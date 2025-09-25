@@ -163,7 +163,7 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventTyp
     PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER, lapTime);
     // Set up the return address.
     meta.set_gateway_id(ZmqMessageToString(gatewayId));
-    meta.set_routing_fd(std::to_string(fd));
+    meta.set_route_fd(fd);
     meta.set_event_type(type);
     RecalculateMetaTimeout(meta, lapTime);
     return Status::OK();
@@ -582,9 +582,7 @@ Status IOService::ServiceToClient(ZmqPollEntry *pe, EventsVal events)
     PerfPoint::RecordElapsed(PerfKey::ZMQ_FRONTEND_TO_IOSVC, GetLapTime(meta, "ZMQ_FRONTEND_TO_IOSVC"));
     ZmqMsgFrames &frames = p.second;
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
-    int fd;
-    CHECK_FAIL_RETURN_STATUS(StringToInt(meta.routing_fd(), fd), K_RUNTIME_ERROR,
-                             "String convert to int failed, service to client failed");
+    int fd = meta.route_fd();
     // No need to prepend the gateway if it is direct connection
     RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, frames));
     RETURN_IF_NOT_OK(PushFrontStringToFrames(meta.client_id(), frames));

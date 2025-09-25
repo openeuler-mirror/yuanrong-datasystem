@@ -53,9 +53,13 @@
 
 namespace datasystem {
 namespace client {
+
+// Static/global id generator init
+std::atomic<int32_t> ClientWorkerCommonApi::exclusiveIdGen_ = 0;
+
 ClientWorkerCommonApi::ClientWorkerCommonApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
                                              Signature *signature, std::string tenantId,
-                                             bool enableCrossNodeConnection)
+                                             bool enableCrossNodeConnection, bool enableExclusiveConnection)
     : hostPort_(std::move(hostPort)),
       cred_(std::move(cred)),
       pageSize_(0),
@@ -63,7 +67,8 @@ ClientWorkerCommonApi::ClientWorkerCommonApi(HostPort hostPort, RpcCredential cr
       heartbeatType_(heartbeatType),
       signature_(signature),
       tenantId_(std::move(tenantId)),
-      enableCrossNodeConnection_(enableCrossNodeConnection)
+      enableCrossNodeConnection_(enableCrossNodeConnection),
+      enableExclusiveConnection_(enableExclusiveConnection)
 {
     recvPageThread_ = Thread(&ClientWorkerCommonApi::RecvPageFd, this);
 }
@@ -81,11 +86,11 @@ ClientWorkerCommonApi::~ClientWorkerCommonApi()
 
 void ClientWorkerCommonApi::SetRpcTimeout()
 {
-    constexpr int32_t rpcMaxTimeout = 600'000;  // 10min
+    constexpr int32_t rpcMaxTimeout = 600000;  // 10min
     int32_t rpcTimeout = timeoutMs_ / retryTimes_;
 
-    int32_t shorterSplitTime = 30'000;  // 30s
-    int32_t longerSplitTime = 90'000;   // 90s
+    int32_t shorterSplitTime = 30000;  // 30s
+    int32_t longerSplitTime = 90000;   // 90s
     if (timeoutMs_ <= shorterSplitTime) {
         rpcTimeoutMs_ = timeoutMs_;
     } else if (timeoutMs_ <= longerSplitTime) {
@@ -338,6 +343,7 @@ Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t t
     req.set_shm_enabled(shmEnabled_);
     req.set_tenant_id(tenantId_);
     req.set_enable_cross_node(enableCrossNodeConnection_);
+    req.set_enable_exclusive_connection(enableExclusiveConnection_);
     req.set_pod_name(Logging::PodName());
 
     RegisterClientRspPb rsp;
@@ -373,6 +379,11 @@ Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t t
     workerUuid_ = rsp.worker_uuid();
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
     SetHealthy(!rsp.unhealthy());
+    exclusiveConnSockPath_ = rsp.exclusive_conn_sockpath();
+    if (enableExclusiveConnection_ && exclusiveConnSockPath_.empty()) {
+        LOG(WARNING) << "Client requested exclusive connection, but the older worker did not support the feature.";
+        enableExclusiveConnection_ = false;
+    }
 
     std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
     uint64_t clientDeadTimeoutMs = rsp.client_dead_timeout_s() * TO_MILLISECOND;

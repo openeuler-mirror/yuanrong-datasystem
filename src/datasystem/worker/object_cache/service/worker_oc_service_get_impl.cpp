@@ -130,31 +130,43 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     timer.Reset();
     std::string traceID = Trace::Instance().GetTraceID();
     auto cost = workerOperationTimeCost;
-    threadPool_->Execute([=]() mutable {
+    if (serverApi->EnableMsgQ()) {
+        threadPool_->Execute([=]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            workerOperationTimeCost = cost;
+            int64_t elapsed = timer.ElapsedMilliSecond();
+            LOG(INFO) << "Process Get from client: " << clientId << ", objects: " << VectorToString(objectKeys)
+                      << ", get threads Statistics: " << threadPool_->GetStatistics() << ", elapsed ms: " << elapsed
+                      << ", remainingTime: " << timeout;
+            if (elapsed >= timeout) {
+                LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", subTimeout:" << subTimeout
+                           << ", get threads Statistics: " << threadPool_->GetStatistics();
+                LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
+            } else {
+                reqTimeoutDuration.Init(timeout - elapsed);
+                auto newSubTimeout = std::max<int64_t>(subTimeout - elapsed, 0);
+                LOG_IF_ERROR(ProcessGetObjectRequest(objectKeys, offsetInfos, serverApi, newSubTimeout, clientId,
+                                                     posixPoint, req),
+                             "Process Get failed");
+                workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
+                LOG(INFO) << FormatString(
+                    "Process Get done, clientId: %s, objectKeys: %s, get threads Statistics: %s."
+                    "The operations of worker Get %s",
+                    clientId, VectorToString(objectKeys), threadPool_->GetStatistics(),
+                    workerOperationTimeCost.GetInfo());
+            }
+            posixPoint.reset();
+        });
+    } else {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         workerOperationTimeCost = cost;
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        LOG(INFO) << "Process Get from client: " << clientId << ", objects: " << VectorToString(objectKeys)
-                  << ", get threads Statistics: " << threadPool_->GetStatistics() << ", elapsed ms: " << elapsed
-                  << ", remainingTime: " << timeout;
-        if (elapsed >= timeout) {
-            LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", subTimeout:" << subTimeout
-                       << ", get threads Statistics: " << threadPool_->GetStatistics();
-            LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
-        } else {
-            reqTimeoutDuration.Init(timeout - elapsed);
-            auto newSubTimeout = std::max<int64_t>(subTimeout - elapsed, 0);
-            LOG_IF_ERROR(
-                ProcessGetObjectRequest(objectKeys, offsetInfos, serverApi, newSubTimeout, clientId, posixPoint, req),
-                "Process Get failed");
-            workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
-            LOG(INFO) << FormatString(
-                "Process Get done, clientId: %s, objectKeys: %s, get threads Statistics: %s."
-                "The operations of worker Get %s",
-                clientId, VectorToString(objectKeys), threadPool_->GetStatistics(), workerOperationTimeCost.GetInfo());
-        }
+        reqTimeoutDuration.Init(timeout);
+        LOG_IF_ERROR(
+            ProcessGetObjectRequest(objectKeys, offsetInfos, serverApi, subTimeout, clientId, posixPoint, req),
+            "Process Get failed");
+        workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
         posixPoint.reset();
-    });
+    }
     return Status::OK();
 }
 
@@ -259,7 +271,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_OBJECT);
     std::vector<ReadKey> objectsNeedGetRemote;
     auto request =
-        std::make_shared<GetRequest>(objectKeys, std::move(serverApi), clientId, -1, getReqPb, accessRecorderPoint);
+        std::make_shared<GetRequest>(objectKeys, serverApi, clientId, -1, getReqPb, accessRecorderPoint);
     if (!offsetInfos.empty()) {
         request->SetOffset(offsetInfos);
     }
@@ -294,9 +306,10 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(
     TimerQueue::TimerImpl timer;
     auto traceID = Trace::Instance().GetTraceID();
     auto weakThis = weak_from_this();
+    serverApi->SetRequestInProgress();  // For exclusive connections: inform parent that an async child is deployed
     RETURN_IF_NOT_OK(TimerQueue::GetInstance()->AddTimer(
         std::min<int64_t>(subTimeout, remainingTimeMs),
-        [weakThis, subTimeout, request, traceID, remainingTimeMs]() {
+        [weakThis, subTimeout, request, traceID, remainingTimeMs, serverApi]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             LOG(ERROR) << "The get request times out, the sub timeout: " << subTimeout
                        << ", remainingTimeMs: " << remainingTimeMs << ", clientId: " << request->clientId_
@@ -310,6 +323,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(
                                                                                workerOcServiceGetImpl->memoryRefTable_);
             // Avoid timeCostPoint destruct after traceGuard.
             request->accessRecorderPoint_.reset();
+            serverApi->SetRequestComplete();  // For exclusive connections: inform parent that async child has finished
         },
         timer));
     request->timer_ = std::make_unique<TimerQueue::TimerImpl>(timer);

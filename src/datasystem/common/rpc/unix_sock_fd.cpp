@@ -22,12 +22,12 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <google/protobuf/descriptor.h>
-
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/protos/utils.pb.h"
 
@@ -69,6 +69,17 @@ Status UnixSockFd::Poll(short event, int timeout) const
 
 Status UnixSockFd::Recv(void *data, size_t size, bool blocking) const
 {
+    if (timeoutEnabled_) {
+        CHECK_FAIL_RETURN_STATUS(blocking, K_RUNTIME_ERROR,
+                                 "Receive with timeout is only supported for blocking receive!");
+        return RecvWithTimeout(data, size);
+    } else {
+        return RecvNoTimeout(data, size, blocking);
+    }
+}
+
+Status UnixSockFd::RecvNoTimeout(void *data, size_t size, bool blocking) const
+{
     PerfPoint point(PerfKey::ZMQ_SOCKET_FD_RECV);
     Status rc;
     auto target = static_cast<ssize_t>(size);
@@ -101,6 +112,15 @@ Status UnixSockFd::Recv(void *data, size_t size, bool blocking) const
 }
 
 Status UnixSockFd::Send(MemView &buf) const
+{
+    if (timeoutEnabled_) {
+        return SendWithTimeout(buf);
+    } else {
+        return SendNoTimeout(buf);
+    }
+}
+
+Status UnixSockFd::SendNoTimeout(MemView &buf) const
 {
     PerfPoint point(PerfKey::ZMQ_SOCKET_FD_SEND);
     Status rc;
@@ -234,15 +254,16 @@ Status UnixSockFd::SetBlocking() const
 
 Status UnixSockFd::SetTimeout(int64_t timeout) const
 {
-    auto s = timeout / ONE_THOUSAND;
-    auto us = (timeout % ONE_THOUSAND) * ONE_THOUSAND;
-    struct timeval t {
-        .tv_sec = s, .tv_usec = us
-    };
-    auto err = setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof(t));
-    CHECK_FAIL_RETURN_STATUS(err != -1, K_RUNTIME_ERROR, FormatString("Socket set timeout error: errno = %d", errno));
-    err = setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &t, sizeof(t));
-    CHECK_FAIL_RETURN_STATUS(err != -1, K_RUNTIME_ERROR, FormatString("Socket set timeout error: errno = %d", errno));
+    // Set both the send and recv timeout for this socket
+    RETURN_IF_NOT_OK(SetTimeout(TimeoutType::SendTimeout, timeout));
+    RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, timeout));
+    return Status::OK();
+}
+
+Status UnixSockFd::SetTimeoutEnforced(int64_t timeout)
+{
+    RETURN_IF_NOT_OK(SetTimeout(timeout));
+    timeoutEnabled_ = true;
     return Status::OK();
 }
 
@@ -429,6 +450,22 @@ Status UnixSockFd::Connect(const std::string &ZmqEndPt)
     return Status::OK();
 }
 
+Status UnixSockFd::Accept(UnixSockFd &outSockFd)
+{
+    int newFd = accept(fd_, nullptr, nullptr);
+    if (newFd <= 0) {
+        Status rc = UnixSockFd::ErrnoToStatus(errno, fd_);
+        if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN) {
+            VLOG(RPC_LOG_LEVEL) << FormatString("Spawn uds connection with listener fd %d failed with status %s", fd_,
+                                                rc.ToString());
+        }
+        return rc;
+    }
+
+    outSockFd = UnixSockFd(newFd);
+    return Status::OK();
+}
+
 Status UnixSockFd::GetBindingHostPort(HostPort &out) const
 {
     sockaddr_in addr{};
@@ -445,4 +482,125 @@ Status UnixSockFd::GetBindingHostPort(HostPort &out) const
     return Status::OK();
 }
 
+Status UnixSockFd::SetTimeout(TimeoutType timeoutType, int64_t timeoutMs) const
+{
+    auto s = timeoutMs / ONE_THOUSAND;
+    auto us = (timeoutMs % ONE_THOUSAND) * ONE_THOUSAND;
+    struct timeval t {
+        .tv_sec = s, .tv_usec = us
+    };
+
+    // Note: std::to_underlying() is available in more recent C++ versions. static_cast for now.
+    auto err = setsockopt(fd_, SOL_SOCKET, static_cast<int>(timeoutType), &t, sizeof(t));
+    CHECK_FAIL_RETURN_STATUS(err != -1, K_RUNTIME_ERROR, FormatString("Socket set timeout error: errno = %d", errno));
+    return Status::OK();
+}
+
+Status UnixSockFd::GetTimeout(TimeoutType timeoutType, int64_t &timeoutMs) const
+{
+    socklen_t tLen = sizeof(struct timeval);
+    struct timeval t;
+
+    // Note: std::to_underlying() is available in more recent C++ versions. static_cast for now.
+    auto err = getsockopt(fd_, SOL_SOCKET, static_cast<int>(timeoutType), &t, &tLen);
+    CHECK_FAIL_RETURN_STATUS(err != -1, K_RUNTIME_ERROR, FormatString("Socket get timeout error: errno = %d", errno));
+
+    // convert to ms for output
+    timeoutMs = (t.tv_sec * ONE_THOUSAND) + (t.tv_usec / ONE_THOUSAND);
+    return Status::OK();
+}
+
+Status UnixSockFd::RecvWithTimeout(void *data, size_t size) const
+{
+    PerfPoint point(PerfKey::ZMQ_SOCKET_FD_RECV);
+    int64_t startingTimeoutMs = 0;
+    int64_t timeRemainingMs = 0;
+    auto sizeRemain = static_cast<ssize_t>(size);
+
+    // Fetch the timeout from the fd. The timeout within the socket may continuously be adjusted as calls are made
+    // (and time has been consumed).
+    RETURN_IF_NOT_OK(GetTimeout(TimeoutType::RecvTimeout, startingTimeoutMs));
+
+    // Create a timer with the given amount of time remaining
+    Timer timer(startingTimeoutMs);
+
+    while (sizeRemain > 0) {
+        ssize_t bytesReceived;
+        int err;
+        bytesReceived = recv(fd_, data, size, 0);
+        err = errno;
+
+        timeRemainingMs = timer.GetRemainingTimeMs();
+        // Regardless of success or fail of the call. If we ran out of time then return to the caller with error.
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(timeRemainingMs > 0, K_RPC_DEADLINE_EXCEEDED, "Socket recv timeout");
+
+        if (bytesReceived == -1) {
+            Status rc = ErrnoToStatus(err, fd_);
+            if (rc.GetCode() != K_TRY_AGAIN) {
+                VLOG(RPC_LOG_LEVEL) << "recv failed with rc: " << rc.ToString();
+            }
+            RETURN_IF_NOT_OK_EXCEPT(rc, K_TRY_AGAIN);
+        } else if (bytesReceived == 0) {
+            RETURN_STATUS(StatusCode::K_RPC_CANCELLED, "bytesReceived is 0");
+        } else {
+            // Record the received data so far
+            data = static_cast<char *>(data) + bytesReceived;
+            size -= bytesReceived;
+            sizeRemain -= bytesReceived;
+        }
+
+        // Assign the timeout for the next receive call so that it has less time allowed than before, then reloop.
+        RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, timeRemainingMs));
+    }
+    point.Record();
+    // The recv timeout was set already naturally after the last recv. Update the send timeout to be the same.
+    RETURN_IF_NOT_OK(SetTimeout(TimeoutType::SendTimeout, timeRemainingMs));
+    return Status::OK();
+}
+
+Status UnixSockFd::SendWithTimeout(MemView &buf) const
+{
+    PerfPoint point(PerfKey::ZMQ_SOCKET_FD_SEND);
+    Status rc;
+    int64_t startingTimeoutMs = 0;
+    int64_t timeRemainingMs = 0;
+
+    // Fetch the timeout from the fd. The timeout within the socket may continuously be adjusted as calls are made
+    // (and time has been consumed).
+    RETURN_IF_NOT_OK(GetTimeout(TimeoutType::SendTimeout, startingTimeoutMs));
+
+    // Create a timer with the given amount of time remaining
+    Timer timer(startingTimeoutMs);
+
+    auto sizeRemain = static_cast<ssize_t>(buf.Size());
+    while (sizeRemain > 0) {
+        ssize_t bytesSend;
+        int err;
+        bytesSend = send(fd_, buf.Data(), buf.Size(), MSG_NOSIGNAL);
+        err = errno;
+
+        timeRemainingMs = timer.GetRemainingTimeMs();
+        // Regardless of success or fail of the call. If we ran out of time then return to the caller with error.
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(timeRemainingMs > 0, K_RPC_DEADLINE_EXCEEDED, "Socket send timeout");
+
+        if (bytesSend == -1) {
+            rc = ErrnoToStatus(err, fd_);
+            if (rc.GetCode() != K_TRY_AGAIN) {
+                VLOG(RPC_LOG_LEVEL) << "send failed with rc: " << rc.ToString();
+            }
+            RETURN_IF_NOT_OK_EXCEPT(rc, K_TRY_AGAIN);
+        } else {
+            buf += bytesSend;
+            sizeRemain -= bytesSend;
+        }
+
+        // Assign the timeout for the next send call so that it has less time allowed than before, then reloop
+        RETURN_IF_NOT_OK(SetTimeout(TimeoutType::SendTimeout, timeRemainingMs));
+    }
+    point.Record();
+
+    // The send timeout was set already naturally after the last send. Update the recv timeout to be the same.
+    RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, timeRemainingMs));
+    return Status::OK();
+}
 }  // namespace datasystem

@@ -47,12 +47,14 @@
 #include "datasystem/common/util/queue/queue.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/rpc/zmq/work_agent.h"
 
 namespace datasystem {
 typedef MsgQueRef<ZmqMetaMsgFrames, ZmqMetaMsgFrames> ZmqServerMsgQueRef;
 typedef MsgQueMgr<ZmqMetaMsgFrames, ZmqMetaMsgFrames> ZmqServerMsgMgr;
 typedef decltype(epoll_event::events) EventsVal;
 class SockEventService;
+class WorkAgent;
 /**
  * @brief An abstract class for RPC service.
  * The ZMQ plugin will generate a subclass, and the user will supply the virtual method implementation.
@@ -73,6 +75,7 @@ public:
      */
     virtual Status CallMethod(std::shared_ptr<ZmqServerMsgQueRef> sock, MetaPb meta, ZmqMsgFrames &&inMsg,
                               int64_t seqNo) = 0;
+    virtual Status DirectCallMethod(MetaPb meta, ZmqMsgFrames &&inMsg, int64_t seqNo, ZmqMsgFrames &outMsg) = 0;
 
     Status Init(RpcServiceCfg cfg, void *proxy);
 
@@ -113,6 +116,12 @@ public:
         return outfd_;
     }
 
+    Status GetExclConnSockPath(std::string &sockPath)
+    {
+        sockPath = exclSockPath_;
+        return Status::OK();
+    }
+
     Status ServiceRequest(MetaPb &&meta, ZmqMsgFrames &&msgs);
 
     Status ServiceReply(ZmqMetaMsgFrames *msg);
@@ -134,6 +143,8 @@ public:
     {
         return serviceName_;
     }
+
+    Status DirectExecInternalMethod(int fd, EventType type, ZmqMetaMsgFrames &inFrames, ZmqMetaMsgFrames &outFrames);
 
 protected:
     /**
@@ -164,6 +175,7 @@ private:
          * Entry function for each thread.
          */
         Status WorkerEntry();
+        Status WorkerEntryWithoutMsgQ(ZmqMetaMsgFrames &inMsg, ZmqMetaMsgFrames &outMsg);
         Status StreamWorkerEntry();
 
         void CloseSocket()
@@ -258,12 +270,14 @@ private:
     int outfd_;             // For replyQueue_.
     int infd_;              // For rqQueue_.
     int tcpfd_;             // If bypass ZmqServiceImpl
+    int exclListenFd_;
     HostPort tcpHostPort_;  // If bypass ZmqServiceImpl
     std::atomic<int64_t> nextWorker_;
     std::atomic<bool> globalInterrupt_;
     bool streamSupport_;
     bool multiDestinations_;
     std::vector<std::string> sockPath_;
+    std::string exclSockPath_;
     bool unlinkSocketPathOnExit_;
     bool tcpDirect_;
     std::shared_ptr<ZmqServerMsgMgr> backendMgr_{ nullptr };
@@ -276,6 +290,9 @@ private:
     WriterPrefRWLock routeMux_;
     std::map<std::string, std::set<int>> routes_;
     std::map<int, std::string> fdToGateway_;
+
+    std::vector<std::unique_ptr<WorkAgent>> workAgents_;
+    std::unique_ptr<ThreadPool> workAgentThreadPool_ { nullptr };
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_SERVICE_H

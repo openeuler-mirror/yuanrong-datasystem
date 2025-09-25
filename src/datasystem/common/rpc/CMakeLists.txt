@@ -55,7 +55,9 @@ set(COMMON_RPC_ZMQ_SRCS
         zmq/zmq_unary_client_impl.h
         zmq/zmq_server_stream_base.cpp
         zmq/zmq_client_stream_base.cpp
-        zmq/zmq_stream_base.cpp)
+        zmq/zmq_stream_base.cpp
+        zmq/exclusive_conn_mgr.cpp
+        zmq/work_agent.cpp)
 
 set(COMMON_RPC_ZMQ_DEPENDS_LIBS
         protobuf::libprotobuf

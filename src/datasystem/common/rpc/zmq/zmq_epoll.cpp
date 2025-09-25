@@ -180,7 +180,7 @@ Status ZmqEpoll::HandleEvent(int timeout)
                 continue;
             }
             rc = pe->inEventFunc_(pe, ev.events);
-            VLOG_IF(RPC_LOG_LEVEL, rc.IsError()) << FormatString("%s fd %d", rc.ToString(), pe->fd_);
+            VLOG(RPC_LOG_LEVEL) << FormatString("%s fd %d", rc.ToString(), pe->fd_);
         }
         if (ev.events & EPOLLOUT) {
             // We need to check again the pe and fd again because we can get both
@@ -190,7 +190,7 @@ Status ZmqEpoll::HandleEvent(int timeout)
                 continue;
             }
             rc = pe->outEventFunc_(pe, ev.events);
-            VLOG_IF(RPC_LOG_LEVEL, rc.IsError()) << FormatString("%s fd %d", rc.ToString(), pe->fd_);
+            VLOG(RPC_LOG_LEVEL) << FormatString("%s fd %d", rc.ToString(), pe->fd_);
         }
     }
     HandlePendingClose();

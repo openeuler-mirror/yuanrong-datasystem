@@ -130,6 +130,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     timeoutMs_ = connectOptions.connectTimeoutMs;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
+    enableExclusiveConnection_ = connectOptions.enableExclusiveConnection;
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
     (void)authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
@@ -211,7 +212,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     workerApi_.resize(STANDBY2_WORKER + 1);
     workerApi_[LOCAL_WORKER] =
         std::make_shared<ClientWorkerApi>(hostPort, cred_, heartbeatType, signature_.get(), tenantId_,
-                                          enableCrossNodeConnection_);
+                                          enableCrossNodeConnection_, enableExclusiveConnection_);
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(timeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
     memoryCopyThreadPool_ = std::make_shared<ThreadPool>(0, GetRecommendedMemoryCopyThreadsNum());
@@ -413,7 +414,7 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWor
         HeartbeatType heartbeatType = currentApi->GetHeartbeatType();
         workerApi_[next] =
             std::make_shared<ClientWorkerApi>(standbyWorker, cred_, heartbeatType, signature_.get(), tenantId_,
-                                                enableCrossNodeConnection_);
+                                              enableCrossNodeConnection_, enableExclusiveConnection_);
         workerApi_[next]->SetIsUseStandbyWorker(true);
         Status rc = workerApi_[next]->Init(timeoutMs_);
         if (rc.IsError()) {
@@ -493,7 +494,7 @@ bool ObjectClientImpl::WaitStandbyWorkerReady(const std::shared_ptr<ClientWorker
     }
     LOG(INFO) << FormatString("[Switch] client %s wait for worker %s:%d ready", GetClientId(),
                               clientWorkerApi->GetWorkHost(), clientWorkerApi->GetWorkPort());
-    constexpr uint64_t maxWaitMilliseconds = 10'000;
+    constexpr uint64_t maxWaitMilliseconds = 10000;
     constexpr uint64_t waitIntervalMs = 500;
     uint64_t waitMilliseconds = std::min<uint64_t>(clientWorkerApi->GetHeartBeatInterval() * 2, maxWaitMilliseconds);
     Timer timer;

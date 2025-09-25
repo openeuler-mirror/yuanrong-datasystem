@@ -167,8 +167,7 @@ public:
         // of the serialized protobuf followed by the protobuf itself.
         PerfPoint point(PerfKey::ZMQ_SOCK_RECV_PB);
         uint32_t sz;
-        // No need to block if nothing to read.
-        RETURN_IF_NOT_OK(Recv32(sz, false));
+        RETURN_IF_NOT_OK(Recv32(sz, true));
         std::unique_ptr<char[]> wa;
         void *buf = nullptr;
         if (sz <= waSz_) {
@@ -281,11 +280,30 @@ public:
     Status Connect(const std::string &ZmqEndPt);
 
     /**
+     * @brief Uses this UnixSockFd as a listener socket and accepts incoming connection. Creates a new UnixSockFd as
+     * output as the connected socket for the caller.
+     * @param[out] outSockFd The new socket that was created when the listening socket accepted the connection.
+     * @return Status of the call.
+     */
+    Status Accept(UnixSockFd &outSockFd);
+
+    /**
      * @brief Set timeout on a socket.
+     * This timeout only provides a wakeup code. The caller codepath continuously retries.
+     * Does not cause a failure of K_RPC_DEADLINE_EXCEEDED.
      * @param[in] timeout Timeout in milliseconds.
      * @return Status of call.
      */
     Status SetTimeout(int64_t timeout) const;
+
+    /**
+     * @brief Set timeout on a socket for exclusive connection mode.
+     * Same as the above SetTimeout, however this version of the timeout disables the continuous retry logic and
+     * enforces that if the timeout is exceeded, it will fail with Status of K_RPC_DEADLINE_EXCEEDED.
+     * @param[in] timeout Timeout in milliseconds.
+     * @return Status of call.
+     */
+    Status SetTimeoutEnforced(int64_t timeout);
 
     /**
      * @brief Set buf size on a socket
@@ -330,8 +348,79 @@ public:
     Status GetBindingHostPort(datasystem::HostPort &out) const;
 
 private:
+    // The underlying type of this enum (int) matches the third argument for getsockopt and setsockopt from sys/socket.h
+    // system calls.
+    enum class TimeoutType : int { SendTimeout = SO_SNDTIMEO, RecvTimeout = SO_RCVTIMEO };
+
+    /**
+     * @brief Sets the timeout for either send or recv.
+     * @param[in] timeoutType The type to set (either send or recv)
+     * @param[in] timeoutMs The amount of time in milliseconds to set for the timeout
+     * @return Status of the call
+     */
+    Status SetTimeout(TimeoutType timeoutType, int64_t timeoutMs) const;
+
+    /**
+     * @brief Gets the timeout for either send or recv.
+     * @param[in] timeoutType The type to get (either send or recv)
+     * @param[out] timeoutMs The amount of time in milliseconds to set for the timeout
+     * @return Status of the call
+     */
+    Status GetTimeout(TimeoutType timeoutType, int64_t &timeoutMs) const;
+
+    /**
+     * @brief Receive a raw buffer, has some retry logic but does not respect overall timeout
+     * @param[in] data -- Address for the receiving buffer
+     * @param[in] size -- Size of the receiving buffer
+     * @param[in] blocking. For non-blocking fd, force non-blocking if true.
+     * @return Status of call.
+     */
+    Status RecvNoTimeout(void *data, size_t size, bool blocking) const;
+
+    /**
+     * @brief Receive a raw buffer with timeout support
+     * @param[in] data -- Address for the receiving buffer
+     * @param[in] size -- Size of the receiving buffer
+     * @return Status of call.
+     */
+    Status RecvWithTimeout(void *data, size_t size) const;
+
+    /**
+     * @brief Send a raw buffer.
+     * @param[in] buf Zmq immutable buffer.
+     * @return Status of call.
+     */
+    Status SendNoTimeout(MemView &buf) const;
+
+    /**
+     * @brief Send a raw buffer.
+     * @param[in] buf Zmq immutable buffer.
+     * @return Status of call.
+     */
+    Status SendWithTimeout(MemView &buf) const;
+
+    /**
+     * @brief Compute how much time has elapsed and the determine if the timeout has been exceeded.
+     * @param[in] startTime The start time to compare with
+     * @param[in] startingTimeout The amount of overall time that is allowed
+     * @param[out] timeDiff The computed amount of time between current time now and the start
+     * @param[out] timeRemaining The computed amount of time allowed for future send/recv calls
+     * @return Status of the call. Return K_RPC_DEADLINE_EXCEEDED if the timeout has expired.
+     */
+    inline static Status CheckAndComputeTimeout(const std::chrono::time_point<std::chrono::steady_clock> &startTime,
+                                                const int64_t &startingTimeoutMs, int64_t &timeDiff,
+                                                int64_t &timeRemainingMs)
+    {
+        std::chrono::time_point<std::chrono::steady_clock> currentTime = std::chrono::steady_clock::now();
+        timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime).count();
+        timeRemainingMs = startingTimeoutMs - timeDiff;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(timeRemainingMs > 0, K_RPC_DEADLINE_EXCEEDED, "Socket send/recv timeout");
+        return Status::OK();
+    }
+
     constexpr static int waSz_ = 64;
     int fd_;
+    bool timeoutEnabled_{ false };
     char workArea_[waSz_]{};
 };
 /**

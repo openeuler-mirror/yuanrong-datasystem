@@ -77,6 +77,17 @@ public:
 
     Status GetInitStatus();
 
+    /**
+     * @brief Set exclusive connection by assigning required fields
+     * @param[in] exclusiveId The exclusive id
+     * @param[in] exclusiveSockPath The socket path for exclusive sock connect
+     */
+    void SetExclusiveConnInfo(const std::optional<int32_t> &exclusiveId, const std::string &sockPath)
+    {
+        exclusiveSockPath_ = sockPath;
+        exclusiveId_ = exclusiveId;
+    }
+
 protected:
     /**
      * @brief Initialization. If requesting uds connection, the connection will be established asynchronously.
@@ -86,6 +97,8 @@ protected:
 
     std::map<int32_t, std::shared_ptr<RpcServiceMethod>> methodMap_;
     std::string serviceName_;
+    std::string exclusiveSockPath_;
+    std::optional<int32_t> exclusiveId_;
     int channelNo_;
     std::unique_ptr<ZmqStubImpl> pimpl_;
 };

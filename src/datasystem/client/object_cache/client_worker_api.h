@@ -89,11 +89,12 @@ public:
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId The tenant id.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
+     * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
      */
     explicit ClientWorkerApi(HostPort hostPort, RpcCredential cred,
                              HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                              Signature *signature = nullptr, std::string tenantId = "",
-                             bool enableCrossNodeConnection = false);
+                             bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
 
     /**
      * @brief Initialize ClientWorkerApi.

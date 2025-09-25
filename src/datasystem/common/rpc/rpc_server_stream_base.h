@@ -269,6 +269,26 @@ public:
         return std::visit([&payload](auto &pimpl) { return pimpl->SendPayload(payload); }, pimpl_);
     }
 
+    virtual Status GetOutMsg(ZmqMsgFrames &outMsg)
+    {
+        return std::visit([&outMsg](auto &pimpl) { return pimpl->GetOutMsg(outMsg); }, pimpl_);
+    }
+
+    virtual bool EnableMsgQ()
+    {
+        return std::visit([](auto &pimpl) { return pimpl->EnableMsgQ(); }, pimpl_);
+    }
+
+    void SetRequestInProgress()
+    {
+        return std::visit([](auto &pimpl) { return pimpl->SetRequestInProgress(); }, pimpl_);
+    }
+
+    void SetRequestComplete()
+    {
+        return std::visit([](auto &pimpl) { return pimpl->SetRequestComplete(); }, pimpl_);
+    }
+
 private:
     std::variant<std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>>> pimpl_;
 };

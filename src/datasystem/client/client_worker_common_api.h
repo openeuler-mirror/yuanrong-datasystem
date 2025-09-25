@@ -65,7 +65,7 @@ public:
     explicit ClientWorkerCommonApi(HostPort hostPort, RpcCredential cred = {},
                                    HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                    Signature *signature = nullptr, std::string tenantId = "",
-                                   bool enableCrossNodeConnection = false);
+                                   bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
 
     virtual ~ClientWorkerCommonApi();
 
@@ -447,6 +447,7 @@ protected:
     int32_t timeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };
     bool enableCrossNodeConnection_{ false };
+    bool enableExclusiveConnection_{ false };
     int64_t heartBeatTimeoutMs_{ 0 };
     int64_t heartBeatIntervalMs_{ MIN_HEARTBEAT_INTERVAL_MS };
     uint64_t clientDeadTimeoutMs_{ 0 };
@@ -472,6 +473,9 @@ protected:
         }
     };
     RecvClientFdState recvClientFdState_;
+    static std::atomic<int32_t> exclusiveIdGen_;
+    std::optional<int32_t> exclusiveId_;
+    std::string exclusiveConnSockPath_;
 };
 }  // namespace client
 }  // namespace datasystem

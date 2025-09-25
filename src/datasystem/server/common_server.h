@@ -116,6 +116,8 @@ public:
     virtual Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset,
                                    std::string &id) = 0;
 
+    virtual Status GetExclConnSockPath(std::string &sockPath) = 0;
+
 protected:
     /**
      * @brief To define common service of rpc server.

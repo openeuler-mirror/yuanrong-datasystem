@@ -61,7 +61,20 @@ public:
         EIGHT_BYTE_SIZE_READY,
         MESSAGE_READY
     };
+
+    /**
+     * @brief This constructor builds a decoder that operates on a file descriptor used by UnixSockFd
+     * @param[in] fd The fd to use for the internal UnixSockFd
+     */
     explicit ZmqMsgDecoder(int fd);
+
+    /**
+     * @brief This constructor builds a decoder that operates on a file descriptor referenced by the pointer to the
+     * existing UnixSockFd.
+     * @param[in] sockFdRef The pointer for the externally managed UnixSockFd
+     */
+    explicit ZmqMsgDecoder(UnixSockFd *sockFdRef);
+
     ~ZmqMsgDecoder();
 
     /**
@@ -70,7 +83,7 @@ public:
      * @return
      * @note Doesn't support write into user provided buffers
      */
-    Status ReceiveMsgFramesV1(ZmqMsgFrames &frames) const;
+    Status ReceiveMsgFramesV1(ZmqMsgFrames &frames);
 
     /**
      * Version 2 protocol of receiving ZmqMessages
@@ -94,7 +107,7 @@ public:
      */
     auto GetFd() const
     {
-        return fd_;
+        return sockFd_.GetFd();
     }
 
     /**
@@ -129,7 +142,8 @@ public:
 
 private:
     constexpr static int K_WA_SIZE = 1024;
-    int fd_;
+    UnixSockFd sockFd_;
+    UnixSockFd *pSockFd_;
     int curFrame_;
     MsgState msgState_;
     MTP_PROTOCOL flag_;
@@ -166,9 +180,24 @@ private:
  */
 class ZmqMsgEncoder {
 public:
-    explicit ZmqMsgEncoder(int fd) : fd_(fd)
+    /**
+     * @brief This constructor builds an encoder that operates on a file descriptor used by UnixSockFd
+     * @param[in] fd The fd to use for the internal UnixSockFd
+     */
+    explicit ZmqMsgEncoder(int fd) : sockFd_(fd)
+    {
+        pSockFd_ = &sockFd_;
+    }
+
+    /**
+     * @brief This constructor builds a decoder that operates on a file descriptor referenced by the pointer to the
+     * existing UnixSockFd.
+     * @param[in] sockFdRef The pointer for the externally managed UnixSockFd
+     */
+    ZmqMsgEncoder(UnixSockFd *sockFdRef) : pSockFd_(sockFdRef)
     {
     }
+
     ~ZmqMsgEncoder() = default;
 
     /**
@@ -177,7 +206,8 @@ public:
     Status SendMsgFrames(EventType type, ZmqMsgFrames &frames);
 
 private:
-    int fd_;
+    UnixSockFd sockFd_;
+    UnixSockFd *pSockFd_;
 
     /**
      * Version 1 protocol of sending ZmqMessages
@@ -185,14 +215,14 @@ private:
      * @return
      * @note Doesn't support write into user provided buffers
      */
-    Status SendMsgFramesV1(ZmqMsgFrames &que) const;
+    Status SendMsgFramesV1(ZmqMsgFrames &que);
 
     /**
      * Version 2 protocol of sending ZmqMessages
      * @param que
      * @return
      */
-    Status SendMsgFramesV2(ZmqMsgFrames &que) const;
+    Status SendMsgFramesV2(ZmqMsgFrames &que);
 
     Status SendMessage(const ZmqMessage &msg, bool more) const;
 };

@@ -45,6 +45,8 @@ message RegisterClientReqPb {
     string tenant_id = 8;
     bool enable_cross_node = 9;
     string pod_name = 10;
+    bool enable_exclusive_connection = 11;
+
 
     // DFX required, need to send something to worker when reconnect.
     repeated google.protobuf.Any extend = 50;
@@ -76,6 +78,7 @@ message RegisterClientRspPb {
     repeated string available_workers = 18;
     bool enable_p2p_transfer = 19;
     uint64 client_reconnect_wait_s = 20;
+    string exclusive_conn_sockpath = 21;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

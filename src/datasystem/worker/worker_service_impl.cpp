@@ -257,6 +257,12 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     std::string id;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
                                      "worker process get ShmQ unit failed");
+
+    std::string exclusiveConnSockPath;
+    if (req.enable_exclusive_connection()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetExclConnSockPath(exclusiveConnSockPath),
+                                         "worker process get exclusive connection socket path failed");
+    }
     rsp.set_page_size(FLAGS_page_size);
     rsp.set_quorum_timeout_mult(timeoutMultiplier_);
     rsp.set_client_id(clientId);
@@ -277,6 +283,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_client_dead_timeout_s(clientDeadTimeoutSec);
     rsp.set_enable_p2p_transfer(FLAGS_enable_p2p_transfer);
     rsp.set_client_reconnect_wait_s(FLAGS_client_reconnect_wait_s);
+    rsp.set_exclusive_conn_sockpath(exclusiveConnSockPath);
 
     INJECT_POINT("worker.RegisterClient.end", [&rsp](int fd) {
         rsp.set_store_fd(fd);

@@ -38,6 +38,7 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/utils/status.h"
 #include "oc_client_common.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
@@ -1529,9 +1530,9 @@ TEST_F(OCClientRemoteGetTest3, DISABLED_LEVEL1_TestGetOOMScenario)
     std::vector<uint8_t> data(1024 * 1024 * 8, '0');
     std::vector<std::string> objKeys = { "ji", "ni", "tai", "mei" };
     std::vector<std::shared_ptr<ObjectClient>> clients;
+    const int timeoutMs = 30000;
     for (size_t i = 0; i < 4; ++i) {
         std::shared_ptr<ObjectClient> client;
-        int timeoutMs = 30'000;
         InitTestClient(i, client, timeoutMs);
         if (i == 0) {
             std::vector<std::string> failedObjectKeys;
@@ -1728,7 +1729,8 @@ TEST_F(OCClientRemoteGetTest4, DISABLED_TestObjectPutAndGetConcurrency)
 
     std::string newVal = RandomData().GetRandomString(1024ul * 1024ul);
     std::thread t2([&client0, &newVal, &objKey, &param]() {
-        usleep(1'000);
+        const int sleepTime = 1000;
+        usleep(sleepTime);
         DS_EXPECT_OK(client0->Put(objKey, (uint8_t *)newVal.c_str(), newVal.size(), param));
     });
 
@@ -1818,6 +1820,233 @@ TEST_F(OCClientRemoteGetTest5, TestRemoteGetAndRemoveLocationFailedThenPut)
     DS_ASSERT_NOT_OK(client1->Get({objKey}, 0, buffers));
 
     DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
+}
+
+// Not a permanent testcase. Just create it to aid development of Exclusive connection feature for now
+class ExclusiveConn : public OCClientGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 2;  // only using 1, but have 2 just for giggles
+        opts.enableDistributedMaster = "false";
+        opts.masterIdx = 0;
+        opts.workerGflagParams = "-shared_memory_size_mb=500 -minloglevel=2";  // for perf runs
+        opts.disableRocksDB = true;  // Maybe the default is true anyway for ctest ExternalCluster tests
+        opts.numEtcd = 1;
+        // Since we may be testing perf with these, make sure the AKSK keys are empty to avoid auth overhead
+        opts.systemAccessKey = "";
+        opts.systemSecretKey = "";
+    }
+};
+
+TEST_F(ExclusiveConn, PutTest1)
+{
+    int numPuts = 1000;
+    int32_t timeoutMs = 30000;  // 30 second timeout. default is 60.
+    LOG(INFO) << "Testing " << numPuts << "puts with timeout " << timeoutMs;
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions, timeoutMs);  // connect to worker 0
+    connectOptions.enableExclusiveConnection = true;
+    std::shared_ptr<ObjectClient> client0 = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client0->Init());
+
+    std::vector<std::string> objKeys;
+    std::string val("a");
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
+
+    LOG(INFO) << "create the data locally before putting";
+    for (int i = 0; i < numPuts; ++i) {
+        objKeys.push_back("AmazingKey_" + std::to_string(i));
+    }
+
+    LOG(INFO) << "now put the data";
+    // A thread not needed right now, could have just run it in current thread. But later, we'll test
+    // different threads using same client.
+    std::thread t1([&client0, &objKeys, &val, &param, &numPuts]() {
+        for (int i = 0; i < numPuts; ++i) {
+            DS_ASSERT_OK(client0->Put(objKeys[i], (uint8_t *)val.c_str(), val.size(), param));
+        }
+        LOG(INFO) << "Thread work completed. Thread exits now.";
+    });
+    LOG(INFO) << "Parent join the complete thread.";
+    t1.join();
+
+    // maybe this not needed
+    LOG(INFO) << "Calling perf manager print from client side in case it didn't get written.";
+    PerfManager *perfManager = PerfManager::Instance();
+    perfManager->PrintPerfLog();
+}
+
+TEST_F(ExclusiveConn, GetTest1)
+{
+    std::chrono::time_point<std::chrono::steady_clock> start;
+    std::chrono::time_point<std::chrono::steady_clock> end;
+    uint64_t totalElapsed = 0;
+    int numClients = 1;
+    int totalGets = 2000;
+    int numGetsPerClient = totalGets / numClients;
+    totalGets = numGetsPerClient * numClients;  // Sanity/fix: in case chosen numbers were not multiples
+    int32_t timeoutMs = 30000;  // 30 second timeout. default is 60.
+    std::vector<std::thread> threads;
+
+    LOG(INFO) << "Testing " << numGetsPerClient << " gets for per cleint. Num clients: " << numClients
+              << " Using timeout: " << timeoutMs;
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions, timeoutMs);  // connect to worker 0
+    // InitConnectOpt from the test framework auto-populates the ak-sk keys for authentication.
+    // We want to run with authentication disabled, so clear these.
+    connectOptions.accessKey.clear();
+    connectOptions.secretKey.Clear();
+    connectOptions.enableExclusiveConnection = true;
+    std::shared_ptr<ObjectClient> client0 = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client0->Init());
+
+    std::vector<std::string> objKeys;
+    std::string val("a");
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
+    objKeys.push_back("AmazingKey_1");
+    LOG(INFO) << "Put some data to DS that we'll use for getting later.";
+    DS_ASSERT_OK(client0->Put(objKeys[0], (uint8_t *)val.c_str(), val.size(), param));
+
+    // We will use a single client, but many threads can share that same client.
+    start = std::chrono::steady_clock::now();
+    for (int i = 0; i < numClients; ++i) {
+        threads.emplace_back([&client0, &objKeys, &numGetsPerClient]() {
+            LOG(INFO) << "Begin get loop in thread.";
+            std::vector<Optional<Buffer>> buffers;
+            for (int i = 0; i < numGetsPerClient; ++i) {
+                DS_EXPECT_OK(client0->Get(objKeys, 0, buffers));
+                buffers.clear();
+            }
+            LOG(INFO) << "Thread work completed. Thread exits now.";
+        });
+    }
+
+    LOG(INFO) << "Parent join the complete threads.";
+    for (auto &t : threads) {
+        t.join();
+    }
+    end = std::chrono::steady_clock::now();
+    totalElapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+
+    // Error level so we get this in perf runs too
+    LOG(ERROR) << "Count of gets: " << totalGets << "\nTotal time: " << totalElapsed
+              << "\nAverage per call: " << totalElapsed / totalGets << std::endl;
+
+    // maybe this not needed
+    LOG(INFO) << "Calling perf manager print from client side in case it didn't get written.";
+    PerfManager *perfManager = PerfManager::Instance();
+    perfManager->PrintPerfLog();
+}
+
+TEST_F(ExclusiveConn, ChildThreadSinglePutAndGetTest)
+{
+    FLAGS_v = 10;  // get lots of logs at client layer
+    LOG(INFO) << "Testing single put and get";
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);  // connect to worker 0
+    connectOptions.enableExclusiveConnection = true;
+    std::shared_ptr<ObjectClient> client0 = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client0->Init());
+
+    LOG(INFO) << "create the data locally before putting";
+    std::string objKey("AmazingKey_a");
+    std::string val("a");
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
+
+    LOG(INFO) << "now put the data";
+    // A thread not needed right now, could have just run it in current thread. But later, we'll test
+    // different threads using same client.
+    std::thread t1([&client0, &objKey, &val, &param]() {
+        DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
+
+        std::vector<Optional<Buffer>> buffers;
+        DS_EXPECT_OK(client0->Get({ objKey }, 0, buffers));
+        ASSERT_EQ(buffers.size(), size_t(1));
+        ASSERT_TRUE(buffers[0]);
+        std::string getVal((char *)buffers[0]->ImmutableData(), buffers[0]->GetSize());
+        EXPECT_EQ(getVal, val);
+    });
+
+    t1.join();
+
+    // maybe this not needed
+    LOG(INFO) << "Calling perf manager print from client side in case it didn't get written.";
+    PerfManager *perfManager = PerfManager::Instance();
+    perfManager->PrintPerfLog();
+}
+
+TEST_F(ExclusiveConn, MainThreadSinglePutAndGetTest)
+{
+    FLAGS_v = 10;
+    // get lots of logs at client layer
+    int numPuts = 1000;
+    LOG(INFO) << "Testing " << numPuts << "puts";
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    // connect to worker 0
+    connectOptions.enableExclusiveConnection = true;
+    std::shared_ptr<ObjectClient> client0 = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client0->Init());
+    std::string objKey = "AmazingKey_1001";
+    std::string val("a");
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
+    DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_EXPECT_OK(client0->Get({ objKey }, 0, buffers));
+    ASSERT_EQ(buffers.size(), size_t(1));
+    ASSERT_TRUE(buffers[0]);
+    std::string getVal((char *)buffers[0]->ImmutableData(), buffers[0]->GetSize());
+    EXPECT_EQ(getVal, val);
+
+    LOG(INFO) << "Calling perf manager print from client side in case it didn't get written.";
+    PerfManager *perfManager = PerfManager::Instance();
+    perfManager->PrintPerfLog();
+}
+
+TEST_F(ExclusiveConn, MultiThreadSinglePutAndGetTest)
+{
+    FLAGS_v = 10;  // get lots of logs at client layer
+    int numThreads = 5;
+    LOG(INFO) << "Testing multi threads single put and get";
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);  // connect to worker 0
+    connectOptions.enableExclusiveConnection = true;
+    std::shared_ptr<ObjectClient> client0 = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(client0->Init());
+
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
+
+    LOG(INFO) << "now put the data";
+    std::vector<std::thread> threads;
+    for (auto i = 0; i < numThreads; i++) {
+        std::string objKey = "AmazingKey_" + std::to_string(i);
+        std::string val("a");
+
+        threads.emplace_back([i, &client0, &objKey, &val, &param]() {
+            LOG(INFO) << "Thread " << std::to_string(i) << "starts.";
+            DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
+            std::vector<Optional<Buffer>> buffers;
+            DS_EXPECT_OK(client0->Get({ objKey }, 0, buffers));
+            ASSERT_EQ(buffers.size(), size_t(1));
+            ASSERT_TRUE(buffers[0]);
+            std::string getVal((char *)buffers[0]->ImmutableData(), buffers[0]->GetSize());
+            EXPECT_EQ(getVal, val);
+            LOG(INFO) << "Thread " << std::to_string(i) << "finishes.";
+        });
+    }
+
+    for (auto& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+
+    // maybe this not needed
+    LOG(INFO) << "Calling perf manager print from client side in case it didn't get written.";
+    PerfManager *perfManager = PerfManager::Instance();
+    perfManager->PrintPerfLog();
 }
 
 }  // namespace st

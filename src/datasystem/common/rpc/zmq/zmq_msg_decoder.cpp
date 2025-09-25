@@ -62,9 +62,13 @@ Status ZmqMsgDecoder::Recv()
     // It is assumed the underlying file descriptor is non-blocking
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(K_WA_SIZE >= bytesReceived_, K_RUNTIME_ERROR,
                                          FormatString("Invalid bytesReceived_ %zu", bytesReceived_));
-    ssize_t bytesReceived = recv(fd_, buf + bytesReceived_, K_WA_SIZE - bytesReceived_, 0);
+
+    // This code is doing direct socket system call instead of going through the UnixSockFd interface.
+    // This may be a concern for exclusive connection logic. Current, this codepath does not seem to be called from the
+    // client-side, so it is not currently an issue.
+    ssize_t bytesReceived = recv(pSockFd_->GetFd(), buf + bytesReceived_, K_WA_SIZE - bytesReceived_, 0);
     if (bytesReceived == -1) {
-        auto rc = UnixSockFd::ErrnoToStatus(errno, fd_);
+        auto rc = UnixSockFd::ErrnoToStatus(errno, pSockFd_->GetFd());
         return rc;
     }
     if (bytesReceived == 0) {
@@ -97,8 +101,7 @@ Status ZmqMsgDecoder::DecodeHdrLen(MsgState &state)
 {
     CHECK_FAIL_RETURN_STATUS(state == MsgState::HDR_LEN_READY, K_RUNTIME_ERROR, "Wrong state");
     if (Empty()) {
-        UnixSockFd sock(fd_);
-        RETURN_IF_NOT_OK(sock.RecvProtobuf(hdr_));
+        RETURN_IF_NOT_OK(pSockFd_->RecvProtobuf(hdr_));
         // Move the state to detect if it is V1 or V2
         state = MsgState::MTP_DETECT;
         return Status::OK();
@@ -146,11 +149,11 @@ Status ZmqMsgDecoder::DetectMTP(MsgState &state)
     // V2 sends an empty header
     newFormat_ = hdr_.msg_size_size() == 0;
     if (newFormat_) {
-        VLOG(RPC_LOG_LEVEL) << FormatString("V2 format detected for fd %d", fd_);
+        VLOG(RPC_LOG_LEVEL) << FormatString("V2 format detected for fd %d", pSockFd_->GetFd());
         state = MsgState::FLAGS_READY;
     } else {
         // V1 format
-        VLOG(RPC_LOG_LEVEL) << FormatString("V1 format detected for fd %d", fd_);
+        VLOG(RPC_LOG_LEVEL) << FormatString("V1 format detected for fd %d", pSockFd_->GetFd());
         state = MsgState::DOWNLEVEL_CLIENT;
     }
     return Status::OK();
@@ -163,7 +166,8 @@ Status ZmqMsgDecoder::V1Client(MsgState &state)
     // possibly some bytes in the work area.
     v1Frames_.clear();
     const int numMsg = hdr_.msg_size_size();
-    VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to receive %d frames from fd %d using V1 format", numMsg, fd_);
+    VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to receive %d frames from fd %d using V1 format", numMsg,
+                                        pSockFd_->GetFd());
     for (auto i = 0; i < hdr_.msg_size_size(); ++i) {
         size_t msgReadSoFar = 0;
         ZmqMessage msg;
@@ -172,10 +176,9 @@ Status ZmqMsgDecoder::V1Client(MsgState &state)
         RETURN_IF_NOT_OK(TransferFromWA(msg.Data(), sz, msgReadSoFar));
         // For the rest we will simply read directly into the ZmqMessage.
         if (msgReadSoFar < sz) {
-            UnixSockFd sock(fd_);
             // We will block ourselves until we get all the data.
             RETURN_IF_NOT_OK(
-                sock.Recv(reinterpret_cast<uint8_t *>(msg.Data()) + msgReadSoFar, sz - msgReadSoFar, true));
+                pSockFd_->Recv(reinterpret_cast<uint8_t *>(msg.Data()) + msgReadSoFar, sz - msgReadSoFar, true));
         }
         VLOG(RPC_LOG_LEVEL) << "Frame (" << i << ") received. Size " << msg.Size() << " ... " << msg;
         v1Frames_.push_back(std::move(msg));
@@ -313,9 +316,8 @@ Status ZmqMsgDecoder::ReadMessage(MsgState &state, void *dest, size_t sz)
     // For the rest or large payload, we will simply read directly into the ZmqMessage.
     if (msgReadSoFar < msgSize_) {
         // We will block ourselves until we get all the data.
-        UnixSockFd sock(fd_);
-        RETURN_IF_NOT_OK(
-            sock.Recv(reinterpret_cast<uint8_t *>(inProcess_.Data()) + msgReadSoFar, msgSize_ - msgReadSoFar, true));
+        RETURN_IF_NOT_OK(pSockFd_->Recv(reinterpret_cast<uint8_t *>(inProcess_.Data()) + msgReadSoFar,
+                                        msgSize_ - msgReadSoFar, true));
     }
     chgState();
     return Status::OK();
@@ -375,18 +377,17 @@ Status ZmqMsgDecoder::GetMessage(ZmqMessage &outMsg, bool &more)
     return rc;
 }
 
-Status ZmqMsgDecoder::ReceiveMsgFramesV1(ZmqMsgFrames &frames) const
+Status ZmqMsgDecoder::ReceiveMsgFramesV1(ZmqMsgFrames &frames)
 {
-    UnixSockFd sock(fd_);
     MultiMsgHdrPb hdr;
-    RETURN_IF_NOT_OK(sock.RecvProtobuf(hdr));
+    RETURN_IF_NOT_OK(pSockFd_->RecvProtobuf(hdr));
     const int numMsg = hdr.msg_size_size();
     VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to receive %d frames from fd %d using V1 format", numMsg,
-                                        sock.GetFd());
+                                        pSockFd_->GetFd());
     for (int i = 0; i < numMsg; ++i) {
         ZmqMessage msg;
         RETURN_IF_NOT_OK(msg.AllocMem(hdr.msg_size(i)));
-        RETURN_IF_NOT_OK(sock.Recv(msg.Data(), msg.Size(), true));
+        RETURN_IF_NOT_OK(pSockFd_->Recv(msg.Data(), msg.Size(), true));
         VLOG(RPC_LOG_LEVEL) << "Frame (" << i << ") received. Size " << msg.Size() << " ... " << msg;
         frames.push_back(std::move(msg));
     }
@@ -465,7 +466,22 @@ Status ZmqMsgDecoder::ReceivePayloadIntoMemory(void *dest, size_t sz)
 }
 
 ZmqMsgDecoder::ZmqMsgDecoder(int fd)
-    : fd_(fd),
+    : sockFd_(fd),
+      curFrame_(0),
+      msgState_(MsgState::HDR_LEN_READY),
+      flag_(MTP_PROTOCOL::MTP_NONE),
+      bytesReceived_(0),
+      pos_(0),
+      msgSize_(0),
+      rpcHdrSz_(0),
+      newFormat_(true)
+{
+    wa_ = std::make_unique<uint8_t[]>(K_WA_SIZE);
+    pSockFd_ = &sockFd_;
+}
+
+ZmqMsgDecoder::ZmqMsgDecoder(UnixSockFd *sockFdRef)
+    : pSockFd_(sockFdRef),
       curFrame_(0),
       msgState_(MsgState::HDR_LEN_READY),
       flag_(MTP_PROTOCOL::MTP_NONE),
@@ -505,20 +521,18 @@ Status ZmqMsgEncoder::SendMessage(const ZmqMessage &msg, bool more) const
     if (type == ZmqMessage::ZmqMsgType::DECODER) {
         hdr.flag_ |= MTP_DECODER;
     }
-    UnixSockFd sock(fd_);
     const int SHORT_LENGTH = 2;
     MemView buf(&hdr, (hdr.flag_ & MTP_LONG) ? K_EIGHT_BYTE + 1 : SHORT_LENGTH);
-    RETURN_IF_NOT_OK(sock.Send(buf));
+    RETURN_IF_NOT_OK(pSockFd_->Send(buf));
     if (sz > 0) {
         buf = MemView(msg.Data(), sz);
-        RETURN_IF_NOT_OK(sock.Send(buf));
+        RETURN_IF_NOT_OK(pSockFd_->Send(buf));
     }
     return Status::OK();
 }
 
-Status ZmqMsgEncoder::SendMsgFramesV1(ZmqMsgFrames &que) const
+Status ZmqMsgEncoder::SendMsgFramesV1(ZmqMsgFrames &que)
 {
-    UnixSockFd sock(fd_);
     MultiMsgHdrPb hdr;
     auto it = que.begin();
     while (it != que.end()) {
@@ -526,28 +540,28 @@ Status ZmqMsgEncoder::SendMsgFramesV1(ZmqMsgFrames &que) const
         ++it;
     }
     VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to send %d frames to fd %d using V1 format", hdr.msg_size_size(),
-                                        sock.GetFd());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(sock.SendProtobuf(hdr), FormatString("Errno = %d", errno));
+                                        pSockFd_->GetFd());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(pSockFd_->SendProtobuf(hdr), FormatString("Errno = %d", errno));
     int i = 0;
     while (!que.empty()) {
         auto &msg = que.front();
         MemView buf(msg.Data(), msg.Size());
-        RETURN_IF_NOT_OK(sock.Send(buf));
+        RETURN_IF_NOT_OK(pSockFd_->Send(buf));
         VLOG(RPC_LOG_LEVEL) << "Frame (" << i++ << ") sent. Size " << msg.Size() << " ... " << msg;
         que.pop_front();
     }
     return Status::OK();
 }
 
-Status ZmqMsgEncoder::SendMsgFramesV2(ZmqMsgFrames &que) const
+Status ZmqMsgEncoder::SendMsgFramesV2(ZmqMsgFrames &que)
 {
-    VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to send %d frames to fd %d using V2 format", que.size(), fd_);
+    VLOG(RPC_LOG_LEVEL) << FormatString("Prepare to send %d frames to fd %d using V2 format", que.size(),
+                                        pSockFd_->GetFd());
     // We will send an empty MultiMsgHdrPb to be compatible with V1,
     // and remote peer can distinguish if it is V1 or V2 format.
     {
-        UnixSockFd sock(fd_);
         MultiMsgHdrPb hdr;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(sock.SendProtobuf(hdr), FormatString("Errno = %d", errno));
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(pSockFd_->SendProtobuf(hdr), FormatString("Errno = %d", errno));
     }
     int i = 0;
     bool more = true;
@@ -566,7 +580,7 @@ Status ZmqMsgEncoder::SendMsgFrames(EventType type, ZmqMsgFrames &frames)
     if (type == V2MTP) {
         return SendMsgFramesV2(frames);
     } else if (type == V1MTP) {
-        VLOG(RPC_LOG_LEVEL) << FormatString("Fall back to V1 format for fd %d", fd_);
+        VLOG(RPC_LOG_LEVEL) << FormatString("Fall back to V1 format for fd %d", pSockFd_->GetFd());
         return SendMsgFramesV1(frames);
     }
     RETURN_STATUS(K_INVALID, FormatString("Unsupported type %d", type));

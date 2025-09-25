@@ -50,15 +50,21 @@ static constexpr uint32_t BIT_NUM_OF_INT = 32;
 const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
                                                        StatusCode::K_RPC_DEADLINE_EXCEEDED,
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
-static constexpr uint64_t P2P_TIMEOUT_MS = 60'000;
-constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20'000;
+static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
+constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
 
 ClientWorkerApi::ClientWorkerApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
                                  Signature *signature, std::string tenantId,
-                                 bool enableCrossNodeConnection)
+                                 bool enableCrossNodeConnection, bool enableExclusiveConnection)
     : ClientWorkerCommonApi(hostPort, cred, heartbeatType, signature, std::move(tenantId),
-                            enableCrossNodeConnection)
+                            enableCrossNodeConnection, enableExclusiveConnection)
 {
+    if (enableExclusiveConnection) {
+        // Assign a value and then bump the counter. This id is a client-side-only identifier, a bit like a
+        // client id but lighter weight for performance sensitive comparisons (existing client id is a large
+        // string and costly for lookups and string compare)
+        exclusiveId_ = exclusiveIdGen_++;
+    }
 }
 
 Status ClientWorkerApi::Init(int32_t timeoutMs)
@@ -75,6 +81,10 @@ Status ClientWorkerApi::Init(int32_t timeoutMs)
         timeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(timeoutMs));
     }
     stub_ = std::make_unique<WorkerOCService_Stub>(channel, timeoutMs);
+    if (enableExclusiveConnection_ && exclusiveId_.has_value()) {
+        // Note: exclusiveConnSockPath_ will be initialized during client register call driven from base class Init()
+        stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+    }
     return Status::OK();
 }
 

@@ -156,8 +156,10 @@ private:
     static void ImplementZmqCallMethodDecl(io::Printer &printer);
     static void ImplementZmqCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
                                           const std::string &indent, const std::string &svcName);
+    static void ImplementZmqDirectCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                                const std::string &indent, const std::string &svcName);
     static void ImplementCallMethodNoStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                            int methodIndex, const std::string &indent);
+                                            int methodIndex, const std::string &indent, bool enableMsgQ = true);
     static void ImplementCallMethodClientStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
                                                 int methodIndex, const std::string &indent);
     static void ImplementCallMethodServerStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
@@ -165,7 +167,7 @@ private:
     static void ImplementCallMethodStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
                                           int methodIndex, const std::string &indent);
     static void ImplementCallMethodUnarySocket(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                               int methodIndex, const std::string &indent);
+                                               int methodIndex, const std::string &indent, bool enableMsgQ = true);
 
     /**
      * @brief Implement stub api for both sides streaming.

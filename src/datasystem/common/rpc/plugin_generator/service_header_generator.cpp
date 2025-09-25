@@ -198,5 +198,9 @@ void ZmqRpcGenerator::ImplementZmqCallMethodDecl(io::Printer &printer)
     printer.PrintRaw(
         "    ::datasystem::Status CallMethod(std::shared_ptr<::datasystem::ZmqServerMsgQueRef> sock, "
         "::datasystem::MetaPb meta, std::deque<::datasystem::ZmqMessage> &&inMsg, int64_t seqNo) override;\n");
+    printer.PrintRaw(
+        "    ::datasystem::Status DirectCallMethod(::datasystem::MetaPb meta,"
+        " std::deque<::datasystem::ZmqMessage> &&inMsg, int64_t seqNo,"
+        " std::deque<::datasystem::ZmqMessage> &outMsg) override;\n");
 }
 }  // namespace datasystem

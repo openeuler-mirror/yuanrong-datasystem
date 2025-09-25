@@ -1075,6 +1075,7 @@ private:
     int32_t timeoutMs_;
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
+    bool enableExclusiveConnection_ = false;
     std::unique_ptr<Signature> signature_{ nullptr };
     std::vector<std::shared_ptr<ClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };

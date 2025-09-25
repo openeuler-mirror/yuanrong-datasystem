@@ -36,11 +36,13 @@
 DS_DECLARE_string(unix_domain_socket_dir);
 
 namespace datasystem {
+static const int MAX_EXCLUSIVE_CONNECTIONS_LIMIT = 128;
 ZmqService::ZmqService()
     : proxy_(nullptr),
       outfd_(ZMQ_NO_FILE_FD),
       infd_(ZMQ_NO_FILE_FD),
       tcpfd_(ZMQ_NO_FILE_FD),
+      exclListenFd_(ZMQ_NO_FILE_FD),
       nextWorker_(0),
       globalInterrupt_(false),
       streamSupport_(false),
@@ -82,6 +84,15 @@ ZmqService::~ZmqService()
     if (payloadBank_ != nullptr) {
         payloadBank_.reset();
     }
+    for (auto &agent : workAgents_) {
+        try {
+            agent->Stop();
+            agent->CloseSocket();
+        } catch  (const std::exception &e) {
+            VLOG(ERROR) << "A work agent got an exception during Stop(): " << e.what();
+        }
+    }
+    workAgentThreadPool_.reset();
 }
 
 Status ZmqService::CreateWorkerCBs()
@@ -190,6 +201,20 @@ Status ZmqService::BindUnixPath()
         RETURN_IF_NOT_OK(AddListenFd(listenFd));
         sockPath_.emplace_back(sockPath);
     }
+
+    // create a exclusive connection listener fd.
+    sockaddr_un addr{};
+    auto exclSockPath = FormatString("%s/%s", path, "exclusiveConn");
+    unlink(exclSockPath.data());
+    UnixSockFd tempsockfd;
+    RETURN_IF_NOT_OK(tempsockfd.CreateUnixSocket());
+    RETURN_IF_NOT_OK(UnixSockFd::SetUpSockPath(exclSockPath, addr));
+    RETURN_IF_NOT_OK(tempsockfd.Bind(addr, RPC_SOCK_MODE));
+    RETURN_IF_NOT_OK(tempsockfd.SetNonBlocking());
+    exclListenFd_ = tempsockfd.GetFd();
+    RETURN_IF_NOT_OK(AddListenFd(exclListenFd_));
+    sockPath_.emplace_back(exclSockPath);
+    exclSockPath_ = exclSockPath;
     return Status::OK();
 }
 
@@ -528,7 +553,7 @@ Status ZmqService::WorkerCB::ProcessStreamRpcRq(const MetaPb &meta, ZmqMsgFrames
     CHECK_FAIL_RETURN_STATUS(methodObj->ClientStreaming() || methodObj->ServerStreaming(), K_RUNTIME_ERROR,
                              "Not streaming method");
     m.set_gateway_id(meta.gateway_id());
-    m.set_routing_fd(meta.routing_fd());
+    m.set_route_fd(meta.route_fd());
     m.set_event_type(meta.event_type());
     std::string workerId;
     PerfPoint point(PerfKey::ZMQ_GET_STREAM_WORKER);
@@ -554,7 +579,7 @@ Status ZmqService::WorkerCB::ProcessHandshakeRq(const MetaPb &meta, ZmqMsgFrames
     RETURN_IF_NOT_OK(ParseFromZmqMessage(inMsg.front(), m));
     inMsg.pop_front();
     m.set_gateway_id(meta.gateway_id());
-    m.set_routing_fd(meta.routing_fd());
+    m.set_route_fd(meta.route_fd());
     m.set_event_type(meta.event_type());
     // Create a bank entry
     HandshakeTokenPb reply;
@@ -639,9 +664,7 @@ Status ZmqService::WorkerCB::HandleInternalRq(int fd, const MetaPb &meta, ZmqMsg
 
 Status ZmqService::WorkerCB::WorkerEntryImpl(MetaPb &meta, ZmqMsgFrames &inMsg, ZmqMsgFrames &replyMsg)
 {
-    int fd;
-    CHECK_FAIL_RETURN_STATUS(StringToInt(meta.routing_fd(), fd), K_RUNTIME_ERROR,
-                             "String convert to int failed, zmq service worker entry failed");
+    int fd = meta.route_fd();
     const int idx = meta.method_index();
     if (idx >= 0) {
         auto remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
@@ -692,6 +715,32 @@ Status ZmqService::WorkerCB::WorkerEntry()
         RETURN_IF_NOT_OK(
             ZmqService::SendStatus(replyMsg, meta, rc, [this](ZmqMetaMsgFramesRef e) { return worker_->SendMsg(e); }));
     }
+    return Status::OK();
+}
+
+Status ZmqService::WorkerCB::WorkerEntryWithoutMsgQ(ZmqMetaMsgFrames &inMsg, ZmqMetaMsgFrames &outMsg)
+{
+    ReadLock rlock(&inUse_);
+    MetaPb &meta = inMsg.first;
+    // Check point.
+    if (impl_->globalInterrupt_) {
+        return Status::OK();
+    }
+    VLOG(RPC_LOG_LEVEL) << FormatString("Worker %s started for service '%s' Method %d serving %s", GetWorkerId(),
+                                        meta.svc_name(), meta.method_index(), meta.client_id());
+    ZmqMsgFrames replyMsg;
+    Status rc;
+    const int idx = meta.method_index();
+    if (idx >= 0) {
+        // There is one more protobuf after, but we can't parse it (yet) and leave
+        // it to the lower level to decode. Also note if the client side is streaming,
+        // it will be handled by StreamWorkEntry.
+        rc = impl_->DirectCallMethod(meta, std::move(inMsg.second), 0, replyMsg);
+    }
+    VLOG(RPC_LOG_LEVEL) << "Service '" << impl_->ServiceName() << "' Method " << meta.method_index() << " rc "
+                        << rc.ToString();
+    outMsg.first = std::move(meta);
+    outMsg.second = std::move(replyMsg);
     return Status::OK();
 }
 
@@ -824,7 +873,7 @@ Status ZmqService::ProcessPayloadGetRq(MetaPb &meta, ZmqMsgFrames &inMsg, ZmqMsg
         if (meta.event_type() == EventType::ZMQ) {
             int fd = std::get<ZmqPayloadBank::COL::K_FD>(entry);
             meta.set_event_type(EventType::V2MTP);
-            meta.set_routing_fd(std::to_string(fd));
+            meta.set_route_fd(fd);
             VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Choosing fd %d for V2MTP for service %s client %s", fd,
                                                     meta.svc_name(), meta.client_id());
         }
@@ -888,8 +937,7 @@ Status ZmqService::ParkPayloadIfNeeded(ZmqMetaMsgFrames &p, ZmqMsgFrames &payloa
         CHECK_FAIL_RETURN_STATUS(routeIt != routes_.end(), K_NOT_FOUND, "No other routes");
         fd = *(routeIt->second.begin());
     } else {
-        CHECK_FAIL_RETURN_STATUS(StringToInt(meta.routing_fd(), fd), K_RUNTIME_ERROR,
-                                 "String convert to int failed, service to client failed");
+        fd = meta.route_fd();
     }
 
     // At this point, we know the client can support V2MTP. We will use FLAGS_payload_nocopy_threshold
@@ -939,13 +987,11 @@ Status ZmqService::ServiceToClient(ZmqMetaMsgFrames &p)
         rpc2.first = std::move(m);
         rpc2.second = std::move(payload);
     }
-    int fd;
+    int fd = meta.route_fd();
     if (meta.event_type() == EventType::ZMQ) {
         RETURN_IF_NOT_OK(replyQueue_->Put(std::move(p)));
         eventfd_write(outfd_, 1);
     } else {
-        CHECK_FAIL_RETURN_STATUS(StringToInt(meta.routing_fd(), fd), K_RUNTIME_ERROR,
-                                 "String convert to int failed, service to client failed");
         RETURN_IF_NOT_OK(io_->ServiceToClient(fd, p));
     }
     if (offlineRpc) {
@@ -1135,31 +1181,80 @@ Status ZmqService::FrontendToBackend(int fd, const EventType type, ZmqMetaMsgFra
 
 Status ZmqService::ProcessAccept(int listenFd)
 {
-    static std::map<int, bool> hasBeenLogged;
     bool isTcp = (listenFd == tcpfd_);
-    auto fd = accept(listenFd, nullptr, nullptr);
-    if (fd > 0) {
-        UnixSockFd sock(fd);
-        hasBeenLogged[listenFd] = false;
+    UnixSockFd listenSockFd(listenFd);
+    UnixSockFd connectedSockFd;
+    RETURN_IF_NOT_OK(listenSockFd.Accept(connectedSockFd));
+    if (listenFd == exclListenFd_) {
+        VLOG(RPC_LOG_LEVEL) << FormatString("Spawn new work agent for exclusive connection, sock_fd: %s",
+                                            connectedSockFd.GetFd());
+        if (!workAgentThreadPool_) {
+            RETURN_IF_EXCEPTION_OCCURS(workAgentThreadPool_ =
+                                       std::make_unique<ThreadPool>(1, MAX_EXCLUSIVE_CONNECTIONS_LIMIT));
+        }
+        auto newAgent = std::make_unique<WorkAgent>(connectedSockFd, this, !isTcp);
+        auto ptr = newAgent.get();
+        workAgentThreadPool_->Execute([this, ptr] { ptr->Run(); });
+        workAgents_.push_back(std::move(newAgent));
+    } else {
         // Make it non-blocking
-        RETURN_IF_NOT_OK(sock.SetNonBlocking());
+        RETURN_IF_NOT_OK(connectedSockFd.SetNonBlocking());
         if (isTcp) {
-            RETURN_IF_NOT_OK(sock.SetNoDelay());
+            RETURN_IF_NOT_OK(connectedSockFd.SetNoDelay());
         }
         // Assign it to the next io service
-        RETURN_IF_NOT_OK(io_->AddFd(this, fd, !isTcp));
-        VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Spawn %s connection %d for service %s", isTcp ? "tcp" : "uds", fd,
-                                                serviceName_);
-    } else {
-        Status rc = UnixSockFd::ErrnoToStatus(errno, listenFd);
-        auto it = hasBeenLogged.find(listenFd);
-        if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN && (it == hasBeenLogged.end() || !it->second)) {
-            hasBeenLogged[listenFd] = true;
-            LOG(ERROR) << FormatString("Spawn uds connection %d failed for service %s:", listenFd, serviceName_)
-                       << " with status:" << rc.ToString();
-            return rc;
-        }
+        RETURN_IF_NOT_OK(io_->AddFd(this, connectedSockFd.GetFd(), !isTcp));
+        VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Spawn %s connection %d for service %s", isTcp ? "tcp" : "uds",
+                                                connectedSockFd.GetFd(), serviceName_);
     }
+
+    return Status::OK();
+}
+
+Status ZmqService::DirectExecInternalMethod(int fd, EventType type, ZmqMetaMsgFrames &inFrames,
+                                            ZmqMetaMsgFrames &outFrames)
+{
+    if (type == EventType::V2MTP || type == EventType::V1MTP) {
+        MetaPb meta;
+        ZmqCurveUserId userId;
+        // A direct connection from stub needs to be parsed.
+        Status rc = ParseMsgFrames(inFrames.second, meta, fd, type, userId);
+        if (rc.IsError()) {
+            // Log the message for anything else, and move on.
+            RETURN_STATUS_LOG_ERROR(StatusCode::K_OK, "Incompatible rpc request. Ignore");
+        }
+        inFrames.first = std::move(meta);
+    }
+
+    CHECK_FAIL_RETURN_STATUS(cfg_.numRegularSockets_ != 0, K_RUNTIME_ERROR,
+                             "Get id failed, regular sockets as divisor is 0, route to reg back end failed");
+    MetaPb &meta = inFrames.first;
+    auto id = nextWorker_.fetch_add(1) % cfg_.numRegularSockets_;
+    auto worker = workerCBs_[id];
+    auto workerId = worker->GetWorkerId();
+    meta.set_worker_id(workerId);
+
+    auto traceID = meta.trace_id();
+    auto timeout = meta.timeout();
+    auto dbName = meta.db_name();
+
+    Timer timer;
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+    if (timeout > 0) {
+        int64_t elapsed = timer.ElapsedMilliSecond();
+        reqTimeoutDuration.Init(timeout - elapsed);
+        scTimeoutDuration.Init(timeout - elapsed);
+    } else {
+        reqTimeoutDuration.Init();
+        scTimeoutDuration.Init();
+    }
+    g_MetaRocksDbName = dbName;
+    LOG_IF_ERROR(worker->WorkerEntryWithoutMsgQ(inFrames, outFrames), "worker entry failed");
+    g_MetaRocksDbName.clear();
+    workerOperationTimeCost.Clear();
+    masterOperationTimeCost.Clear();
+    VLOG(RPC_LOG_LEVEL) << FormatString("Routing request %s to %s", meta.client_id(), workerId);
+
     return Status::OK();
 }
 
@@ -1173,6 +1268,7 @@ Status ZmqService::HandleRqFromProxy()
         RETURN_IF_NOT_OK(rqQueue_->Take(&p));
         PerfPoint::RecordElapsed(PerfKey::ZMQ_ROUTER_TO_SVC, GetLapTime(p.first, "ZMQ_ROUTER_TO_SVC"));
         RETURN_IF_NOT_OK(FrontendToBackend(ZMQ_NO_FILE_FD, EventType::ZMQ, p, false));
+
         if (globalInterrupt_) {
             RETURN_STATUS(StatusCode::K_SHUTTING_DOWN, "Shutting down the socket.");
         }

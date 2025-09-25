@@ -108,6 +108,8 @@ public:
     Status ProcessServerReboot(const std::string &clientId, const std::string &tenantId, const std::string &reqToken,
                                const google::protobuf::RepeatedPtrField<google::protobuf::Any> &msg) override;
 
+    Status GetExclConnSockPath(std::string &sockPath) override;
+
     /**
      * @brief Register a client to client manager.
      * @param[in] clientId The clientId.

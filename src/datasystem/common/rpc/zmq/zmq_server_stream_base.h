@@ -25,7 +25,8 @@
 
 #include <queue>
 #include <utility>
-
+#include <mutex>
+#include <condition_variable>
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/zmq/zmq_service.h"
 #include "datasystem/common/rpc/zmq/zmq_stream_base.h"
@@ -266,11 +267,17 @@ class ServerUnaryWriterReaderImpl : public StreamBase {
 public:
     explicit ServerUnaryWriterReaderImpl(std::shared_ptr<ZmqServerMsgQueRef> mQue, const MetaPb &meta,
                                          ZmqMsgFrames &&inMsg, bool sendPayload, bool recvPayload)
-        : StreamBase::StreamBase(sendPayload, recvPayload), mQue_(std::move(mQue)), writeOnce_(false), readOnce_(false)
+        : StreamBase::StreamBase(sendPayload, recvPayload),
+          mQue_(std::move(mQue)),
+          writeOnce_(false),
+          readOnce_(false),
+          requestComplete_(true)
     {
         meta_ = meta;
         inMsg_ = std::move(inMsg);
+        enableMsgQ_ = (mQue_ != nullptr);
     }
+
     ~ServerUnaryWriterReaderImpl() override = default;
 
     virtual Status SendStatus(const Status &rc)
@@ -292,6 +299,49 @@ public:
         }
     }
 
+    Status GetOutMsg(ZmqMsgFrames &outMsg)
+    {
+        // Most codepaths do not have async handling, and requestComplete_ will always be true.
+        // If it does have async, then requestComplete_ will be initialized to false and we as the parent need to wait
+        // for the child thread to inform us when it is safe to continue processing after the request is done.
+        if (!requestComplete_) {
+            VLOG(RPC_LOG_LEVEL) << "Work agent needs to wait for async request to complete before returning results.";
+            std::unique_lock<std::mutex> lock(requestCompleteMtx_);
+            requestCompleteCond_.wait(lock, [this] { return (requestComplete_ == true); });
+            // There is no need to flip the requestComplete to false again because this class is instantiated for every
+            // request and is not re-used.
+            VLOG(RPC_LOG_LEVEL) << "Work agent was notified that the request completed.";
+        }
+        outMsg = std::move(outMsg_);
+        return Status::OK();
+    }
+
+    virtual bool EnableMsgQ()
+    {
+        return enableMsgQ_;
+    }
+
+    void SetRequestInProgress()
+    {
+        if (!enableMsgQ_) {
+            requestComplete_ = false;
+        }
+        // no-op if message queues were used. This call only relevent for exclusive connection mode.
+        // requestComplete_ remains true in that case.
+    }
+
+    void SetRequestComplete()
+    {
+        if (!enableMsgQ_) {
+            // Signal that the request is done.
+            std::unique_lock<std::mutex> lock(requestCompleteMtx_);
+            requestComplete_ = true;
+            lock.unlock();
+            requestCompleteCond_.notify_one();
+        }
+        // no-op if message queues were used. This call only relevent for exclusive connection mode.
+    }
+
     Status SendAll(ZmqSendFlags flags) override
     {
         PerfPoint::RecordElapsed(PerfKey::ZMQ_APP_WORKLOAD, GetLapTime(meta_, "ZMQ_APP_WORKLOAD"));
@@ -310,7 +360,29 @@ public:
             outMsg_.push_back(std::move(rcMsg));
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
             RETURN_OK_IF_TRUE(HasRecvPayloadOp());
-            return SendAll(ZmqSendFlags::NONE);
+            if (enableMsgQ_) {
+                return SendAll(ZmqSendFlags::NONE);
+            }
+            return Status::OK();
+        } else {
+            RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "ServerUnaryWriterReaderImpl is only supposed to be used once!");
+        }
+    }
+
+    virtual Status ConstructWriteMsg(const W &pb, ZmqMsgFrames &outMsg)
+    {
+        CHECK_FAIL_RETURN_STATUS(!enableMsgQ_, StatusCode::K_RUNTIME_ERROR,
+                                "Invoke ConstructWriteMsg() only if enableMsgQ_ flag is off.");
+        bool expected = false;
+        if (writeOnce_.compare_exchange_strong(expected, true)) {
+            VLOG(RPC_LOG_LEVEL) << "Server uses unary socket sending rc " << Status::OK() << " message "
+                                << LogHelper::IgnoreSensitive(pb) << " back to client " << meta_.client_id()
+                                << std::endl;
+            ZmqMessage rcMsg = StatusToZmqMessage(Status::OK());
+            outMsg.push_back(std::move(rcMsg));
+            RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg));
+            RETURN_OK_IF_TRUE(HasRecvPayloadOp());
+            return Status::OK();
         } else {
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "ServerUnaryWriterReaderImpl is only supposed to be used once!");
         }
@@ -335,7 +407,10 @@ public:
             "Server uses unary socket to send %zu payload bytes to Service %s Method"
             "%d to client %s",
             bufSz, meta_.svc_name(), meta_.method_index(), meta_.client_id());
-        return SendAll(ZmqSendFlags::NONE);
+        if (enableMsgQ_) {
+            return SendAll(ZmqSendFlags::NONE);
+        }
+        return Status::OK();
     }
 
     virtual Status SendPayload(std::vector<datasystem::RpcMessage> &buffer)
@@ -428,6 +503,10 @@ protected:
 private:
     std::atomic<bool> writeOnce_;
     std::atomic<bool> readOnce_;
+    bool enableMsgQ_;
+    std::atomic<bool> requestComplete_;
+    std::mutex requestCompleteMtx_;
+    std::condition_variable requestCompleteCond_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_STREAM_SERVER_H

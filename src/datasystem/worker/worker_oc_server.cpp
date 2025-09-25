@@ -1295,6 +1295,11 @@ Status WorkerOCServer::AddClient(const std::string &clientId, bool shmEnabled, i
         clientId, std::bind(&WorkerOCServer::AfterClientLostHandler, this, clientId), HeartbeatType::RPC_HEARTBEAT);
 }
 
+Status WorkerOCServer::GetExclConnSockPath(std::string &sockPath)
+{
+    return objCacheClientWorkerSvc_->GetExclConnSockPath(sockPath);
+}
+
 void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 {
     int updateCheckNum = static_cast<int>(FLAGS_check_async_queue_empty_time_s / CHECK_ASYNC_SLEEP_TIME_S);

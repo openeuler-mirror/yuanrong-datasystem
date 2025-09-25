@@ -297,6 +297,7 @@ class ObjectClient:
         access_key(str): The access key used by AK/SK authorize.
         secret_key(str): The secret key for AK/SK authorize.
         tenant_id(str): The tenant ID.
+        enable_exclusive_connection(bool): Indicates if the client connects using exclusive conn mode, default off.
 
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
@@ -317,6 +318,7 @@ class ObjectClient:
         access_key="",
         secret_key="",
         tenant_id="",
+        enable_exclusive_connection=False
     ):
         """Constructor of the ObjectClient class
 
@@ -348,6 +350,7 @@ class ObjectClient:
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
+            ["enable_exclusive_connection", enable_exclusive_connection, bool]
         ]
         validator.check_args_types(args)
         self.client = ds.ObjectClient(
@@ -359,7 +362,8 @@ class ObjectClient:
             server_public_key,
             access_key,
             secret_key,
-            tenant_id
+            tenant_id,
+            enable_exclusive_connection
         )
 
     @staticmethod

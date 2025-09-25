@@ -166,7 +166,8 @@ void ZmqRpcGenerator::ImplementGenericStubOtherFuncDecl(io::Printer &printer)
     const std::string otherFuncDecl =
         "    void ForgetRequest(int64_t tagId);\n"
         "    bool IsPeerAlive(uint32_t threshold);\n"
-        "    void CacheSession(bool cache);\n";
+        "    void CacheSession(bool cache);\n"
+        "    void SetExclusiveConnInfo(const std::optional<int32_t> &exclusiveId, const std::string &sockPath);\n";
     printer.PrintRaw(otherFuncDecl);
 }
 
