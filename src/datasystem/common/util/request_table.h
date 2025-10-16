@@ -34,17 +34,20 @@ namespace datasystem {
 template <typename Request>
 class RequestTable {
 public:
+    using TbbRequestTable = tbb::concurrent_hash_map<ImmutableString, std::vector<std::shared_ptr<Request>>>;
+
     /**
      * @brief Add request to Worker/MasterRequestManager.
      * @param[in] objectKey The object key.
      * @param[in] request The request that is waiting on the object key.
      * @return Status of the call.
      */
-    Status AddRequest(const std::string &objectKey, std::shared_ptr<Request> &request)
+    Status AddRequest(const std::string &objectKey, const std::shared_ptr<Request> &request)
     {
         RETURN_RUNTIME_ERROR_IF_NULL(request);
-        std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-        requestTable_[objectKey].push_back(request);
+        typename TbbRequestTable::accessor acc;
+        requestTable_.insert(acc, objectKey);
+        acc->second.emplace_back(request);
         return Status::OK();
     }
 
@@ -55,23 +58,21 @@ public:
      */
     bool ObjectInRequest(const std::string &objectKey)
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-        return requestTable_.find(objectKey) != requestTable_.end();
+        return requestTable_.count(objectKey) != 0;
     }
 
     /**
      * @brief Remove the request from the waiting requests table.
      * @param[in] request The request need to remove.
      */
-    void RemoveRequest(std::shared_ptr<Request> &request)
+    void RemoveRequest(const std::shared_ptr<Request> &request)
     {
-        std::lock_guard<std::shared_timed_mutex> locker(mutex_);
         for (auto &objectKey : request->deduplicatedObjectKeys_) {
-            auto iter = requestTable_.find(objectKey);
-            if (iter == requestTable_.end()) {
+            typename TbbRequestTable::accessor acc;
+            if (!requestTable_.find(acc, objectKey)) {
                 continue;
             }
-            auto &requestsOnObject = iter->second;
+            auto &requestsOnObject = acc->second;
             // Erase request from the list.
             auto it = std::find(requestsOnObject.begin(), requestsOnObject.end(), request);
             if (it == requestsOnObject.end()) {
@@ -80,7 +81,7 @@ public:
             requestsOnObject.erase(it);
             // If the vector is empty, remove the object key from the map.
             if (requestsOnObject.empty()) {
-                requestTable_.erase(iter);
+                requestTable_.erase(acc);
             }
         }
     }
@@ -91,8 +92,7 @@ public:
      */
     void EraseSub(const std::string &key)
     {
-        std::lock_guard<std::shared_timed_mutex> locker(mutex_);
-        (void)requestTable_.erase(key);
+        requestTable_.erase(key);
     }
 
     /**
@@ -111,19 +111,19 @@ public:
         const std::string &objectKey, std::shared_ptr<EntryParam> entryParam, Status lastRc,
         std::function<void(std::shared_ptr<Request>)> doneRequestCallBack,
         const std::shared_ptr<Request> &specRequset = nullptr, bool isUpdateSubRecvEventRequest = false,
-        std::function<bool(const std::string &objKey, const std::shared_ptr<Request>)> checkOffsetMatch = nullptr)
+        std::function<bool(const std::string &objKey, const std::shared_ptr<Request> &req)> checkOffsetMatch = nullptr)
     {
         std::vector<std::shared_ptr<Request>> requests;
         {
-            std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-            auto it = requestTable_.find(objectKey);
-            RETURN_OK_IF_TRUE(it == requestTable_.end());
+            typename TbbRequestTable::const_accessor acc;
+            RETURN_OK_IF_TRUE(!requestTable_.find(acc, objectKey));
 
             LOG(INFO) << FormatString("Update request for objectKey: %s, status:%s", objectKey, lastRc.ToString());
             // Avoid acquiring locks for both WorkerRequestManager/MasterDevReqManager and xxRequest at the same time.
-            requests = it->second;
+            requests = acc->second;
         }
         std::vector<std::shared_ptr<Request>> completedRequests;
+        completedRequests.reserve(requests.size());
         for (auto &req : requests) {
             std::lock_guard<std::mutex> locker(req->mutex_);
             if (specRequset != nullptr && specRequset != req) {
@@ -168,19 +168,16 @@ public:
      */
     std::vector<std::shared_ptr<Request>> GetRequestsByObject(const std::string &objKey)
     {
-        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-        auto it = requestTable_.find(objKey);
-        if (it != requestTable_.end()) {
-            return it->second;
+        typename TbbRequestTable::const_accessor acc;
+        if (requestTable_.find(acc, objKey)) {
+            return acc->second;
         }
         return {};
     }
 
 private:
-    std::shared_timed_mutex mutex_;
-
     // A hash table that maps object key to a vector of requests, which are waiting for objects to be ready.
-    std::unordered_map<ImmutableString, std::vector<std::shared_ptr<Request>>> requestTable_;
+    TbbRequestTable requestTable_;
 };
 
 template <typename Req, typename Resp, typename EntryParam>
