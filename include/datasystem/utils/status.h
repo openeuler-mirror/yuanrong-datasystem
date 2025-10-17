@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_UTILS_STATUS_H
 #define DATASYSTEM_UTILS_STATUS_H
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -108,11 +109,11 @@ class Status {
 public:
     Status() noexcept;
 
-    Status(const Status &other) = default;
+    Status(const Status &other) noexcept;
 
     Status(Status &&other) noexcept;
 
-    Status &operator=(const Status &other);
+    Status &operator=(const Status &other) noexcept;
 
     Status &operator=(Status &&other) noexcept;
 
@@ -123,7 +124,7 @@ public:
      * @param[in] code Return code.
      * @param[in] msg Return msg.
      */
-    Status(StatusCode code, std::string msg);
+    Status(StatusCode code, std::string msg) noexcept;
 
     /**
      * @brief Set return info of Status.
@@ -219,8 +220,13 @@ public:
     static std::string StatusCodeName(StatusCode code);
 
 private:
-    StatusCode code_;
-    std::string errMsg_;
+    void Assign(const Status &other) noexcept;
+
+    struct State {
+        StatusCode code;
+        std::string errMsg;
+    };
+    std::unique_ptr<State> state_{ nullptr };
 };
 }  // namespace datasystem
 

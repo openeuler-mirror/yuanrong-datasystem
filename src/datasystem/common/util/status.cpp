@@ -27,52 +27,54 @@
 #include "datasystem/common/log/trace.h"
 
 namespace datasystem {
-Status::Status() noexcept : code_(StatusCode::K_OK)
+Status::Status() noexcept : state_(nullptr)
 {
 }
 
-Status &Status::operator=(const Status &other)
+Status::Status(const Status &other) noexcept
 {
-    if (this == &other) {
-        return *this;
-    }
-    code_ = other.code_;
-    errMsg_ = other.errMsg_;
+    Assign(other);
+}
+
+Status &Status::operator=(const Status &other) noexcept
+{
+    Assign(other);
     return *this;
 }
 
 Status::Status(Status &&other) noexcept
 {
-    code_ = other.code_;
-    other.code_ = StatusCode::K_OK;
-    errMsg_ = std::move(other.errMsg_);
+    std::swap(state_, other.state_);
 }
 
 Status &Status::operator=(Status &&other) noexcept
 {
-    if (this == &other) {
-        return *this;
-    }
-    code_ = other.code_;
-    other.code_ = StatusCode::K_OK;
-    errMsg_ = std::move(other.errMsg_);
+    std::swap(state_, other.state_);
     return *this;
 }
 
-Status::Status(StatusCode code, std::string msg) : code_(code), errMsg_(std::move(msg))
+Status::Status(StatusCode code, std::string msg) noexcept
 {
-    auto traceId = Trace::Instance().GetTraceID();
-    if (code_ != K_OK && !traceId.empty() && errMsg_.find(traceId) == std::string::npos) {
-        if (!errMsg_.empty() && errMsg_.back() == '.') {
-            errMsg_.pop_back();
-        }
-        errMsg_ += ", traceId: " + traceId;
+    if (code == StatusCode::K_OK) {
+        return;
     }
+    auto traceId = Trace::Instance().GetTraceID();
+    if (code != K_OK && !traceId.empty()) {
+        if (!msg.empty() && msg.back() == '.') {
+            msg.pop_back();
+        }
+        msg += ", traceId: " + traceId;
+    }
+    state_ = std::make_unique<State>();
+    state_->code = code;
+    state_->errMsg = std::move(msg);
 }
 
 Status::Status(StatusCode code, int lineOfCode, const std::string &fileName, const std::string &extra)
 {
-    this->code_ = code;
+     if (code == StatusCode::K_OK) {
+        return;
+    }
     std::ostringstream ss;
     ss << "Thread ID " << std::this_thread::get_id() << " " << StatusCodeName(code) << ". ";
     if (!extra.empty()) {
@@ -85,10 +87,12 @@ Status::Status(StatusCode code, int lineOfCode, const std::string &fileName, con
         ss << "File         : " << fileName.substr(position, fileName.length() - position) << std::endl;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    if (code_ != K_OK && !traceId.empty() && errMsg_.find(traceId) == std::string::npos) {
+    if (code != K_OK && !traceId.empty()) {
         ss << "traceId      : " << traceId;
     }
-    errMsg_ = ss.str();
+    state_ = std::make_unique<State>();
+    state_->code = code;
+    state_->errMsg = ss.str();
 }
 
 std::ostream &operator<<(std::ostream &os, const Status &s)
@@ -99,23 +103,40 @@ std::ostream &operator<<(std::ostream &os, const Status &s)
 
 std::string Status::ToString() const
 {
-    return "code: [" + StatusCodeName(code_) + "], msg: [" + errMsg_ + "]";
+    return "code: [" + StatusCodeName(GetCode()) + "], msg: [" + GetMsg() + "]";
 }
 
 StatusCode Status::GetCode() const
 {
-    return code_;
+    return state_ == nullptr ? K_OK : state_->code;
 }
 
 std::string Status::GetMsg() const
 {
-    return errMsg_;
+    return state_ == nullptr ? "" : state_->errMsg;
 }
 
 void Status::AppendMsg(const std::string &appendMsg)
 {
-    errMsg_ +=  (!errMsg_.empty() && errMsg_.back() != '.' ? ". " : " ") + appendMsg;
+    if (IsOk()) {
+        return;
+    }
+    auto &errMsg = state_->errMsg;
+    errMsg += (!errMsg.empty() && errMsg.back() != '.' ? ". " : " ") + appendMsg;
 }
+
+void Status::Assign(const Status &other) noexcept
+{
+    if (other.IsOk()) {
+        state_ = nullptr;
+        return;
+    }
+    if (state_ == nullptr) {
+        state_ = std::make_unique<State>();
+    }
+    *state_ = *other.state_;
+}
+
 
 // clang-format off.
 #define STATUS_CODE_DEF(code, msg) \
@@ -138,8 +159,7 @@ std::string Status::StatusCodeName(StatusCode code)
 #undef STATUS_CODE_DEF
 
 #define STATUS_CODE_DEF(code, msg)     \
-    else if (name == #code)            \
-    {                                  \
+    else if (name == #code) {          \
         statusCode = StatusCode::code; \
     }
 StatusCode GetStatusCodeByName(const std::string &name)

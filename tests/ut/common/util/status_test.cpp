@@ -198,15 +198,15 @@ TEST_F(StatusTest, TestStreamOperator)
 
 TEST_F(StatusTest, TestStatusLogForMat)
 {
-    Status status(StatusCode::K_OK, "This is a msg.");
+    Status status(StatusCode::K_RUNTIME_ERROR, "This is a msg.");
     status.AppendMsg("This is appended msg.");
     ASSERT_EQ(status.GetMsg(), "This is a msg. This is appended msg.");
 
-    Status status1(StatusCode::K_OK, "This is a msg");
+    Status status1(StatusCode::K_RUNTIME_ERROR, "This is a msg");
     status1.AppendMsg("This is appended msg.");
     ASSERT_EQ(status1.GetMsg(), "This is a msg. This is appended msg.");
 
-    Status status3(StatusCode::K_OK, "");
+    Status status3(StatusCode::K_RUNTIME_ERROR, "");
     status3.AppendMsg("This is appended msg.");
     ASSERT_EQ(status3.GetMsg(), " This is appended msg.");
 
