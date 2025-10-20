@@ -787,14 +787,15 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 }
 
 template <typename Req>
-Status WorkerOcServiceGetImpl::PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb,
+Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb,
                                                bool &shmUnitAllocated, std::shared_ptr<ShmOwner> shmOwner)
 {
+    // If URMA is enabled, or if shmOwner is not nullptr, memory distribution/allocation needs to be processed.
     if (!IsUrmaEnabled() && shmOwner == nullptr) {
         return Status::OK();
     }
     reqPb.set_data_size(dataSize);
-    INJECT_POINT("WorkerOcServiceGetImpl.PrepareUrmaInfo.changeSize", [&reqPb](uint64_t testDataSize) {
+    INJECT_POINT("WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize", [&reqPb](uint64_t testDataSize) {
         reqPb.set_data_size(testDataSize);
         return Status::OK();
     });
@@ -819,6 +820,10 @@ Status WorkerOcServiceGetImpl::PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &
         shmUnit->id = GetStringUuid();
         entry->SetShmUnit(shmUnit);
         shmUnitAllocated = true;
+    }
+    // Early exit for the urma info.
+    if (!IsUrmaEnabled()) {
+        return Status::OK();
     }
     uint64_t segAddress;
     uint64_t dataOffset;
@@ -845,7 +850,8 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
     std::unordered_set<std::string> &failedIds, BatchGetObjectRemoteReqPb &reqPb)
 {
     PerfPoint point(PerfKey::WORKER_CONSTRUCT_BATCH_GET_REQ);
-    // The function is placed together with PrepareUrmaInfo, as the template definition does not suit in header file.
+    // The function is placed together with PrepareGetRequestHelper,
+    // as the template definition does not suit in header file.
     Status lastRc = Status::OK();
     // Pre-allocate an aggregated chunk of shared memory as ShmOwner, to reduce the number of allocation calls.
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
@@ -853,8 +859,8 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
     RETURN_IF_NOT_OK(AggregateAllocateHelper(metas, lockedEntries, shmOwners, shmIndexMapping));
 
     bool requestReady = false;
-    uint32_t objectId = 0;
-    for (auto metaIter = metas.begin(); metaIter != metas.end(); objectId++) {
+    uint32_t objectIndex = 0;
+    for (auto metaIter = metas.begin(); metaIter != metas.end(); objectIndex++) {
         auto &meta = *metaIter;
         const auto &objectKey = meta->object_key();
         // Checked availability when metas are grouped, so it should be safe to just access the entry here.
@@ -881,10 +887,10 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
         // BatchGetObjectHandleIndividualStatus will free ShmUnit upon error, so no need to actually record it here.
         bool shmUnitAllocated = false;
         std::shared_ptr<ShmOwner> shmOwner = nullptr;
-        if (shmIndexMapping.size() > objectId && shmOwners.size() > shmIndexMapping[objectId]) {
-            shmOwner = shmOwners[shmIndexMapping[objectId]];
+        if (shmIndexMapping.size() > objectIndex && shmOwners.size() > shmIndexMapping[objectIndex]) {
+            shmOwner = shmOwners[shmIndexMapping[objectIndex]];
         }
-        status = PrepareUrmaInfo(meta->data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
+        status = PrepareGetRequestHelper(meta->data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
         if (status.IsError()) {
             BatchGetObjectHandleIndividualStatus(status, objectKey, readKey, successIds, needRetryIds, failedIds);
             metaIter = metas.erase(metaIter);
@@ -936,7 +942,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         dataSizeChange = false;
         bool shmUnitAllocated = false;
         // Prepare the protobuf with urma info for data transfer if applicable.
-        RETURN_IF_NOT_OK(PrepareUrmaInfo(dataSize, objectKV, reqPb, shmUnitAllocated));
+        RETURN_IF_NOT_OK(PrepareGetRequestHelper(dataSize, objectKV, reqPb, shmUnitAllocated));
         // If getting data from other AZ, then we leave 3/4 remain time to query from L2 cache in case getting data
         // failed.
         int64_t timeoutMs =

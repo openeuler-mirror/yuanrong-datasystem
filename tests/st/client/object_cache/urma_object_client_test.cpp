@@ -520,8 +520,8 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteGetTwoSmallParallel)
 
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetSizeChanged)
 {
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareUrmaInfo.changeSize", "1*call(1023)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize",
+                                           "1*call(1023)"));
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
@@ -543,8 +543,8 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteGetSizeChanged)
 TEST_F(UrmaObjectClientTest, UrmaRemoteBatchGetSizeChanged)
 {
     // Test that with batch get, a batch of failure due to size change can be retried automatically.
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareUrmaInfo.changeSize", "10*call(1023)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize",
+                                           "10*call(1023)"));
     std::shared_ptr<KVClient> client1;
     std::shared_ptr<KVClient> client2;
     InitTestKVClient(0, client1);
@@ -580,8 +580,8 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteBatchGetSizeChanged)
 
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetSizeChangedInvalid)
 {
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareUrmaInfo.changeSize", "1*call(1023)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize",
+                                           "1*call(1023)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerWorkerOCServiceImpl.GetObjectRemoteImpl.changeDataSize",
                                            "1*call(0)"));
     std::shared_ptr<ObjectClient> client1;

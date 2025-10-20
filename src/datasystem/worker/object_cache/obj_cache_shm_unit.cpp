@@ -234,9 +234,7 @@ Status AggregateAllocate(
     std::vector<uint32_t> &shmIndexMapping)
 {
     // Pre-allocate aggregated chunks of shared memory as ShmOwner, to reduce the number of allocation calls.
-    // 1. Only for URMA case, non-URMA case allocates the memory when response is handled.
-    // 2. Aggregate only if all the objects are small objects (< 1MB size), and batch up to 1024 keys and 2MB size.
-    // 3. Multi-tenancy not yet supported.
+    // Aggregate only for small objects (< 1MB size), and batch up to 1024 keys and 2MB size.
     const uint64_t batchLimitKeys = 1024;
     const uint64_t batchLimitSingleSize = 1024 * 1024;
     const uint64_t batchLimitTotalSize = 2 * 1024 * 1024;
@@ -247,7 +245,7 @@ Status AggregateAllocate(
     uint64_t currentKeyCount = 0;
 
     std::function<void(uint64_t, uint64_t, uint32_t)> aggregateCollector =
-        [&](uint64_t dataSz, uint64_t shmSize, uint32_t objectId) {
+        [&](uint64_t dataSz, uint64_t shmSize, uint32_t objectIndex) {
             // Skip any object that has size beyond 1MB.
             if (dataSz >= batchLimitSingleSize) {
                 return;
@@ -262,7 +260,7 @@ Status AggregateAllocate(
             // Record the size and num, and also map from object key to ShmOwners index.
             currentBatchSize += shmSize;
             currentKeyCount++;
-            shmIndexMapping[objectId] = aggreatedSizes.size();
+            shmIndexMapping[objectIndex] = aggreatedSizes.size();
         };
 
     traversalHelper(aggregateCollector, needAggregate);

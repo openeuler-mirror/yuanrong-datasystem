@@ -488,8 +488,8 @@ Status WorkerOcServiceGetImpl::AggregateAllocateHelper(
         [&metas, &lockedEntries](std::function<void(uint64_t, uint64_t, uint32_t)> collector,
                                  bool &needAggregate) {
             needAggregate = metas.size() > 1;
-            uint32_t objectId = 0;
-            for (auto metaIter = metas.begin(); metaIter != metas.end() && needAggregate; metaIter++, objectId++) {
+            uint32_t objectIndex = 0;
+            for (auto metaIter = metas.begin(); metaIter != metas.end() && needAggregate; metaIter++, objectIndex++) {
                 auto &meta = *metaIter;
                 auto dataSz = meta->data_size();
 
@@ -505,7 +505,7 @@ Status WorkerOcServiceGetImpl::AggregateAllocateHelper(
                 if (!szChanged) {
                     continue;
                 }
-                collector(dataSz, shmSize, objectId);
+                collector(dataSz, shmSize, objectIndex);
             }
         };
     auto firstObjectKey = metas.front()->object_key();

@@ -317,8 +317,8 @@ private:
      * @return Status of the call.
      */
     template <typename Req>
-    Status PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated,
-                           std::shared_ptr<ShmOwner> shmOwner = nullptr);
+    Status PrepareGetRequestHelper(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated,
+                                   std::shared_ptr<ShmOwner> shmOwner = nullptr);
 
     /**
      * @brief Pull object data from remote worker.
