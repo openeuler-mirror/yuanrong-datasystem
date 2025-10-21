@@ -126,7 +126,7 @@ setup(
     ),
     long_description=readme,
     long_description_content_type="text/markdown",
-    url="https://gitee.com/mindspore/yr-datasystem",
+    url="https://gitee.com/openeuler/yuanrong-datasystem",
     python_requires='>=3.8',
     packages=find_packages(),
     package_data=package_datas,
@@ -159,5 +159,5 @@ setup(
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     license="Apache 2.0",
-    keywords='mindspore yr-datasystem datasystem',
+    keywords='yr-datasystem datasystem yuanrong-datasystem',
 )
