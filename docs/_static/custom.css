@@ -1,0 +1,35 @@
+/* 移除导航栏固定宽度限制 */
+.wy-nav-side {
+    width: auto !important;
+    min-width: 250px; /* 设置最小宽度 */
+    max-width: 350px; /* 设置最大宽度防止过宽 */
+  }
+  
+  /* 让导航菜单根据内容自适应 */
+  .wy-menu-vertical {
+    width: auto !important;
+    white-space: nowrap; /* 初始不换行 */
+  }
+  
+  /* 一级标题样式 */
+  .wy-menu-vertical li.toctree-l1 > a {
+    white-space: nowrap;
+    padding-right: 20px; /* 为可能的滚动条留空间 */
+  }
+  
+  /* 子标题允许换行 */
+  .wy-menu-vertical li.toctree-l2 > a,
+  .wy-menu-vertical li.toctree-l3 > a {
+    white-space: normal;
+    word-wrap: break-word;
+  }
+  
+  /* 添加平滑过渡效果 */
+  .wy-menu-vertical {
+    transition: width 0.3s ease;
+  }
+  
+  /* 鼠标悬停时临时展开 */
+  .wy-nav-side:hover {
+    max-width: 500px; /* 悬停时可更宽 */
+  }

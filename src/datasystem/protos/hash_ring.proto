@@ -1,0 +1,63 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the RPC API of the worker component, including the meta of the object cache and state cache.
+ * These APIs are used for communication between workers and workers or master to worker.
+ */
+syntax = "proto3";
+package datasystem;
+
+message WorkerPb {
+  enum StatePb {
+    INITIAL = 0; // waiting to join hash ring
+    JOINING = 1; // joining to hash ring
+    ACTIVE = 2;  // active on hash ring
+    LEAVING = 3; // leaving on hash ring
+  }
+  repeated uint32 hash_tokens = 1;
+  bytes worker_uuid = 2;
+  StatePb state = 3;
+  bool need_scale_down = 4; // The flag for voluntary scale down
+}
+
+message ChangeNodePb {
+  message RangePb {
+    string workerId = 1;
+    uint32 from = 2;
+    uint32 end = 3;
+    bool finished = 4;
+    bool lost_all_range = 5;
+    bool is_upgrade = 6;
+  }
+  repeated RangePb changed_ranges = 1;
+}
+
+message UpdateNodePb {
+  bytes worker_uuid = 1;
+  uint64 timestamp = 2;
+}
+
+message HashRingPb {
+  string cluster_id = 1;
+  map<string, WorkerPb> workers = 2;  // The order is undefined, when serialize sorted by key.
+  bool cluster_has_init = 3;
+  map<string, ChangeNodePb> add_node_info = 4;
+  map<string, ChangeNodePb> del_node_info = 5;
+  map<string, string> key_with_worker_id_meta_map = 6; // The pair is {workerUuid, workerAddr}
+  map<string, UpdateNodePb> update_worker_map = 7; // The pair is {workerAddr, workerUuid}
+}
+

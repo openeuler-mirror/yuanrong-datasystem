@@ -1,0 +1,39 @@
+From 36ae2df9c98405643d7843dc1c26d6c818bf8e5c Mon Sep 17 00:00:00 2001
+From: wolfkdy <wolfkdy1989@gmail.com>
+Date: Fri, 26 Mar 2021 18:12:23 -0700
+Subject: [PATCH] On ARM platform, use yield op to relax CPU. See issue 7376
+ (#7438)
+
+Summary:
+see https://github.com/facebook/rocksdb/issues/7376.
+The `wfe` op on ARM platform is not suitable to relax CPU. Use `yield` op.
+
+Pull Request resolved: https://github.com/facebook/rocksdb/pull/7438
+
+Reviewed By: riversand963
+
+Differential Revision: D24063427
+
+Pulled By: jay-zhuang
+
+fbshipit-source-id: b0ebc5590d7555bd21b30f15cd59f84dc006367a
+---
+ port/port_posix.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/port/port_posix.h b/port/port_posix.h
+index 63d7239fe..a2342f543 100644
+--- a/port/port_posix.h
++++ b/port/port_posix.h
+@@ -163,7 +163,7 @@ static inline void AsmVolatilePause() {
+ #if defined(__i386__) || defined(__x86_64__)
+   asm volatile("pause");
+ #elif defined(__aarch64__)
+-  asm volatile("wfe");
++  asm volatile("yield");
+ #elif defined(__powerpc64__)
+   asm volatile("or 27,27,27");
+ #endif
+-- 
+2.17.1
+

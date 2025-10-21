@@ -1,0 +1,81 @@
+build/*
+!build/build.sh
+output
+coverage_report
+example/datasystem
+
+# for java
+target
+
+# for python
+__pycache__
+
+# Editor
+.vscode
+.idea/
+cmake-build-debug
+cmake-build-release
+cmake-build-release*
+venv
+.cache
+
+# Cmake files
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# Protobuf middleware
+*.pb.*
+*.pb-c.*
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+*.ko
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+*.lo
+
+# Temporary output file from clang-format
+__checked_files_list__
+__code_format_check_result__
+__TEMP__*
+tests/python/__pycache__/
+tests/python/nohup.out
+rerun_ut.sh
+
+# go work
+go.work
+
+# docs
+build_zh_cn
+build_en
+docs/source_en/generated
+false

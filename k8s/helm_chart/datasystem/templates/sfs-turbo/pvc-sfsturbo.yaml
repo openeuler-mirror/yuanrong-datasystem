@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-sfsturbo
+  namespace: {{ .Values.global.namespace }}
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: everest-csi-provisioner
+    everest.io/enterprise-project-id: "{{ .Values.global.l2Cache.sfsTurbo.projectId }}"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: "{{ .Values.global.l2Cache.sfsTurbo.capacity }}"
+  storageClassName: csi-sfsturbo
+  volumeName: pv-sfsturbo-{{ .Values.global.namespace }}

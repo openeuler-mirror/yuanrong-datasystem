@@ -1,0 +1,11 @@
+{
+    "ssh_auth": {
+        "ssh_private_key": "~/.ssh/id_rsa",
+        "ssh_user_name": "root"
+    },
+    "worker_config_path": "./worker_config.json",
+    "worker_nodes": [
+        "127.0.0.1"
+    ],
+    "worker_port": 31501
+}

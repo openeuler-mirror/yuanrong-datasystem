@@ -1,0 +1,26 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: "nodes-reader-{{ .Values.global.namespace }}"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: {{ .Values.global.namespace }}
+  name: pods-deleter
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - delete
