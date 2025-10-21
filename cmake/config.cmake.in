@@ -1,0 +1,18 @@
+# This config sets the following targets in your project:
+#
+#   @PROJECT_NAME@_FOUND - true if @PROJECT_NAME@ found on the system
+#   @PROJECT_NAME@_INCLUDE_DIR - the directory containing @PROJECT_NAME@ headers
+#   datasystem - the @PROJECT_NAME@ object cache shared library to link
+
+@PACKAGE_INIT@
+
+# Load targets only once. If we load targets multiple times, CMake reports already existent target error.
+if (NOT TARGET datasystem)
+    include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
+
+    # installation prefix
+    get_filename_component (CMAKE_CURRENT_LIST_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
+    get_filename_component (_INSTALL_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+
+    set(@PROJECT_NAME@_INCLUDE_DIR "${_INSTALL_PREFIX}/include")
+endif()

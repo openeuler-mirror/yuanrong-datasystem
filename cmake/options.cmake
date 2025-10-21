@@ -1,0 +1,6 @@
+option(WITH_TESTS "Enable run datasystem testcases" OFF)
+option(BUILD_COVERAGE "Build code for coverage statistics" OFF)
+option(FAIL_ON_WARNINGS "Treat compile warnings as errors" ON)
+option(ENABLE_PERF "Generate perf point logs" OFF)
+option(BUILD_PYTHON_API "Build python api" OFF)
+option(ENABLE_STRIP "Discard symbols from object files" OFF)

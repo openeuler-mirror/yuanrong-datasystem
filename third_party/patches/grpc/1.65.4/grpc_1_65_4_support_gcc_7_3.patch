@@ -1,0 +1,54 @@
+diff --git a/BUILD b/BUILD
+
+
+index da8e732a77..a7dd982b3b 100644
+--- a/BUILD
++++ b/BUILD
+@@ -2365,7 +2365,7 @@ grpc_cc_library(
+     name = "grpc_core_credentials_header",
+     hdrs = ["include/grpc/credentials.h"],
+     language = "c++",
+-    visibility = ["@grpc:core_credentials"],
++    visibility = ["@grpc:public"],
+ )
+
+ grpc_cc_library(
+diff --git a/src/core/ext/filters/rbac/rbac_service_config_parser.cc b/src/core/ext/filters/rbac/rbac_service_config_parser.cc
+index 000440f527..244f44b47f 100644
+--- a/src/core/ext/filters/rbac/rbac_service_config_parser.cc
++++ b/src/core/ext/filters/rbac/rbac_service_config_parser.cc
+@@ -193,7 +193,7 @@ struct RbacConfig {
+         Json::Object config;
+
+         AuditLogger() = default;
+-        AuditLogger(const AuditLogger&) = delete;
++        AuditLogger(const AuditLogger&) = default;
+         AuditLogger& operator=(const AuditLogger&) = delete;
+         AuditLogger(AuditLogger&&) = default;
+         AuditLogger& operator=(AuditLogger&&) = default;
+diff --git a/src/core/lib/gprpp/validation_errors.h b/src/core/lib/gprpp/validation_errors.h
+index 34a299b2ca..6ccfdb6348 100644
+--- a/src/core/lib/gprpp/validation_errors.h
++++ b/src/core/lib/gprpp/validation_errors.h
+@@ -76,7 +76,7 @@ class ValidationErrors {
+     }
+
+     // Not copyable.
+-    ScopedField(const ScopedField& other) = delete;
++    ScopedField(const ScopedField& other) = default;
+     ScopedField& operator=(const ScopedField& other) = delete;
+
+     // Movable.
+diff --git a/src/core/lib/promise/pipe.h b/src/core/lib/promise/pipe.h
+index 9c896682fe..ed900ecd73 100644
+--- a/src/core/lib/promise/pipe.h
++++ b/src/core/lib/promise/pipe.h
+@@ -515,7 +515,7 @@ namespace pipe_detail {
+ template <typename T>
+ class Next {
+  public:
+-  Next(const Next&) = delete;
++  Next(const Next&) = default;
+   Next& operator=(const Next&) = delete;
+   Next(Next&& other) noexcept = default;
+   Next& operator=(Next&& other) noexcept = default;

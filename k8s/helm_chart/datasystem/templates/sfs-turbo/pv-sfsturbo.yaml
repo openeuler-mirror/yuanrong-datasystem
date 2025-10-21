@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  annotations:
+    pv.kubernetes.io/provisioned-by: everest-csi-provisioner
+  name: pv-sfsturbo-{{ .Values.global.namespace }}
+spec:
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: "{{ .Values.global.l2Cache.sfsTurbo.capacity }}"
+  csi:
+    driver: sfsturbo.csi.everest.io
+    fsType: nfs
+    volumeHandle: "{{ .Values.global.l2Cache.sfsTurbo.id }}"
+    volumeAttributes:
+      everest.io/share-export-location: "{{ .Values.global.l2Cache.sfsTurbo.endpoint }}:/"
+      everest.io/enterprise-project-id: "{{ .Values.global.l2Cache.sfsTurbo.projectId }}"
+      storage.kubernetes.io/csiProvisionerIdentity: everest-csi-provisioner
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: csi-sfsturbo
+  mountOptions: []

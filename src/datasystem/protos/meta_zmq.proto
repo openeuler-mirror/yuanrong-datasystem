@@ -1,0 +1,100 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the meta header message of the zmq server.
+ */
+syntax = "proto3";
+package datasystem;
+import "utils.proto";
+
+message TickPb {
+    uint64 ts = 1;
+    string tick_name = 2;
+}
+
+// This is the header message sent by the client
+message MetaPb {
+    string svc_name = 1;
+    int32 method_index = 2;
+    int64 payload_index = 3;
+    string client_id = 4;
+    string worker_id = 5;
+    string gateway_id = 6;
+    string routing_fd = 7;
+    int32  event_type = 8;
+    repeated TickPb ticks = 9;
+    string trace_id = 10;
+    int64 timeout = 11;
+    string db_name = 12;
+
+    // ak/sk required.
+    string tenant_id = 98;
+    string token = 99;
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+// Type of event. Internal use only. Do not use
+enum EventType {
+    ZMQ = 0;
+    V1MTP = 1;
+    V2MTP = 2;
+}
+
+message MultiMsgHdrPb {
+    repeated uint64 msg_size = 1;
+}
+
+message HandshakePb {
+    uint64 payload_sz = 1;
+    uint64 total_packets = 2;
+    repeated uint32 data_sizes = 3;
+}
+
+message HandshakeTokenPb {
+    int64 token = 1;
+    int64 payload_index = 2;
+}
+
+message PayloadDirectGetReqPb {
+    int64 id = 1;
+    int64 addr = 2;
+    uint64 sz = 3;
+    int32 error_code = 4;
+    bytes error_msg = 5;
+}
+
+message PayloadDirectGetRspPb {
+    int64 addr = 1;
+    uint64 sz = 2;
+}
+
+// Exchange of jfr. Send our local jfr and host port
+message UrmaHandshakeReqPb {
+    bytes eid = 1;
+    uint32 uasid = 2;
+    repeated uint32 jfr_ids = 3;
+    HostPortPb address = 4;
+}
+
+// Exchange of jfr. Remote's jfr
+message UrmaHandshakeRspPb {
+    bytes eid = 1;
+    uint32 uasid = 2;
+    repeated uint32 jfr_ids = 3;
+}

@@ -1,0 +1,23 @@
+{
+    "MasterService": [
+        "admin.key",
+        "worker.key"
+    ],
+    "MasterOCService": [
+        "worker.key"
+    ],
+    "MasterOCAdminService": [
+        "worker.key"
+    ],
+    "MasterSCService": [
+        "worker.key"
+    ],
+    "MasterFCService": [
+        "admin.key",
+        "client.key",
+        "worker.key"
+    ],
+    "GenericService": [
+        "admin.key"
+    ]
+}

@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Values.global.namespace }}
+  name: datasystem-configmap
+data:
+  datasystem.config: |-
+    -loglevel_only_for_workers=
+    -v={{ .Values.global.logLevel }}
+    -log_async_queue_size={{ .Values.global.log.logAsyncQueueSize }}
+    -logbufsecs={{ .Values.global.log.logBufSecs }}
+    -log_compress={{ .Values.global.log.logCompress }}
+    -max_log_file_num={{ .Values.global.log.maxLogFileNum }}
+    -arena_per_tenant={{ .Values.global.performance.arenaPerTenant }}
+    -node_dead_timeout_s={{ .Values.global.reliability.nodeDeadTimeoutS }}
+    -client_reconnect_wait_s={{ .Values.global.reliability.clientReconnectWaitS }}
+    -spill_file_max_size_mb={{ .Values.global.spill.spillFileMaxSizeMb }}
+    -spill_file_open_limit={{ .Values.global.spill.spillFileOpenLimit }}
+    -spill_size_limit={{ .Values.global.spill.spillSizeLimit }}
+    -heartbeat_interval_ms={{ .Values.global.reliability.heartbeatIntervalMs }}
+    -add_node_wait_time_s={{ .Values.global.reliability.addNodeWaitTimeS }}
+    -async_delete={{ .Values.global.performance.asyncDelete}}
+    -auto_del_dead_node={{ .Values.global.reliability.autoDelDeadNode }}
+    -cross_az_get_data_from_worker={{ .Values.global.reliability.crossAzGetDataFromWorker }}
+    -enable_hash_ring_self_healing={{ .Values.global.reliability.enableHashRingSelfHealing }}
+    -enable_lossless_data_exit_mode={{ .Values.global.gracefulShutdown.enableLosslessDataExitMode }}

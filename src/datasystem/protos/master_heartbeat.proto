@@ -1,0 +1,52 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the proto between the master and the worker.
+ */
+syntax = "proto3";
+package datasystem.master;
+import "google/protobuf/any.proto";
+
+enum NodeTypePb {
+  NONE = 0;
+  GCS_NODE = 1;
+  WORKER_NODE = 2;
+}
+
+message HeartbeatReqPb {
+  NodeTypePb type = 1;
+  string ip_address = 2;
+  string node_id = 3; // Currently, used only by the GCS node.
+  bool first_msg = 4;  // The flag for whether the message is the first heartbeat message.
+  string git_hash = 5;
+
+  repeated google.protobuf.Any extend = 50;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message HeartbeatRspPb {
+  repeated google.protobuf.Any extend = 100;
+}
+
+
+service MasterService {
+  rpc Heartbeat(HeartbeatReqPb) returns(HeartbeatRspPb) {}
+}

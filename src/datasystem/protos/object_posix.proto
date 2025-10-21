@@ -1,0 +1,599 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the POSIX API of the worker component, including the meta of the object cache and state cache.
+ * These APIs are used for communication between clients and workers,
+ */
+syntax = "proto3";
+package datasystem;
+import "rpc_option.proto";
+import "utils.proto";
+import "p2p_subscribe.proto";
+
+message HealthCheckRequestPb {
+  string info = 1;
+  string client_id = 2;
+  string tenant_id = 3;
+  string token = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+};
+
+message HealthCheckReplyPb {
+};
+
+message CreateReqPb {
+  string client_id = 1;
+  string object_key = 2;
+  uint64 data_size = 3;
+  string token = 4;
+  string tenant_id = 5;
+  uint32 cache_type = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CreateRspPb {
+  // not set for noshm
+  int64 store_fd = 1;
+  uint64 mmap_size = 2;
+  uint64 offset = 3;
+  string shm_id = 4;
+  uint64 metadata_size = 5;
+}
+
+message MultiCreateReqPb {
+  string client_id = 1;
+  repeated string object_key = 2;
+  repeated uint64 data_size = 3;
+  string token = 4;
+  string tenant_id = 5;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message MultiCreateRspPb {
+  repeated CreateRspPb results = 1;
+}
+
+// For the meaning of the value, see 'ExistenceOpt' enum class.
+enum ExistenceOptPb {
+  NONE = 0;
+  NX = 1;
+}
+
+message PublishReqPb {
+  string client_id = 1;
+  string object_key = 2;
+  string token = 3;
+  repeated string nested_keys = 4;
+  uint64 data_size = 5;
+  bool keep = 6;
+  uint32 write_mode = 7;
+  uint32 consistency_type = 8;
+  string shm_id = 9;
+  bool is_seal = 10;
+  bool is_retry = 11;
+  uint32 ttl_second = 12;
+  // For the meaning of the value, see 'ExistenceOpt' enum class.
+  ExistenceOptPb existence = 13;
+  string tenant_id = 14;
+  uint32 cache_type = 15;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message PublishRspPb {
+}
+
+message MultiPublishReqPb {
+  message ObjectInfoPb {
+    string object_key = 1;
+    uint64 data_size = 2;
+    string shm_id = 3;
+    repeated uint64 blob_sizes = 4; 
+  }
+
+  string client_id = 1;
+  repeated ObjectInfoPb object_info = 2;
+  string token = 3;
+  uint32 write_mode = 4;
+  uint32 consistency_type = 5;
+  uint32 ttl_second = 6;
+  bool isTx = 7;
+  uint32 existence = 8;
+  string tenant_id = 9;
+  uint32 cache_type = 10;
+  bool is_replica = 11;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message MultiPublishRspPb {
+  repeated string failed_object_keys = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message GetReqPb {
+  int64 sub_timeout = 1;
+  repeated string object_keys = 2;
+  string client_id = 3;
+  string token = 4;
+  string tenant_id = 5;
+  repeated uint64 read_offset_list = 6;
+  repeated uint64 read_size_list = 7;
+  bool no_query_l2cache = 8 ; 
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message GetRspPb {
+  message ObjectInfoPb {
+    int64 store_fd = 1;
+    int64 offset = 2;
+    int64 data_size = 3;
+    int64 metadata_size = 4;
+    int64 mmap_size = 5;
+    int64 version = 6;
+    bool is_seal = 7;
+    string object_key = 8;
+    bool keep = 9;
+    uint32 write_mode = 10;
+    uint32 consistency_type = 11;
+    string shm_id = 12;
+    uint32 cache_type = 13;
+  }
+  message PayloadInfoPb {
+  	string object_key = 1;
+  	int64 data_size = 2;
+    bool is_seal = 3;
+    int64 version = 4;
+    bool keep = 5;
+    uint32 write_mode = 6;
+    uint32 consistency_type = 7;
+    repeated uint32 part_index = 8;
+    uint32 cache_type = 9;
+  }
+  repeated ObjectInfoPb objects = 1;
+  repeated PayloadInfoPb payload_info = 2;
+  ErrorInfoPb last_rc = 3;
+}
+
+message DecreaseReferenceRequest {
+  bytes client_id = 1;
+  repeated string object_keys = 2;
+  string token = 3;
+  string tenant_id = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+};
+
+message DecreaseReferenceResponse {
+  ErrorInfoPb error = 1;
+  repeated int32 reference_count = 2;
+};
+
+message GIncreaseReqPb  {
+  bytes address = 1;
+  repeated string object_keys = 2;
+  string token = 3;
+  int64 timeout = 4;
+  string client_id = 5;
+  string remote_client_id = 6;
+  string tenant_id = 7;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+};
+
+message GIncreaseRspPb {
+  repeated string failed_object_keys = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message GDecreaseReqPb {
+  bytes address = 1;
+  repeated string object_keys = 2;
+  string token = 3;
+  string client_id = 4;
+  string remote_client_id = 5;
+  string tenant_id = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message GDecreaseRspPb {
+  repeated string failed_object_keys = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message ReleaseGRefsReqPb {
+  string token = 1;
+  string client_id = 2;
+  string remote_client_id = 3;
+  string tenant_id = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ReleaseGRefsRspPb {
+  ErrorInfoPb last_rc = 1;
+}
+
+message GRefRecoveryPb {
+  repeated string object_keys = 1;
+}
+
+message DeleteAllCopyReqPb {
+  string client_id = 1;
+  repeated string object_keys = 2;
+  string token = 3;
+  bool are_device_objects = 4;
+  string tenant_id = 5;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message DeleteAllCopyRspPb {
+  repeated string fail_object_keys = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message DeleteObjectReqPb {
+  repeated string object_keys = 1;
+  string address = 2;
+  bool is_async = 3;
+  repeated uint64 versions = 4;
+  string tenant_id = 5;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message DeleteObjectRspPb {
+  repeated string failed_object_keys = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message LpushRequestPb {
+}
+ 
+message LpushReplyPb {
+}
+ 
+message LpopRequestPb {
+}
+ 
+message LpopReplyPb {
+}
+ 
+message LindexRequestPb {
+}
+ 
+message LindexReplyPb {
+}
+ 
+message LlenRequestPb {
+}
+ 
+message LlenReplyPb {
+}
+ 
+message HgetRequestPb {
+}
+ 
+message HgetReplyPb {
+}
+ 
+message HsetRequestPb {
+}
+
+message HsetReplyPb {
+}
+
+message HdelRequestPb {
+}
+
+message HdelReplyPb {
+}
+
+message HgetallRequestPb {
+}
+
+message HgetallReplyPb {
+}
+
+message IncrSeqNoReqPb  {
+}
+
+message IncrSeqNoRspPb {
+}
+
+message GetSeqNoReqPb  {
+}
+
+message GetSeqNoRspPb {
+}
+
+message DelSeqNoReqPb  {
+}
+
+message DelSeqNoRspPb {
+}
+
+message InvalidateBufferReqPb {
+  string client_id = 1;
+  string object_key = 2;
+  string token = 3;
+  string shm_id = 4;
+  string tenant_id = 5;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message InvalidateBufferRspPb {
+}
+
+message QueryGlobalRefNumReqPb{
+  repeated string object_keys = 1;
+  string token = 2;
+  string client_id = 3;
+  int64 timeout = 4;
+  string tenant_id = 5;
+  bool redirect = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message GRefDistributionPb {
+  // This msg shared with worker and master
+  // and the referred_addr is corresponded to
+  // the referrer of each worker or runtime.
+  string object_key = 1;
+  repeated string referred_addr = 2;
+}
+
+message QueryGlobalRefNumRspPb{
+  repeated GRefDistributionPb objs_glb_ref = 2;
+}
+
+message QueryGlobalRefNumRspCollectionPb{
+  repeated QueryGlobalRefNumRspPb objs_glb_refs = 1;
+  repeated RedirectMetaInfo infos = 2;
+  bool ref_is_moving = 3;
+}
+
+message PublishDeviceObjectReqPb {
+  string client_id = 1;
+  string dev_object_key = 2;
+  string token = 3;
+  uint64 data_size = 4;
+  string shm_id = 5;
+  int32 device_id = 6;
+  uint64 offset = 7;
+  string tenant_id = 8;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message PublishDeviceObjectRspPb {
+}
+
+message GetDeviceObjectReqPb {
+  int64 sub_timeout = 1;
+  repeated string device_object_keys = 2;
+  string client_id = 3;
+  string token = 4;
+  uint64 data_size = 5;
+  string tenant_id = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message GetDeviceObjectRspPb {
+  CreateRspPb shm_info = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message GetObjMetaInfoReqPb {
+  string tenantId = 1;
+  repeated string object_keys = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+message ObjMetaInfoPb {
+    uint64 obj_size = 1;
+    repeated string location_ids = 2;
+}
+message GetObjMetaInfoRspPb {
+  repeated ObjMetaInfoPb objs_meta_info = 1;
+}
+
+message QuerySizeReqPb {
+  string client_id = 1;
+  string token = 2;
+  string tenant_id = 3;
+  repeated string object_keys = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message QuerySizeRspPb {
+  repeated uint64 sizes = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+message ExistReqPb {
+  string client_id = 1;
+  string token = 2;
+  string tenant_id = 3;
+  repeated string object_keys = 4;
+  // whether query l2cache
+  bool query_l2cache = 5;
+  bool is_local = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ExistRspPb {
+  repeated bool exists = 1;
+}
+
+message ExpireReqPb {
+  string client_id = 1;
+  repeated string object_keys = 2;
+  string token = 3;
+  string tenant_id = 4;
+  uint32 ttl_second = 5;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ExpireRspPb {
+  repeated string failed_object_keys = 1;
+  ErrorInfoPb last_rc = 2;
+}
+
+service WorkerOCService {
+  rpc HealthCheck (HealthCheckRequestPb) returns (HealthCheckReplyPb) {}
+  rpc Create (CreateReqPb) returns (CreateRspPb) {}
+  rpc Publish(PublishReqPb) returns (PublishRspPb) {
+        option (datasystem.send_payload_option) = true;
+  }
+  rpc Get (GetReqPb) returns (GetRspPb) {
+    option (datasystem.unary_socket_option) = true;
+    option (datasystem.recv_payload_option) = true;
+  }
+  rpc DecreaseReference(DecreaseReferenceRequest) returns (DecreaseReferenceResponse) {}
+  rpc GIncreaseRef(GIncreaseReqPb) returns (GIncreaseRspPb) {}
+  rpc GDecreaseRef(GDecreaseReqPb) returns (GDecreaseRspPb) {}
+  rpc DeleteAllCopy(DeleteAllCopyReqPb) returns (DeleteAllCopyRspPb) {}
+  rpc InvalidateBuffer(InvalidateBufferReqPb) returns (InvalidateBufferRspPb) {}
+  rpc ReleaseGRefs(ReleaseGRefsReqPb) returns (ReleaseGRefsRspPb) {}
+
+  rpc IncrSeqNo(IncrSeqNoReqPb) returns (IncrSeqNoRspPb) {option deprecated = true;}
+  rpc GetSeqNo(GetSeqNoReqPb) returns (GetSeqNoRspPb) {option deprecated = true;}
+  rpc DelSeqNo(DelSeqNoReqPb) returns (DelSeqNoRspPb) {option deprecated = true;}
+ 
+  rpc Lpush (LpushRequestPb) returns (LpushReplyPb) {option deprecated = true;}
+  rpc Lpop (LpopRequestPb) returns (LpopReplyPb) {option deprecated = true;}
+  rpc Lindex (LindexRequestPb) returns (LindexReplyPb) {option deprecated = true;}
+  rpc Llen (LlenRequestPb) returns (LlenReplyPb) {option deprecated = true;}
+  rpc Hget (HgetRequestPb) returns (HgetReplyPb) {option deprecated = true;}
+  rpc Hset (HsetRequestPb) returns (HsetReplyPb) {option deprecated = true;}
+  rpc Hdel (HdelRequestPb) returns (HdelReplyPb) {option deprecated = true;}
+  rpc Hgetall (HgetallRequestPb) returns (HgetallReplyPb) {option deprecated = true;}
+
+  rpc QueryGlobalRefNum(QueryGlobalRefNumReqPb) returns (QueryGlobalRefNumRspCollectionPb) {}
+  rpc PublishDeviceObject(PublishDeviceObjectReqPb) returns (PublishDeviceObjectRspPb) {
+    option (datasystem.send_payload_option) = true;
+  }
+  rpc GetDeviceObject (GetDeviceObjectReqPb) returns (GetDeviceObjectRspPb) {
+    option (datasystem.unary_socket_option) = true;
+    option (datasystem.recv_payload_option) = true;
+  }
+  rpc MultiPublish(MultiPublishReqPb) returns (MultiPublishRspPb) {
+    option (datasystem.send_payload_option) = true;
+  }
+
+  rpc PutP2PMeta(PutP2PMetaReqPb) returns (PutP2PMetaRspPb) {}
+  rpc SubscribeReceiveEvent(SubscribeReceiveEventReqPb) returns (SubscribeReceiveEventRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc GetP2PMeta(GetP2PMetaReqPb) returns (GetP2PMetaRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc SendRootInfo(SendRootInfoReqPb) returns (SendRootInfoRspPb) {}
+  rpc RecvRootInfo(RecvRootInfoReqPb) returns (RecvRootInfoRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+
+  rpc GetDataInfo(GetDataInfoReqPb) returns (GetDataInfoRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc AckRecvFinish(AckRecvFinishReqPb) returns (AckRecvFinishRspPb) {}
+  rpc RemoveP2PLocation(RemoveP2PLocationReqPb) returns (RemoveP2PLocationRspPb) {}
+  rpc GetObjMetaInfo(GetObjMetaInfoReqPb) returns (GetObjMetaInfoRspPb) {}
+
+  rpc MultiCreate (MultiCreateReqPb) returns (MultiCreateRspPb) {}
+
+  rpc QuerySize(QuerySizeReqPb) returns (QuerySizeRspPb) {}
+
+  rpc Exist(ExistReqPb) returns (ExistRspPb) {}
+
+  rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
+   
+  rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
+}

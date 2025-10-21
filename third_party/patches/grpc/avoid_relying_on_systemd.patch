@@ -1,0 +1,16 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b67b7aafae..35bdf9b96a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -330,11 +330,6 @@ include(cmake/xxhash.cmake)
+ include(cmake/zlib.cmake)
+ include(cmake/download_archive.cmake)
+ 
+-if(_gRPC_PLATFORM_LINUX OR _gRPC_PLATFORM_POSIX)
+-  include(cmake/systemd.cmake)
+-  set(_gRPC_ALLTARGETS_LIBRARIES ${_gRPC_ALLTARGETS_LIBRARIES} ${_gRPC_SYSTEMD_LIBRARIES})
+-endif()
+-
+ # Setup external proto library at third_party/envoy-api with 2 download URLs
+ if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/envoy-api)
+   # Download the archive via HTTP, validate the checksum, and extract to third_party/envoy-api.
