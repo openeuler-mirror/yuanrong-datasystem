@@ -20,7 +20,7 @@
 
 yuanrong-datasystem is a distributed data caching system that leverages the HBM/DRAM/SSD resources of a compute cluster to build a multi-level cache close to computation, improving data access performance in scenarios such as model training and inference, big data, and microservices.
 
-![](https://gitee.com/mindspore/yr-datasystem/raw/develop/docs/source_en/getting-started/image/logical_architecture.png)
+![](./docs/source_en/getting-started/image/logical_architecture.png)
 
 yuanrong-datasystem consists of three components:
 
@@ -39,7 +39,7 @@ yuanrong-datasystem consists of three components:
 
 - **Cluster Management**: Leverages ETCD to enable node discovery/health monitoring, supporting fault recovery and online scaling (both expansion and contraction).
 
-![Deployment View of yuanrong-datasystem](https://gitee.com/mindspore/yr-datasystem/raw/develop/docs/source_en/getting-started/image/deployment.png)
+![Deployment View of yuanrong-datasystem](./docs/source_en/getting-started/image/deployment.png)
 
 Deployment Architecture of yuanrong-datasystem (as illustrated in the diagram above):
 
