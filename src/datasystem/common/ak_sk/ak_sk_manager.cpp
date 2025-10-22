@@ -19,7 +19,6 @@
  */
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 
-#include "datasystem/common/aes/aes_impl.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
@@ -79,55 +78,8 @@ Status AkSkManager::CopyAkSk(const std::string &accessKey, SensitiveValue secret
     return Status::OK();
 }
 
-Status AkSkManager::DecodeEncryptData(std::string &cipherText)
-{
-    // iv(12):content+tag(16) -> iv(12):tag(16):content
-    auto strs = Split(cipherText, ":");
-    const auto splitLen = 2;
-    if (strs.size() != splitLen) {
-        LOG(ERROR) << "Failed to decode cipherText, invalid strs size:" << strs.size();
-        RETURN_STATUS(K_INVALID, "Invalid cipherText format");
-    }
-    const auto hexTagLen = AES_TAG_LEN * BYTE_PRE_HEX;
-    if (strs[1].size() < hexTagLen + 1) {
-        LOG(ERROR) << "Failed to decode cipherText, invalid size: " << strs[1].size();
-        RETURN_STATUS(K_INVALID, "Invalid cipherText size");
-    }
-    auto hexContent = strs[1].substr(0, strs[1].size() - hexTagLen);
-    auto contentSize = hexContent.size() / BYTE_PRE_HEX;
-    auto byteContent = std::make_unique<char[]>(contentSize + 1);
-    RETURN_IF_NOT_OK(
-        AesImpl::DecodeToString(hexContent.c_str(), hexContent.size(), byteContent.get(), contentSize + 1));
-    cipherText =
-        strs[0] + ":" + strs[1].substr(strs[1].size() - hexTagLen) + ":" + std::string(byteContent.get(), contentSize);
-    return Status::OK();
-}
-
-Status AkSkManager::ConstructAesAndDecrypt(SensitiveValue &encryptData)
-{
-    SensitiveValue systemDataKey;
-    {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-        systemDataKey = clientKey_.dataKey;
-    }
-
-    if (!systemDataKey.Empty()) {
-        SensitiveValue plainText;
-        auto aes = std::make_unique<AesImpl>(systemDataKey, AesImpl::Algorithm::AES_256_GCM);
-        std::string cipherText(encryptData.GetData(), encryptData.GetSize());
-        RETURN_IF_NOT_OK(DecodeEncryptData(cipherText));
-        Raii raii([&cipherText] { std::fill(cipherText.begin(), cipherText.end(), 0); });
-        RETURN_IF_NOT_OK(aes->Decrypt(cipherText, plainText));
-        encryptData = std::move(plainText);
-    }
-    return Status::OK();
-}
-
 Status AkSkManager::SetTenantAkSk(const std::string &accessKey, SensitiveValue &secretKey)
 {
-    RETURN_IF_NOT_OK(ConstructAesAndDecrypt(secretKey));
-
-    INJECT_POINT("TestAES", [] { return Status::OK(); });
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
     AkSkData data;
     data.accessKey = accessKey;
@@ -143,23 +95,7 @@ AkSkManager::AkSkManager(const uint32_t requestExpireTimeSec) : Signature(), req
 
 Status AkSkManager::CopyDk(SensitiveValue dataKey, AkSkData &data)
 {
-    if (SecretManager::Instance()->IsRootKeyActive()) {
-        std::unique_ptr<char[]> plainDk;
-        int plainDkSize = 0;
-        std::string cipherDk(dataKey.GetData(), dataKey.GetSize());
-        Raii raii([&cipherDk, &plainDk, &plainDkSize] {
-            std::fill(cipherDk.begin(), cipherDk.end(), 0);
-            (void)memset_s(plainDk.get(), plainDkSize, 0, plainDkSize);
-        });
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SecretManager::Instance()->Decrypt(cipherDk, plainDk, plainDkSize),
-                                         "DataKey decrypt failed.");
-        const auto decodeDkSize = static_cast<uint32_t>(plainDkSize) / BYTE_PRE_HEX;
-        auto decodeDk = std::make_unique<char[]>(decodeDkSize + 1);
-        RETURN_IF_NOT_OK(AesImpl::DecodeToString(plainDk.get(), plainDkSize, decodeDk.get(), decodeDkSize + 1, true));
-        data.dataKey = SensitiveValue(std::move(decodeDk), decodeDkSize);
-    } else {
-        data.dataKey = std::move(dataKey);
-    }
+    data.dataKey = std::move(dataKey);
     return Status::OK();
 }
 

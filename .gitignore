@@ -1,5 +1,4 @@
-build/*
-!build/build.sh
+build/
 output
 coverage_report
 example/datasystem

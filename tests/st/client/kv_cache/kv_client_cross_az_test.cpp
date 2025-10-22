@@ -473,15 +473,13 @@ public:
     {
         opts.waitWorkerReady = false;
         opts.numEtcd = 1;
+        opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.addNodeTime = SCALE_RESTART_ADD_TIME;
         std::string obsGflag =
-            "-obs_endpoint=ddl.test.huawei.com:19000 "
-            "-obs_access_key=3rtJpvkP4zowTDsx6XiE -obs_secret_key=SJx5Zecs7SL7I6Au9XpylG9LwPF29kMwIxisI5Xs"
             "-shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=false "
-            "-other_az_names=AZ1,AZ2 "
-            "-l2_cache_type=obs -obs_bucket=test -v=1 -log_monitor=true";
+            "-other_az_names=AZ1,AZ2 -v=1 -log_monitor=true";
         FLAGS_v = 1;
         opts.workerGflagParams = obsGflag;
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {

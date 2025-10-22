@@ -32,7 +32,7 @@ const int DEFAULT_TTL_SECOND = 86400;
 const std::string DEFAULT_PROJECT_ID = "mock_projectID";
 const std::string DEFAULT_REGION_ID = "mock_regionID";
 const std::string DEFAULT_IDENTITY_PROVIDER = "mock_provider";
-const std::string DEFAULT_IAM_HOST_NAME = "iam.cn-north-7.myhuaweicloud.com";
+const std::string DEFAULT_IAM_HOST_NAME = "iam.cn-north-7.mycloud.com";
 
 namespace datasystem {
 namespace ut {

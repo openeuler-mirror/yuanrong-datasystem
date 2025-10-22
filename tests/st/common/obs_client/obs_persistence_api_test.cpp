@@ -58,7 +58,7 @@ void ObsPersistenceApiTest::SetUp()
     pApi_->Init();
 }
 
-TEST_F(ObsPersistenceApiTest, SaveSmallObject)
+TEST_F(ObsPersistenceApiTest, DISABLED_SaveSmallObject)
 {
     size_t sz = 100;
     std::string key = "SaveSmallObject";
@@ -73,7 +73,7 @@ TEST_F(ObsPersistenceApiTest, SaveSmallObject)
     DS_ASSERT_NOT_OK(pApi_->Get(key, 0, timeout_, content));
 }
 
-TEST_F(ObsPersistenceApiTest, LEVEL2_SaveLargeObject)
+TEST_F(ObsPersistenceApiTest, DISABLED__SaveLargeObject)
 {
     size_t sz = 200 * 1024 * 1024;
     std::string key = "SaveLargeObject";
@@ -88,7 +88,7 @@ TEST_F(ObsPersistenceApiTest, LEVEL2_SaveLargeObject)
     DS_ASSERT_NOT_OK(pApi_->Get(key, 0, timeout_, content));
 }
 
-TEST_F(ObsPersistenceApiTest, GetLatestFromMultiVersion)
+TEST_F(ObsPersistenceApiTest, DISABLED_GetLatestFromMultiVersion)
 {
     size_t sz = 200 * 1024;
     std::string key = "GetLatest";

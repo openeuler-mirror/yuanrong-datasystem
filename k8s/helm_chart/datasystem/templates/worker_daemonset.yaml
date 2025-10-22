@@ -124,7 +124,7 @@ spec:
         - -obs_https_enabled={{ $.Values.global.l2Cache.obs.obsHttpsEnabled }}
         {{- end }}
         {{- if eq ($.Values.global.l2Cache.l2CacheType) "sfs" }}
-        - -sfs_path=/opt/huawei/data/datasystem/sfs-turbo
+        - -sfs_path=/opt/data/datasystem/sfs-turbo
         {{- end }}
         - -enable_cloud_service_token_rotation={{ $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
         - -l2_cache_type={{ $.Values.global.l2Cache.l2CacheType }}
@@ -341,7 +341,7 @@ spec:
         {{- if eq ($.Values.global.l2Cache.l2CacheType) "sfs" }}
         - name: pvc-sfsturbo
           readOnly: false
-          mountPath: /opt/huawei/data/datasystem/sfs-turbo
+          mountPath: /opt/data/datasystem/sfs-turbo
           subPath: {{ $.Values.global.l2Cache.sfsTurbo.subPath }}
         {{- end }}
       restartPolicy: Always

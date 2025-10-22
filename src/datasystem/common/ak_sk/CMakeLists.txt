@@ -21,7 +21,6 @@ set(AK_SK_DEPEND_LIBS
         common_log
         common_util
         common_encrypt
-        common_aes
         )
 
 add_library(ak_sk_signature STATIC ${AK_SK_SIGNATURE})

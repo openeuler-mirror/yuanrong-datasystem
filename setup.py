@@ -159,5 +159,5 @@ setup(
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     license="Apache 2.0",
-    keywords='yr-datasystem datasystem yuanrong-datasystem',
+    keywords='mindspore yr-datasystem datasystem',
 )

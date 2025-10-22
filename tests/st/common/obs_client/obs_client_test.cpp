@@ -45,7 +45,7 @@ protected:
     void StreamingUpload();
 
     RandomData randData_;
-    const std::string obsEndpoint_ = "ddl.test.huawei.com:19000";
+    const std::string obsEndpoint_ = "ddl.test.com:19000";
     const std::string obsAk_ = "3rtJpvkP4zowTDsx6XiE";
     const std::string obsSk_ = "SJx5Zecs7SL7I6Au9XpylG9LwPF29kMwIxisI5Xs";
     const std::string bucket_ = "test";
@@ -83,12 +83,12 @@ void ObsClientTest::StreamingUpload()
     ASSERT_EQ(list.size(), 0u);
 }
 
-TEST_F(ObsClientTest, StreamingUpload)
+TEST_F(ObsClientTest, DISABLED_StreamingUpload)
 {
     StreamingUpload();
 }
 
-TEST_F(ObsClientTest, LEVEL2_MultiPartUpload)
+TEST_F(ObsClientTest, DISABLED_MultiPartUpload)
 {
     size_t sz = 201 * 1024 * 1024;
     std::shared_ptr<std::stringstream> buf = std::make_shared<std::stringstream>(randData_.GetRandomString(sz));
@@ -153,7 +153,7 @@ TEST_F(ObsClientTest, DISABLED_ConcurrentUploadDownload)
     ASSERT_EQ(list.size(), 0u);
 }
 
-TEST_F(ObsClientTest, ConcurrentOperations)
+TEST_F(ObsClientTest, DISABLED_ConcurrentOperations)
 {
     size_t numThread = 50;
     auto job = [this] (int i) {
@@ -221,7 +221,7 @@ TEST_F(ObsClientTest, DISABLED_ListLargeAmountObjects)
     ASSERT_EQ(list.size(), 0u);
 }
 
-TEST_F(ObsClientTest, ListMultiVersion)
+TEST_F(ObsClientTest, DISABLED_ListMultiVersion)
 {
     size_t numObj = 100;
     std::vector<std::string> paths(numObj);
@@ -260,7 +260,7 @@ TEST_F(ObsClientTest, ListMultiVersion)
     ASSERT_EQ(list.size(), 0u);
 }
 
-TEST_F(ObsClientTest, LEVEL1_HandleFailedUpload)
+TEST_F(ObsClientTest, DISABLED_HandleFailedUpload)
 {
     int timeoutMs = 5000;
     DS_ASSERT_OK(datasystem::inject::Set("ObsClient.OnePartUpload.sleepReturnFailure", "1*call(10000)"));

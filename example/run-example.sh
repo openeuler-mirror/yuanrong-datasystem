@@ -66,7 +66,6 @@ echo "Set LD_LIBRARY_PATH=${LD_LIBRARY_PATH} before cpp example test."
 ${example_build_dir}/ds_example "127.0.0.1" "${worker_port}"
 ${example_build_dir}/object_example "127.0.0.1" "${worker_port}" "1000" "false"
 ${example_build_dir}/kv_example "127.0.0.1" "${worker_port}"
-${example_build_dir}/aes_example
 
 if [ "x$run_perf" == "xon" ]; then
   ${example_build_dir}/perf_example "127.0.0.1" "${worker_port}"

@@ -149,7 +149,7 @@ Status TenantAuthManager::TenantAkAuth(const std::string &accessKey, const std::
             tenantId, std::hash<std::string>()(accessKey),
             GetTruncatedStr(std::to_string(std::hash<std::string>()(secretKey.GetData()))), expireSec, isSystemRole);
         (void)clientAkTable_.insert({ accessKey, { tenantId, isSystemRole } });
-        // Create AES and use dataKey to decrypt secertKey when set tenant aksk.
+        // Create and use dataKey to decrypt secertKey when set tenant aksk.
         RETURN_IF_NOT_OK(akSkManager_->SetTenantAkSk(accessKey, secretKey));
         RETURN_OK_IF_TRUE(expireSec == 0);
         // Add timer and callback func for client aksk.

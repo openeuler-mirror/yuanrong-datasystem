@@ -4,7 +4,6 @@ list(APPEND CLIENT_SRCS
         listen_worker.cpp
         mmap_table.cpp
         mmap_manager.cpp
-        aes.cpp
         client_flags_monitor.cpp
         context/context.cpp
         object_cache/client_worker_api.cpp
@@ -36,7 +35,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_shm_unit_info
         common_util
         common_immutable_string
-        common_aes
         httpclient
         nlohmann_json::nlohmann_json
         posix_protos_client
