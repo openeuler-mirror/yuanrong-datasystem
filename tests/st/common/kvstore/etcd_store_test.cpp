@@ -916,7 +916,7 @@ TEST_F(EtcdSslTest, TestCreateSessionWithTls)
 {
     InitTestEtcdInstance();
     std::string stsP12Path = "./certs/etcd.p12";
-    std::string pass = "huawei";
+    std::string pass = "example";
     SensitiveValue passphrase(pass);
 
     std::string CA;

@@ -38,8 +38,6 @@ target_link_libraries(state_example datasystem)
 add_executable(kv_example src/kv_cache/kv_example.cpp)
 target_link_libraries(kv_example datasystem)
 
-add_executable(aes_example  src/aes/aes_example.cpp)
-target_link_libraries(aes_example datasystem)
 if (ENABLE_PERF)
     add_executable(perf_example  src/perf/perf_demo.cpp)
     target_link_libraries(perf_example datasystem)

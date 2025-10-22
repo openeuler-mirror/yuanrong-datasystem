@@ -27,26 +27,26 @@ EOF
 
 unset LD_LIBRARY_PATH
 # Create the CA Certificate and Key
-openssl req -keyout certs/ca.key -out certs/ca.crt -passin pass:huawei -passout pass:huawei \
-  -subj "/C=CN/ST=GuangDong/L=ShenZhen/O=huawei/OU=Test/CN=etcd CA" -config certs/etcd_ssl.conf -new -x509 -extensions v3_ca
+openssl req -keyout certs/ca.key -out certs/ca.crt -passin pass:example -passout pass:example \
+  -subj "/C=CN/ST=GuangDong/L=ShenZhen/O=example/OU=Test/CN=etcd CA" -config certs/etcd_ssl.conf -new -x509 -extensions v3_ca
 
 # Generate valid Server Key/Cert
-openssl genrsa -passout pass:huawei -out certs/etcd-server.key 4096
-openssl req -passin pass:huawei -new -key certs/etcd-server.key -out server.csr -subj  "/C=CN/ST=GuangDong/L=ShenZhen/O=huawei/OU=Server/CN=etcd"  -config certs/etcd_ssl.conf
-openssl x509 -req -passin pass:huawei -days 365 -in server.csr -CA certs/ca.crt -CAkey certs/ca.key -set_serial 01 -out certs/etcd-server.crt  -extensions v3_req  -extfile certs/etcd_ssl.conf
+openssl genrsa -passout pass:example -out certs/etcd-server.key 4096
+openssl req -passin pass:example -new -key certs/etcd-server.key -out server.csr -subj  "/C=CN/ST=GuangDong/L=ShenZhen/O=example/OU=Server/CN=etcd"  -config certs/etcd_ssl.conf
+openssl x509 -req -passin pass:example -days 365 -in server.csr -CA certs/ca.crt -CAkey certs/ca.key -set_serial 01 -out certs/etcd-server.crt  -extensions v3_req  -extfile certs/etcd_ssl.conf
 
 # Remove passphrase from the Server Key
-openssl rsa -passin pass:huawei -in certs/etcd-server.key -out certs/etcd-server.key
+openssl rsa -passin pass:example -in certs/etcd-server.key -out certs/etcd-server.key
 
 # Generate valid Client Key/Cert
-openssl genrsa -passout pass:huawei -out certs/etcd-client.key 4096
-openssl req -passin pass:huawei -new -key certs/etcd-client.key -out client.csr -subj  "/C=CN/ST=GuangDong/L=ShenZhen/O=huawei/OU=Client/CN=etcd"
-openssl x509 -passin pass:huawei -req -days 365 -in client.csr -CA certs/ca.crt -CAkey certs/ca.key -set_serial 01 -out certs/etcd-client.crt  -extensions v3_req  -extfile certs/etcd_ssl.conf
+openssl genrsa -passout pass:example -out certs/etcd-client.key 4096
+openssl req -passin pass:example -new -key certs/etcd-client.key -out client.csr -subj  "/C=CN/ST=GuangDong/L=ShenZhen/O=example/OU=Client/CN=etcd"
+openssl x509 -passin pass:example -req -days 365 -in client.csr -CA certs/ca.crt -CAkey certs/ca.key -set_serial 01 -out certs/etcd-client.crt  -extensions v3_req  -extfile certs/etcd_ssl.conf
 
 # Remove passphrase from Client Key
-openssl rsa -passin pass:huawei -in certs/etcd-client.key -out certs/etcd-client.key
+openssl rsa -passin pass:example -in certs/etcd-client.key -out certs/etcd-client.key
 
-openssl pkcs12 -export -in certs/etcd-client.crt -inkey certs/etcd-client.key -passout pass:huawei -certfile certs/ca.crt -out certs/etcd.p12
+openssl pkcs12 -export -in certs/etcd-client.crt -inkey certs/etcd-client.key -passout pass:example -certfile certs/ca.crt -out certs/etcd.p12
 
 rm -f ./server.csr
 rm -f ./client.csr

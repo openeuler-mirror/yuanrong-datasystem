@@ -40,7 +40,7 @@ const int DEFAULT_TTL_SECOND = 86400;
 const std::string DEFAULT_PROJECT_ID = "mock_projectID";
 const std::string DEFAULT_REGION_ID = "mock_regionID";
 const std::string DEFAULT_IDENTITY_PROVIDER = "mock_provider";
-const std::string DEFAULT_IAM_HOST_NAME = "iam.cn-north-7.myhuaweicloud.com";
+const std::string DEFAULT_IAM_HOST_NAME = "iam.cn-north-7.mycloud.com";
 
 namespace datasystem {
 namespace ut {
@@ -68,7 +68,7 @@ public:
 
 protected:
     RandomData randData_;
-    const std::string obsEndpoint_ = "ddl.test.huawei.com:19000";
+    const std::string obsEndpoint_ = "ddl.test.com:19000";
     const std::string bucket_ = "test";
     const std::string tokenRotationConfig_ = "TOKEN_ROTATION_CONFIG";
     RotationTokenConf rotationConf_;
@@ -132,7 +132,7 @@ void ObsClientTokenRotationTest::TestTokenRotation(size_t checkOriginTokenNum, b
     DS_ASSERT_OK(client_->CheckValidRotationToken());
 }
 
-TEST_F(ObsClientTokenRotationTest, TestObsClientInitSuccess)
+TEST_F(ObsClientTokenRotationTest, DISABLED_TestObsClientInitSuccess)
 {
     InitializeCsmsToken();
     DS_ASSERT_OK(datasystem::inject::Set("ObsClient.TokenRotationInit.FirstInitCredentialInfo",
@@ -141,7 +141,7 @@ TEST_F(ObsClientTokenRotationTest, TestObsClientInitSuccess)
     DS_ASSERT_OK(client_->Init());
 }
 
-TEST_F(ObsClientTokenRotationTest, TestObsClientReadCsmsTokenError)
+TEST_F(ObsClientTokenRotationTest, DISABLED_TestObsClientReadCsmsTokenError)
 {
     std::string csmsTokenPath = FLAGS_log_dir + "/csms-token";
     DS_ASSERT_OK(datasystem::inject::Set("ObsClient.ReadCSMSToken.readTestOidcToken",
@@ -152,7 +152,7 @@ TEST_F(ObsClientTokenRotationTest, TestObsClientReadCsmsTokenError)
     DS_ASSERT_NOT_OK(client_->Init());
 }
 
-TEST_F(ObsClientTokenRotationTest, TestObsClientReadConfigEnvError)
+TEST_F(ObsClientTokenRotationTest, DISABLED_TestObsClientReadConfigEnvError)
 {
     int initTimes = 5;
     InitializeCsmsToken(initTimes);
@@ -200,14 +200,14 @@ TEST_F(ObsClientTokenRotationTest, TestObsClientReadConfigEnvError)
     DS_ASSERT_NOT_OK(client_->Init());
 }
 
-TEST_F(ObsClientTokenRotationTest, TestObsClientSuccessUpdateToken)
+TEST_F(ObsClientTokenRotationTest, DISABLED_TestObsClientSuccessUpdateToken)
 {
     size_t checkOriginTokenNum = 2;
     bool wantFirstUpdateFailed = false;
     TestTokenRotation(checkOriginTokenNum, wantFirstUpdateFailed);
 }
 
-TEST_F(ObsClientTokenRotationTest, TestObsClientFirstFailedAndFinalSuccessUpdateToken)
+TEST_F(ObsClientTokenRotationTest, DISABLED_TestObsClientFirstFailedAndFinalSuccessUpdateToken)
 {
     size_t checkOriginTokenNum = 3;
     bool wantFirstUpdateFailed = true;

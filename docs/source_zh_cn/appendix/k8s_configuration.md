@@ -42,7 +42,7 @@
 **样例**：
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/mindspore/yr-datasystem:v0.1
+  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
 
   images:
@@ -62,7 +62,7 @@ global:
 
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/mindspore/yr-datasystem:v0.1
+  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
 
   images:
@@ -110,7 +110,7 @@ global:
 **样例**：
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/mindspore/yr-datasystem:v0.1
+  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
   images:
     datasystem: "yr-datasystem:v0.1"

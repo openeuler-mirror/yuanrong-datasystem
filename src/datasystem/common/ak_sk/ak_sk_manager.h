@@ -80,7 +80,7 @@ public:
                          SensitiveValue dataKey = SensitiveValue());
 
     /**
-     * @brief Construct AES_256_GCM and use dataKey to decrypt the secret key.
+     * @brief Construct and use dataKey to decrypt the secret key.
      * @param[in] accessKey The access key used by AK/SK authentication.
      * @param[in] secretKey The secret key need to be decrypted and used by AK/SK authorize.
      * @return Status of the call.
@@ -172,20 +172,6 @@ public:
 protected:
     Status CopyAkSk(const std::string &accessKey, SensitiveValue secretKey, AkSkType type, AkSkData &data) override;
     Status CopyDk(SensitiveValue dataKey, AkSkData &data);
-
-    /**
-     * @brief Construct AES_256_GCM and use dataKey to decrypt the secret key.
-     * @param[in] endecryData The secret data need to be decrypted.
-     * @return Status of the call.
-     */
-    Status ConstructAesAndDecrypt(SensitiveValue &encryptData);
-
-    /**
-     * @brief Decode encrypt data.
-     * @param[in] cipherText The cipher text.
-     * @return Status of the call.
-     */
-    Status DecodeEncryptData(std::string &cipherText);
 
 private:
     bool systemAuthEnabled_{ false };

@@ -202,7 +202,7 @@ source ~/.bashrc
 ### 从代码仓下载源码
 
 ```bash
-git clone https://gitee.com/mindspore/yr-datasystem.git
+git clone https://gitee.com/openeuler/yuanrong-datasystem.git
 ```
 
 ### 初始化环境变量

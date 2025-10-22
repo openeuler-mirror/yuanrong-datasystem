@@ -39,7 +39,7 @@ This document describes yr-datasystem Kubernetes configuration items.
 **Example**:
 ```yaml
 global:
-  # image：swr.cn-south-1.myhuaweicloud.com/mindspore/yr-datasystem:v0.1
+  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
 
   images:
@@ -59,7 +59,7 @@ Each yr-datasystem DaemonSet can use a maximum of 2GB shared memory space for da
 
 ```yaml
 global:
-  # swr.cn-south-1.myhuaweicloud.com/mindspore/yr-datasystem:v0.1
+  # swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
 
   images:
@@ -107,7 +107,7 @@ global:
 **Example**:
 ```yaml
 global:
-  # image：swr.cn-south-1.myhuaweicloud.com/mindspore/yr-datasystem:v0.1
+  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
   images:
     datasystem: "yr-datasystem:v0.1"

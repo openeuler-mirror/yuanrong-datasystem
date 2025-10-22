@@ -39,7 +39,7 @@ Options:
 
     For multiple programming languages:
     -P Build Python sdk, choose from: on/off, default: on.
-    -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'off'.
+    -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'on'.
 
     For communication layer
     -M Build with URMA framework in addition to ZMQ, choose from on/off, default: off.
@@ -142,7 +142,7 @@ function init_default_opts() {
   export PYTHON_VERSION=""
 
   # Whether to build device object.
-  export BUILD_HETERO="off"
+  export BUILD_HETERO="on"
 
   # Whether support jemalloc memory profiling
   export SUPPORT_JEPROF="off"

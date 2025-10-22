@@ -367,7 +367,7 @@ yr-datasystem Kubernetes部署所需的依赖如下：
 - 通过镜像仓获取镜像：
 
     ```bash
-    docker pull mindspore/yr-datasystem:<version>
+    docker pull openeuler/yuanrong-datasystem:<version>
     ```
 
 - 源码编译构建镜像
@@ -375,7 +375,7 @@ yr-datasystem Kubernetes部署所需的依赖如下：
     如果需要从源码构建镜像，需要先完成 [源码编译](install.md)。源码编译完成之后执行如下命令：
 
     ```bash
-    cd yr-datasystem/docker
+    cd yuanrong-datasystem/docker
     bash docker_build.sh \
         -b <base_image_name>:<base_image_tag> \
         -n <image_name> \
@@ -403,8 +403,8 @@ yr-datasystem Kubernetes部署所需的依赖如下：
 - 通过源码获取：
 
     ```bash
-    git clone -b ${version} https://gitee.com/mindspore/mindspore.git
-    cp -r yr-datasystem/docker/chart/datasystem /tmp
+    git clone -b ${version} https://gitee.com/openeuler/yuanrong-datasystem.git
+    cp -r yuanrong-datasystem/docker/chart/datasystem /tmp
     ```
 
 ### 集群部署
@@ -416,7 +416,7 @@ global:
   # 其他配置项...
 
   # 镜像仓地址，不涉及可以留空
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore/"
+  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler/"
   # 镜像名字和镜像tag，<VERSION>需要替换为对应的版本号
   images:
     datasystem: "yr-datasystem:<VERSION>"

@@ -8,7 +8,7 @@
 
 ```shell
 # Update the vllm-ascend image
-export IMAGE=ddl.test.huawei.com/datasystem/vllm-ascend:v0.10.0rc1-openeuler
+export IMAGE=ddl.test.example.com/datasystem/vllm-ascend:v0.10.0rc1-openeuler
 docker run \
 --name "容器名"  \
 --privileged -itu root  -d --shm-size 64g    \

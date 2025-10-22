@@ -205,11 +205,11 @@ TEST_F(ValidatorTest, TestValidateEtcdAddresses)
     ASSERT_TRUE(
         Validator::ValidateEtcdAddresses("FlagName", "localhost:1,yr-core-etcd.default.svc.cluster.local:2379"));
     ASSERT_TRUE(Validator::ValidateEtcdAddresses(
-        "FlagName", "huawei.com:6553,test.com:0,yr-core-etcd.default.svc.cluster.local:2379"));
+        "FlagName", "huahuahua.com:6553,test.com:0,yr-core-etcd.default.svc.cluster.local:2379"));
 
     ASSERT_FALSE(Validator::ValidateEtcdAddresses("FlagName", "test:0,yr-core-etcd.default.svc.cluster.local:6"));
     ASSERT_FALSE(Validator::ValidateEtcdAddresses(
-        "FlagName", "huawei.com:6553,test:0,yr-core-etcd.default.svc.cluster.local:65536"));
+        "FlagName", "huahuahua.com:6553,test:0,yr-core-etcd.default.svc.cluster.local:65536"));
 }
 
 TEST_F(ValidatorTest, ValidateFailed)

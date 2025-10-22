@@ -17,7 +17,6 @@ add_subdirectory(device)
 add_subdirectory(l2cache)
 add_subdirectory(flags)
 add_subdirectory(signal)
-add_subdirectory(aes)
 add_subdirectory(rdma)
 
 
