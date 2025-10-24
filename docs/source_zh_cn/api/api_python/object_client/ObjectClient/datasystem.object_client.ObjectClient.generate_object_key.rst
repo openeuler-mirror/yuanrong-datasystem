@@ -1,7 +1,7 @@
-datasystem.object_client.ObjectClient.generate_object_id
+datasystem.object_client.ObjectClient.generate_object_key
 =========================================================
 
-.. py:method:: datasystem.object_client.ObjectClient.generate_object_id(prefix='')
+.. py:method:: datasystem.object_client.ObjectClient.generate_object_key(prefix='')
 
     生成一个带数据系统Worker UUID的对象 key。
 

@@ -26,6 +26,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"

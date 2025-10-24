@@ -838,9 +838,9 @@ Status LruCache<LruKey, LruObjPtr, LruEvictionPolicy>::MakeRoomInCache(LruObjPtr
     // on the eviction type.
     rc = evictPolicy_->RoomInCache(lruObjPtr, cacheMiss);
     while (rc.IsError()) {
-        if (rc.GetCode() == StatusCode::K_FC_HARD_LIMIT) {
+        if (rc.GetCode() == StatusCode::K_LRU_HARD_LIMIT) {
             RETURN_IF_NOT_OK(HardEviction(lruObjPtr, stats));
-        } else if (rc.GetCode() == StatusCode::K_FC_SOFT_LIMIT) {
+        } else if (rc.GetCode() == StatusCode::K_LRU_SOFT_LIMIT) {
             RETURN_IF_NOT_OK(SoftEviction(lruObjPtr, stats));
         } else {
             LOG(WARNING) << "Failed when trying to make room in cache.";

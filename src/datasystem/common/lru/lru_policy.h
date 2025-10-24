@@ -185,8 +185,7 @@ public:
      * @tparam ObjPtr The object type in the cache.
      * @returns Status from the call.  Status returns:
      * K_OK : there was room in the cache.
-     * K_FC_HARD_LIMIT : there was no room in the cache and a hard eviction will be needed.
-     * K_FC_SOFT_LIMIT : there was room in the cache, but the soft limit was hit and soft eviction can be done.
+     * K_LRU_HARD_LIMIT : there was no room in the cache and a hard eviction will be needed.
      */
     template <typename ObjPtr>
     Status RoomInCache(ObjPtr obj, bool cacheMiss) const
@@ -566,14 +565,13 @@ public:
      * @tparam ObjPtr the object type in the cache.
      * @returns Status from the call.  Status returns:
      * K_OK : there was room in the cache.
-     * K_FC_HARD_LIMIT : there was no room in the cache and a hard eviction will be needed.
-     * K_FC_SOFT_LIMIT : there was room in the cache, but the soft limit was hit and soft eviction can be done.
+     * K_LRU_HARD_LIMIT : there was no room in the cache and a hard eviction will be needed.
      */
     template <typename ObjPtr>
     Status RoomInCacheImpl(ObjPtr obj, bool cacheMiss) const
     {
         if (cacheMiss && (currentSize_ + obj->Size()) > maxSize_) {
-            RETURN_STATUS(StatusCode::K_FC_HARD_LIMIT, "Lru limit");
+            RETURN_STATUS(StatusCode::K_LRU_HARD_LIMIT, "Lru limit");
         }
         return Status::OK();
     };
@@ -770,15 +768,14 @@ public:
      * @tparam ObjPtr the object type in the cache.
      * @returns Status from the call.  Status returns:
      * K_OK : there was room in the cache.
-     * K_FC_HARD_LIMIT : there was no room in the cache and a hard eviction will be needed.
-     * K_FC_SOFT_LIMIT : there was room in the cache, but the soft limit was hit and soft eviction can be done.
+     * K_LRU_HARD_LIMIT : there was no room in the cache and a hard eviction will be needed.
      */
     template <typename ObjPtr>
     Status RoomInCacheImpl(ObjPtr obj, bool cacheMiss) const
     {
         (void)obj;
         if (cacheMiss && (currentCount_ + 1) > maxCount_) {
-            RETURN_STATUS(StatusCode::K_FC_HARD_LIMIT, "Lru limit");
+            RETURN_STATUS(StatusCode::K_LRU_HARD_LIMIT, "Lru limit");
         }
         return Status::OK();
     };

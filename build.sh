@@ -59,7 +59,7 @@ Options:
     For debug code:
     -p Generate perf point logs, choose from: on/off, default: off.
     -s Use strip tool to export the symbol table as sym and erase symbols based on it, choose from: on/off,
-       default: off.
+       default: on.
     -S Use Google Sanitizers tools to detect bugs. Choose from off/address/thread/undefined,
        if set the value to 'address' enable AddressSanitizer,
        if set the value to 'thread' enable ThreadSanitizer,
@@ -133,7 +133,7 @@ function init_default_opts() {
   export LLT_TIMEOUT_S=80
 
   # For debug
-  export ENABLE_STRIP="off"
+  export ENABLE_STRIP="on"
   export ENABLE_PERF="off"
   export USE_SANITIZER="off"
 

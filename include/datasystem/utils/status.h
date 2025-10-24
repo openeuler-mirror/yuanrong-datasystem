@@ -59,6 +59,8 @@ enum StatusCode : uint32_t {
     K_RETRY_IF_LEAVING = 30,
     K_SCALE_DOWN = 31,
     K_SCALING = 32,
+    K_LRU_HARD_LIMIT = 33,
+    K_LRU_SOFT_LIMIT = 34,
 
     // rpc error code, range: [1000, 2000)
     K_RPC_CANCELLED = 1000,
@@ -74,24 +76,6 @@ enum StatusCode : uint32_t {
     K_WRITE_BACK_QUEUE_FULL = 2003,
     K_OC_KEY_ALREADY_EXIST = 2004,
     K_WORKER_PULL_OBJECT_NOT_FOUND = 2005,
-
-    // file error code, range: [4000, 5000)
-    // Delete file error code when open source
-    K_FC_BUSY = 4000,
-    K_FC_FRAGMENT_ERROR = 4001,
-    K_FC_NOT_FLUSHED = 4002,
-    K_FC_SEVERE_ERROR = 4003,
-    K_FC_HARD_LIMIT = 4004,
-    K_FC_SOFT_LIMIT = 4005,
-    K_FC_UPDATE_NEEDED = 4006,
-    K_FC_FILE_CLOSED = 4007,
-    K_FC_DIRECTORY_NOT_EMPTY = 4008,
-    K_FC_FILE_ALREADY_WRITING = 4009,
-    K_FC_FAIL_QUORUM_WRITE = 4010,
-    K_FC_FAIL_QUORUM_READ = 4011,
-    K_FC_RETRY_LAST_COMMIT = 4012,
-    K_FC_CATCHUP_PENDING = 4013,
-    K_FC_FLUSH_PENDING = 4014,
 
     // Heterogeneous error code, range: [5000, 6000]
     K_ACL_ERROR = 5000,

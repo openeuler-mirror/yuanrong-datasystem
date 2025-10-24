@@ -840,7 +840,7 @@ function(PACKAGE_PYTHON PACKAGE_NAME)
     set(PY_TAGS "${PY_TAGS}m")
   endif ()
   string(TOLOWER ${CMAKE_HOST_SYSTEM_NAME}_${CMAKE_HOST_SYSTEM_PROCESSOR} PLATFORM_TAG)
-  set(TARGET_WHEEL "${PACKAGE_NAME}-${DATASYSTEM_VERSION}-${PY_TAGS}-${PLATFORM_TAG}.whl")
+  set(TARGET_WHEEL "yr_datasystem_sdk-${DATASYSTEM_VERSION}-${PY_TAGS}-${PLATFORM_TAG}.whl")
   set(CONFIG_PACKAGE_SCRIPT ${CMAKE_BINARY_DIR}/PackagePythonSDK.cmake)
   # Generate PackagePythonSDK.cmake to run setup.py
   configure_file(${CMAKE_SOURCE_DIR}/cmake/scripts/PackagePython.cmake.in

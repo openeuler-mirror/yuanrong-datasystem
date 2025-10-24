@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "datasystem/client/mmap_table_entry.h"
+#include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
