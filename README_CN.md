@@ -1,25 +1,20 @@
-[View English](./README.md)
+![](./docs/source_zh_cn/getting-started/image/logo-large.png)
 
-<!-- TOC -->
+openYuanrong 是一个 Serverless 分布式计算引擎，致力于以一套统一 Serverless 架构支持 AI、大数据、微服务等各类分布式应用。它提供多语言函数编程接口，以单机编程体验简化分布式应用开发；提供分布式动态调度和数据共享等能力，实现分布式应用的高性能运行和集群的高效资源利用。
 
-- [yr-datasystem 介绍](#yr-datasystem-介绍)
-- [适用场景](#适用场景)
-- [架构](#架构)
-- [安装](#安装)
-  - [pip 方式安装](#pip-方式安装)
-  - [源码编译方式安装](#源码编译方式安装)
-- [部署](#部署)
-  - [进程部署](#进程部署)
-  - [Kubernetes 部署](#kubernetes-部署)
-- [快速入门](#快速入门)
-- [文档](#文档)
-- [许可证](#许可证)
+## 简介
 
-<!-- /TOC -->
+![](./docs/source_zh_cn/getting-started/image/introduction.png)
 
-## yr-datasystem 介绍
+openYuanrong 由多语言函数运行时、函数系统和数据系统组成，支持按需灵活单独或组合使用。
 
-yuanrong-datasystem 是一款专为 AI 训推场景设计的分布式异构缓存系统。支持 HBM/DDR/SSD 异构介质池化缓存及 NPU 间异步并发高效数据传输，用于分布式 KVCache 缓存、模型参数缓存、高性能 replaybuffer 等场景。
+- **多语言函数运行时**：提供函数分布式编程，支持 Python、Java、C++ 语言，实现类单机编程高性能分布式运行。
+- **函数系统**：提供大规模分布式动态调度，支持函数实例极速弹性扩缩和跨节点迁移，实现集群资源高效利用。
+- **数据系统**：提供异构分布式多级缓存，支持 Object、Stream 语义，实现函数实例间高性能数据共享及传递。
+
+openYuanrong 分为三个代码仓库：[yuanrong-runtime](https://gitee.com/openeuler/yuanrong-runtime) 对应多语言函数运行时；[yuanrong-functionsystem](https://gitee.com/openeuler/yuanrong-functionsystem) 对应函数系统；[yuanrong-datasystem](https://gitee.com/openeuler/yuanrong-datasystem) 对应数据系统，即当前代码仓。
+
+**数据系统**是 openYuanrong 的核心概念抽象，是一款专为 AI 训推场景设计的分布式异构缓存系统。支持 HBM/DDR/SSD 异构介质池化缓存及 NPU 间异步并发高效数据传输，用于分布式 KVCache 缓存、模型参数缓存、高性能 replaybuffer 等场景。
 
 yuanrong-datasystem 的主要特性包括：
 
@@ -32,14 +27,14 @@ yuanrong-datasystem 的主要特性包括：
 - **数据发布订阅**：支持数据订阅发布，解耦数据的生产者（发布者）和消费者（订阅者），实现数据的异步传输与共享。
 - **高可靠高可用**：支持分布式元数据管理，实现系统水平线性扩展。支持元数据可靠性，支持动态资源伸缩自动迁移数据，实现系统高可用。
 
-## 适用场景
+### yuanrong-datasystem 适用场景
 
 - **LLM 长序列推理 KVCache**：基于异构对象提供分布式多级缓存 (HBM/DRAM/SSD) 和高吞吐 D2D/H2D/D2H 访问能力，构建分布式 KV Cache，实现 Prefill 阶段的 KVCache 缓存以及 Prefill/Decode 实例间 KV Cache 快速传递，提升推理吞吐。
 - **模型推理实例 M->N 快速弹性**：利用异构对象的卡间直通及 P2P 数据分发能力实现模型参数快速复制。
 - **强化学习模型参数重排**：利用异构对象的卡间直通传输能力，快速将模型参数从训练侧同步到推理侧。
 - **训练场景 CheckPoint 快速保存及加载**：基于 KV 接口快速写 Checkpoint，并支持将数据持久化到二级缓存保证数据可靠性。Checkpoint恢复时各节点将 Checkpoint 分片快速加载到异构对象中，利用异构对象的卡间直通传输及 P2P 数据分发能力，快速将 Checkpoint 传递到各节点 HBM。
 
-## 架构
+### yuanrong-datasystem 架构
 
 ![](./docs/source_zh_cn/getting-started/image/logical_architecture.png)
 
@@ -67,39 +62,199 @@ yuanrong-datasystem 的部署视图如上图所示：
 - worker 和 worker 之间通过 TCP/RDMA 传输数据（当前版本仅支持 TCP，后续版本支持 RDMA ）。
 - 异构对象 HBM 之间通过 HCCS/RoCE 卡间直通传输数据。
 
-## 安装
+## 入门
 
-### pip 方式安装
+### 安装 yuanrong-datasystem
 
-安装 PyPI 上的版本：
-```bash
-pip install yr-datasystem
-```
+#### pip 方式安装
 
-安装自定义版本，可以参考文档：[安装 yr-datasystem 自定义版本](./docs/source_zh_cn/getting-started/install.md#安装自定义版本)
+- 安装 yuanrong-datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
+  ```bash
+  pip install yuanrong-datasystem
+  ```
 
-### 源码编译方式安装
+- 仅安装 yuanrong-datasystem Python SDK（不包含C++ SDK以及命令行工具）：
+  ```bash
+  pip install yuanrong-datasystem-sdk
+  ```
 
-使用源码编译方式安装 yr-datasystem 可以参考文档：[源码编译安装 yr-datasystem](./docs/source_zh_cn/getting-started/install.md#源码编译方式安装yr-datasystem版本)
+#### 源码编译方式安装
 
-## 部署
+使用源码编译方式安装 yuanrong-datasystem 可以参考文档：[源码编译安装 yuanrong-datasystem](./docs/source_zh_cn/getting-started/install.md#源码编译方式安装yuanrong-datasystem版本)
 
-### 进程部署
+### 部署 yuanrong-datasystem
 
-yr-datasystem 可基于 dscli 工具快速部署集群，参考文档：[yr-datasystem 进程部署](./docs/source_zh_cn/getting-started/deploy.md#yr-datasystem进程部署)
+#### 进程部署
 
-### Kubernetes 部署
+- 准备ETCD
+  
+  yuanrong-datasystem 的集群管理依赖 ETCD，请先在后台启动单节点 ETCD（示例端口 2379）：
+  ```bash
+  etcd --listen-client-urls http://0.0.0.0:2379 \
+       --advertise-client-urls http://localhost:2379
+  ```
+- 一键启动集群
 
-yr-datasystem 还提供了基于 Kubernetes 容器化部署方式，参考文档：[yr-datasystem Kubernetes 部署](./docs/source_zh_cn/getting-started/deploy.md#yr-datasystem-kubernetes部署)
+  安装 yuanrong-datasystem 完整发行版后，即可通过随包自带的 dscli 命令行工具一键完成集群部署。启动一个监听端口号为 31501 的单机集群：
+  ```bash
+  dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+  ```
 
-## 快速入门
+- 集群卸载
+  ```bash
+  dscli stop --worker_address "127.0.0.1:31501"
+  ```
 
-heterogeneous object、KV 和 object 语义的快速入门，可参考以下文档。
-- [heterogeneous object 快速入门](./docs/source_zh_cn/getting-started/overview.md#异构对象)
-- [KV 快速入门](./docs/source_zh_cn/getting-started/overview.md#kv)
+更多进程部署参数与部署方式请参考文档：[yuanrong-datasystem 进程部署](./docs/source_zh_cn/getting-started/deploy.md#yuanrong-datasystem进程部署)
+
+#### Kubernetes 部署
+
+yuanrong-datasystem 还提供了基于 Kubernetes 容器化部署方式，部署前请确保部署环境集群已就绪 Kubernetes、Helm 及可访问的 ETCD 集群。
+
+- 获取 yuanrong-datasystem helm chart 包
+
+  安装 yuanrong-datasystem 完整发行版后，即可通过随包自带的 dscli 命令行工具在当前路径下快速获取 helm chart 包：
+  ```
+  dscli generate_helm_chart -o ./
+  ```
+
+- 编辑集群部署配置
+
+  yuanrong-datasystem 通过 ./datasystem/values.yaml 文件进行集群相关配置，其中必配项如下：
+
+  ```yaml
+  global:
+    # 其他配置项...
+
+    # 镜像仓地址
+    imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler/"
+    # 镜像名字和镜像tag
+    images:
+      datasystem: "yr-datasystem:0.5.0-alpha"
+    
+    etcd:
+      # ETCD集群地址
+      etcdAddress: "127.0.0.1:2379"
+  ```
+
+- 集群部署
+
+  Helm 会提交 DaemonSet，按节点依次拉起 yuanrong-datasystem 实例：
+
+  ```bash
+  helm install yr_datasystem ./datasystem
+  ```
+
+- 集群卸载
+
+  ```bash
+  helm uninstall yr_datasystem
+  ```
+
+更多 yuanrong-datasystem Kubernetes 高级参数配置请参考文档：[yuanrong-datasystem Kubernetes 部署](./docs/source_zh_cn/getting-started/deploy.md#yuanrong-datasystem-kubernetes部署)
+
+### 代码样例
+
+- 异构对象
+
+  通过异构对象接口实现 HBM 数据零拷贝发布/订阅
+
+  ```python
+  import acl
+  import random
+  from datasystem.ds_client import DsClient
+
+  def random_str(slen=10):
+      seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
+      sa = []
+      for _ in range(slen):
+          sa.append(random.choice(seed))
+      return ''.join(sa)
+
+  # hetero_dev_publish and hetero_dev_subscribe must be executed in different processes
+  # because they need to be bound to different NPUs.
+  def hetero_dev_publish():
+      client = DsClient("127.0.0.1", 31501)
+      client.init()
+
+      acl.init()
+      device_idx = 1
+      acl.rt.set_device(device_idx)
+
+      key_list = [ 'key1', 'key2', 'key3' ]
+      data_size = 1024 * 1024
+      test_value = random_str(data_size)
+
+      in_data_blob_list = []
+      for _ in key_list:
+          tmp_batch_list = []
+          for _ in range(4):
+              dev_ptr, _ = acl.rt.malloc(data_size, 0)
+              acl.rt.memcpy(dev_ptr, data_size, acl.util.bytes_to_ptr(test_value.encode()), data_size, 1)
+              blob = Blob(dev_ptr, data_size)
+              tmp_batch_list.append(blob)
+          blob_list = DeviceBlobList(device_idx, tmp_batch_list)
+          in_data_blob_list.append(blob_list)
+      pub_futures = client.hetero().dev_publish(key_list, in_data_blob_list)
+      for future in pub_futures:
+          future.get()
+
+  def hetero_dev_subscribe():
+      client = DsClient("127.0.0.1", 31501)
+      client.init()
+
+      acl.init()
+      device_idx = 2
+      acl.rt.set_device(device_idx)
+
+      key_list = [ 'key1', 'key2', 'key3' ]
+      data_size = 1024 * 1024
+      out_data_blob_list = []
+      for _ in key_list:
+          tmp_batch_list = []
+          for _ in range(4):
+              dev_ptr, _ = acl.rt.malloc(data_size, 0)
+              blob = Blob(dev_ptr, data_size)
+              tmp_batch_list.append(blob)
+          blob_list = DeviceBlobList(device_idx, tmp_batch_list)
+          out_data_blob_list.append(blob_list)
+      sub_futures = client.hetero().dev_subscribe(key_list, out_data_blob_list)
+      for future in sub_futures:
+          future.get()
+  ```
+
+- KV
+
+  通过 KV 接口，将任意二进制数据以键值对形式写入全局分布式缓存：
+
+  ```python
+  from datasystem.ds_client import DsClient
+
+  client = DsClient("127.0.0.1", 31501)
+  client.init()
+
+  key = "key"
+  expected_val = b"value"
+  client.kv().set(key, expected_val)
+
+  val = client.kv().get([key])
+  assert val[0] == expected_val
+
+  client.kv().delete([key])
+  ```
 
 ## 文档
-有关安装指南、教程和 API 的更多详细信息，请参阅[用户文档](docs)
+
+有关 yuanrong-datasystem 安装指南、教程和 API 的更多详细信息，请参阅 [用户文档](docs)
+
+查看 [openYuanrong 文档](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/index.html) 了解如何使用 openYuanrong 开发分布式应用。
+
+- 安装：`pip install openyuanrong`，[更多安装信息](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/deploy/installation.html)。
+- [快速入门](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/getting_started.html)
+
+## 贡献
+
+我们欢迎您对 openYuanrong 做各种形式的贡献，请参阅我们的[贡献者指南](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/contributor_guide/index.html)。
 
 ## 许可证
 

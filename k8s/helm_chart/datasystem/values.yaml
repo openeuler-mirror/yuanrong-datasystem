@@ -52,7 +52,7 @@ global:
       # Minimum required resources.
       requests:
         cpu: "3"
-        memory: "4Gi"
+        memory: "3Gi"
 
       # Upper limit of the shared memory, the default unit for shared memory is MB.
       # To prevent being rendered as scientific notation by helm, numbers with more than 5 digits should be configured as strings.

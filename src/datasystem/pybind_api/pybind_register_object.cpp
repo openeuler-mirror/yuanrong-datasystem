@@ -27,6 +27,7 @@
 
 #include <pybind11/detail/common.h>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/format.h"

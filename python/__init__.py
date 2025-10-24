@@ -21,7 +21,6 @@ __all__ = [
     "DsClient",
     "HeteroClient",
     "ObjectClient",
-    "StateClient",
     "KVClient",
     "Status",
     "SubconfigType",

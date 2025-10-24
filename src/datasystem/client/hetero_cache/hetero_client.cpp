@@ -61,18 +61,6 @@ Status HeteroClient::Init()
     return rc;
 }
 
-Status HeteroClient::MGet(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
-                          uint64_t timeoutMs, std::vector<std::string> &failKeys)
-{
-    RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    PerfPoint point(PerfKey::CLIENT_MGET_H2D_ALL);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    std::shared_future<AsyncResult> future = impl_->MGetH2D(objectKeys, devBlobList, timeoutMs);
-    auto result = future.get();
-    failKeys = std::move(result.failedList);
-    return result.status;
-}
-
 Status HeteroClient::MGetH2D(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                              std::vector<std::string> &failedKeys, int32_t subTimeoutMs)
 {
@@ -85,34 +73,6 @@ Status HeteroClient::MGetH2D(const std::vector<std::string> &keys, const std::ve
     return result.status;
 }
 
-std::shared_future<AsyncResult> HeteroClient::MGetAsync(const std::vector<std::string> &objectKeys,
-                                                        const std::vector<DeviceBlobList> &devBlobList,
-                                                        uint64_t timeoutMs)
-{
-#ifndef BUILD_HETERO
-#ifndef WITH_TESTS
-    std::promise<AsyncResult> promise;
-    promise.set_value(
-        AsyncResult{ .status = Status(K_RUNTIME_ERROR, "Hetero client is not supported. compile with -X on please!"),
-                     .failedList = {} });
-    return promise.get_future().share();
-#endif
-#endif
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    std::shared_future<AsyncResult> future = impl_->MGetH2D(objectKeys, devBlobList, timeoutMs);
-    return future;
-}
-
-Status HeteroClient::MSet(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList)
-{
-    RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    PerfPoint point(PerfKey::CLIENT_MSET_D2H_ALL);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    SetParam setParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
-    std::shared_future<AsyncResult> future = impl_->MSet(objectKeys, devBlobList, setParam);
-    return future.get().status;
-}
-
 Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                              const SetParam &setParam)
 {
@@ -121,23 +81,6 @@ Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::ve
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     std::shared_future<AsyncResult> future = impl_->MSet(keys, devBlobList, setParam);
     return future.get().status;
-}
-
-std::shared_future<AsyncResult> HeteroClient::MSetAsync(const std::vector<std::string> &objectKeys,
-                                                        const std::vector<DeviceBlobList> &devBlobList)
-{
-#ifndef BUILD_HETERO
-#ifndef WITH_TESTS
-    std::promise<AsyncResult> promise;
-    promise.set_value(
-        AsyncResult{ .status = Status(K_RUNTIME_ERROR, "Hetero client is not supported. compile with -X on please!"),
-                     .failedList = {} });
-    return promise.get_future().share();
-#endif
-#endif
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-
-    return impl_->MSet(objectKeys, devBlobList, { .writeMode = WriteMode::NONE_L2_CACHE_EVICT });
 }
 
 Status HeteroClient::Delete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
@@ -200,13 +143,6 @@ Status HeteroClient::DevSubscribe(const std::vector<std::string> &keys, const st
     return impl_->DevSubscribe(keys, devBlobList, futureVec);
 }
 
-Status HeteroClient::LocalDelete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedKeys)
-{
-    RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->DevLocalDelete(objectKeys, failedKeys);
-}
-
 Status HeteroClient::DevDelete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
@@ -241,14 +177,6 @@ Status HeteroClient::DevMSet(const std::vector<std::string> &keys, const std::ve
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     return impl_->DevMSet(keys, devBlobList, failedKeys);
-}
-
-Status HeteroClient::DevPreFetch(const std::vector<std::string> &keys, std::vector<DeviceBlobList> &blob2dList)
-{
-    RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    (void)keys;
-    (void)blob2dList;
-    return Status::OK();
 }
 
 Status HeteroClient::DevMGet(const std::vector<std::string> &keys, std::vector<DeviceBlobList> &devBlobList,

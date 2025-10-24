@@ -63,15 +63,6 @@ public:
     /// \return Status of the call.
     Status Init();
 
-    /// \brief (Deprecated) For device object, to get multiple objects.
-    /// \param[in] objectKeys multiple keys support
-    /// \param[out] devBlobList vector of blobs, only modify the data pointed to by the pointer.
-    /// \param[in] timeoutMs max waiting time of getting data
-    /// \param[out] failList failed ojbejcts to be get
-    /// \return K_OK on any object success; the error code otherwise.
-    Status MGet(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
-                uint64_t timeoutMs, std::vector<std::string> &failList);
-
     /// \brief Obtain data from the host and write the data to the device.
     ///     MGetH2D and MSetD2H must be used together.
     ///     If multiple memory addresses are combined and written to the host during MSetD2H, the host data
@@ -85,20 +76,6 @@ public:
     Status MGetH2D(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                    std::vector<std::string> &failKeys, int32_t subTimeoutMs);
 
-    /// \brief (Deprecated) For device object, to async get multiple objects.
-    /// \param[in] objectKeys multiple keys support
-    /// \param[out] devBlobList vector of blobs, only modify the data pointed to by the pointer.
-    /// \param[in] timeoutMs max waiting time of getting data
-    /// \return future of AsyncResult, describe get status and failed list.
-    std::shared_future<AsyncResult> MGetAsync(const std::vector<std::string> &objectKeys,
-                                              const std::vector<DeviceBlobList> &devBlobList, uint64_t timeoutMs);
-
-    /// \brief (Deprecated) For device object, to invoke worker client to create and publish multiple objects.
-    /// \param[in] objKeys multiple keys support
-    /// \param[in] devBlobList vector of blobs
-    /// \return K_OK on any object success; the error code otherwise.
-    Status MSet(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList);
-
     /// \brief Write the data of the device to the host. If the BLOB of the device contains multiple memory addresses,
     ///     the device automatically combines data and writes the data to the host.
     /// \param[in] keys Keys in the host
@@ -109,13 +86,6 @@ public:
     /// \return K_OK on any object success; the error code otherwise.
     Status MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                    const SetParam &setParam = {});
-
-    /// \brief (Deprecated) For device object Async set multiple objects, and return before publish rpc called.
-    /// \param[in] objKeys multiple keys support
-    /// \param[in] devBlobList vector of blobs
-    /// \return future of AsyncResult, describe set status and failed list.
-    std::shared_future<AsyncResult> MSetAsync(const std::vector<std::string> &objectKeys,
-                                              const std::vector<DeviceBlobList> &devBlobList);
 
     /// \brief Delete the key from the host.
     /// \param[in] keys Keys in the host
@@ -174,13 +144,6 @@ public:
     Status DevSubscribe(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                         std::vector<Future> &futureVec);
 
-    /// \brief (Deprecate)Retrieves Device data through prefetching, completing the operation and returning immediately,
-    ///    requiring combination with DevMGet.
-    /// \param[in] keys Keys corresponding to blob2dList
-    /// \param[out] devBlobList List describing the structure of Device memory
-    /// \return K_OK on when return sucesssfully; the error code otherwise.
-    Status DevPreFetch(const std::vector<std::string> &keys, std::vector<DeviceBlobList> &blob2dList);
-
     /// \brief Obtains data from the device and writes the data to blob2dList. Data is transmitted directly through
     ///     the device-to-device channel.
     ///     DevMSet and DevMGet must be used together. Heterogeneous objects are not automatically deleted after
@@ -219,13 +182,6 @@ public:
     /// \return K_OK on any key success; the error code otherwise.
     /// \       K_INVALID: the vector of keys is empty or include empty key.
     Status DevDelete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys);
-
-    /// \brief (Deprecated) LocalDelete interface. After calling this interface, the data replica stored in the
-    ///      datasystem by the current client connection will be deleted.
-    /// \param[in] keys The objectKeys of the data expected to be deleted.
-    /// \param[out] failedKeys Partial failures will be returned through this parameter.
-    /// \return K_OK on when return sucesss; the error code otherwise.
-    Status LocalDelete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys);
 
     /// \brief LocalDelete interface. After calling this interface, the data replica stored in the data system by the
     ///    current client connection will be deleted.

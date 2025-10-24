@@ -48,11 +48,6 @@ struct CreateParam {
     CacheType cacheType = CacheType::MEMORY;
 };
 
-struct CreateDeviceParam {
-    LifetimeType lifetime = LifetimeType::REFERENCE;
-    bool cacheLocation = true;
-};
-
 struct ObjMetaInfo {
     uint64_t objSize{ 0 };               // the size of object data, 0 if object not found.
     std::vector<std::string> locations;  // the workerIds of the locations

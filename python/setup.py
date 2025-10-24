@@ -28,7 +28,7 @@ version_path = os.path.join(pwd, 'datasystem', 'VERSION')
 with open(version_path, 'r') as v:
     version = v.read()
 
-package_name = 'datasystem'
+package_name = 'yr-datasystem-sdk'
 commit_id = os.getenv('COMMIT_ID', 'None').replace("\n", "")
 
 package_datas = {
@@ -78,7 +78,7 @@ class EggInfo(egg_info):
     """Egg info."""
 
     def run(self):
-        egg_info_dir = os.path.join(os.path.dirname(__file__), 'datasystem.egg-info')
+        egg_info_dir = os.path.join(os.path.dirname(__file__), 'yr_datasystem_sdk.egg-info')
         super().run()
         update_permissions(egg_info_dir)
 

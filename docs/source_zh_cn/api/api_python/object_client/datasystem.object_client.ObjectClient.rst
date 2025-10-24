@@ -31,4 +31,4 @@ datasystem.object_client.ObjectClient
     datasystem.object_client.ObjectClient.g_increase_ref
     datasystem.object_client.ObjectClient.g_decrease_ref
     datasystem.object_client.ObjectClient.query_global_ref_num
-    datasystem.object_client.ObjectClient.generate_object_id
+    datasystem.object_client.ObjectClient.generate_object_key

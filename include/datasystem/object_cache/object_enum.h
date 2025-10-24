@@ -31,33 +31,12 @@ enum class WriteMode : int {
     NONE_L2_CACHE = 0,
     WRITE_THROUGH_L2_CACHE = 1,  // sync write
     WRITE_BACK_L2_CACHE = 2,     // async write
-    NONE_L2_CACHE_EVICT =  3,    // evictable write
+    NONE_L2_CACHE_EVICT = 3,     // evictable write
 };
 
 enum class ConsistencyType : int {
     PRAM = 0,
     CAUSAL = 1,
-};
-
-enum class DataType : uint8_t {
-    DATA_TYPE_INT8 = 0,   /**< int8 */
-    DATA_TYPE_INT16 = 1,  /**< int16 */
-    DATA_TYPE_INT32 = 2,  /**< int32 */
-    DATA_TYPE_FP16 = 3,   /**< fp16 */
-    DATA_TYPE_FP32 = 4,   /**< fp32 */
-    DATA_TYPE_INT64 = 5,  /**< int64 */
-    DATA_TYPE_UINT64 = 6, /**< uint64 */
-    DATA_TYPE_UINT8 = 7,  /**< uint8 */
-    DATA_TYPE_UINT16 = 8, /**< uint16 */
-    DATA_TYPE_UINT32 = 9, /**< uint32 */
-    DATA_TYPE_FP64 = 10,  /**< fp64 */
-    DATA_TYPE_BFP16 = 11, /**< bfp16 */
-    DATA_TYPE_RESERVED    /**< reserved */
-};
-
-enum class LifetimeType : uint8_t {
-    REFERENCE = 0,
-    MOVE = 1,
 };
 
 enum class CacheType : int {

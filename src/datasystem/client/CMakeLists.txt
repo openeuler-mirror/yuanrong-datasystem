@@ -16,7 +16,6 @@ list(APPEND CLIENT_SRCS
         object_cache/device/device_memory_unit.cpp
         object_cache/device/hccl_comm_magr.cpp
         object_cache/device/page_attn_utils.cpp
-        state_cache/state_client.cpp
         kv_cache/read_only_buffer.cpp
         kv_cache/kv_client.cpp
         hetero_cache/hetero_client.cpp)

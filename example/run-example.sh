@@ -26,38 +26,6 @@ export PATH=$PATH:/usr/sbin
 run_hetero="$1"
 run_perf="$2"
 
-function run_go_example()
-{
-    echo "Start to run go example"
-    BUILD_GO_DIR="$(realpath "${EXAMPLE_DIR}/../build/package-go")"
-    export WORKER_ADDR=$1
-    export WORKER_PORT=$2
-    export WORKER_ETCD_ADDRESS=$3
-
-    # Run the golang tests
-    # We do this here during the example run because we lack an infrastructure for starting
-    # and stopping the cluster.  The example has this built in already.
-    # In the future we should move this "go test" logic into the unit test paths
-    export LD_LIBRARY_PATH=${BUILD_GO_DIR}/lib:${LD_LIBRARY_PATH}
-    echo "Set LD_LIBRARY_PATH=${LD_LIBRARY_PATH} before go example test."
-    echo "Running golang tests. Using worker ${WORKER_ADDR} on port ${WORKER_PORT}, etcd address: ${WORKER_ETCD_ADDRESS}"
-    cd ${BUILD_GO_DIR}/common
-    go test
-  
-    cd ${BUILD_GO_DIR}/objectcache
-    go test
-
-    cd ${BUILD_GO_DIR}/statecache
-    go test
-
-    echo "Running golang state/object cache demo. Using worker ${WORKER_ADDR} on port ${WORKER_PORT}"
-    ${BUILD_GO_DIR}/state_cache_client_demo
-    ${BUILD_GO_DIR}/object_cache_client_demo
-
-    export LD_LIBRARY_PATH=${old_ld_path}
-    echo "Restore LD_LIBRARY_PATH=${LD_LIBRARY_PATH} after go example test."
-}
-
 start_all "${EXAMPLE_DIR}/build" "${ds_output_dir}"
 
 echo -e "---- Running the example..."

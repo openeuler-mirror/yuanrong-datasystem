@@ -29,7 +29,6 @@
 
 namespace datasystem {
 class KVClient;
-class StateClient;
 class __attribute ((visibility ("default"))) ReadOnlyBuffer {
 public:
     ReadOnlyBuffer() = default;
@@ -64,7 +63,6 @@ public:
 
 private:
     friend KVClient;
-    friend StateClient;
 
     explicit ReadOnlyBuffer(std::shared_ptr<Buffer> &buffer)
     {

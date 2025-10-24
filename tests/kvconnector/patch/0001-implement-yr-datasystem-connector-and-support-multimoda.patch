@@ -983,7 +983,7 @@ index 0000000..9b7407a
 +from datasystem import DsTensorClient, Future
 +
 +ENABLE_PREFIX_CACHING = int(os.environ.get("USING_PREFIX_CONNECTOR", 1))
-+FUTURE_TIMEOUT = int(os.getenv("FUTURE_TIMEOUT", 0))
++FUTURE_TIMEOUT = int(os.getenv("FUTURE_TIMEOUT", 10000))
 +SYNC_FUTURE_TIMEOUT = int(os.getenv("SYNC_FUTURE_TIMEOUT", 1))
 +SLEEP_TIMEOUT = 0.005
 +

@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/object_cache/object_enum.h"
 
 namespace datasystem {
