@@ -70,12 +70,12 @@ yuanrong-datasystem 的部署视图如上图所示：
 
 - 安装 yuanrong-datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
   ```bash
-  pip install yuanrong-datasystem
+  pip install pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem-0.5.0-cp39-cp39-manylinux_2_34_x86_64.whl
   ```
 
 - 仅安装 yuanrong-datasystem Python SDK（不包含C++ SDK以及命令行工具）：
   ```bash
-  pip install yuanrong-datasystem-sdk
+  pip install pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem_sdk-0.5.0-cp39-cp39-manylinux_2_34_x86_64.whl
   ```
 
 #### 源码编译方式安装
