@@ -833,14 +833,6 @@ function(PACKAGE_PYTHON PACKAGE_NAME)
   # Copy VERSION and LICENSE to package lib path
   install(FILES ${CMAKE_SOURCE_DIR}/VERSION ${CMAKE_SOURCE_DIR}/LICENSE
           DESTINATION ${PYTHON_PACKAGE_LIBPATH})
-  # Prepare variable needed in pacakge_python.cmake.in
-  set(PY_TAGS cp${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}-cp${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR})
-  # Before Python3.8, python whl filename need abiflags 'm' for pymalloc
-  if (${Python3_VERSION_MINOR} LESS_EQUAL "7")
-    set(PY_TAGS "${PY_TAGS}m")
-  endif ()
-  string(TOLOWER ${CMAKE_HOST_SYSTEM_NAME}_${CMAKE_HOST_SYSTEM_PROCESSOR} PLATFORM_TAG)
-  set(TARGET_WHEEL "yr_datasystem_sdk-${DATASYSTEM_VERSION}-${PY_TAGS}-${PLATFORM_TAG}.whl")
   set(CONFIG_PACKAGE_SCRIPT ${CMAKE_BINARY_DIR}/PackagePythonSDK.cmake)
   # Generate PackagePythonSDK.cmake to run setup.py
   configure_file(${CMAKE_SOURCE_DIR}/cmake/scripts/PackagePython.cmake.in

@@ -229,5 +229,5 @@ bash build.sh
 ### 安装yr-datasystem
 
 ```bash
-pip install output/yr_datasystem-*.whl
+pip install output/openyuanrong_datasystem-*.whl
 ```

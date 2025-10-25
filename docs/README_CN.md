@@ -22,7 +22,7 @@ yr-datasystem的教程和API文档均可由[Sphinx](https://www.sphinx-doc.org/e
 1. 使用pip安装yr-datasystem模块，API文档需要根据安装后的yr-datasystem模块生成，参考[安装](source_zh_cn/getting-started/install.md)。
 
    ```bash
-   pip install yr_datasystem-*.whl
+   pip install openyuanrong_datasystem-*.whl
    ```
 
 2. 安装Doxygen

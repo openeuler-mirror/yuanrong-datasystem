@@ -27,7 +27,7 @@ function run_ut_python() {
   PYTHON=$(which python${PYTHON_VERSION}) ||
     go_die "---- Could not find python${PYTHON_VERSION}, run datasystem testcases failed!"
   local python_test_dir="${DATASYSTEM_DIR}/tests/python"
-  ${PYTHON} -m pip install ${INSTALL_DIR}/yr_datasystem-${DATASYSTEM_VERSION}*.whl --force-reinstall
+  ${PYTHON} -m pip install ${INSTALL_DIR}/openyuanrong_datasystem-${DATASYSTEM_VERSION}*.whl --force-reinstall
   dscli generate_config -o ${INSTALL_DIR}/service
   cd ${python_test_dir}
   ${PYTHON} -m unittest || (remove_running_pids && go_die "---- run datasystem testcases failed!")

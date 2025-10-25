@@ -21,6 +21,8 @@ from setuptools import find_packages
 from setuptools import setup
 from setuptools.command.egg_info import egg_info
 from setuptools.command.build_py import build_py
+from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+from wheel.vendored.packaging import tags
 
 pwd = os.path.dirname(os.path.realpath(__file__))
 
@@ -28,7 +30,7 @@ version_path = os.path.join(pwd, 'datasystem', 'VERSION')
 with open(version_path, 'r') as v:
     version = v.read()
 
-package_name = 'yr-datasystem-sdk'
+package_name = 'openyuanrong-datasystem-sdk'
 commit_id = os.getenv('COMMIT_ID', 'None').replace("\n", "")
 
 package_datas = {
@@ -78,7 +80,7 @@ class EggInfo(egg_info):
     """Egg info."""
 
     def run(self):
-        egg_info_dir = os.path.join(os.path.dirname(__file__), 'yr_datasystem_sdk.egg-info')
+        egg_info_dir = os.path.join(os.path.dirname(__file__), 'openyuanrong_datasystem_sdk.egg-info')
         super().run()
         update_permissions(egg_info_dir)
 
@@ -92,6 +94,11 @@ class BuildPy(build_py):
         update_permissions(datasystem_lib_dir)
 
 
+class CustomBdistWheel(_bdist_wheel):
+    def get_tag(self):
+        tag = next(tags.sys_tags())
+        return tag.interpreter, tag.abi, tag.platform
+
 setup(
     python_requires='>=3.6',
     name=package_name,
@@ -102,6 +109,7 @@ setup(
     cmdclass={
         'egg_info': EggInfo,
         'build_py': BuildPy,
+        'bdist_wheel': CustomBdistWheel
     },
     install_requires=requires,
 )

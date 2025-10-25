@@ -315,7 +315,7 @@ function run_example() {
     export LD_LIBRARY_PATH=$new_ld_path
     echo -e "---- Sanitize LD_LIBRARY_PATH from ${old_ld_path} to ${new_ld_path}"
 
-    python3 -m pip install ${INSTALL_DIR}/yr_datasystem-*.whl --force-reinstall
+    python3 -m pip install ${INSTALL_DIR}/openyuanrong_datasystem-*.whl --force-reinstall
     bash "${DATASYSTEM_DIR}/example/run-example.sh" "${BUILD_HETERO}" "${ENABLE_PERF}" ||
       (remove_running_pids && go_die "---- Smoke Testing failed!")
     echo -e "---- Smoke Testing success!"
@@ -421,7 +421,7 @@ function run_manual_ut()
       local baseTime_s
       baseTime_s=$(date +%s)
       if [[ "${RUN_TESTS}" = "run_python" ]]; then
-        python3 -m pip install ${INSTALL_DIR}/yr_datasystem-*.whl --force-reinstall
+        python3 -m pip install ${INSTALL_DIR}/openyuanrong_datasystem-*.whl --force-reinstall
       fi
       start_all "${BUILD_DIR}" "${INSTALL_DIR}"
       run_ut_python
