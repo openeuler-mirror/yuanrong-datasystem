@@ -16,14 +16,13 @@
 
 """setup_package."""
 import os
-import platform
 import stat
-import sys
 
 from setuptools import find_packages, setup
 from setuptools.command.build_py import build_py
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+from wheel.vendored.packaging import tags
 
 root_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -87,7 +86,7 @@ class EggInfo(egg_info):
 
     def run(self):
         egg_info_dir = os.path.join(
-            os.path.dirname(__file__), 'yr_datasystem.egg-info')
+            os.path.dirname(__file__), 'openyuanrong_datasystem.egg-info')
         super().run()
         update_permissions(egg_info_dir)
 
@@ -107,21 +106,16 @@ class BuildPy(build_py):
 
 class CustomBdistWheel(_bdist_wheel):
     def get_tag(self):
-        python_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-        abi_tag = python_tag
-        system = platform.system().lower()
-        machine = platform.machine().lower()
-        if system == "linux":
-            plat_tag = f"manylinux2014_{machine}"
-        return python_tag, abi_tag, plat_tag
+        tag = next(tags.sys_tags())
+        return tag.interpreter, tag.abi, tag.platform
 
 
 setup(
-    name="yr-datasystem",
+    name="openyuanrong-datasystem",
     version=version,
-    author="yr-datasystem Team",
+    author="openYuanrong Team",
     description=(
-        "yr-datasystem is a distributed heterogeneous cache system that supports pooled caching across "
+        "openyuanrong datasystem is a distributed heterogeneous cache system that supports pooled caching across "
         "HBM, DDR, and SSD, along with asynchronous, high-efficiency data transmission for NPUs."
     ),
     long_description=readme,
@@ -159,5 +153,5 @@ setup(
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     license="Apache 2.0",
-    keywords='mindspore yr-datasystem datasystem',
+    keywords='openyuanrong-datasystem datasystem',
 )

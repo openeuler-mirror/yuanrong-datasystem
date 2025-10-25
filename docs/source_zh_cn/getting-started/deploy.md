@@ -87,7 +87,7 @@ python --version
 ```
 
 ### 安装dscli
-dscli命令行工具集成在yr-datasystem的wheel包 `yr_datasystem-<version>-cp311-cp311-manylinux2014_<arch>.whl`中，安装yr-datasystem请参考[安装yr-datasystem](install.md)。
+dscli命令行工具集成在yr-datasystem的wheel包 `openyuanrong_datasystem-<version>-cp311-cp311-manylinux_2_34_<arch>.whl`中，安装yr-datasystem请参考[安装yr-datasystem](install.md)。
 
 安装完成后，运行如下命令：
 ```bash

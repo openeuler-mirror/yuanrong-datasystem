@@ -74,13 +74,11 @@ vllm 可以直接使用镜像自带的版本，或者自己参考官网教程下
 
 ## 安装数据系统依赖
 
-yr_datasystem 是必选项，必须要安装使用。
+openyuanrong_datasystem 是必选项，必须要安装使用。
 
-dllm 后续会解除依赖，当前还需要安装，并且保证 dllm 和 yr_datasystem 是配套的。
 
 ```shell
-pip install yr_datasystem-2.2-cp311-cp311-manylinux2014_aarch64.whl
-pip install dllm-0.0.1-cp311-cp311-linux_aarch64.whl
+pip install openyuanrong_datasystem-0.5.0-cp311-cp311-manylinux_2_34_aarch64.whl
 ```
 
 ## 部署执行

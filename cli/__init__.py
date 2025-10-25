@@ -20,4 +20,4 @@ __all__ = [
     '__version__',
 ]
 
-__version__ = importlib.metadata.version("yr-datasystem")
+__version__ = importlib.metadata.version("openyuanrong-datasystem")

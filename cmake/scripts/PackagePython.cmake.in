@@ -21,6 +21,6 @@ execute_process(COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel
         WORKING_DIRECTORY ${PYTHON_PACKAGE_PATH})
 file(GLOB ORIGIN_WHEEL "python_api/dist/*.whl")
 # Rename origin wheel file and move to install path.
-file(RENAME ${ORIGIN_WHEEL} ${CMAKE_INSTALL_PATH}/${TARGET_WHEEL})
+file(COPY ${ORIGIN_WHEEL} DESTINATION ${CMAKE_INSTALL_PATH})
 # Remove temporary package path
 file(REMOVE_RECURSE ${PYTHON_PACKAGE_PATH})

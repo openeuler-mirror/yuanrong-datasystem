@@ -215,7 +215,7 @@ pip install yr-datasystem
 export version="0.1"
 # 指定Python版本为3.11
 export py_version="311"
-pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/${version}/yr_datasystem/any/yr_datasystem-${version}-cp${py_version}-cp${py_version}-linux_x86_64.whl --trusted-host ms-release.obs.cn-north-4.myhuaweicloud.com -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/${version}/yr_datasystem/any/openyuanrong_datasystem-${version}-cp${py_version}-cp${py_version}-linux_x86_64.whl --trusted-host ms-release.obs.cn-north-4.myhuaweicloud.com -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### 源码编译安装
