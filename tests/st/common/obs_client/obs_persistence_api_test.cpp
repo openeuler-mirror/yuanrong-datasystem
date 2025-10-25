@@ -38,7 +38,7 @@ public:
 
 protected:
     RandomData randData_;
-    const std::string obsEndpoint_ = "ddl.test.huawei.com:19000";
+    const std::string obsEndpoint_ = "ddl.test.example.com:19000";
     const std::string obsAk_ = "3rtJpvkP4zowTDsx6XiE";
     const std::string obsSk_ = "SJx5Zecs7SL7I6Au9XpylG9LwPF29kMwIxisI5Xs";
     const std::string bucket_ = "test";
