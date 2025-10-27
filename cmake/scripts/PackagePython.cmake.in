@@ -15,6 +15,7 @@ message("cmake install prefix: ${CMAKE_INSTALL_PREFIX}")
 file(COPY ${PYTHON_LIBPATH}/
      DESTINATION ${PYTHON_PACKAGE_LIBPATH}/lib
      REGEX ".*sym$" EXCLUDE)
+
 file(RENAME ${PYTHON_PACKAGE_LIBPATH}/setup.py ${PYTHON_PACKAGE_PATH}/setup.py)
 # Run python setup.py bdist_whell to generate origin wheel file.
 execute_process(COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel

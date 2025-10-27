@@ -1,14 +1,14 @@
-# 安装yr-datasystem
+# 安装openYuanrong datasystem
 
 <!-- TOC -->
 
-- [快速安装yr-datasystem](#快速安装yr-datasystem版本)
+- [快速安装openYuanrong datasystem](#快速安装openyuanrong-datasystem版本)
     - [环境准备](#环境准备)
         - [安装Python](#安装python)
         - [安装CANN](#安装cann)
     - [pip安装](#pip安装)
     - [安装自定义版本](#安装自定义版本)
-- [源码编译方式安装yr-datasystem](#源码编译方式安装yr-datasystem版本)
+- [源码编译方式安装openyuanrong datasystem](#源码编译方式安装openyuanrong-datasystem版本)
     - [环境准备](#环境准备-1)
         - [安装Python](#安装python-1)
         - [安装CANN](#安装cann-1)
@@ -18,32 +18,33 @@
         - [安装git patch make libtool](#安装git-patch-make-libtool)
         - [安装CMake](#安装cmake)
     - [从代码仓下载源码](#从代码仓下载源码)
-    - [编译yr-datasystem](#编译yr-datasystem)
-    - [安装yr-datasystem](#安装yr-datasystem)
+    - [编译openyuanrong datasystem](#编译openyuanrong-datasystem)
+    - [安装openyuanrong datasystem](#安装openyuanrong-datasystem)
 
 <!-- /TOC -->
 
-[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](install.md)
+[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_zh_cn/getting-started/install.md)
 
-本文档介绍如何在CPU/NPU环境的Linux系统上，快速安装yr-datasystem或者使用源码编译方式安装yr-datasystem。
+本文档介绍如何在CPU/NPU环境的Linux系统上，快速安装openYuanrong datasystem或者使用源码编译方式安装openYuanrong datasystem。
 
-## 快速安装yr-datasystem版本
+## 快速安装openYuanrong datasystem版本
 
 ### 环境准备
 
-下表列出了运行yr-datasystem所需的系统环境和第三方依赖：
+下表列出了运行openYuanrong datasystem所需的系统环境和第三方依赖：
 
 |软件名称|版本|作用|
 |-|-|-|
-|EulerOS 2.8/openEuler 20.03|-|运行yr-datasystem的操作系统|
-|[CANN](#安装cann)|8.0.0或8.0.rc2|运行异构相关特性的依赖库|
-|[Python](#安装python)|3.10-3.11|yr-datasystem的运行依赖Python环境|
+|openEuler|22.03|运行openYuanrong datasystem的操作系统|
+|[CANN](#安装cann)|8.2.RC1|运行异构相关特性的依赖库|
+|[Python](#安装python)|3.9-3.11|openYuanrong datasystem的运行依赖Python环境|
 
 下面给出第三方依赖的安装方法。
 
 #### 安装CANN
-在[Ascend官网](https://www.hiascend.com/hardware/firmware-drivers/community?product=1&model=30&cann=8.0.0.beta1&driver=Ascend+HDK+24.1.RC3)下载CANN run包，安装 run 包：
+在[Ascend官网](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.2.RC1)下载CANN run包，安装 run 包：
 ```bash
+chmod +x ./Ascend-cann-toolkit_<version>_linux-<arch>.run
 ./Ascend-cann-toolkit_<version>_linux-<arch>.run --install
 ```
 执行以上命令会打屏华为企业业务最终用户许可协议（EULA）的条款和条件，请输入Y或y同意协议，继续安装流程。
@@ -83,8 +84,8 @@ conda init bash
 创建虚拟环境，以Python 3.11.4为例：
 
 ```bash
-conda create -n yr-datasystem_py311 python=3.11.4 -y
-conda activate yr-datasystem_py311
+conda create -n py311 python=3.11.4 -y
+conda activate py311
 ```
 
 可以通过以下命令查看Python版本。
@@ -94,42 +95,62 @@ python --version
 ```
 
 ### pip安装
+
 安装PyPI上的版本：
-```bash
-pip install yr-datasystem
-```
+
+- 安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
+  ```bash
+  pip install openyuanrong-datasystem
+  ```
+
+- 仅安装 openYuanrong datasystem Python SDK（不包含C++ SDK以及命令行工具）：
+  ```bash
+  pip install openyuanrong-datasystem-sdk
+  ```
 
 ### 安装自定义版本
-指定好yr_datasystem以及配套的Python版本，运行如下命令安装yr_datasystem包：
-```bash
-# 指定yr_datasystem版本为1.0.0
-export version="1.0.0"
-# 指定Python版本为3.11
-export py_version="311"
-pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/${version}/yr_datasystem/any/yr-datasystem-${version}-cp${py_version}-cp${py_version}-linux_x86_64.whl --trusted-host ms-release.obs.cn-north-4.myhuaweicloud.com -i https://pypi.tuna.tsinghua.edu.cn/simple
-``` 
 
-## 源码编译方式安装yr-datasystem版本
+指定好openYuanrong datasystem以及配套的Python版本，运行如下命令安装openYuanrong datasystem包：
+
+- 安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
+    ```bash
+    export version="0.5.0"
+    export py_version="$(python -c 'import sys;print(f"{sys.version_info.major}{sys.version_info.minor}")')"
+    export arch="$(uname -m)"
+
+    pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem-${version}-cp${py_version}-cp${py_version}-manylinux_2_34_${arch}.whl
+    ```
+
+- 仅安装 openYuanrong datasystem Python SDK（不包含C++ SDK以及命令行工具）：
+    ```bash
+    export version="0.5.0"
+    export py_version="$(python -c 'import sys;print(f"{sys.version_info.major}{sys.version_info.minor}")')"
+    export arch="$(uname -m)"
+
+    pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem_sdk-${version}-cp${py_version}-cp${py_version}-manylinux_2_34_${arch}.whl
+    ```
+
+## 源码编译方式安装openYuanrong datasystem版本
 
 (源码环境准备)=
 ### 环境准备
 
-下表列出了源码编译yr-datasystem所需的系统环境和第三方依赖：
+下表列出了源码编译openYuanrong datasystem所需的系统环境和第三方依赖：
 
 |软件名称|版本|作用|
 |-|-|-|
-|EulerOS 2.8/openEuler 20.03|-|编译和运行yr-datasystem的操作系统|
-|[CANN](#安装cann)|8.0.0或8.0.rc2|编译和运行异构相关特性的依赖库|
-|[Python](#安装python)|3.10-3.11|yr-datasystem的使用依赖Python环境|
-|[wheel](#安装wheel和setuptools)|0.32.0及以上|yr-datasystem使用的Python打包工具|
-|[setuptools](#安装wheel和setuptools)|44.0及以上|yr-datasystem使用的Python包管理工具|
-|[GCC](#安装gcc)|7.3.0|用于编译yr-datasystem的C编译器|
-|[G++](#安装g)|7.3.0|用于编译yr-datasystem的C++编译器|
-|[libtool](#安装git-patch-make-libtool)|-|编译构建yr-datasystem的工具|
-|[git](#安装git-patch-make-libtool)|-|yr-datasystem使用的源代码管理工具|
-|[Make](#安装git-patch-make-libtool)|-|yr-datasystem使用的源代码管理工具|
-|[CMake](#安装cmake)|3.18.3及以上|编译构建yr-datasystem的工具|
-|[patch](#安装git-patch-make-libtool)|2.5及以上|yr-datasystem使用的源代码补丁工具|
+|openEuler|22.04|编译和运行openYuanrong datasystem的操作系统|
+|[CANN](#安装cann)|8.2.RC1|编译和运行异构相关特性的依赖库|
+|[Python](#安装python)|3.10-3.11|openYuanrong datasystem的使用依赖Python环境|
+|[wheel](#安装wheel和setuptools)|0.32.0+|openYuanrong datasystem使用的Python打包工具|
+|[setuptools](#安装wheel和setuptools)|44.0+|openYuanrong datasystem使用的Python包管理工具|
+|[GCC](#安装gcc)|7.3.0+|用于编译openYuanrong datasystem的C编译器|
+|[G++](#安装g)|7.3.0+|用于编译openYuanrong datasystem的C++编译器|
+|[libtool](#安装git-patch-make-libtool)|-|编译构建openYuanrong datasystem的工具|
+|[git](#安装git-patch-make-libtool)|-|openYuanrong datasystem使用的源代码管理工具|
+|[Make](#安装git-patch-make-libtool)|-|openYuanrong datasystem使用的源代码管理工具|
+|[CMake](#安装cmake)|3.18.3+|编译构建openYuanrong datasystem的工具|
+|[patch](#安装git-patch-make-libtool)|2.5+|openYuanrong datasystem使用的源代码补丁工具|
 
 下面给出第三方依赖的安装方法。
 
@@ -212,12 +233,12 @@ source ${HOME}/Ascend/ascend-toolkit/set_env.sh
 ```
 详细介绍请参考[安装CANN](#安装cann)章节。
 
-### 编译yr-datasystem
+### 编译openYuanrong datasystem
 
-进入yr-datasystem根目录，然后执行编译脚本。
+进入openYuanrong datasystem根目录，然后执行编译脚本。
 
 ```bash
-cd yr-datasystem
+cd yuanrong-datasystem
 bash build.sh
 ```
 
@@ -226,7 +247,7 @@ bash build.sh
 - `build.sh`中默认的编译线程数为8，如果编译机性能较差可能会出现编译错误，可在执行中增加-j{线程数}来减少线程数量。如`bash build.sh -j4`。
 - 关于`build.sh`更多用法请执行`bash build.sh -h`获取帮助或者参看脚本头部的说明。
 
-### 安装yr-datasystem
+### 安装openYuanrong datasystem
 
 ```bash
 pip install output/openyuanrong_datasystem-*.whl
