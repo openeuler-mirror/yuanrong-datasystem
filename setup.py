@@ -16,8 +16,11 @@
 
 """setup_package."""
 import os
+import shutil
 import stat
+import subprocess
 
+from pathlib import Path
 from setuptools import find_packages, setup
 from setuptools.command.build_py import build_py
 from setuptools.command.egg_info import egg_info
@@ -57,6 +60,47 @@ def build_depends():
 
 
 build_depends()
+
+
+def get_dependencies(file_path):
+    """
+    get dependencieds of file
+    """
+    dependencies = set()
+    ldd_path = shutil.which("ldd")
+    if ldd_path is None:
+        raise FileNotFoundError("cant find ldd, get dependencies failed")
+    result = subprocess.run([ldd_path, file_path],
+                            capture_output=True, text=True, check=True)
+    output = result.stdout
+    for line in output.splitlines():
+        line = line.strip()
+        if '=>' in line:
+            lib_name, lib_path = line.split('=>', 1)
+            lib_name = lib_name.strip()
+            lib_path = lib_path.strip().split()[0]
+            dependencies.add((lib_name))
+        else:
+            lib_name = line.split()[0]
+            dependencies.add(lib_name)
+    return dependencies
+
+
+def get_all_dependencies():
+    """
+    get all dependencies for datasystem
+    """
+    all_dependencies = {"libdatasystem.so", "libds_client_py.so"}
+    src = os.path.join(os.path.dirname(__file__), 'datasystem', 'lib')
+    worker = os.path.join(os.path.dirname(__file__), 'datasystem', 'datasystem_worker')
+    src_path = Path(src)
+    bin_path = Path(worker)
+    all_dependencies.update(get_dependencies(bin_path))
+    for item in src_path.rglob('*'):
+        all_dependencies.update(get_dependencies(item))
+    return all_dependencies
+
+all_dependencies_for_datasystem = get_all_dependencies()
 
 
 def update_permissions(path):
@@ -102,6 +146,11 @@ class BuildPy(build_py):
             datasystem_lib_dir, 'lib', 'datasystem', 'datasystem_worker')
         os.chmod(worker_bin, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
         os.system(f"strip --strip-all {worker_bin}")
+        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem', 'lib')
+        lib_path = Path(lib_dir)
+        for item in lib_path.rglob('*'):
+            if item.name not in all_dependencies_for_datasystem:
+                item.unlink()
 
 
 class CustomBdistWheel(_bdist_wheel):

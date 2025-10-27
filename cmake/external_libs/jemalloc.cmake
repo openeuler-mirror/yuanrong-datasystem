@@ -17,6 +17,11 @@ set(jemalloc_CONF_OPTIONS
     --disable-initial-exec-tls
     --with-jemalloc-prefix=datasystem_)
 
+if (DEFINED ENV{DS_JEMALLOC_LG_PAGE})
+  message(STATUS "jemalloc custom page size=2^$ENV{DS_JEMALLOC_LG_PAGE}")
+  list(APPEND jemalloc_CONF_OPTIONS --with-lg-page=$ENV{DS_JEMALLOC_LG_PAGE})
+endif()
+
 set(jemalloc_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(jemalloc_LINK_FLAGS "-Wl,-z,now")
 
@@ -46,6 +51,10 @@ set(JemallocShared_CONF_OPTIONS
     --disable-static
     --disable-cxx
     --enable-stats)
+
+if (DEFINED ENV{DS_JEMALLOC_LG_PAGE})
+  list(APPEND JemallocShared_CONF_OPTIONS --with-lg-page=$ENV{DS_JEMALLOC_LG_PAGE})
+endif()
 
 if (SUPPORT_JEPROF)
     message(STATUS "Support jemalloc memory profiling.")

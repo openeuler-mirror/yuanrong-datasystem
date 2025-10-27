@@ -23,6 +23,12 @@ foreach(FILE ${FILE_LIST})
     file(APPEND "${DATASYSTEM_WHEEL_PATH}/sdk_lib_list" "${FILENAME}\n")
 endforeach()
 
+find_program(CMAKE_STRIP NAMES strip)
+file(GLOB SO_FILES "${DATASYSTEM_WHEEL_PATH}/lib/*.so*")
+foreach(SO_FILE ${SO_FILES})
+    execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
+endforeach()
+
 # Run python setup.py bdist_whell to generate origin wheel file.
 execute_process(COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel
         WORKING_DIRECTORY ${DATASYSTEM_SETUP_PATH})

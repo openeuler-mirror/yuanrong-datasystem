@@ -87,12 +87,16 @@ Options:
     -m The timeout period of testcases, the unit is second, default: 40.
 
 Environment:
-1) DS_OPENSOURCE_DIR: Specifies a directory to cache the opensource compilation result.
+1) DS_JEMALLOC_LG_PAGE: Explicitly sets the page size used by the jemalloc. page size=2^\${DS_JEMALLOC_LG_PAGE} bytes.
+    When this variable is omitted, jemalloc infers the system's page size at build time from the build environment 
+    (e.g., via sysconf(_SC_PAGESIZE) or equivalent). Only set DS_JEMALLOC_LG_PAGE if the runtime system's page size 
+    differs from the one detected at build time and you must override the value.
+2) DS_OPENSOURCE_DIR: Specifies a directory to cache the opensource compilation result.
     Cache the compilation result to speed up the compilation. Default: /tmp/{sha256(pwd)}/
-2) DS_VERSION: Customize a version number during compilation.
-3) DS_PACKAGE: If specified, third-party libs for the path provided by this variable will be compiled, for
+3) DS_VERSION: Customize a version number during compilation.
+4) DS_PACKAGE: If specified, third-party libs for the path provided by this variable will be compiled, for
     version build only.
-4) CTEST_OUTPUT_ON_FAILURE: Boolean environment variable that controls if the sdk output should be logged for
+5) CTEST_OUTPUT_ON_FAILURE: Boolean environment variable that controls if the sdk output should be logged for
     failed tests. Set the value to 1, True, or ON to enable output on failure.
 
 Example:

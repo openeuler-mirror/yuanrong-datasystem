@@ -6,7 +6,6 @@ project(
     p2p-transfer
     VERSION 0.1.0
     DESCRIPTION "Fast NPU peer to peer transfer library"
-    HOMEPAGE_URL "https://example.com/SIR/usched/P2P-Transfer"
     LANGUAGES CXX
 )
 

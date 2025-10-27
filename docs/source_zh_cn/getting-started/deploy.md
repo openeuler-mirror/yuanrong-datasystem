@@ -1,7 +1,7 @@
-# 部署yr-datasystem
+# 部署openYuanrong datasystem
 
 <!-- TOC -->
-- [yr-datasystem进程部署](#yr-datasystem进程部署)
+- [openYuanrong datasystem进程部署](#openyuanrong-datasystem进程部署)
     - [部署环境准备](#部署环境准备)
     - [集群部署](#集群部署)
         - [单机部署](#单机部署)
@@ -10,7 +10,7 @@
     - [集群卸载](#集群卸载)
         - [单机卸载](#单机卸载)
         - [多机卸载](#多机卸载)
-- [yr-datasystem Kubernetes部署](#yr-datasystem-kubernetes部署)
+- [openYuanrong datasystem Kubernetes部署](#openyuanrong-datasystem-kubernetes部署)
     - [部署环境准备](#部署环境准备-1)
     - [集群部署](#集群部署-1)
     - [快速验证](#快速验证-1)
@@ -20,19 +20,19 @@
 
 [![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](deploy.md)
 
-本文档介绍如何将yr-datasystem通过裸进程或者Kubernetes的方式进行部署。
+本文档介绍如何将openYuanrong datasystem通过裸进程或者Kubernetes的方式进行部署。
 
-## yr-datasystem进程部署
+## openYuanrong datasystem进程部署
 
 ### 部署环境准备
-yr-datasystem进程部署所需的系统环境依赖如下：
+openYuanrong datasystem进程部署所需的系统环境依赖如下：
 |软件名称|版本|作用|
 |-------|----|----|
-|EulerOS 2.8/openEuler 20.03|-|运行yr-datasystem的操作系统|
+|EulerOS 2.8/openEuler 20.03|-|运行openYuanrong datasystem的操作系统|
 |[CANN](#安装cann)|8.0.0或8.0.rc2|运行异构相关特性的依赖库|
-|[Python](#安装python)|3.10-3.11|yr-datasystem dscli的使用依赖Python环境|
-|[dscli](#安装dscli)|-|用于部署yr-datasystem的命令行工具|
-|[ETCD](#安装并部署etcd)|3.5|yr-datasystem集群管理依赖组件|
+|[Python](#安装python)|3.10-3.11|openYuanrong datasystem dscli的使用依赖Python环境|
+|[dscli](#安装dscli)|-|用于部署openYuanrong datasystem的命令行工具|
+|[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
 |[SSH互信配置](#ssh互信配置)|-|仅多机部署需要，配置SSH互信用于机器间互相访问|
 
 下面给出以上依赖的安装方法。
@@ -76,8 +76,8 @@ conda init bash
 创建虚拟环境，以Python 3.11.4为例：
 
 ```bash
-conda create -n yr-datasystem_py311 python=3.11.4 -y
-conda activate yr-datasystem_py311
+conda create -n openYuanrong datasystem_py311 python=3.11.4 -y
+conda activate openYuanrong datasystem_py311
 ```
 
 可以通过以下命令查看Python版本。
@@ -87,7 +87,7 @@ python --version
 ```
 
 ### 安装dscli
-dscli命令行工具集成在yr-datasystem的wheel包 `openyuanrong_datasystem-<version>-cp311-cp311-manylinux_2_34_<arch>.whl`中，安装yr-datasystem请参考[安装yr-datasystem](install.md)。
+dscli命令行工具集成在openYuanrong datasystem的wheel包 `openyuanrong_datasystem-<version>-cp311-cp311-manylinux_2_34_<arch>.whl`中，安装openYuanrong datasystem请参考[安装openYuanrong datasystem](install.md)。
 
 安装完成后，运行如下命令：
 ```bash
@@ -194,7 +194,7 @@ ssh username@hostname
 
 ### 集群部署
 
-yr-datasystem集群依赖ETCD，部署前需要先部署ETCD，部署ETCD可参考：[安装并部署ETCD](#安装并部署etcd)。
+openYuanrong datasystem集群依赖ETCD，部署前需要先部署ETCD，部署ETCD可参考：[安装并部署ETCD](#安装并部署etcd)。
 
 #### 单机部署
 
@@ -267,7 +267,7 @@ dscli up -f ./cluster_config.json
 
 > 注意事项：
 > 
-> - yr-datasystem集群依赖ETCD，部署前需要先部署ETCD，部署ETCD可参考：[安装并部署ETCD](#安装并部署etcd)。
+> - openYuanrong datasystem集群依赖ETCD，部署前需要先部署ETCD，部署ETCD可参考：[安装并部署ETCD](#安装并部署etcd)。
 > - 多机集群部署依赖多机之间配置SSH互信，请参考：[SSH互信配置](#ssh互信配置)。
 > - 需要部署的机器上都已安装dscli，dscli安装可参考：[安装dscli](#安装dscli)。
 >
@@ -285,7 +285,7 @@ client = DsClient("127.0.0.1", 31501)
 client.init()
 ```
 
-当脚本执行未发生异常时说明yr-datasystem的客户端能正常连接上当前节点的ds-worker，部署成功。
+当脚本执行未发生异常时说明openYuanrong datasystem的客户端能正常连接上当前节点的ds-worker，部署成功。
 
 ### 集群卸载
 
@@ -323,22 +323,22 @@ dscli down -f ./cluster_config.json
 
 当输出如上信息时说明集群卸载成功。
 
-## yr-datasystem Kubernetes部署
+## openYuanrong datasystem Kubernetes部署
 
 ### 部署环境准备
 
-yr-datasystem Kubernetes部署所需的依赖如下：
+openYuanrong datasystem Kubernetes部署所需的依赖如下：
 
 |软件名称|推荐版本|作用|
 |--------|-------|----|
 |EulerOS 2.8/openEuler 20.03|-|支持运行Kubernetes与Docker的操作系统|
 |[kubectl](#安装kubectl)|-|运行异构相关特性的依赖库|
-|[Kubernetes](#安装kubernetes)|-|Kubernetes集群，用于编排和管理yr-datasystem的容器|
-|[Helm](#安装helm)|-|yr-datasystem dscli的使用依赖Python环境|
-|[Docker](#安装docker)|-|提供容器化平台，支持yr-datasystem容器化部署和运行|
-|[ETCD](#安装并部署etcd)|3.5|yr-datasystem集群管理依赖组件|
-|[yr-datasystem镜像](#获取yr-datasystem镜像)|-|yr-datasystem服务端组件镜像|
-|[yr-datasystem helm chart](#获取yr-datasystem-helm-chart包)|-|yr-datasystem helm chart包|
+|[Kubernetes](#安装kubernetes)|-|Kubernetes集群，用于编排和管理openYuanrong datasystem的容器|
+|[Helm](#安装helm)|-|openYuanrong datasystem dscli的使用依赖Python环境|
+|[Docker](#安装docker)|-|提供容器化平台，支持openYuanrong datasystem容器化部署和运行|
+|[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
+|[openYuanrong datasystem镜像](#获取openYuanrong datasystem镜像)|-|openYuanrong datasystem服务端组件镜像|
+|[openYuanrong datasystem helm chart](#获取openYuanrong datasystem-helm-chart包)|-|openYuanrong datasystem helm chart包|
 
 下面给出以上软件的获取及安装方法。
 
@@ -362,7 +362,7 @@ yr-datasystem Kubernetes部署所需的依赖如下：
 
 安装详情请参考 [安装并部署ETCD](#安装并部署etcd) 章节。
 
-#### 获取yr-datasystem镜像
+#### 获取openYuanrong datasystem镜像
 
 - 通过镜像仓获取镜像：
 
@@ -388,9 +388,9 @@ yr-datasystem Kubernetes部署所需的依赖如下：
     - image_name: 生成的镜像名
     - image_tag: 生成的镜像Tag
 
-    执行完成之后会在yr-datasystem/docker目录下生成一个build目录，build目录中会生成一个 `datasystem.tar` 文件，即为镜像压缩文件；与此同时本地的docker仓库中也会保存 `<image_name>:<image_tag>` 的镜像。
+    执行完成之后会在openYuanrong datasystem/docker目录下生成一个build目录，build目录中会生成一个 `datasystem.tar` 文件，即为镜像压缩文件；与此同时本地的docker仓库中也会保存 `<image_name>:<image_tag>` 的镜像。
 
-#### 获取yr-datasystem helm chart包
+#### 获取openYuanrong datasystem helm chart包
 
 - 通过 dscli 命令行工具获取：
 
@@ -409,7 +409,7 @@ yr-datasystem Kubernetes部署所需的依赖如下：
 
 ### 集群部署
 
-yr-datasystem通过 [/tmp/datasystem/values.yaml](#获取yr-datasystem-helm-chart包) 文件进行集群相关配置，其中必配项如下：
+openYuanrong datasystem通过 [/tmp/datasystem/values.yaml](#获取openYuanrong datasystem-helm-chart包) 文件进行集群相关配置，其中必配项如下：
 
 ```yaml
 global:
@@ -419,7 +419,7 @@ global:
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler/"
   # 镜像名字和镜像tag，<VERSION>需要替换为对应的版本号
   images:
-    datasystem: "yr-datasystem:<VERSION>"
+    datasystem: "openYuanrong datasystem:<VERSION>"
   
   etcd:
     # ETCD集群地址
@@ -428,7 +428,7 @@ global:
 
 > 注意事项：
 > 
-> - 镜像仓地址与镜像名称获取请参考：[获取yr-datasystem镜像](#获取yr-datasystem镜像)。
+> - 镜像仓地址与镜像名称获取请参考：[获取openYuanrong datasystem镜像](#获取openYuanrong datasystem镜像)。
 > - ETCD集群的部署与IP地址获取请参考：[安装并部署ETCD](#安装并部署etcd)。
 
 配置完成后，通过 helm 命令即可轻松完成部署，命令如下：
@@ -459,7 +459,7 @@ kubectl get pods -o wide
 
 ### 快速验证
 
-yr-datasystem会默认以DamonSet的方式在每个节点都部署一个 `ds-worker` Pod，默认监听 `<主机IP>:31501`，可通过如下 Python 脚本快速验证：
+openYuanrong datasystem会默认以DamonSet的方式在每个节点都部署一个 `ds-worker` Pod，默认监听 `<主机IP>:31501`，可通过如下 Python 脚本快速验证：
 
 ```python
 from datasystem.ds_client import DsClient
@@ -468,7 +468,7 @@ client = DsClient("127.0.0.1", 31501)
 client.init()
 ```
 
-当脚本执行未发生异常时说明yr-datasystem的客户端能正常连接上当前节点的ds-worker，部署成功。
+当脚本执行未发生异常时说明openYuanrong datasystem的客户端能正常连接上当前节点的ds-worker，部署成功。
 
 ### 集群卸载
 
@@ -486,4 +486,4 @@ kubectl get pods -o wide
 # Pod列表中不存在ds-worker Pod
 ```
 
-当yr-datasystem所有的ds-worker Pod都退出时说明集群卸载成功。
+当openYuanrong datasystem所有的ds-worker Pod都退出时说明集群卸载成功。

@@ -778,7 +778,7 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/example/cpp_template
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
   # Copy worker and worker_config to package lib path
-  install(FILES ${CMAKE_INSTALL_PREFIX}/service/datasystem_worker ${CMAKE_SOURCE_DIR}/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/deploy/conf/cluster_config.json
+  install(FILES ${CMAKE_INSTALL_PREFIX}/service/datasystem_worker ${CMAKE_SOURCE_DIR}/cli/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/cluster_config.json
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
  
   find_package(Python3 COMPONENTS Interpreter Development)
