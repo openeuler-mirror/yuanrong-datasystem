@@ -852,15 +852,15 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
         mmapPoint.Record();
 
-        ObjectBufferInfo bufferInfo =
-            SetObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize, param,
-                                false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+        auto bufferInfo =
+            MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize,
+                                 param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
         CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
                                  FormatString("shmId not uuid, shmId is %s", shmBuf->id));
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer));
+        RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
     } else {
-        ObjectBufferInfo bufferInfo = SetObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer));
+        auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
+        RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
     }
     buffer = std::move(newBuffer);
     createPoint.Record();
@@ -925,7 +925,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
             auto dataSize = dataSizeList[i];
             auto version = 0u;
             std::shared_ptr<Buffer> newBuffer;
-            ObjectBufferInfo bufferInfo = SetObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
+            auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
             auto rc = Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer);
             if (rc.IsError()) {
                 bufferList.clear();
@@ -948,36 +948,9 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
         }
         bufferList.clear();
     });
-    Status injectRC = Status::OK();
     point.Reset(PerfKey::CLIENT_MULTI_CREATE_RSP_HANDLE);
-    for (auto &createParam : multiCreateParamList) {
-        if (!skipCheckExistence && exists[createParam.index]) {
-            continue;
-        }
-        PerfPoint mmapPoint(PerfKey::CLIENT_LOOK_UP_MMAP_FD);
-        auto &shmBuf = createParam.shmBuf;
-        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
-        auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-        CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-        mmapPoint.Record();
-
-        ObjectBufferInfo bufferInfo = SetObjectBufferInfo(
-            createParam.objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, createParam.dataSize,
-            createParam.metadataSize, param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
-        CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
-                                 FormatString("shmId not uuid, shmId is %s", shmBuf->id));
-        INJECT_POINT("ObjectClientImpl.MultiCreate.mmapFailed", [&bufferList, &injectRC](int failedIndex) {
-            if (bufferList[failedIndex] != nullptr) {
-                injectRC = Status(StatusCode::K_RUNTIME_ERROR, "Set runtime error");
-            }
-            return Status::OK();
-        });
-        RETURN_IF_NOT_OK(injectRC);
-        PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_BUFFER_CREATE);
-        std::shared_ptr<Buffer> newBuffer;
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer));
-        bufferList[createParam.index] = std::move(newBuffer);
-    }
+    RETURN_IF_NOT_OK(
+        MutiCreateParallel(skipCheckExistence, param, version, exists, multiCreateParamList, bufferList));
     isInactive = true;
     return Status::OK();
 }
@@ -1169,7 +1142,6 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
                                        const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
                                        const std::shared_ptr<ClientWorkerApi> &workerApi, int existence)
 {
-    ObjectBufferInfo objInfo;
     // Create a buffer first.
     auto shmBuf = std::make_shared<ShmUnitInfo>();
     uint32_t version = 0;
@@ -1178,8 +1150,8 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
     auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
     CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-    objInfo = SetObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize, param,
-                                  false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+    auto objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
+                                        param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
     std::shared_ptr<Buffer> buffer;
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Acquire accessor to protect later publish.
@@ -1194,9 +1166,8 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     RETURN_IF_NOT_OK(buffer->MemoryCopy(data, size));
 
     // Start to send put request.
-    auto putInfo = std::make_shared<ObjectBufferInfo>(objInfo);
     // In this case buffer is local data, but rpc must be locked.:
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(putInfo, true, false, nestedObjectKeys, ttlSecond, existence),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, true, false, nestedObjectKeys, ttlSecond, existence),
                                      FormatString("Put object %s", objectKey));
     buffer->SetVisibility(true);
     // Destruct Buffer With Lock.
@@ -1288,10 +1259,9 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
             ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence));
     } else {
         // Construct info to put.
-        auto objInfo = SetObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
-        auto putInfo = std::make_shared<ObjectBufferInfo>(objInfo);
+        auto objInfo = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerApi->Publish(putInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
+            workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
             FormatString("Put object %s", objectKey));
     }
     LOG(INFO) << "Finished putting and sealing object, object_key: " << objectKey;
@@ -1386,16 +1356,16 @@ Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const 
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());
     param.cacheType = CacheType(info.cache_type());
-    ObjectBufferInfo bufferInfo =
-        SetObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
-                            ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
+    auto bufferInfo =
+        MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
+                             ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Update shared memory reference count.
     TbbMemoryRefTable::accessor accessor;
     auto found = memoryRefCount_.insert(accessor, ShmKey::Intern(info.shm_id()));
     accessor->second = (found ? 1 : accessor->second + 1);
-    return Buffer::CreateBuffer(bufferInfo, shared_from_this(), buffer);
+    return Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), buffer);
 }
 
 Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t offset,
@@ -1414,25 +1384,24 @@ Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t of
     return Status::OK();
 }
 
-ObjectBufferInfo ObjectClientImpl::SetObjectBufferInfo(const std::string &objectKey, uint8_t *pointer, uint64_t size,
-                                                       uint64_t metaSize, const FullParam &param, bool isSeal,
-                                                       uint32_t version, const ShmKey &shmId,
-                                                       const std::shared_ptr<RpcMessage> &payloadPointer,
-                                                       std::shared_ptr<client::MmapTableEntry> mmapEntry)
+std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
+    const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
+    bool isSeal, uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
+    std::shared_ptr<client::MmapTableEntry> mmapEntry)
 {
-    ObjectBufferInfo bufferInfo;
-    bufferInfo.objectKey = objectKey;
-    bufferInfo.shmId = shmId;
-    bufferInfo.pointer = pointer;
-    bufferInfo.dataSize = size;
-    bufferInfo.metadataSize = metaSize;
-    bufferInfo.objectMode.SetWriteMode(param.writeMode);
-    bufferInfo.objectMode.SetConsistencyType(param.consistencyType);
-    bufferInfo.objectMode.SetCacheType(param.cacheType);
-    bufferInfo.isSeal = isSeal;
-    bufferInfo.version = version;
-    bufferInfo.payloadPointer = payloadPointer;
-    bufferInfo.mmapEntry = std::move(mmapEntry);
+    auto bufferInfo = std::make_shared<ObjectBufferInfo>();
+    bufferInfo->objectKey = objectKey;
+    bufferInfo->shmId = shmId;
+    bufferInfo->pointer = pointer;
+    bufferInfo->dataSize = size;
+    bufferInfo->metadataSize = metaSize;
+    bufferInfo->objectMode.SetWriteMode(param.writeMode);
+    bufferInfo->objectMode.SetConsistencyType(param.consistencyType);
+    bufferInfo->objectMode.SetCacheType(param.cacheType);
+    bufferInfo->isSeal = isSeal;
+    bufferInfo->version = version;
+    bufferInfo->payloadPointer = payloadPointer;
+    bufferInfo->mmapEntry = std::move(mmapEntry);
     return bufferInfo;
 }
 
@@ -1544,9 +1513,9 @@ Status ObjectClientImpl::SetNonShmObjectBuffer(const std::string &objectKey, con
     if (payloadIndexSize == 1) {
         std::shared_ptr<RpcMessage> payloadSharedPtr =
             std::make_shared<RpcMessage>(std::move(payloads[payloadInfo.part_index(0)]));
-        auto bufferInfo = SetObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
-                                              payloadInfo.is_seal(), version, {}, payloadSharedPtr, nullptr);
-        return Buffer::CreateBuffer(bufferInfo, shared_from_this(), bufferPtr);
+        auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
+                                               payloadInfo.is_seal(), version, {}, payloadSharedPtr, nullptr);
+        return Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), bufferPtr);
     } else {
         std::vector<RpcMessage> objectPayloads;
         for (int i = 0; i < payloadIndexSize; i++) {
@@ -1557,9 +1526,9 @@ Status ObjectClientImpl::SetNonShmObjectBuffer(const std::string &objectKey, con
             }
             objectPayloads.emplace_back(std::move(payloads[partIndex]));
         }
-        auto bufferInfo = SetObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
-                                              payloadInfo.is_seal(), version, {}, nullptr, nullptr);
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), bufferPtr));
+        auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
+                                               payloadInfo.is_seal(), version, {}, nullptr, nullptr);
+        RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), bufferPtr));
         size_t offset = 0;
         for (const auto &part : objectPayloads) {
             const auto length = part.Size();
@@ -1599,9 +1568,9 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());
     param.cacheType = CacheType(info.cache_type());
-    ObjectBufferInfo bufferInfo =
-        SetObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
-                            ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
+    auto bufferInfo =
+        MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
+                             ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Update shared memory reference count.
@@ -1610,12 +1579,12 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
         TbbMemoryRefTable::accessor accessor;
         auto found = memoryRefCount_.insert(accessor, ShmKey::Intern(info.shm_id()));
         accessor->second = (found ? 1 : accessor->second + 1);
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), tmpbuffer));
+        RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), tmpbuffer));
     }
 
-    ObjectBufferInfo readBufferInfo = SetObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param,
-                                                          info.is_seal(), version, {}, nullptr, nullptr);
-    RETURN_IF_NOT_OK(Buffer::CreateBuffer(readBufferInfo, shared_from_this(), buffer));
+    auto readBufferInfo = MakeObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param, info.is_seal(),
+                                               version, {}, nullptr, nullptr);
+    RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(readBufferInfo), shared_from_this(), buffer));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         buffer->MemoryCopy(static_cast<uint8_t *>(tmpbuffer->MutableData()) + offset, offsetInfo.readSize),
         "Memory copy failed.");
@@ -1991,19 +1960,16 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
                                                const CacheType &cacheType)
 {
     FullParam param;
-    param.writeMode = writeMode,
-    param.consistencyType = ConsistencyType::CAUSAL;
+    param.writeMode = writeMode, param.consistencyType = ConsistencyType::CAUSAL;
     param.cacheType = cacheType;
     int i = 0;
     for (const auto &keyValue : kv) {
-        ObjectBufferInfo objInfo;
         // if is not transaction, the val  of object master less than 500KB, not ShmCreateable.
         if (!workerApi->ShmCreateable(keyValue.second.size())) {
             // Transmit data with payload.
-            objInfo = SetObjectBufferInfo(keyValue.first,
-                                          reinterpret_cast<uint8_t *>(const_cast<char *>(keyValue.second.data())),
-                                          keyValue.second.size(), 0, param, false, 0);
-            bufferInfo[i] = std::make_shared<ObjectBufferInfo>(objInfo);
+            bufferInfo[i] = MakeObjectBufferInfo(
+                keyValue.first, reinterpret_cast<uint8_t *>(const_cast<char *>(keyValue.second.data())),
+                keyValue.second.size(), 0, param, false, 0);
             i++;
             continue;
         }
@@ -2016,17 +1982,67 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
         RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
         auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
         CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-        objInfo =
-            SetObjectBufferInfo(keyValue.first, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, keyValue.second.size(),
-                                metadataSize, param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+        auto objInfo =
+            MakeObjectBufferInfo(keyValue.first, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, keyValue.second.size(),
+                                 metadataSize, param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffers[i]));
         CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(accessor[i], shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
                                  FormatString("shmId not uuid, shmId is %s", shmBuf->id));
         RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(keyValue.second.data(), keyValue.second.size()));
-        bufferInfo[i] = std::make_shared<ObjectBufferInfo>(objInfo);
+        bufferInfo[i] = std::move(objInfo);
         i++;
     }
     return Status::OK();
+}
+
+Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence,
+                                            const FullParam &param, const uint32_t &version, std::vector<bool> &exists,
+                                            std::vector<MultiCreateParam> &multiCreateParamList,
+                                            std::vector<std::shared_ptr<Buffer>> &bufferList)
+{
+    Status injectRC = Status::OK();
+    const int sz = static_cast<int>(multiCreateParamList.size());
+    auto multicreate = [&, this](size_t start, size_t end) {
+        for (auto i = start; i < end; i++) {
+            auto &createParam = multiCreateParamList[i];
+            if (!skipCheckExistence && exists[createParam.index]) {
+                continue;
+            }
+            PerfPoint mmapPoint(PerfKey::CLIENT_MULTI_CREATE_GET_MMAP);
+            auto &shmBuf = createParam.shmBuf;
+            RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+            auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+            CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
+            mmapPoint.Record();
+
+            auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset,
+                                                   createParam.dataSize, createParam.metadataSize, param, false,
+                                                   version, shmBuf->id, nullptr, std::move(mmapEntry));
+            PerfPoint refPoint(PerfKey::CLIENT_MEMORY_REF_ADD);
+            CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
+                                     FormatString("shmId not uuid, shmId is %s", shmBuf->id));
+            refPoint.Record();
+            INJECT_POINT("ObjectClientImpl.MultiCreate.mmapFailed", [&bufferList, &injectRC](int failedIndex) {
+                if (bufferList[failedIndex] != nullptr) {
+                    injectRC = Status(StatusCode::K_RUNTIME_ERROR, "Set runtime error");
+                }
+                return Status::OK();
+            });
+            RETURN_IF_NOT_OK(injectRC);
+            PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_BUFFER_CREATE);
+            std::shared_ptr<Buffer> newBuffer;
+            RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
+            bufferList[createParam.index] = std::move(newBuffer);
+        }
+        return Status::OK();
+    };
+    static const int parallelThreshold = 128;
+    bool isParallel = multiCreateParamList.size() > parallelThreshold;
+    if (!isParallel || parallismNum_ == 0) {
+        return multicreate(0, sz);
+    }
+    static const int parallism = 4;
+    return Parallel::ParallelFor<size_t>(0, multiCreateParamList.size(), multicreate, 0, parallism);
 }
 
 Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
@@ -2039,9 +2055,9 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
         for (int i = start; i < end; i++) {
             auto &buffer = bufferList[i];
             if (buffer == nullptr) {
-                bufferInfoList[i] = std::make_shared<ObjectBufferInfo>(
-                    SetObjectBufferInfo(keys[i], reinterpret_cast<uint8_t *>(const_cast<char *>(vals[i].data())),
-                                        vals[i].size(), 0, creatParam, false, 0));
+                bufferInfoList[i] =
+                    MakeObjectBufferInfo(keys[i], reinterpret_cast<uint8_t *>(const_cast<char *>(vals[i].data())),
+                                         vals[i].size(), 0, creatParam, false, 0);
                 continue;
             }
             RETURN_IF_NOT_OK(buffer->CheckDeprecated());

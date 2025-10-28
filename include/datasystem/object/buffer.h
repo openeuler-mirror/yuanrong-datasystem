@@ -125,7 +125,7 @@ private:
     friend class datasystem::object_cache::ObjectClientImpl;
     friend class WorkerOCServiceImpl;
 
-    Buffer(const ObjectBufferInfo &bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl);
+    Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl);
 
     /// \brief The only purpose of having this function is to encapsulate the above private Buffer constructor,
     ///         to make it work with std::make_shared<Buffer>. Directly use std::make_shared with a private
@@ -136,8 +136,8 @@ private:
     /// \param[out] buffer The buffer instance.
     ///
     /// \return New created buffer.
-    static Status CreateBuffer(const ObjectBufferInfo &bufferInfo,
-                               const std::shared_ptr<object_cache::ObjectClientImpl> &clientImpl,
+    static Status CreateBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
+                               std::shared_ptr<object_cache::ObjectClientImpl> clientImpl,
                                std::shared_ptr<Buffer> &buffer);
     /// \brief Initialize the buffer information.
     ///

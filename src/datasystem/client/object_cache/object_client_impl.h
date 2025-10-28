@@ -790,11 +790,11 @@ private:
      * the bufferInfo->pointer; other cases will pass in a nullptr.
      * @return ObjectBufferInfo The struct which stores buffer info.
      */
-    static ObjectBufferInfo SetObjectBufferInfo(const std::string &objectKey, uint8_t *pointer, uint64_t size,
-                                                uint64_t metaSize, const FullParam &param, bool isSeal,
-                                                uint32_t version, const ShmKey &shmId = {},
-                                                const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
-                                                std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
+    static std::shared_ptr<ObjectBufferInfo> MakeObjectBufferInfo(
+        const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
+        bool isSeal, uint32_t version, const ShmKey &shmId = {},
+        const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
+        std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
 
     /**
      * @brief Make the buffer invalid.
@@ -1033,6 +1033,20 @@ private:
                                  std::vector<std::shared_ptr<Buffer>> &buffers,
                                  std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                  const CacheType &cacheType);
+
+    /**
+     * @brief Muti create buffer parallel
+     * @param[in] skipCheckExistence is skip check existence
+     * @param[in] param set param
+     * @param[in] version buffer version
+     * @param[out] exists exists list
+     * @param[out] multiCreateParamList create param list
+     * @param[out] bufferList buffer list
+     */
+    Status MutiCreateParallel(const bool skipCheckExistence, const FullParam &param,
+                              const uint32_t &version, std::vector<bool> &exists,
+                              std::vector<MultiCreateParam> &multiCreateParamList,
+                              std::vector<std::shared_ptr<Buffer>> &bufferList);
 
     /**
      * @brief Get clientId.

@@ -36,8 +36,8 @@
 static constexpr int DEBUG_LOG_LEVEL = 2;
 
 namespace datasystem {
-Buffer::Buffer(const ObjectBufferInfo &bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl)
-    : bufferInfo_(std::make_shared<ObjectBufferInfo>(bufferInfo)), clientImpl_(std::move(clientImpl)), isShm_(false)
+Buffer::Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl)
+    : bufferInfo_(std::move(bufferInfo)), clientImpl_(std::move(clientImpl)), isShm_(false)
 {
     clientId_ = clientImpl_->GetClientId();
 }
@@ -45,8 +45,7 @@ Buffer::Buffer(const ObjectBufferInfo &bufferInfo, std::shared_ptr<object_cache:
 Status Buffer::Init()
 {
     RETURN_IF_NOT_OK(CheckDeprecated());
-    if (bufferInfo_->pointer == nullptr
-        && bufferInfo_->payloadPointer == nullptr) {  // non-shared memory Create or Put
+    if (bufferInfo_->pointer == nullptr && bufferInfo_->payloadPointer == nullptr) {  // non-shared memory Create or Put
         auto mallocSize = bufferInfo_->dataSize + 1;
         auto memPtr = static_cast<uint8_t *>(malloc(mallocSize));
         if (memPtr == nullptr) {
@@ -69,18 +68,18 @@ Status Buffer::Init()
     return latch_->Init();
 }
 
-Status Buffer::CreateBuffer(const ObjectBufferInfo &bufferInfo,
-                            const std::shared_ptr<object_cache::ObjectClientImpl> &clientImpl,
-                            std::shared_ptr<Buffer> &buffer)
+Status Buffer::CreateBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
+                            std::shared_ptr<object_cache::ObjectClientImpl> clientImpl, std::shared_ptr<Buffer> &buffer)
 {
     struct ConcreteBuffer : public Buffer {
-        ConcreteBuffer(const ObjectBufferInfo &bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl)
-            : Buffer(bufferInfo, std::move(clientImpl))
+        ConcreteBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
+                       std::shared_ptr<object_cache::ObjectClientImpl> clientImpl)
+            : Buffer(std::move(bufferInfo), std::move(clientImpl))
         {
             clientId_ = clientImpl_->GetClientId();
         }
     };
-    buffer = std::make_shared<ConcreteBuffer>(bufferInfo, clientImpl);
+    buffer = std::make_shared<ConcreteBuffer>(std::move(bufferInfo), std::move(clientImpl));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->Init(), "Create buffer failed");
     return Status::OK();
 }
@@ -265,8 +264,8 @@ Status Buffer::CheckDeprecated()
     if (status.IsError()) {
         return status;
     }
-    if (bufferInfo_->version != clientImpl_->GetWorkerVersion() ||
-        clientImpl_->GetState() != (uint16_t)ClientState::INITIALIZED) {
+    if (bufferInfo_->version != clientImpl_->GetWorkerVersion()
+        || clientImpl_->GetState() != (uint16_t)ClientState::INITIALIZED) {
         RETURN_STATUS(K_RUNTIME_ERROR, "The buffer is useless, please destruct it!");
     }
     return Status::OK();

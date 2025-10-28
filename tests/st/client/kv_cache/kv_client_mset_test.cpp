@@ -59,7 +59,7 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.enableDistributedMaster = "false";
-        opts.workerGflagParams = "-shared_memory_size_mb=3000 -v=2";
+        opts.workerGflagParams = "-shared_memory_size_mb=3000 -v=2 ";
     }
 
     void GenerateKeyValues(std::vector<std::string> &keys, std::vector<std::string> &values, int num, int valSize)
@@ -549,7 +549,7 @@ TEST_F(KVClientMSetTest, DISABLED_MSetAndAsyncDel)
     thread3.join();
 }
 
-TEST_F(KVClientMSetTest, DISABLED_MsetNtxRestartWorker)
+TEST_F(KVClientMSetTest, DISABLED_LEVEL1_MsetNtxRestartWorker)
 {
     MSetParam param;
     std::vector<std::string> keys, vals;
@@ -1141,9 +1141,7 @@ TEST_F(KVClientMSetTest, MSetDuplicateObj)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMeta.delay", "1*sleep(1000)"));
 
     Status rc1, rc2;
-    std::thread t1([&]() {
-        rc1 = client0_->MSetTx(keys, values, param);
-    });
+    std::thread t1([&]() { rc1 = client0_->MSetTx(keys, values, param); });
     std::thread t2([&]() {
         constexpr int sleepTimeUs = 1'000;
         usleep(sleepTimeUs);
@@ -1631,16 +1629,12 @@ TEST_F(KVClientMSetDMTest, MSetMeetRollbackAsync)
     (void)client1_->GenerateKey("obj2", key2);
     keys.emplace_back(key1);
     keys.emplace_back(key2);
-    std::vector<StringView> vals{"any", "any"};
+    std::vector<StringView> vals{ "any", "any" };
 
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", "1*return(K_TRY_AGAIN)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "AsyncRollbackToMaster.delay", "1*call(2)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "master.RollbackMultiMeta.begin", "1*return(K_UNKNOWN_ERROR)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMetaPhaseTwo.begin", "2*sleep(5000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", "1*return(K_TRY_AGAIN)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "AsyncRollbackToMaster.delay", "1*call(2)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.RollbackMultiMeta.begin", "1*return(K_UNKNOWN_ERROR)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMetaPhaseTwo.begin", "2*sleep(5000)"));
     const int threadNum = 2;
     ThreadPool threadPool(threadNum);
     // 1. w0 -> w1 create meta phase one
@@ -1648,12 +1642,11 @@ TEST_F(KVClientMSetDMTest, MSetMeetRollbackAsync)
     // 3. w2 -> w1 create meta phase one
     // 4. w0 -> w1 create meta phase two  --> The obj2 metadata cannot be rolled back because it is occupied by w2.
     // 5. w2 -> w1 create meta phase two
-    auto fut = threadPool.Submit([this, keys, vals]() {
-        ASSERT_EQ(client0_->MSetTx(keys, vals, mParam_).GetCode(), K_OC_KEY_ALREADY_EXIST);
-    });
+    auto fut = threadPool.Submit(
+        [this, keys, vals]() { ASSERT_EQ(client0_->MSetTx(keys, vals, mParam_).GetCode(), K_OC_KEY_ALREADY_EXIST); });
     auto fut1 = threadPool.Submit([this, keys, vals]() {
-        sleep(3); // wait obj2 rolled back
-        DS_ASSERT_OK(client2_->MSetTx({keys[1]}, {vals[1]}, mParam_));
+        sleep(3);  // wait obj2 rolled back
+        DS_ASSERT_OK(client2_->MSetTx({ keys[1] }, { vals[1] }, mParam_));
     });
     fut.get();
     fut1.get();
