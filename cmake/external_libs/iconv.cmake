@@ -2,7 +2,7 @@ set(iconv_VERSION 1.15)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
   set(iconv_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/libiconv-1.15.tar.gz")
 else()
-  set(iconv_URL "https://mirror.freedif.org/GNU/libiconv/libiconv-1.15.tar.gz")
+  set(iconv_URL "https://mirrors.aliyun.com/gnu/libiconv/libiconv-1.15.tar.gz")
 endif()
 set(iconv_SHA256 "ccf536620a45458d26ba83887a983b96827001e92a13847b45e4925cc8913178")
 
