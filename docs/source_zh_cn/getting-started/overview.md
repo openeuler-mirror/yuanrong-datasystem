@@ -44,8 +44,8 @@ yuanrong-datasystem 的部署视图(如上图所示)：
 yuanrong-datasystem 提供了 pip install 及源码安装两种方式，详细请参考[安装指南](install.md)。
 yuanrong-datasystem 提供了两种部署方式：
 
-- [快速进程部署](deploy.md#yr-datasystem进程部署)
-- [在 Kubernetes上部署](deploy.md#yr-datasystem-kubernetes部署)
+- [快速进程部署](deploy.md#openyuanrong-datasystem进程部署)
+- [在 Kubernetes上部署](deploy.md#openyuanrong-datasystem-kubernetes部署)
 
 ## 开发指南
 

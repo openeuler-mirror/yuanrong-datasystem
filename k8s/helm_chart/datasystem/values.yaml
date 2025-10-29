@@ -95,6 +95,8 @@ global:
     logAsyncQueueSize: 65536
     # Vlog level, a larger value indicates more detailed logs. The value is between 0-3.
     logLevel: 0
+    # Log messages below this level will not actually be recorded anywhere. The value is between 0-3.
+    minLogLevel: 0
     # The maximum log file size (in MB), which must be greater than 0.
     maxLogSize: 400
     # Maximum number of log files to retain per severity level. And every log file size is limited by max log size.

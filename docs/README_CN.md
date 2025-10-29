@@ -1,7 +1,7 @@
-# yr-datasystem 文档
+# openYuanrong datasystem 文档
 
 ## 简介
-此目录用于生成 yr-datasystem 的中文文档以及英文文档。
+此目录用于生成 openYuanrong datasystem 的中文文档以及英文文档。
 
 ## 目录结构说明
 ```text
@@ -17,9 +17,9 @@ docs
 
 ## 文档构建
 
-yr-datasystem的教程和API文档均可由[Sphinx](https://www.sphinx-doc.org/en/master/)工具生成，操作前需完成yr-datasystem的安装。
+openYuanrong datasystem的教程和API文档均可由[Sphinx](https://www.sphinx-doc.org/en/master/)工具生成，操作前需完成openYuanrong datasystem的安装。
 
-1. 使用pip安装yr-datasystem模块，API文档需要根据安装后的yr-datasystem模块生成，参考[安装](source_zh_cn/getting-started/install.md)。
+1. 使用pip安装openYuanrong datasystem模块，API文档需要根据安装后的openYuanrong datasystem模块生成，参考[安装](source_zh_cn/getting-started/install.md)。
 
    ```bash
    pip install openyuanrong_datasystem-*.whl
@@ -47,14 +47,14 @@ yr-datasystem的教程和API文档均可由[Sphinx](https://www.sphinx-doc.org/e
       sudo make install
       ```
 
-3. 进入文档所在目录`yr-datasystem/docs`，安装该目录下`requirements.txt`文件中的依赖项
+3. 进入文档所在目录`yuanrong-datasystem/docs`，安装该目录下`requirements.txt`文件中的依赖项
 
    ```bash
-   cd yr-datasystem/docs
+   cd yuanrong-datasystem/docs
    pip install -r requirements.txt
    ```
 
-4. 进入文档所在目录`yr-datasystem/docs`下执行如下命令进行文档构建：
+4. 进入文档所在目录`yuanrong-datasystem/docs`下执行如下命令进行文档构建：
 
    - 构建中文文档：
       ```bash

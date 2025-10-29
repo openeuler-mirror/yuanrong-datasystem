@@ -10,7 +10,7 @@
 |-----------|---|
 | ubuntu    |18.04|
 | euler     |v2r9|
-| openeuler |20.03|
+| openeuler |22.03|
 | centos    |7.9|
 
 可以通过`docker pull` 命令获取，或者其他渠道获取到这些基础镜像。下面以`docker pull`示例.

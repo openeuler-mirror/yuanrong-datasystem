@@ -1,4 +1,4 @@
-# yr-datasystem Kubernetes配置项
+# openYuanrong datasystem Kubernetes配置项
 
 <!-- TOC -->
 
@@ -25,36 +25,36 @@
 
 <!-- /TOC -->
 
-[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](https://gitee.com/mindspore/yr-datasystem/tree/master/docs/source_zh_cn/appendix/k8s_configuration.md)
+[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_zh_cn/appendix/k8s_configuration.md)
 
-本文档描述了yr-datasystem Kubernetes快速启动以及详细配置项说明。
+本文档描述了openYuanrong datasystem Kubernetes快速启动以及详细配置项说明。
 
 ## 最小化配置项
 
-本节描述了在Kubernetes部署yr-datasystem的必须配置项，最小化配置项如下表所示：
+本节描述了在Kubernetes部署openYuanrong datasystem的必须配置项，最小化配置项如下表所示：
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | [global.imageRegistry](#镜像相关配置) | string | `""` | 镜像仓库 url |
 | [global.images.datasystem](#镜像相关配置) | string | `"yr_datasystem:v0.1"` | 镜像名称和镜像标签 |
-| [global.etcd.etcdAddress](#etcd相关配置) | string | `""` | ETCD 服务端访问地址，yr-datasystem的集群管理依赖ETCD |
+| [global.etcd.etcdAddress](#etcd相关配置) | string | `""` | ETCD 服务端访问地址，openYuanrong datasystem的集群管理依赖ETCD |
 
 **样例**：
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
+  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
+  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
 
   images:
-    datasystem: "yr-datasystem:v0.1"
+    datasystem: "openyuanrong_datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
 ```
 
-部署yr-datasystem请参考：[yr-datasystem Kubernetes部署](../getting-started/deploy.md#yr-datasystem-kubernetes部署)。
+部署openYuanrong datasystem请参考：[openYuanrong datasystem Kubernetes部署](../getting-started/deploy.md#openyuanrong-datasystem-kubernetes部署)。
 
-默认情况下，每个 yr-datasystem DaemonSet 最大可使用 2GB 共享内存空间用于缓存数据，如果需要调整该值，可以通过 [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 调整。
+默认情况下，每个 openYuanrong datasystem DaemonSet 最大可使用 2GB 共享内存空间用于缓存数据，如果需要调整该值，可以通过 [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 调整。
 
 > **注意事项：**
 >
@@ -62,11 +62,11 @@ global:
 
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
+  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
+  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
 
   images:
-    datasystem: "yr-datasystem:v0.1"
+    datasystem: "openyuanrong_datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
@@ -87,10 +87,10 @@ global:
 
 > **注意事项：**
 >
-> - yr-datasystem依赖ETCD进行集群管理，请确保部署前ETCD服务处于可用状态。
-> - yr-datasystem默认占用端口号 `31501`，请确保Kubernetes集群中每个节点的31501端口处于空闲状态，或者通过[global.port.datasystemWorker](#ipcrpc相关配置)更换默认端口号。
+> - openYuanrong datasystem依赖ETCD进行集群管理，请确保部署前ETCD服务处于可用状态。
+> - openYuanrong datasystem默认占用端口号 `31501`，请确保Kubernetes集群中每个节点的31501端口处于空闲状态，或者通过[global.port.datasystemWorker](#ipcrpc相关配置)更换默认端口号。
 > - 请确保Kubernetes集群中每个节点拥有至少3核4G的资源剩余，或者通过[资源相关配置](#资源相关配置)减少默认的资源需求。
-> - yr-datasystem Pod内容器默认会挂载以下宿主机目录，请确保容器运行用户具备以下目录的可读可写可访问权限（rwx）：
+> - openYuanrong datasystem Pod内容器默认会挂载以下宿主机目录，请确保容器运行用户具备以下目录的可读可写可访问权限（rwx）：
 >   | 宿主机目录 | 配置项 | 作用 |
 >   |-----------|--------|------|
 >   | /home/sn/datasystem/logs | [global.log.logDir](#日志与可观测相关配置) | 日志持久化目录 |
@@ -110,10 +110,10 @@ global:
 **样例**：
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
+  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
   imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
   images:
-    datasystem: "yr-datasystem:v0.1"
+    datasystem: "openyuanrong_datasystem:0.5.0"
 ```
 
 ### 命名空间相关配置
@@ -127,12 +127,12 @@ global:
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.resources.datasystemWorker.limits.cpu | string | `"3"` | yr-datasystem单个DaemonSet占用的最大CPU核数 |
-| global.resources.datasystemWorker.limits.memory | string | `"4Gi"` | yr-datasystem单个DaemonSet占用的最大内存量 |
-| global.resources.datasystemWorker.requests.cpu | string | `"3"` | yr-datasystem单个DaemonSet初始化时需要的CPU核数，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.cpu` |
-| global.resources.datasystemWorker.requests.memory | string | `"4Gi"` | yr-datasystem单个DaemonSet初始化时需要的内存量，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.memory` |
-| global.resources.datasystemWorker.maxClientNum | int | `200` | yr-datasystem单个DaemonSet最大可同时连接的客户端数 |
-| global.resources.datasystemWorker.sharedMemory | int | `2048` | yr-datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位），该值的大小必须小于 `global.resources.datasystemWorker.requests.memory` |
+| global.resources.datasystemWorker.limits.cpu | string | `"3"` | openYuanrong datasystem单个DaemonSet占用的最大CPU核数 |
+| global.resources.datasystemWorker.limits.memory | string | `"4Gi"` | openYuanrong datasystem单个DaemonSet占用的最大内存量 |
+| global.resources.datasystemWorker.requests.cpu | string | `"3"` | openYuanrong datasystem单个DaemonSet初始化时需要的CPU核数，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.cpu` |
+| global.resources.datasystemWorker.requests.memory | string | `"3Gi"` | openYuanrong datasystem单个DaemonSet初始化时需要的内存量，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.memory` |
+| global.resources.datasystemWorker.maxClientNum | int | `200` | openYuanrong datasystem单个DaemonSet最大可同时连接的客户端数 |
+| global.resources.datasystemWorker.sharedMemory | int | `2048` | openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位），该值的大小必须小于 `global.resources.datasystemWorker.requests.memory` |
 
 ### IPC/RPC相关配置
 
@@ -140,7 +140,7 @@ global:
 |-----|------|---------|-------------|
 | global.ipc.ipcThroughSharedMemory | bool | `true` | datasystem-worker共享内存启用开关 |
 | global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
-| global.port.datasystemWorker | int | `31501` | yr-datasystem DaemonSet占用的主机端口号 |
+| global.port.datasystemWorker | int | `31501` | openYuanrong datasystem DaemonSet占用的主机端口号 |
 | global.rpc.enableCurveZmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | global.rpc.curveKeyDir | string | `"/home/sn/datasystem/curve_key_dir"` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | global.rpc.curveZmqKey.clientPublicKey | string | `""` | 客户端公钥 |
@@ -157,7 +157,7 @@ global:
 | global.rpc.maxRpcSessionNum | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 
 **样例**：
-配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为yr-datasystem DaemonSet的监听端口号
+配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号
 ```yaml
 global:
   port:
@@ -271,9 +271,9 @@ global:
 **样例**：
 ```yaml
 global:
-  # 配置日志路径为 '/home/sn/datasystem/yr-datasystem/logs'，日志前缀名为 'yr-datasystem'
+  # 配置日志路径为 '/home/sn/datasystem/openeuler_datasystem/logs'，日志前缀名为 'openeuler_datasystem'
   log:
-    logDir: /home/sn/datasystem/yr-datasystem/logs
+    logDir: /home/sn/datasystem/openeuler_datasystem/logs
     logAsyncQueueSize: 65536
     logLevel: 0
     maxLogSize: 400
@@ -283,8 +283,8 @@ global:
     logBufSecs: 10
     # 开启日志压缩功能，历史日志将被压缩成gzip格式节约磁盘空间
     logCompress: true
-    # 日志前缀名，配置为 'yr-datasystem'
-    logFilename: "yr-datasystem"
+    # 日志前缀名，配置为 'openeuler_datasystem'
+    logFilename: "openeuler_datasystem"
 ```
 
 ### 二级缓存相关配置
@@ -307,7 +307,7 @@ global:
 | global.l2Cache.obs.obsHttpsEnabled | bool | `false` | 是否启用HTTPS连接对象存储服务（OBS），默认为HTTP |
 | global.l2Cache.obs.cloudServiceTokenRotation.enable | bool | `false` | 是否使用CCMS凭据轮换模式访问OBS，默认值为 `false`。若启用此模式，则至少需指定 `iamHostName`（IAM服务地址）、`identityProvider`（身份提供商）、`projectId`（项目ID）及 `regionId`（区域ID）。 |
 | global.l2Cache.obs.cloudServiceTokenRotation.iamHostName | string | `""` | 需要获取的IAM token的域名。例如：iam.cn-beijing-4.myhuaweicloud.com |
-| global.l2Cache.obs.cloudServiceTokenRotation.identityProvider | string | `""` | 为 yr-datasystem 提供权限的 Provider。例如：csms-datasystem |
+| global.l2Cache.obs.cloudServiceTokenRotation.identityProvider | string | `""` | 为 openYuanrong datasystem 提供权限的 Provider。例如：csms-datasystem |
 | global.l2Cache.obs.cloudServiceTokenRotation.projectId | string | `""` | 对象存储服务(OBS) 的项目ID。例如：fb6a00ff7ae54a5fbb8ff855d0841d00。 |
 | global.l2Cache.obs.cloudServiceTokenRotation.regionId | string | `""` | 对象存储服务(OBS) 的区域ID。例如：cn-north-7 |
 | global.l2Cache.obs.cloudServiceTokenRotation.enableTokenByAgency | bool | `false` | 是否通过委托代理访问其他账号的 对象存储服务(OBS) ，默认值为 `false`。若设为 `true`，需指定 `tokenAgencyName` 和 `tokenAgencyDomain`。 |
@@ -441,7 +441,7 @@ global:
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.multiSpec | list | `[]` | 混合部署支持，默认情况下所有yr-datasystem的DaemonSet Pod都是相同规格的，如果需要配置不同规格的Pod，需要使用该配置，该配置需要与节点亲和性标签一起配合使用 |
+| global.multiSpec | list | `[]` | 混合部署支持，默认情况下所有openYuanrong datasystem的DaemonSet Pod都是相同规格的，如果需要配置不同规格的Pod，需要使用该配置，该配置需要与节点亲和性标签一起配合使用 |
 
 **样例**：
 ```yaml

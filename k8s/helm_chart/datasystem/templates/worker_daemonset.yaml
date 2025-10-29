@@ -80,6 +80,7 @@ spec:
         - -bind_address=$(BIND_IP):$(WORKER_PORT)
         - -log_dir=$(WORKER_LOG_DIR)
         - -v={{ $.Values.global.log.logLevel }}
+        - -minloglevel={{ $.Values.global.log.minLogLevel }}
         - -log_filename={{ $.Values.global.log.logFilename }}
         - -log_async_queue_size={{ $.Values.global.log.logAsyncQueueSize }}
         - -max_log_size={{ $.Values.global.log.maxLogSize }}

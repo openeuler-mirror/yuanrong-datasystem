@@ -38,7 +38,9 @@ Options:
     -n Use Ninja to speed up compilation, the default is to compile using Unix Makefiles, choose from: on/off, default: off.
 
     For multiple programming languages:
-    -P Build Python sdk, choose from: on/off, default: on.
+    -P Build Python sdk, choose from: on/off/<python_root_dir>, default: on. Accepts on (default) to auto-detect a Python
+       version from the system environment, off to disable the build, or a <python_root_dir> path to prioritize the Python
+       at that specified location for search.
     -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'on'.
 
     For communication layer
@@ -143,7 +145,7 @@ function init_default_opts() {
 
   # For packaging mutil language
   export PACKAGE_PYTHON="on"
-  export PYTHON_VERSION=""
+  export PYTHON_ROOT_DIR=""
 
   # Whether to build device object.
   export BUILD_HETERO="on"
@@ -493,6 +495,10 @@ function build_datasystem()
     "-DUB_SHA256:STRING=${UB_SHA256}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
     )
+  if is_on "${PACKAGE_PYTHON}" && [ -n "${PYTHON_ROOT_DIR}" ]; then
+    echo -e "-- Specify python root path: ${PYTHON_ROOT_DIR}"
+    cmake_options=("${cmake_options[@]}" "-DPython3_ROOT_DIR:PATH=${PYTHON_ROOT_DIR}")
+  fi
   if is_on "${BUILD_WITH_NINJA}"; then
     cmake_options=("-G" "Ninja" "${cmake_options[@]}")
   else
@@ -632,8 +638,17 @@ function main() {
       USE_SANITIZER="${OPTARG}"
       ;;
     P)
-      check_on_off "${OPTARG}" P
-      PACKAGE_PYTHON=${OPTARG}
+      if [ "${OPTARG}" == "off" ] || [ "${OPTARG}" == "on" ]; then
+        PACKAGE_PYTHON="${OPTARG}"
+        PYTHON_ROOT_DIR=""
+      elif [[ -d "${OPTARG}" ]]; then
+        PACKAGE_PYTHON="on"
+        PYTHON_ROOT_DIR="${OPTARG}"
+      else
+        echo -e "Invalid value ${OPTARG} for option -P, choose from off, on or <python_root_dir>. If specifying <python_root_dir>, ensure the path exists."
+        echo -e "${USAGE}"
+        exit 1
+      fi
       ;;
     p)
       check_on_off "${OPTARG}" p

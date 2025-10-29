@@ -54,9 +54,9 @@ for file_name in fileList:
         file.write(updated_content)
 
 # ---- Project Information ----
-project = 'yr-datasystem'
-copyright = 'yr-datasystem'
-author = 'yr-datasystem'
+project = 'openYuanrong datasystem'
+copyright = 'openYuanrong datasystem'
+author = 'openYuanrong datasystem'
 release = '1.0'
 
 # Add any Sphinx extension module names here, as strings. They can be

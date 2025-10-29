@@ -1011,7 +1011,7 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
            + " -add_node_wait_time_s=" + std::to_string(opts_.addNodeTime)
            + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads) + " -zmq_server_io_context="
            + std::to_string(opts_.numZmqServerCtx) + " -oc_thread_num=" + std::to_string(opts_.numOcThreadNum)
-           + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum);
+           + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum) + " -check_async_queue_empty_time_s=1";
     cmd += " -system_access_key=" + opts_.systemAccessKey + " -system_secret_key=" + opts_.systemSecretKey
            + " -tenant_access_key=" + opts_.tenantAccessKey + " -tenant_secret_key=" + opts_.tenantSecretKey;
     cmd += " -oc_worker_worker_direct_port="

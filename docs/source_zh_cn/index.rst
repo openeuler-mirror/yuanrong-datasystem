@@ -1,4 +1,4 @@
-yr-datasystem文档
+openYuanrong datasystem文档
 =========================================
 
 .. toctree::

@@ -28,7 +28,7 @@
         "description": "Using shared memory to exchange data between client and worker. If this parameter is set to true, client and worker will pass control messages through Unix Domain Sockets (UDS); otherwise, they will pass control messages through TCP/IP and exchange data through TCP/IP."
     },
     "unix_domain_socket_dir": {
-        "value": "./yr_datasystem/uds",
+        "value": "./datasystem/uds",
         "description": "The directory to store unix domain socket file. The UDS generates temporary files in this path. Max length: 80"
     },
     "etcd_table_prefix": {
@@ -104,7 +104,7 @@
         "description": "Disable readahead can mitigate the read amplification problem for offset read, default is true"
     },
     "log_monitor": {
-        "value": "false",
+        "value": "true",
         "description": "Record performance and resource logs."
     },
     "log_monitor_exporter": {
@@ -160,7 +160,7 @@
         "description": "Deprecated: This flag is deprecated and will be removed in future releases."
     },
     "backend_store_dir": {
-        "value": "./yr_datasystem/rocksdb",
+        "value": "./datasystem/rocksdb",
         "description": "Config MASTER back store directory and must specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata stored in the master so that the metadata before the restart can be re-obtained when the master restarts."
     },
     "rocksdb_sync_write": {
@@ -195,6 +195,10 @@
         "value": "600",
         "description": "The memory reclamation time after free."
     },
+    "async_delete": {
+        "value": "false",
+        "description": "Master notify workers to delete objects asynchronously."
+    },
     "add_node_wait_time_s": {
         "value": "60",
         "description": "Time to wait for the first node that wants to join a working hash ring."
@@ -212,7 +216,7 @@
         "description": "Maximum time interval for the worker to determine client death, Value range: [15, UINT64_MAX)."
     },
     "monitor_config_file": {
-        "value": "./yr_datasystem/config/yr_datasystem.config",
+        "value": "./datasystem/config/datasystem.config",
         "description": "Configure the path of the worker monitoring configuration file. During the execution of the worker, it periodically monitors whether the configuration file is changed to update the flag parameter value."
     },
     "loglevel_only_for_workers": {
@@ -243,8 +247,12 @@
         "value": "true",
         "description": "Whether to enable reconciliation, default is true."
     },
+    "data_migrate_rate_limit_mb": {
+        "value": "40",
+        "description": "Data migrate rate limit for every node when scale down happen."
+    },
     "check_async_queue_empty_time_s": {
-        "value": "1",
+        "value": "15",
         "description": "The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and L2 cache remain empty before it can exit properly."
     },
     "obs_access_key": {
@@ -272,19 +280,23 @@
         "description": "The path to the mounted SFS."
     },
     "health_check_path": {
-        "value": "./yr_datasystem/probe/healthy",
+        "value": "./datasystem/probe/healthy",
         "description": "File will create after the worker successfully."
     },
     "ready_check_path": {
-        "value": "./yr_datasystem/probe/ready",
+        "value": "./datasystem/probe/ready",
         "description": "This file will be created after the worker service is started successfully and a connection can be established using the stub."
     },
     "rpc_thread_num": {
         "value": "16",
         "description": "Config rpc server thread number, must be great equal than 0."
     },
+    "minloglevel": {
+        "value": "0",
+        "description": "Messages logged at a lower level than this don't actually get logged anywhere."
+    },
     "log_dir": {
-        "value": "./yr_datasystem/logs",
+        "value": "./datasystem/logs",
         "description": "The directory where log files are stored."
     },
     "log_filename": {

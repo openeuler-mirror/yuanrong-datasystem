@@ -120,7 +120,7 @@ class Command(BaseCommand):
         config_path = util.valid_safe_path(config_path)
 
         default_config_path = os.path.join(self._base_dir, "worker_config.json")
-        default_config_path = util.valid_safe_path(config_path)
+        default_config_path = util.valid_safe_path(default_config_path)
         try:
             with open(config_path, "r") as f:
                 config = json.load(f)
@@ -139,7 +139,6 @@ class Command(BaseCommand):
             params[flag] = str(conf.get("value", "")).strip()
             if flag == "log_dir":
                 self.logger.info(f"Log directory configured at: {params[flag]}")
-
         return params
 
     def parse_cli_args(self, cli_args: list) -> Dict[str, str]:
@@ -223,6 +222,8 @@ class Command(BaseCommand):
         env["LD_LIBRARY_PATH"] = f"{lib_dir}:{env.get('LD_LIBRARY_PATH', '')}"
         try:
             ready_check_path = params.get("ready_check_path")
+            if not ready_check_path:
+                raise RuntimeError("ready_check_path is empty")
             ready_check_path = os.path.abspath(ready_check_path)
             if os.path.exists(ready_check_path) and os.path.isfile(ready_check_path):
                 os.remove(ready_check_path)

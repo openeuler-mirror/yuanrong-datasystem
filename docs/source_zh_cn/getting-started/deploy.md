@@ -28,7 +28,7 @@
 openYuanrong datasystem进程部署所需的系统环境依赖如下：
 |软件名称|版本|作用|
 |-------|----|----|
-|EulerOS 2.8/openEuler 20.03|-|运行openYuanrong datasystem的操作系统|
+| openEuler |22.03|运行openYuanrong datasystem的操作系统|
 |[CANN](#安装cann)|8.0.0或8.0.rc2|运行异构相关特性的依赖库|
 |[Python](#安装python)|3.10-3.11|openYuanrong datasystem dscli的使用依赖Python环境|
 |[dscli](#安装dscli)|-|用于部署openYuanrong datasystem的命令行工具|
@@ -311,7 +311,7 @@ client.init()
     # [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100
     ```
 
-    输出OK说明部署成功。
+    输出OK说明卸载成功。
 
 #### 多机卸载
 
@@ -331,7 +331,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 
 |软件名称|推荐版本|作用|
 |--------|-------|----|
-|EulerOS 2.8/openEuler 20.03|-|支持运行Kubernetes与Docker的操作系统|
+|openEuler |22.03|支持运行Kubernetes与Docker的操作系统|
 |[kubectl](#安装kubectl)|-|运行异构相关特性的依赖库|
 |[Kubernetes](#安装kubernetes)|-|Kubernetes集群，用于编排和管理openYuanrong datasystem的容器|
 |[Helm](#安装helm)|-|openYuanrong datasystem dscli的使用依赖Python环境|
@@ -468,7 +468,7 @@ client = DsClient("127.0.0.1", 31501)
 client.init()
 ```
 
-当脚本执行未发生异常时说明openYuanrong datasystem的客户端能正常连接上当前节点的ds-worker，部署成功。
+当脚本执行未发生异常时说明openYuanrong datasystem的客户端能正常连接上当前节点的 `ds-worker` Pod，部署成功。
 
 ### 集群卸载
 
