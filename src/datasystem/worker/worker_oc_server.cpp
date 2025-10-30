@@ -122,7 +122,7 @@ DS_DEFINE_string(liveness_check_path, "",
                  "The path length must less than 4095 characters.");
 DS_DEFINE_validator(liveness_check_path, &Validator::ValidatePathString);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
-DS_DEFINE_uint32(check_async_queue_empty_time_s, 1,
+DS_DEFINE_uint32(check_async_queue_empty_time_s, 15,
                  "The async queue needs to be empty for a certain period of time before worker can exist.");
 DS_DECLARE_string(backend_store_dir);
 DS_DEFINE_int32(max_rpc_session_num, 2048,

@@ -15,8 +15,12 @@
 # limitations under the License.
 
 """setup_package."""
+import shutil
 import os
 import stat
+import subprocess
+
+from pathlib import Path
 from setuptools import find_packages
 from setuptools import setup
 from setuptools.command.egg_info import egg_info
@@ -53,6 +57,44 @@ def build_depends():
 
 
 build_depends()
+
+
+def get_dependencies(file_path):
+    """
+    get dependencieds of file
+    """
+    dependencies = set()
+    ldd_path = shutil.which("ldd")
+    if ldd_path is None:
+        raise FileNotFoundError("cant find ldd, get dependencies failed")
+    result = subprocess.run([ldd_path, file_path],
+                            capture_output=True, text=True, check=True)
+    output = result.stdout
+    for line in output.splitlines():
+        line = line.strip()
+        if '=>' in line:
+            lib_name, lib_path = line.split('=>', 1)
+            lib_name = lib_name.strip()
+            lib_path = lib_path.strip().split()[0]
+            dependencies.add((lib_name))
+        else:
+            lib_name = line.split()[0]
+            dependencies.add(lib_name)
+    return dependencies
+
+
+def get_all_dependencies():
+    """
+    get all dependencies for datasystem
+    """
+    all_dependencies = {"libdatasystem.so", "libds_client_py.so"}
+    src = os.path.join(os.path.dirname(__file__), 'datasystem', 'lib')
+    src_path = Path(src)
+    for item in src_path.rglob('*'):
+        all_dependencies.update(get_dependencies(item))
+    return all_dependencies
+
+all_dependencies_for_datasystem = get_all_dependencies()
 
 
 def update_permissions(path):
@@ -92,6 +134,11 @@ class BuildPy(build_py):
         datasystem_lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem')
         super().run()
         update_permissions(datasystem_lib_dir)
+        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem', 'lib')
+        lib_path = Path(lib_dir)
+        for item in lib_path.rglob('*'):
+            if item.name not in all_dependencies_for_datasystem:
+                item.unlink()
 
 
 class CustomBdistWheel(_bdist_wheel):

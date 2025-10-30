@@ -16,6 +16,12 @@ file(COPY ${PYTHON_LIBPATH}/
      DESTINATION ${PYTHON_PACKAGE_LIBPATH}/lib
      REGEX ".*sym$" EXCLUDE)
 
+find_program(CMAKE_STRIP NAMES strip)
+file(GLOB SO_FILES "${PYTHON_PACKAGE_LIBPATH}/lib/*.so*")
+foreach(SO_FILE ${SO_FILES})
+    execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
+endforeach()
+
 file(RENAME ${PYTHON_PACKAGE_LIBPATH}/setup.py ${PYTHON_PACKAGE_PATH}/setup.py)
 # Run python setup.py bdist_whell to generate origin wheel file.
 execute_process(COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel

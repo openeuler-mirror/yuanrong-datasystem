@@ -164,7 +164,7 @@ setup(
     version=version,
     author="openYuanrong Team",
     description=(
-        "openyuanrong datasystem is a distributed heterogeneous cache system that supports pooled caching across "
+        "openYuanrong datasystem is a distributed heterogeneous cache system that supports pooled caching across "
         "HBM, DDR, and SSD, along with asynchronous, high-efficiency data transmission for NPUs."
     ),
     long_description=readme,

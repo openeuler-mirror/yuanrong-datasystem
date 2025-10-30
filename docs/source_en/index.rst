@@ -1,5 +1,5 @@
-yr-datasystem Documentation
-========================
+openYuanrong datasystem Documentation
+=====================================
 
 Python API
 --------

@@ -37,9 +37,9 @@ with open(_html_base.__file__, "r", encoding="utf-8") as f:
 
 # -- Project information -----------------------------------------------------
 
-project = 'yr-datasystem'
-copyright = 'yr-datasystem'
-author = 'yr-datasystem'
+project = 'openYuanrong datasystem'
+copyright = 'openYuanrong datasystem'
+author = 'openYuanrong datasystem'
 
 # The full version, including alpha/beta/rc tags
 release = 'master'

@@ -1,4 +1,4 @@
-# yr-datasystem Kubernetes Configuration
+# openYuanrong datasystem Kubernetes Configuration
 
 <!-- TOC -->
 - [Minimal Configurations](#minimal-configurations)
@@ -24,9 +24,9 @@
 
 <!-- /TOC -->
 
-[![View Source On Gitee](https://mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source_en.svg)](https://gitee.com/mindspore/yr-datasystem/tree/master/docs/source_en/appendix/k8s_configuration.md)
+[![View Source On Gitee](https://mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source_en.svg)](https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_en/appendix/k8s_configuration.md)
 
-This document describes yr-datasystem Kubernetes configuration items.
+This document describes openYuanrong datasystem Kubernetes configuration items.
 
 ## Minimal Configurations
 
@@ -34,24 +34,24 @@ This document describes yr-datasystem Kubernetes configuration items.
 |-----|------|---------|-------------|
 | [global.imageRegistry](#image-configurations) | string | `""` | image registry url |
 | [global.images.datasystem](#image-configurations) | string | `"yr_datasystem:v0.1"` | image name and image tag |
-| [global.etcd.etcdAddress](#etcd-configurations) | string | `""` | ETCD endpoints，yr-datasystem cluster management relies on ETCD |
+| [global.etcd.etcdAddress](#etcd-configurations) | string | `""` | ETCD endpoints，openYuanrong datasystem cluster management relies on ETCD |
 
 **Example**:
 ```yaml
 global:
-  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
+  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
+  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
 
   images:
-    datasystem: "yr-datasystem:v0.1"
+    datasystem: "openyuanrong_datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
 ```
 
-To deploy yr-datasystem, refer to: [yr-datasystem Kubernetes Deployment](../getting-started/deploy.md#yr-datasystem-kubernetes部署).
+To deploy openYuanrong datasystem, refer to: [openYuanrong datasystem Kubernetes Deployment](../getting-started/deploy.md#openYuanrong-datasystem-kubernetes部署).
 
-Each yr-datasystem DaemonSet can use a maximum of 2GB shared memory space for data caching by default. If you need to adjust this value, you can configure it via [global.resources.datasystemWorker.sharedMemory](#resource-configurations).
+Each openYuanrong datasystem DaemonSet can use a maximum of 2GB shared memory space for data caching by default. If you need to adjust this value, you can configure it via [global.resources.datasystemWorker.sharedMemory](#resource-configurations).
 
 > **Notes:**
 >
@@ -59,11 +59,11 @@ Each yr-datasystem DaemonSet can use a maximum of 2GB shared memory space for da
 
 ```yaml
 global:
-  # swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
+  # swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
+  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
 
   images:
-    datasystem: "yr-datasystem:v0.1"
+    datasystem: "openyuanrong_datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
@@ -84,10 +84,10 @@ global:
 
 > **Important Notes:**
 > 
-> - yr-datasystem relies on ETCD for cluster management. Ensure the ETCD service is available before deployment.
-> - yr-datasystem uses port `31501` by default. Ensure this port is available on all Kubernetes nodes, or specify a custom port via [global.port.datasystemWorker](#ipcrpc-configurations).
+> - openYuanrong datasystem relies on ETCD for cluster management. Ensure the ETCD service is available before deployment.
+> - openYuanrong datasystem uses port `31501` by default. Ensure this port is available on all Kubernetes nodes, or specify a custom port via [global.port.datasystemWorker](#ipcrpc-configurations).
 > - Ensure each node in the Kubernetes cluster has at least 3 CPU cores and 4GB memory available, or reduce default resource requirements via [Resource Configurations](#resource-configurations).
-> - yr-datasystem Pod containers mount the following host directories by default. Ensure the container runtime user has read-write-execute (rwx) permissions for these directories:
+> - openYuanrong datasystem Pod containers mount the following host directories by default. Ensure the container runtime user has read-write-execute (rwx) permissions for these directories:
 >   | Host Path | Configuration | Function |
 >   |-----------|--------|------|
 >   | /home/sn/datasystem/logs | [global.log.logDir](#log-configurations) | Log persistence directory |
@@ -107,10 +107,10 @@ global:
 **Example**:
 ```yaml
 global:
-  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/yr-datasystem:v0.1
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
+  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
+  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
   images:
-    datasystem: "yr-datasystem:v0.1"
+    datasystem: "openyuanrong_datasystem:0.5.0"
 ```
 
 ### Namespace Configurations
@@ -124,10 +124,10 @@ global:
 
 | Configuration | Type | Default | Description |
 |-----|------|---------|-------------|
-| global.resources.datasystemWorker.limits.cpu | string | `"3"` | Maximum CPU cores occupied by a yr-datasystem DaemonSet |
-| global.resources.datasystemWorker.limits.memory | string | `"4Gi"` | Maximum memory occupied by a yr-datasystem DaemonSet |
-| global.resources.datasystemWorker.requests.cpu | string | `"3"` | CPU cores required for initializing a single yr-datasystem DaemonSet. The value must be less than or equal to `global.resources.datasystemWorker.limits.cpu` |
-| global.resources.datasystemWorker.requests.memory | string | `"4Gi"` | Memory required for initializing a single yr-datasystem DaemonSet. The value must be less than or equal to `global.resources.datasystemWorker.limits.memory` |
+| global.resources.datasystemWorker.limits.cpu | string | `"3"` | Maximum CPU cores occupied by a openYuanrong datasystem DaemonSet |
+| global.resources.datasystemWorker.limits.memory | string | `"4Gi"` | Maximum memory occupied by a openYuanrong datasystem DaemonSet |
+| global.resources.datasystemWorker.requests.cpu | string | `"3"` | CPU cores required for initializing a single openYuanrong datasystem DaemonSet. The value must be less than or equal to `global.resources.datasystemWorker.limits.cpu` |
+| global.resources.datasystemWorker.requests.memory | string | `"4Gi"` | Memory required for initializing a single openYuanrong datasystem DaemonSet. The value must be less than or equal to `global.resources.datasystemWorker.limits.memory` |
 | global.resources.datasystemWorker.maxClientNum | int | `200` | Maximum number of clients that can be connected to a worker |
 | global.resources.datasystemWorker.sharedMemory | int | `2048` | Upper limit of the shared memory, the default unit for shared memory is MB. The value must be less than `global.resources.datasystemWorker.requests.memory` |
 
@@ -155,7 +155,7 @@ global:
 
 **Example**:
 
-Configure a Unix Domain Socket path as "/home/uds" and use port 31501 as the listening port for the yr-datasystem DaemonSet.
+Configure a Unix Domain Socket path as "/home/uds" and use port 31501 as the listening port for the openYuanrong datasystem DaemonSet.
 
 ```yaml
 global:
