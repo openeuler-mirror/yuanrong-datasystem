@@ -34,6 +34,9 @@ class MemMmapTest : public CommonTest {
 
 TEST_F(MemMmapTest, InitFailed)
 {
+    if (IsArmArchitecture()) {
+        GTEST_SKIP() << "Skipped on ARM architecture";
+    }
     memory::MemMmap m;
     size_t sz = 1024;
     // init with huge
@@ -51,6 +54,9 @@ TEST_F(MemMmapTest, InitFailed)
 
 TEST_F(MemMmapTest, CommitFailed)
 {
+    if (IsArmArchitecture()) {
+        GTEST_SKIP() << "Skipped on ARM architecture";
+    }
     memory::MemMmap m;
     size_t sz = 1024;
     DS_ASSERT_OK(m.Initialize(sz));

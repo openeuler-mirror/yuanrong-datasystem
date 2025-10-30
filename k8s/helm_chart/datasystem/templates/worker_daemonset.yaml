@@ -132,7 +132,7 @@ spec:
         - -l2_cache_delete_thread_num={{ $.Values.global.l2Cache.l2CacheDeleteThreadNum }}
         - -object_del_retry_delay_sec={{ $.Values.global.l2Cache.objectDelRetryDelaySec }}
         - -max_rpc_session_num={{ $.Values.global.rpc.maxRpcSessionNum }}
-        - -backend_store_dir=/home/sn/datasystem/rocksdb
+        - -rocksdb_store_dir=/home/sn/datasystem/rocksdb
         - -rocksdb_max_open_file={{ $.Values.global.metadata.rocksdbMaxOpenFile }}
         - -rocksdb_background_threads={{ $.Values.global.metadata.rocksdbBackgroundThreads }}
         - -node_timeout_s={{ $.Values.global.reliability.nodeTimeoutS }}
@@ -154,14 +154,14 @@ spec:
         - -spill_file_open_limit={{ $.Values.global.spill.spillFileOpenLimit }}
         - -spill_enable_readahead={{ $.Values.global.spill.spillEnableReadahead }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
-        - -enable_component_auth={{ $.Values.global.rpc.enableCurveZmq }}
+        - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -curve_key_dir=$(CURVE_KEY_DIR)
         - -zmq_server_io_context={{ $.Values.global.rpc.zmqServerIoContext }}
         - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}
-        - -etcd_table_prefix={{ $.Values.global.azName }}
+        - -az_name={{ $.Values.global.azName }}
         - -other_az_names={{ $.Values.global.crossAz.otherAzNames }}
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
         - -etcd_meta_pool_size={{ $.Values.global.etcd.etcdMetaPoolSize }}
@@ -253,7 +253,7 @@ spec:
             value: "{{ $spec.workerResources.sharedMemory }}"
           - name: CURVE_KEY_DIR
             value: {{ $.Values.global.rpc.curveKeyDir }}
-          - name: ENABLE_COMPONENT_AUTH
+          - name: ENABLE_CURVE_ZMQ
             value: "{{ $.Values.global.rpc.enableCurveZmq }}"
           - name: ETCD_CERT_DIR
             value: {{ $.Values.global.etcd.etcdCertDir }}

@@ -62,7 +62,7 @@ DS_DEFINE_uint32(max_client_num, 200,
                  "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]");
 DS_DEFINE_validator(max_client_num, &Validator::ValidateClientNum);
 DS_DECLARE_uint32(node_timeout_s);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_uint64(client_dead_timeout_s);
 DS_DECLARE_bool(enable_huge_tlb);
 DS_DEFINE_uint64(oc_shm_transfer_threshold_kb, 500u,

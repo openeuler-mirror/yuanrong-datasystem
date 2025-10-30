@@ -43,7 +43,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/zmq_test.stub.rpc.pb.h"
 
-DS_DECLARE_bool(enable_component_auth);
+DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(curve_key_dir);
 DS_DECLARE_bool(log_async);
 DS_DECLARE_string(unix_domain_socket_dir);

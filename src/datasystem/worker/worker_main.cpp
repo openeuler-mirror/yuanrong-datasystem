@@ -52,7 +52,7 @@ DS_DECLARE_string(master_address);
 DS_DEFINE_validator(worker_address, &Validator::ValidateHostPortIPv4);
 DS_DEFINE_validator(bind_address, &Validator::ValidateHostPortIPv4);
 DS_DECLARE_uint64(shared_memory_size_mb);
-DS_DECLARE_bool(enable_component_auth);
+DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_string(monitor_config_file);
 DS_DEFINE_bool(
@@ -63,7 +63,7 @@ DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(etcd_ca);
 DS_DECLARE_string(etcd_cert);
 DS_DECLARE_string(etcd_key);
-DS_DECLARE_string(backend_store_dir);
+DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_int32(logfile_mode);
@@ -186,8 +186,8 @@ void GenerateLogReadMe()
  */
 Status PreInitRocksDB()
 {
-    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_backend_store_dir, "~/.datasystem/rocksdb", "/master"));
-    std::string preInitRocksDir = FLAGS_backend_store_dir + "/pre-start";
+    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_rocksdb_store_dir, "~/.datasystem/rocksdb", "/master"));
+    std::string preInitRocksDir = FLAGS_rocksdb_store_dir + "/pre-start";
     RETURN_IF_NOT_OK(RemoveAll(preInitRocksDir));
     if (!FileExist(preInitRocksDir)) {
         // The permission of ~/.datasystem/rocksdb/object_metadata.

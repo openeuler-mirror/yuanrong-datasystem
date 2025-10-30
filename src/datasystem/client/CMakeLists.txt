@@ -23,7 +23,6 @@ list(APPEND CLIENT_SRCS
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
         ${TBB_LIBRARY}
-        CURL::libcurl
         protobuf::libprotobuf
         ak_sk_signature
         common_buffer
@@ -34,7 +33,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_shm_unit_info
         common_util
         common_immutable_string
-        httpclient
         nlohmann_json::nlohmann_json
         posix_protos_client
         share_memory_protos_client

@@ -90,7 +90,7 @@ def get_all_dependencies():
     """
     get all dependencies for datasystem
     """
-    all_dependencies = {"libdatasystem.so", "libds_client_py.so"}
+    all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so"}
     src = os.path.join(os.path.dirname(__file__), 'datasystem', 'lib')
     worker = os.path.join(os.path.dirname(__file__), 'datasystem', 'datasystem_worker')
     src_path = Path(src)

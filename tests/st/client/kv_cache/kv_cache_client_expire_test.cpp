@@ -225,7 +225,7 @@ void SetClusterSetupOptions(ExternalClusterOptions &opts) override
             "-cross_az_get_meta_from_worker=true -cross_az_get_data_from_worker=true",
             timeoutS_, deadTimeoutS_);
         for (size_t i = 0; i < workerNum_; i++) {
-            std::string param = "-etcd_table_prefix=" + azNames_[i % azNames_.size()];
+            std::string param = "-az_name=" + azNames_[i % azNames_.size()];
             opts.workerSpecifyGflagParams[i] += param;
         }
     }

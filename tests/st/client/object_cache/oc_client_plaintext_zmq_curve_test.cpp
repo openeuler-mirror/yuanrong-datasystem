@@ -44,7 +44,7 @@ public:
 
         // use default configurations for all the other zmq curve gflags settings
         const std::string zmqConfig =
-            "-enable_component_auth=true -encrypt_kit=plaintext -curve_key_dir=" + GetCurveKeyDir();
+            "-enable_curve_zmq=true -encrypt_kit=plaintext -curve_key_dir=" + GetCurveKeyDir();
         opts.workerGflagParams = zmqConfig;
         FLAGS_v = 1;
     }

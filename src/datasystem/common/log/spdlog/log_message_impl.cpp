@@ -35,9 +35,9 @@
 #include "datasystem/common/log/trace.h"
 
 DS_DEFINE_int32(v, 0, "Show all VLOG(m) messages for m <= this.");
-DS_DEFINE_string(
-    etcd_table_prefix, "",
-    "Prefix of all tables in etcd, which is used to distinguish tables created by different data systems in etcd.");
+DS_DEFINE_string(az_name, "",
+                 "az_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, "
+                 "allowing different clusters to be distinguished by the az_name.");
 
 namespace datasystem {
 // thread_local for store log info
@@ -72,7 +72,7 @@ static void AppendLogMessageImplPrefix(const std::string &podName, std::ostream 
     static thread_local pid_t tid = syscall(__NR_gettid);
 
     logStream << podName << " | " << pid << ":" << tid << " | " << Trace::Instance().GetTraceID() << " | "
-              << FLAGS_etcd_table_prefix << " |  ";
+              << FLAGS_az_name << " |  ";
 }
 
 static DsLogger GetMessageLogger()
@@ -142,7 +142,7 @@ void LogMessageImpl::ToStderr()
     }
 
     ConstructLogPrefix(std::cerr, logTime.getTm(), logTime.getUsec(), baseFilename, sourceLoc_.line, podName_.c_str(),
-                       LogSeverityName[0], FLAGS_etcd_table_prefix);
+                       LogSeverityName[0], FLAGS_az_name);
 
     std::cerr.write(g_ThreadLogData, static_cast<std::streamsize>(msgSize_));
     std::cerr << '\n';

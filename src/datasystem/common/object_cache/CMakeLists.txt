@@ -10,7 +10,6 @@ set(COMMON_BUFFER_DEPEND_LIBS
         ${CLIENT_LIB}
         common_log
         common_util
-        CURL::libcurl
         )
 
 set(COMMON_REF_SRCS object_ref_info.cpp)

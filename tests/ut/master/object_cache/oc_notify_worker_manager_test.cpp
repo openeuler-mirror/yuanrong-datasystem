@@ -27,7 +27,7 @@
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 
-DS_DECLARE_string(backend_store_dir);
+DS_DECLARE_string(rocksdb_store_dir);
 
 using namespace ::testing;
 using namespace datasystem::master;

@@ -39,7 +39,7 @@
 DS_DEFINE_int32(zmq_server_io_context, 5,
                 "Optimize the performance of the customer. Default server 5. "
                 "The higher the throughput, the higher the value, but should be in range [1, 32]");
-DS_DECLARE_bool(enable_component_auth);
+DS_DECLARE_bool(enable_curve_zmq);
 
 namespace {
 static bool ValidateZmqServerIoCtxThreads(const char *flagname, int32_t value)
@@ -189,7 +189,7 @@ Status ZmqServerImpl::SendErrorToClient(const MetaPb &meta, const Status &status
 Status ZmqServerImpl::ClientToService(ZmqMsgFrames &&frames)
 {
     MetaPb meta;
-    ZmqCurveUserId userId = { .checkUserId_ = FLAGS_enable_component_auth };
+    ZmqCurveUserId userId = { .checkUserId_ = FLAGS_enable_curve_zmq };
     Status rc = ParseMsgFrames(frames, meta, ffd_, EventType::ZMQ, userId);
     if (rc.IsError()) {
         // Silently (no logging) ignore K_TRY_AGAIN because stub will probe us with an empty message

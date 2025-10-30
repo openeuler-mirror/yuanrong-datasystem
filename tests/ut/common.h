@@ -91,6 +91,14 @@ namespace ut {
         }                                                                                      \
     } while (false)
 
+inline bool IsArmArchitecture() {
+    #if defined(__arm__) || defined(__aarch64__) || defined(__ARM_ARCH)
+        return true;
+    #else
+        return false;
+    #endif
+}
+
 class CommonTest : public testing::Test {
 public:
     CommonTest();

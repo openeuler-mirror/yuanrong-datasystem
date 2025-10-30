@@ -649,7 +649,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | ipc_through_shared_memory | bool | `true` | datasystem-worker共享内存启用开关 |
 | unix_domain_socket_dir | string | `"./yr_datasystem/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
 | worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址 |
-| enable_component_auth | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
+| enable_curve_zmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | curve_key_dir | string | `""` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
 | oc_worker_worker_pool_size | int | `3` | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
@@ -731,7 +731,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| backend_store_dir | string | `"./yr_datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
+| rocksdb_store_dir | string | `"./yr_datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | rocksdb_background_threads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | rocksdb_max_open_file | int | `128` | RocksDB可使用的最大打开文件个数 |
 

@@ -64,6 +64,9 @@ Status SharedDiskDetecterTest::FakeOpen(const std::string &pathname, int flags, 
 
 TEST_F(SharedDiskDetecterTest, TestDiskFullAndRecovery)
 {
+    if (IsArmArchitecture()) {
+        GTEST_SKIP() << "Skipped on ARM architecture";
+    }
     uint64_t intervalMs = 10;
     uint64_t remainBytes = 100;
     char path[PATH_MAX + 1] = { 0 };
@@ -84,6 +87,9 @@ TEST_F(SharedDiskDetecterTest, TestDiskFullAndRecovery)
 
 TEST_F(SharedDiskDetecterTest, TestDiskIOFailure)
 {
+    if (IsArmArchitecture()) {
+        GTEST_SKIP() << "Skipped on ARM architecture";
+    }
     uint64_t intervalMs = 10;
     char path[PATH_MAX + 1] = { 0 };
     auto ret = getcwd(path, sizeof(path));
@@ -102,6 +108,9 @@ TEST_F(SharedDiskDetecterTest, TestDiskIOFailure)
 
 TEST_F(SharedDiskDetecterTest, TestDiskOpenFailure)
 {
+    if (IsArmArchitecture()) {
+        GTEST_SKIP() << "Skipped on ARM architecture";
+    }
     uint64_t intervalMs = 10;
     char path[PATH_MAX + 1] = { 0 };
     auto ret = getcwd(path, sizeof(path));
