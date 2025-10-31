@@ -108,7 +108,7 @@ DS_DEFINE_uint32(data_migrate_rate_limit_mb, 40, "Data migrate rate limit for ev
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);

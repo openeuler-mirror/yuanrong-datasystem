@@ -124,7 +124,7 @@ DS_DEFINE_validator(liveness_check_path, &Validator::ValidatePathString);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
 DS_DEFINE_uint32(check_async_queue_empty_time_s, 15,
                  "The async queue needs to be empty for a certain period of time before worker can exist.");
-DS_DECLARE_string(backend_store_dir);
+DS_DECLARE_string(rocksdb_store_dir);
 DS_DEFINE_int32(max_rpc_session_num, 2048,
                 "Maximum number of sessions that can be cached, must be within [512, 10'000]");
 DS_DEFINE_validator(max_rpc_session_num, &Validator::ValidateMaxRpcSessionNum);
@@ -152,7 +152,7 @@ static bool ValidatePopulate(const char *flagName, bool value)
 }
 DS_DEFINE_validator(shared_memory_populate, &ValidatePopulate);
 DS_DECLARE_string(sfs_path);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
@@ -474,8 +474,8 @@ void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
 
 Status WorkerOCServer::ConstructClusterStore()
 {
-    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_backend_store_dir, "~/.datasystem/rocksdb", "/master"));
-    std::string clusterInfoRocksDir = FLAGS_backend_store_dir + "/cluster_info";
+    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_rocksdb_store_dir, "~/.datasystem/rocksdb", "/master"));
+    std::string clusterInfoRocksDir = FLAGS_rocksdb_store_dir + "/cluster_info";
     if (!FileExist(clusterInfoRocksDir)) {
         // The permission of ~/.datasystem/rocksdb/object_metadata.
         const int permission = 0700;
@@ -530,7 +530,7 @@ Status WorkerOCServer::LoadHashRingFromRocksDb(ClusterInfo &clusterInfo, HashRin
             return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
         }
         auto azName = GetSubStringBeforeField(itr->first, std::string(ETCD_RING_PREFIX) + "/").erase(0, 1);
-        if (!FLAGS_etcd_table_prefix.empty() && azName != FLAGS_etcd_table_prefix) {
+        if (!FLAGS_az_name.empty() && azName != FLAGS_az_name) {
             clusterInfo.otherAzHashrings.emplace_back(std::move(azName), std::move(itr->second));
         } else {
             clusterInfo.localHashRing.emplace_back(std::move(*itr));
@@ -551,7 +551,7 @@ Status WorkerOCServer::LoadWorkersFromRocksDb(ClusterInfo &clusterInfo,
         auto workerAddr = GetSubStringAfterField(itr->first, std::string(ETCD_CLUSTER_TABLE) + "/");
         CHECK_FAIL_RETURN_STATUS(!workerAddr.empty(), K_RUNTIME_ERROR, "The loaded cluster information is incomplete");
         auto azName = GetSubStringBeforeField(itr->first, "/" + std::string(ETCD_CLUSTER_TABLE) + "/").erase(0, 1);
-        if (!FLAGS_etcd_table_prefix.empty() && azName != FLAGS_etcd_table_prefix) {
+        if (!FLAGS_az_name.empty() && azName != FLAGS_az_name) {
             clusterInfo.otherAzWorkers.emplace_back(std::move(workerAddr), std::move(itr->second));
         } else {
             if (workerAddr != hostPort_.ToString()) {
@@ -719,7 +719,7 @@ Status WorkerOCServer::InitLivenessCheck()
 Status WorkerOCServer::InitReplicaManager()
 {
     ReplicaManagerParam param;
-    param.dbRootPath = FLAGS_backend_store_dir;
+    param.dbRootPath = FLAGS_rocksdb_store_dir;
     param.currWorkerId = etcdCM_->GetLocalWorkerUuid();
     param.akSkManager = akSkManager_;
     param.etcdStore = etcdStore_.get();

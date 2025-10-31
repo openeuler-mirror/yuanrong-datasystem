@@ -80,7 +80,7 @@ public:
 
         opts.workerGflagParams = OBSGflag;
         for (size_t i = 0; i < workerNum_; i++) {
-            std::string param = "-etcd_table_prefix=";
+            std::string param = "-az_name=";
             if (i % MASTER_NUM == 0) {
                 param.append(AZ1);
             } else {
@@ -445,7 +445,7 @@ public:
 
         opts.workerGflagParams = obsGflag;
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
-            std::string param = "-etcd_table_prefix=";
+            std::string param = "-az_name=";
             if (i % MASTER_NUM == 0) {
                 param.append(AZ1);
             } else {
@@ -486,7 +486,7 @@ public:
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
 
-            std::string param = "-etcd_table_prefix=";
+            std::string param = "-az_name=";
             if (i < EACH_AZ_WORKER_NUM) {
                 param.append(AZ1);
             } else {
@@ -1028,7 +1028,7 @@ public:
         for (size_t i = 0; i < workerNum_; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
-            std::string param = "-etcd_table_prefix=";
+            std::string param = "-az_name=";
             param.append(otherAzNames[i]);
             opts.workerSpecifyGflagParams[i] = param;
         }
@@ -1162,8 +1162,8 @@ public:
             "-other_az_names=AZ1,AZ2 -cross_az_get_meta_from_worker=true -oc_io_from_l2cache_need_metadata=false -v=2";
 
         opts.workerGflagParams = gflag;
-        opts.workerSpecifyGflagParams[0] += " -etcd_table_prefix=AZ1 ";
-        opts.workerSpecifyGflagParams[1] += " -etcd_table_prefix=AZ2 ";
+        opts.workerSpecifyGflagParams[0] += " -az_name=AZ1 ";
+        opts.workerSpecifyGflagParams[1] += " -az_name=AZ2 ";
         std::vector<std::string> otherAzNames = { "AZ1", "AZ2" };
         for (size_t i = 0; i < workerNum_; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
@@ -1236,7 +1236,7 @@ public:
         for (size_t i = 0; i < workerNum_; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
-            std::string param = "-etcd_table_prefix=";
+            std::string param = "-az_name=";
             param.append(otherAzNames_[i % otherAzNames_.size()]);
             opts.workerSpecifyGflagParams[i] = param;
         }
@@ -1490,7 +1490,7 @@ public:
         opts.workerGflagParams = gflag;
         for (size_t i = 0; i < workerNum_; i++) {
             auto azName = azNames_[i % azNames_.size()];
-            std::string param = "-etcd_table_prefix=" + azName;
+            std::string param = "-az_name=" + azName;
             opts.workerSpecifyGflagParams[i] = param;
         }
     }

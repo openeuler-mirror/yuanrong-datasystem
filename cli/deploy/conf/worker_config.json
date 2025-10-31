@@ -31,9 +31,9 @@
         "value": "./datasystem/uds",
         "description": "The directory to store unix domain socket file. The UDS generates temporary files in this path. Max length: 80"
     },
-    "etcd_table_prefix": {
+    "az_name": {
         "value": "",
-        "description": "Prefix of all tables in etcd, which is used to distinguish tables created by different data systems in etcd, the value should contain english alphabetics(a-zA-Z), numbers (0-9) only."
+        "description": "az_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, allowing different clusters to be distinguished by the az_name."
     },
     "other_az_names": {
         "value": "",
@@ -159,7 +159,7 @@
         "value": "true",
         "description": "Deprecated: This flag is deprecated and will be removed in future releases."
     },
-    "backend_store_dir": {
+    "rocksdb_store_dir": {
         "value": "./datasystem/rocksdb",
         "description": "Config MASTER back store directory and must specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata stored in the master so that the metadata before the restart can be re-obtained when the master restarts."
     },
@@ -335,9 +335,9 @@
         "value": "0",
         "description": "Vlog level, a larger value indicates more detailed logs. The value is between 0-3."
     },
-    "enable_component_auth": {
+    "enable_curve_zmq": {
         "value": "false",
-        "description": "Whether to enable the authentication function between components(worker, master)."
+        "description": "Whether to enable Curve ZMQ for authentication and authorization between components."
     },
     "zmq_server_io_context": {
         "value": "5",

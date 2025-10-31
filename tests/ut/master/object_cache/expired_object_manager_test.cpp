@@ -29,7 +29,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/inject/inject_point.h"
 
-DS_DECLARE_string(backend_store_dir);
+DS_DECLARE_string(rocksdb_store_dir);
 
 using namespace datasystem::master;
 namespace datasystem {

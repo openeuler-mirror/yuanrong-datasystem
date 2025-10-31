@@ -28,7 +28,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
 
-DS_DECLARE_bool(enable_component_auth);
+DS_DECLARE_bool(enable_curve_zmq);
 DS_DEFINE_string(curve_key_dir, "",
                  "The directory to find ZMQ curve key files. This path must be specified "
                  "when zmq authentication is enabled. Path must be less than 4095 characters (PATH_MAX).");
@@ -62,7 +62,7 @@ static Status LoadKey(const std::string &filePath, std::unique_ptr<char[]> &keyC
     ifs.close();
     std::string keyString = buffer.str();
     Raii clearRaii([&keyString]() { ClearStr(keyString); });
-    if (FLAGS_enable_component_auth) {
+    if (FLAGS_enable_curve_zmq) {
         // Decrypt ciphertext once.
         int keyContentSize;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SecretManager::Instance()->Decrypt(keyString, keyContent, keyContentSize),
@@ -158,7 +158,7 @@ static Status LoadServerKeysHelper(const std::string &serverName)
 
 Status RpcAuthKeyManager::ServerLoadKeys(const std::string &serverName, RpcCredential &cred)
 {
-    if (!FLAGS_enable_component_auth) {
+    if (!FLAGS_enable_curve_zmq) {
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(SERVER_TYPES.find(serverName) != SERVER_TYPES.end(), K_INVALID,

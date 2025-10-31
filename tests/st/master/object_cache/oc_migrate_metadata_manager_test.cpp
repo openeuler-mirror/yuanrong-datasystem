@@ -48,7 +48,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "gtest/gtest.h"
 
-DS_DECLARE_string(backend_store_dir);
+DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
 
@@ -79,7 +79,7 @@ public:
         // The static members are destructed in the reverse order of their construction,
         // Below call guarantees that the destructor of Env is behind other Rocksdb singletons.
         (void)rocksdb::Env::Default();
-        FLAGS_backend_store_dir = GetTestCaseDataDir() + "/rocksdb";
+        FLAGS_rocksdb_store_dir = GetTestCaseDataDir() + "/rocksdb";
         LOG_IF_ERROR(PreInitRocksDB(), "Failed to initialize the rocksdb database in advance.");
         hostPort_.ParseString("127.0.0.1:" + std::to_string(GetFreePort()));
         akSkManager_ = std::make_shared<AkSkManager>();
@@ -98,7 +98,7 @@ public:
         RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));
         workerUuid_ = etcdCM_->GetLocalWorkerUuid();
         ReplicaManagerParam param;
-        param.dbRootPath = FLAGS_backend_store_dir;
+        param.dbRootPath = FLAGS_rocksdb_store_dir;
         param.currWorkerId = workerUuid_;
         param.akSkManager = akSkManager_;
         param.etcdStore = etcdStore_.get();
@@ -218,8 +218,8 @@ public:
     Status PreInitRocksDB()
     {
         RETURN_IF_NOT_OK(
-            Uri::NormalizePathWithUserHomeDir(FLAGS_backend_store_dir, "~/.datasystem/rocksdb", "/master"));
-        std::string preInitRocksDir = FLAGS_backend_store_dir + "/pre-start";
+            Uri::NormalizePathWithUserHomeDir(FLAGS_rocksdb_store_dir, "~/.datasystem/rocksdb", "/master"));
+        std::string preInitRocksDir = FLAGS_rocksdb_store_dir + "/pre-start";
         RETURN_IF_NOT_OK(RemoveAll(preInitRocksDir));
         if (!FileExist(preInitRocksDir)) {
             // The permission of ~/.datasystem/rocksdb/object_metadata.

@@ -55,7 +55,7 @@ DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(add_node_wait_time_s);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(other_az_names);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(auto_del_dead_node);
 DS_DEFINE_bool(cross_az_get_meta_from_worker, false, "cross az to get metadata from worker");
@@ -103,7 +103,7 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
     if (!FLAGS_other_az_names.empty() && FLAGS_enable_distributed_master) {
         ConstructOtherAzHashRings();
         for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-            if (azName != FLAGS_etcd_table_prefix) {
+            if (azName != FLAGS_az_name) {
                 otherAZNames_.emplace_back(azName);
             }
         }
@@ -135,7 +135,7 @@ EtcdClusterManager::~EtcdClusterManager()
 void EtcdClusterManager::ConstructOtherAzHashRings()
 {
     for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-        if (azName != FLAGS_etcd_table_prefix) {
+        if (azName != FLAGS_az_name) {
             auto readRing = std::make_unique<worker::ReadHashRing>(azName, workerAddress_.ToString(), etcdDB_);
             (void)otherAzHashRings_.insert(std::make_pair(azName, std::move(readRing)));
         }

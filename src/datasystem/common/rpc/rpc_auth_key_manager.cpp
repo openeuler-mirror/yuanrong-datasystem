@@ -22,8 +22,8 @@
 #include <nlohmann/json.hpp>
 #include <securec.h>
 
-DS_DEFINE_bool(enable_component_auth, false,
-            "Enable all of datasystem components authentication, default is false");
+DS_DEFINE_bool(enable_curve_zmq, false,
+            "Whether to enable Curve ZMQ for authentication and authorization between components.");
 
 namespace datasystem {
 static Status CreateCredentialsHelper(const RpcAuthKeys &keys, const std::string &serverName, RpcCredential &cred)
@@ -41,7 +41,7 @@ static Status CreateCredentialsHelper(const RpcAuthKeys &keys, const std::string
 
 Status RpcAuthKeyManager::CreateCredentials(const std::string &serverName, RpcCredential &cred)
 {
-    if (!FLAGS_enable_component_auth) {
+    if (!FLAGS_enable_curve_zmq) {
         return Status::OK();
     }
     const RpcAuthKeys &authKeys = RpcAuthKeyManager::Instance().GetKeys();

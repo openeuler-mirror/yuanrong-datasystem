@@ -896,7 +896,7 @@ Status ExternalCluster::StartMaster(int index)
     std::string healthFile = rootDir + "/health";
     (void)DeleteFile(healthFile);
     masterCmd += " -master_address=" + opts_.masterIpAddrs[index].ToString() + " -log_dir=" + rootDir + "/log"
-                 + " -backend_store_dir=" + rootDir + "/rocksdb" + " -unix_domain_socket_dir=" + opts_.socketDir + " "
+                 + " -rocksdb_store_dir=" + rootDir + "/rocksdb" + " -unix_domain_socket_dir=" + opts_.socketDir + " "
                  + " -v=" + std::to_string(opts_.vLogLevel) + " -health_check_path=" + healthFile
                  + +" -l2_cache_delete_thread_num=4 " + opts_.masterGflagParams
                  + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads);
@@ -910,7 +910,7 @@ Status ExternalCluster::StartMaster(int index)
             }
             etcdUrl += addrs.first.ToString();
         }
-        masterCmd += " -backend_store=etcd -etcd_address=" + etcdUrl + " -etcd_table_prefix=" + opts_.etcdPrefix;
+        masterCmd += " -backend_store=etcd -etcd_address=" + etcdUrl + " -az_name=" + opts_.etcdPrefix;
     }
     LOG(INFO) << "Launch master [" << index << "] command: " << masterCmd;
     auto masterProcess = std::make_unique<MasterProcess>(masterCmd, opts_.masterIpAddrs[index]);
@@ -1024,7 +1024,7 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
         cmd += " " + specifyParams[index];
     }
     if (opts_.isObjectCache) {
-        cmd += " -backend_store_dir=" + rootDir + "/rocksdb ";
+        cmd += " -rocksdb_store_dir=" + rootDir + "/rocksdb ";
     }
     if (opts_.enableLivenessProbe) {
         cmd += " -liveness_check_path=" + rootDir + "/liveness ";

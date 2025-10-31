@@ -52,7 +52,7 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
 DS_DECLARE_string(other_az_names);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
@@ -79,7 +79,7 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
 {
     if (HaveOtherAZ()) {
         for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-            if (azName != FLAGS_etcd_table_prefix) {
+            if (azName != FLAGS_az_name) {
                 otherAZNames_.emplace_back(azName);
             }
         }
@@ -1346,7 +1346,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
     Status rc;
     for (const std::string &objKey : objectKeys) {
         if (getLocalAz) {
-            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_etcd_table_prefix, objKey, workerId, queryMetas);
+            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_az_name, objKey, workerId, queryMetas);
             if (rc.IsOk()) {
                 continue;
             }
@@ -1387,7 +1387,7 @@ Status WorkerOcServiceGetImpl::ConstructKeyAndQueryMetaFromEtcd(const std::strin
         hashValue = Hash2Str(MurmurHash3_32(workerId));
     }
     std::string tablePrefix;
-    if (!FLAGS_etcd_table_prefix.empty()) {
+    if (!FLAGS_az_name.empty()) {
         tablePrefix = FormatString("/%s", azName);
     }
     std::string etcdKey = tablePrefix + FormatString("%s/%zu/%s", etcdTableName, hashValue, objKey);

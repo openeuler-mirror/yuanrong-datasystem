@@ -45,7 +45,7 @@
 using namespace datasystem;
 
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_bool(enable_etcd_auth);
 DS_DECLARE_string(etcd_target_name_override);
 DS_DECLARE_string(encrypt_kit);
@@ -848,7 +848,7 @@ TEST_F(EtcdStoreTest, TestGetEtcdPrefix)
 {
     LOG(INFO) << "Test EtcdStore GetEtcdPrefix";
     std::string table_prefix = "AZ1";
-    FLAGS_etcd_table_prefix = table_prefix;
+    FLAGS_az_name = table_prefix;
     InitTestEtcdInstance();
     std::string prefix;
     DS_ASSERT_OK(db_->GetEtcdPrefix(tableName_, prefix));

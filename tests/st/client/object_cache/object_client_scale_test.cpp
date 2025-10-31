@@ -55,7 +55,7 @@
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {

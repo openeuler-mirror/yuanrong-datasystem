@@ -814,7 +814,7 @@ public:
         for (size_t i = 0; i < WORKER_NUM; i++) {
             opts.workerConfigs.emplace_back("127.0.0.1", GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
-            std::string param = "-etcd_table_prefix=";
+            std::string param = "-az_name=";
             param.append(otherAzNames_[i % otherAzNames_.size()]);
             opts.workerSpecifyGflagParams[i] = param;
         }

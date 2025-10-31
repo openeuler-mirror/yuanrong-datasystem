@@ -69,11 +69,11 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 
-DS_DEFINE_string(backend_store_dir, "~/datasystem/rocksdb",
+DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "The path of persistent gcs meta data and must "
                  "specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata "
                  "in the master, so that the metadata before the restart can be re-obtained when the master restarts.");
-DS_DEFINE_validator(backend_store_dir, &Validator::ValidatePathString);
+DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);

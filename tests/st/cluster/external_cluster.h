@@ -35,7 +35,7 @@
 #include "cluster/base_cluster.h"
 #include "cluster/subprocess.h"
 
-DS_DECLARE_bool(enable_component_auth);
+DS_DECLARE_bool(enable_curve_zmq);
 
 namespace datasystem {
 namespace st {

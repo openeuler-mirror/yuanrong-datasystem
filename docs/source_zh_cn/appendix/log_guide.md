@@ -51,7 +51,19 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | datasize | 16 | 记录Publish请求接收到的Payload大小。 |
 | request param | 2560 | 记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。 |
 | response param | 1024 | 记录该请求的响应信息。最大长度为1024 Byte，超出则截断。 |
-| shm_info | 47 | 记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %.<br>&emsp;&emsp;spill_disk_info 47 记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>5) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>6) physicalSpaceUsage	已使用的物理磁盘大小。<br>7) totalLimit	Spill磁盘总大小。<br>8) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %.<br>&emsp;&emsp;client nums 5 记录已和worker成功建立连接的Client数。最大值为10000.<br>&emsp;&emsp;object nums 9 记录worker已缓存对象数。按照1亿对象限制数量。<br>&emsp;&emsp;object total datasize 13 记录worker已缓存对象的大小。按照1T限制大小，长度 13 Byte<br>&emsp;&emsp;WorkerOcService threadpool 21 WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>9) idelNum	空闲线程数；<br>10) currentTotalNum	当前正在运行任务的线程数；<br>11) MaxThreadNum	 threadpool最大可申请的线程数；<br>12) waitingTaskNum	正在等待的任务数。<br>13) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字。<br>&emsp;&emsp;WorkerWorkerOcService threadpool 21  threadpool使用信息<br>&emsp;&emsp;MasterWokrerOcService threadpool 21  threadpool使用信息<br>&emsp;&emsp;MasterOcService threadpool 21  threadpool使用信息<br>&emsp;&emsp;write ETCD queue 15 队列使用信息<br>&emsp;&emsp;ETCDrequest success rate 6 请求使用率，单位 %,保留3位有效数字<br>&emsp;&emsp;OBSrequest success rate 6 请求使用率，单位 %,保留3位有效数字<br>&emsp;&emsp;Master AsyncTask threadpool 21  threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
+| shm_info | 47 | 记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %. |
+| spill_disk_inf0 | 47 | 记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>1) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>2) physicalSpaceUsage	已使用的物理磁盘大小。<br>3) totalLimit	Spill磁盘总大小。<br>4) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %. |
+| client nums | 5 | 记录已和worker成功建立连接的Client数。最大值为10000. |
+| object nums | 9 | 记录worker已缓存对象数。按照1亿对象限制数量。 |
+| object total datasize | 13 | 记录worker已缓存对象的大小。按照1T限制大小，长度 13 Byte |
+| WorkerOcService threadpool | 21 | WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idelNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字。 |
+| WorkerWorkerOcService threadpool | 21 | threadpool使用信息 |
+| MasterWokrerOcService threadpool | 21 | threadpool使用信息 |
+| MasterOcService threadpool | 21 | threadpool使用信息 |
+| write ETCD queue | 15 | 队列使用信息 |
+| ETCDrequest success rate | 6 | 请求使用率，单位 %,保留3位有效数字 |
+| OBSrequest success rate | 6 | 请求使用率，单位 %,保留3位有效数字 |
+| Master AsyncTask threadpool | 21 | threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
 
 
 #### SDK与worker访问日志关键请求参数

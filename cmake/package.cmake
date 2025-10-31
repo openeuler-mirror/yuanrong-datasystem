@@ -74,7 +74,6 @@ set(SDK_USER_LIB_PATTERNS
         ${SDK_SPDLOG_LIB}
        "${SecureC_LIB_PATH}/libsecurec.so"
        "${TBB_LIB_PATH}/libtbb.so*"
-       "${CURL_LIB_PATH}/libcurl.so*"
        "${gRPC_LIB_PATH}/libgrpc.so*"
        "${gRPC_LIB_PATH}/libgrpc++.so*"
        "${gRPC_LIB_PATH}/libgpr.so*"
@@ -111,7 +110,6 @@ if (BUILD_PYTHON_API)
             ${SDK_PROTOBUF_LIB}
             "${SecureC_LIB_PATH}/libsecurec.so"
             "${TBB_LIB_PATH}/libtbb.so*"
-            "${CURL_LIB_PATH}/libcurl.so*"
             "${OpenSSL_LIB_PATH}/libssl.so*"
             ${RPC_LIB_PATH}
     )
@@ -156,7 +154,6 @@ if (BUILD_GO_API)
            "${TBB_LIB_PATH}/libtbb.so*"
            "${OpenSSL_LIB_PATH}/libssl.so*"
            "${OpenSSL_LIB_PATH}/libcrypto.so*"
-           "${CURL_LIB_PATH}/libcurl.so*"
            "${gRPC_LIB_PATH}/libgrpc.so*"
            "${gRPC_LIB_PATH}/libgrpc++.so*"
            "${gRPC_LIB_PATH}/libgpr.so*"

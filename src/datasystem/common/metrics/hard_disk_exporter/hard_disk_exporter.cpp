@@ -29,7 +29,7 @@
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/log/log_time.h"
 
-DS_DECLARE_string(etcd_table_prefix);
+DS_DECLARE_string(az_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_int32(logfile_mode);
 DS_DECLARE_uint32(log_size);
@@ -52,7 +52,7 @@ void HardDiskExporter::Send(const std::string &message, Uri &uri, int line)
     std::ostringstream constructStr;
     LogTime logTime;
     ConstructLogPrefix(constructStr, logTime.getTm(), logTime.getUsec(), uri.GetFileName().c_str(), line, podName_,
-                       'I', FLAGS_etcd_table_prefix);
+                       'I', FLAGS_az_name);
     constructStr << std::string(message);
     WriteMessage(constructStr.str());
 }
