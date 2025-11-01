@@ -62,5 +62,5 @@ add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
-target_link_libraries(flags_ut ds_flags GTest::gtest GTest::gmock)
+target_link_libraries(flags_ut ds_flags GTest::gtest GTest::gmock re2::re2)
 add_datasystem_test(flags_ut)

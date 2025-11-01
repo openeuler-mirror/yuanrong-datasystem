@@ -103,8 +103,7 @@ class DsClient:
             server_public_key,
             access_key,
             secret_key,
-            tenant_id,
-            enable_cross_node_connection
+            tenant_id
         )
 
     def init(self):

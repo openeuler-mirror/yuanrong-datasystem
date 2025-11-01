@@ -297,7 +297,6 @@ class ObjectClient:
         access_key(str): The access key used by AK/SK authorize.
         secret_key(str): The secret key for AK/SK authorize.
         tenant_id(str): The tenant ID.
-        enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
 
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
@@ -318,7 +317,6 @@ class ObjectClient:
         access_key="",
         secret_key="",
         tenant_id="",
-        enable_cross_node_connection=False,
     ):
         """Constructor of the ObjectClient class
 
@@ -336,7 +334,6 @@ class ObjectClient:
             oauth_client_secret(str): The client secret for tenant.
             oauth_url(str): The auth url of IAM.
             tenant_id(str): The tenant ID.
-            enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -351,7 +348,6 @@ class ObjectClient:
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
-            ["enable_cross_node_connection", enable_cross_node_connection, bool],
         ]
         validator.check_args_types(args)
         self.client = ds.ObjectClient(
@@ -363,8 +359,7 @@ class ObjectClient:
             server_public_key,
             access_key,
             secret_key,
-            tenant_id,
-            enable_cross_node_connection,
+            tenant_id
         )
 
     @staticmethod

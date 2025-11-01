@@ -6,7 +6,7 @@ datasystem.kv_client.KVClient.generate_key
     生成唯一的键。
 
     参数：
-        - **prefix** (str) - 前缀。
+        - **prefix** (str) - 前缀，当为空时自动生成前缀。
 
     返回：
         唯一键。如果键生成失败，将返回空字符串。

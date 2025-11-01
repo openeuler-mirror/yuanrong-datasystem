@@ -6,24 +6,12 @@
 
 | 类名                        | 说明                                |
 |--------------------------------|---------------------------------------------|
-|[`enum ExistenceOpt`](#enum-existenceopt)            |该选项用于配置对象存在时是否允许继续操作  |
 |[`class KVClient`](#class-kvclient) | KV缓存客户端类|
+|[`enum ExistenceOpt`](#enum-existenceopt)            |该选项用于配置对象存在时是否允许继续操作  |
 |[`class ReadOnlyBuffer`](#class-readonlybuffer) | 只读缓冲区结构类 |
 |[`struct MSetParam`](#struct-msetparam) | 同时创建多个Key时设置的属性 |
 |[`struct ReadParam`](#struct-readparam) | 偏移读取Key时设置的属性 |
 |[`struct SetParam`](#struct-setparam) | 创建Key时设置的属性 |
-
-
-## enum ExistenceOpt
-
-\#include &lt;[datasystem/kv_cache/kv_client.h](../../../../include/datasystem/kv_cache/kv_client.h)&gt;
-
-用于配置对象存在时是否允许继续操作的枚举类。
-
- 定义                         | 说明
---------------------------------|---------------------------------------------
-NONE            | 允许Key存在时执行Set
-NX            | 不允许Key存在时执行Set
 
 ## class KVClient
 
@@ -103,7 +91,7 @@ KV缓存对象类
   - `param` 设置参数，详见[SetParam](#struct-setparam)章节
 
 - 返回值
-  - 成功时返回非空字符串
+  - 成功时返回key
   - 失败时返回空字符串
 
 <a id="status-msettx"></a>
@@ -266,7 +254,7 @@ KV缓存对象类
   返回值状态码为 `K_OK` 时表示 Worker 健康，否则返回其他错误码。
 
 <a id="exist"></a>
-#### Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
+#### Status KVClient::Exist(const std::vector&lt;std::string&gt; &keys, std::vector<bool> &exists)
 
 批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多10000个键的查询。
 
@@ -283,7 +271,7 @@ KV缓存对象类
 
 <a id="status-expire"></a>
 
-#### Status Expire (const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys)
+#### Status Expire (const std::vector&lt;std::string&gt; &keys, uint32_t ttlSeconds, std::vector&lt;std::string&gt; &failedKeys)
 
 批量为一组键（keys）更新过期生命周期（ttlSeconds），并返回更新失败的键（failedKeys）。最多支持 10000 个键的查询。
 
@@ -300,17 +288,28 @@ KV缓存对象类
   - 返回`K_NOT_READY` 表示服务当前无法处理请求
   - 返回`K_RUNTIME_ERROR`表示 worker 侧存在错误
 
+## enum ExistenceOpt
+
+\#include &lt;[datasystem/kv_cache/kv_client.h](../../../../include/datasystem/kv_cache/kv_client.h)&gt;
+
+用于配置对象存在时是否允许继续操作的枚举类。
+
+ 定义                         | 说明
+--------------------------------|---------------------------------------------
+NONE            | 允许Key存在时执行Set
+NX            | 不允许Key存在时执行Set
+
 ## class ReadOnlyBuffer
 
 \#include &lt;[datasystem/kv_cache/read_only_buffer.h](../../../../include/datasystem/kv_cache/read_only_buffer.h)&gt;
 
 ### 构造函数和析构函数
 
-#### ReadOnlyBuffer () = default
+#### ReadOnlyBuffer ()
 
 构造只读缓冲区结构类
 
-#### ~ReadOnlyBuffer () = default
+#### ~ReadOnlyBuffer ()
 
 析构只读缓冲区结构类
 
