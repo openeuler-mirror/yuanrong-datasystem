@@ -29,6 +29,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/encrypt/phrase_pem_tls.h"
 #include "datasystem/common/util/ssl_authorization.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -114,5 +115,18 @@ Status SecretManager::GenerateAllKeyComponent(const std::string &k1Path, const s
                                               const std::string &k3Path, const std::string &saltPath)
 {
     return encryptService_->GenerateAllKeyComponent(k1Path, k2Path, k3Path, saltPath);
+}
+
+Status SecretManager::GetPemTlsInfo(TlsConfig &config, TlsInfo &info)
+{
+    SensitiveValue passPhrase;
+    auto phraseTlsService = std::make_shared<PhrasePEMTLS>(encryptService_);
+    RETURN_IF_NOT_OK(phraseTlsService->PhrasePass(config.passPhrasePath, passPhrase));
+    return phraseTlsService->GetTlsInfo(config, passPhrase, info);
+}
+
+Status SecretManager::GetTlsInfo(TlsConfig &config, TlsInfo &info)
+{
+    return GetPemTlsInfo(config, info);
 }
 }  // namespace datasystem

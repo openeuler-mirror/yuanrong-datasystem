@@ -25,6 +25,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/encrypt/encrypt_kit.h"
+#include "datasystem/common/encrypt/iphrase_tls.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/sensitive_value.h"
 
@@ -115,8 +116,24 @@ public:
      */
     bool IsRootKeyActive();
 
+    /**
+     * @brief Get CA, cert and key from sts pkcs12 or pem file.
+     * @param[out] config the CA, cert, key file path.
+     * @param[out] info the tls info.
+     * @return Status of the call.
+     */
+    Status GetTlsInfo(TlsConfig &config, TlsInfo &info);
+
+    /**
+     * @brief Get CA, cert and key from pem file.
+     * @param[out] config the CA, cert, key file path.
+     * @param[out] info the tls info.
+     * @return Status of the call.
+     */
+    Status GetPemTlsInfo(TlsConfig &config, TlsInfo &info);
+
 private:
-    std::unique_ptr<EncryptKit> encryptService_;
+    std::shared_ptr<EncryptKit> encryptService_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_ENCRYPT_SECRET_MANAGER_H
