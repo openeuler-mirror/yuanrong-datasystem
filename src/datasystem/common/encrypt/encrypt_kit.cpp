@@ -17,7 +17,6 @@
 /**
  * Description: a dummy encrypt kit implement, means no encrypt
  */
-#include "securec.h"
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/encrypt/encrypt_kit.h"

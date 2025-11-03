@@ -94,7 +94,8 @@ public:
     {
         // for routeClient
         if (!etcdCa.empty() && !etcdCert.Empty() && !etcdKey.Empty()) {
-            return CreateSessionWithTls(addresses, etcdCa, etcdCert, etcdKey, targetNameOverride, rpcSession);
+            SensitiveValue ca(etcdCa);
+            return CreateSessionWithTls(addresses, ca, etcdCert, etcdKey, targetNameOverride, rpcSession);
         }
 
         if (!FLAGS_enable_etcd_auth) {
@@ -105,10 +106,17 @@ public:
         LOG_IF(WARNING, FLAGS_encrypt_kit == ENCRYPT_KIT_PLAINTEXT)
             << "Etcd auth is enabled but sensitive information is not encrypted, avoid use in production environments.";
 
-        RETURN_IF_NOT_OK(ReadEtcdCertAndCreateSession(addresses, FLAGS_etcd_ca, FLAGS_etcd_cert, FLAGS_etcd_key,
-                                                          FLAGS_etcd_target_name_override, FLAGS_etcd_passphrase_path,
-                                                          true, rpcSession));
-
+        TlsConfig config;
+        config.caPath = FLAGS_etcd_ca;
+        config.certPath = FLAGS_etcd_cert;
+        config.keyPath = FLAGS_etcd_key;
+        config.passPhrasePath = FLAGS_etcd_passphrase_path;
+        TlsInfo info;
+        auto targetName = !targetNameOverride.empty() ? targetNameOverride : FLAGS_etcd_target_name_override;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SecretManager::Instance()->GetTlsInfo(config, info),
+                                         "etcd get tls info failed");
+        RETURN_IF_NOT_OK(
+            CreateSessionWithTls(addresses, info.ca, info.cert, info.key, targetName, rpcSession));
         return Status::OK();
     }
 
@@ -153,13 +161,13 @@ public:
      * @param[out] rpcSession an RPC session.
      * @return Status of the call.
      */
-    static Status CreateSessionWithTls(const std::string &addresses, const std::string &ca, const SensitiveValue &cert,
-                                       const SensitiveValue &key, const std::string &targetNameOverride,
-                                       std::unique_ptr<GrpcSession> &rpcSession)
+    static Status CreateSessionWithTls(const std::string &addresses, const SensitiveValue &ca,
+                                       const SensitiveValue &cert, const SensitiveValue &key,
+                                       const std::string &targetNameOverride, std::unique_ptr<GrpcSession> &rpcSession)
     {
         grpc::ChannelArguments args;
         SetCommonChannelArgs(args);
-        grpc::SslCredentialsOptions sslCredOpt{ .pem_root_certs = ca,
+        grpc::SslCredentialsOptions sslCredOpt{ .pem_root_certs = { ca.GetData(), ca.GetSize() },
                                                 .pem_private_key = { key.GetData(), key.GetSize() },
                                                 .pem_cert_chain = { cert.GetData(), cert.GetSize() } };
 
@@ -358,47 +366,6 @@ public:
     }
 
     /**
-     * @brief Reads the etcd certificate and establishes a connection with etcd.
-     * @param[in] addresses Etcd address.
-     * @param[in] etcdCaPath Root etcd certificate path.
-     * @param[in] etcdCertPath Etcd certificate chain path.
-     * @param[in] etcdKeyPath Etcd private key path.
-     * @param[in] targetNameOverride Etcd DNS name.
-     * @param[in] etcdPassphrasePath Etcd passphrase path.
-     * @param[in] isContentEncrypted Check whether the certificate text is encrypted.
-     * @param[out] rpcSession An RPC session.
-     * @return Status of the call.
-     */
-    static Status ReadEtcdCertAndCreateSession(const std::string &addresses, const std::string &etcdCaPath,
-                                               const std::string &etcdCertPath, const std::string &etcdKeyPath,
-                                               const std::string &targetNameOverride,
-                                               const std::string &etcdPassphrasePath, bool isContentEncrypted,
-                                               std::unique_ptr<GrpcSession> &rpcSession)
-    {
-        SensitiveValue caCert;
-        SensitiveValue clientCert;
-        SensitiveValue clientPrivateKey;
-        if (!etcdPassphrasePath.empty()) {
-            SensitiveValue passphrase;
-            // decrypt passphrase.
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ReadText(etcdPassphrasePath, passphrase, isContentEncrypted),
-                                             "Etcd passphrase decrypt failed.");
-            // decrypt client private key.
-            RETURN_IF_NOT_OK(DecryptRSAPrivateKeyToMemoryInPemFormat(etcdKeyPath, passphrase, clientPrivateKey));
-        } else {
-            // decrypt client private key.
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ReadText(etcdKeyPath, clientPrivateKey, isContentEncrypted),
-                                             "Etcd private key decrypt failed.");
-        }
-        // read ca cert
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ReadText(etcdCaPath, caCert, false), "Etcd ca cert decrypt failed.");
-        // read client cert
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ReadText(etcdCertPath, clientCert, false), "Etcd client cert decrypt failed.");
-        return CreateSessionWithTls(addresses, std::string(caCert.GetData(), caCert.GetSize()), clientCert,
-                                    clientPrivateKey, targetNameOverride, rpcSession);
-    }
-
-    /**
      * @brief Obtains the success rate of all etcd requests. BlockingGetRate will clean vector.
      * @return The success rate string.
      */
@@ -429,35 +396,6 @@ private:
             return AccessRecorderKey::DS_ETCD_UNKNOWN;
         }
         return requestMethods[methodName];
-    }
-
-    /**
-     * @brief Reading a plaintext or ciphertext certificate.
-     * @param[in] path Indicates the certificate path to be read.
-     * @param[in] isTextEncrypted Check whether the certificate text is encrypted.
-     * @param[out] value Certificate characters.
-     * @return Status of the call.
-     */
-    static Status ReadText(const std::string &path, SensitiveValue &value, bool isTextEncrypted = true)
-    {
-        std::string textStr;
-        RETURN_IF_NOT_OK(ReadFileToString(path, textStr));
-        Raii cleanStr([&textStr] {
-            while (!textStr.empty()) {
-                textStr.pop_back();
-            }
-        });
-
-        if (isTextEncrypted) {
-            std::unique_ptr<char[]> text;
-            int textSize;
-            RETURN_IF_NOT_OK(SecretManager::Instance()->Decrypt(textStr, text, textSize));
-            value = SensitiveValue(std::move(text), textSize);
-            return Status::OK();
-        }
-
-        value = SensitiveValue(textStr);
-        return Status::OK();
     }
 
     std::string addresses_;
