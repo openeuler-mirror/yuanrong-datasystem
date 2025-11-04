@@ -397,6 +397,8 @@ global:
     tenantSecretKey: ""
     # Request expiration time in seconds, the maximum value is 300s.
     requestExpireTimeS: 300
+    # Skip authentication for worker requests
+    skipAuthenticate: false
     
   # fsGroup configuration
   # All processes of the container are also part of the supplementary group ID.

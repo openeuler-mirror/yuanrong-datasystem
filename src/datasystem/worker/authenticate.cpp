@@ -20,6 +20,8 @@
 
 #include "datasystem/worker/authenticate.h"
 
+DS_DEFINE_bool(skip_authenticate, false, "hack to skip authenticate");
+
 namespace datasystem {
 namespace worker {
 

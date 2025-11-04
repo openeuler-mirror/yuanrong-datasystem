@@ -914,7 +914,6 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     } else {
         exists.resize(objectKeyList.size(), false);
     }
-
     if (!useShmTransfer) {
         for (size_t i = 0; i < objectKeyList.size(); i++) {
             if (!skipCheckExistence && exists[i]) {

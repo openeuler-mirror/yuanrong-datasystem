@@ -506,5 +506,9 @@
     "stream_idle_time_s": {
         "value": "300",
         "description": "stream idle time. default 300s (5 minutes)"
+    },
+    "skip_authenticate": {
+        "value": "false",
+        "description": "Skip authentication for worker requests"
     }
 }

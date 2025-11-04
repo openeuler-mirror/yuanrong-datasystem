@@ -31,8 +31,11 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/worker/client_manager/client_manager.h"
+
+DS_DECLARE_bool(skip_authenticate);
 
 namespace datasystem {
 namespace worker {
@@ -40,10 +43,20 @@ namespace worker {
 Status AuthenticateMessageInternal(std::shared_ptr<AkSkManager> akSkManager, const std::string &reqTenantId,
                                    const std::string &token, std::string &tenantId);
 
+inline Status CheckTenantId(const std::string &reqTenantId)
+{
+    CHECK_FAIL_RETURN_STATUS(reqTenantId.empty(), K_INVALID,
+                             "Don't request worker with tenantId, when enable skip_authenticate ");
+    return Status::OK();
+}
+
 template <typename ReqType>
 Status AuthenticateRequest(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, const std::string &reqTenantId,
                            std::string &tenantId)
 {
+    if (FLAGS_skip_authenticate) {
+        return CheckTenantId(reqTenantId);
+    }
     if (!g_ReqAk.empty() && !g_ReqSignature.empty() && !g_SerializedMessage.Empty()) {
         return worker::AuthenticateMessageInternal(akSkManager, reqTenantId, req.token(), tenantId);
     }
@@ -75,9 +88,12 @@ Status AuthenticateRequest(std::shared_ptr<AkSkManager> akSkManager, const ReqTy
 }
 
 template <typename ReqType>
-Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, ReqType req, std::string &tenantId,
+Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, std::string &tenantId,
                     const std::string &clientId)
 {
+    if (FLAGS_skip_authenticate) {
+        return CheckTenantId(req.tenant_id());
+    }
     Timer timer;
     std::string authTenantId = req.tenant_id();
     auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId);
@@ -92,9 +108,12 @@ Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, ReqType req, std::
 }
 
 template <typename ReqType>
-Status AuthenticateMessage(std::shared_ptr<AkSkManager> akSkManager, ReqType req, const std::string &clientId,
+Status AuthenticateMessage(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, const std::string &clientId,
                            std::string &tenantId)
 {
+    if (FLAGS_skip_authenticate) {
+        return CheckTenantId(req.tenant_id());
+    }
     Timer timer;
     std::string authTenantId = req.tenant_id();
     auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId);
@@ -109,8 +128,11 @@ Status AuthenticateMessage(std::shared_ptr<AkSkManager> akSkManager, ReqType req
 }
 
 template <typename ReqType>
-Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, ReqType req, std::string &tenantId)
+Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, std::string &tenantId)
 {
+    if (FLAGS_skip_authenticate) {
+        return CheckTenantId(req.tenant_id());
+    }
     return !g_ReqAk.empty() && !g_ReqSignature.empty() && !g_SerializedMessage.Empty()
                ? AuthenticateMessage(akSkManager, req, req.client_id(), tenantId)
                : Authenticate(akSkManager, req, tenantId, req.client_id());

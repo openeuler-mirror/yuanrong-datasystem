@@ -135,6 +135,7 @@ spec:
         - -system_secret_key={{ $.Values.global.akSk.systemSecretKey }}
         - -tenant_access_key={{ $.Values.global.akSk.tenantAccessKey }}
         - -tenant_secret_key={{ $.Values.global.akSk.tenantSecretKey }}
+        - -skip_authenticate={{ $.Values.global.akSk.skipAuthenticate }}
         - -request_expire_time_s={{ $.Values.global.akSk.requestExpireTimeS }}
         {{- if eq ($.Values.global.l2Cache.l2CacheType) "obs" }}
         - -obs_access_key={{ $.Values.global.l2Cache.obs.obsAccessKey }}
