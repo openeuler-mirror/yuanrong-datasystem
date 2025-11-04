@@ -20,8 +20,9 @@ readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
                      [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-X on/off] [-e on/off] [-T <thirdparty_versions>]
-                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M \"on|off <urma_mode>\"/off] [-D \"on <ub_url> <ub_sha256>\"/off] 
-                     [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off][-x on/off]
+                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M \"on|off <urma_mode>\"/off]
+                     [-D \"on|off <ub_url> <ub_sha256>\"/off] [-A on/off]
+                     [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
 
 Options:
     -h Output this help and exit.
@@ -58,6 +59,10 @@ Options:
           Command to set up OFED environment:
             ./mlnxofedinstall --without-depcheck --without-fw-update --force
             /etc/init.d/openibd restart
+    -A Build with UCX framework to support RDMA transport, choose from on/off, default: off.
+       Notes for compiling and running with RDMA support:
+       1. An RDMA-capable NIC and its driver must be installed and properly configured.
+       2. The RDMA userspace libraries (libibverbs, librdmacm) from rdma-core must be installed.
 
     For debug code:
     -p Generate perf point logs, choose from: on/off, default: off.
@@ -129,6 +134,7 @@ function init_default_opts() {
   export DOWNLOAD_UB="off"
   export UB_URL=""
   export UB_SHA256=""
+  export BUILD_WITH_RDMA="off"
 
   # For testcase
   export BUILD_TESTCASE="off"
@@ -517,6 +523,7 @@ function build_datasystem()
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
     "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
     "-DURMA_OVER_UB:BOOL=${URMA_OVER_UB}"
+    "-DBUILD_WITH_RDMA:BOOL=${BUILD_WITH_RDMA}"
     )
 
   if [[ "${BUILD_WITH_URMA}" == "on" ]]; then
@@ -605,7 +612,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:B:F:S:P:T:X:R:D:C:M:x:m:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:P:T:X:R:D:C:M:x:m:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -696,6 +703,10 @@ function main() {
 
     D)
       parse_ub_download_options ${OPTARG}
+      ;;
+    A)
+      check_on_off "${OPTARG}" A
+      BUILD_WITH_RDMA="${OPTARG}"
       ;;
     h)
       echo -e "${USAGE}"

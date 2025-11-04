@@ -110,3 +110,9 @@ message UrmaHandshakeReqPb {
 
 message UrmaHandshakeRspPb {
 }
+
+message RdmaHandshakeReqPb {
+}
+
+message RdmaHandshakeRspPb {
+}

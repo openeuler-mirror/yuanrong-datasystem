@@ -476,7 +476,7 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
     endif()
     list(APPEND ARG_CONF_OPTIONS "--prefix=${${LIB_NAME}_ROOT}")
 
-    if (EXISTS ${${_LIB_NAME_LOWER}_SOURCE_DIR}/config)
+    if (EXISTS ${${_LIB_NAME_LOWER}_SOURCE_DIR}/config AND NOT IS_DIRECTORY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/config)
       set(_CONFIG_FILE ${${_LIB_NAME_LOWER}_SOURCE_DIR}/config)
     else()
       set(_CONFIG_FILE ${${_LIB_NAME_LOWER}_SOURCE_DIR}/configure)

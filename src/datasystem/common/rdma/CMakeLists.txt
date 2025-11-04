@@ -19,5 +19,12 @@ if (BUILD_WITH_URMA)
     add_library(common_stub_rdma STATIC ${URMA_STUB_SRCS})
 endif()
 
-add_library(common_rdma STATIC ${URMA_SRCS})
-target_link_libraries(common_rdma PRIVATE ${URMA_DEPEND_LIBS})
+if (BUILD_WITH_RDMA)
+    list(APPEND RDMA_SRCS ucp_manager.cpp)
+    list(APPEND RDMA_DEPEND_LIBS ${UCX_LIBRARIES})
+
+    # TODO: STUB RDMA_STUB_SRCS
+endif()
+
+add_library(common_rdma STATIC ${URMA_SRCS} ${RDMA_SRCS})
+target_link_libraries(common_rdma PRIVATE ${URMA_DEPEND_LIBS} ${RDMA_DEPEND_LIBS})

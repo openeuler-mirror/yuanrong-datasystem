@@ -60,3 +60,6 @@ message UrmaRemoteAddrPb {
   uint64 seg_data_offset = 2;
   HostPortPb request_address = 3;
 }
+
+message RdmaImportSegmentPb {
+}

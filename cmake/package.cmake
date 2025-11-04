@@ -25,7 +25,10 @@ if (BUILD_WITH_URMA)
         list(APPEND RPC_LIB_PATH "${URMA_LIB_LOCATION}/liburma*.so*")
         list(APPEND URMA_LIB_PATH "${URMA_IP_IB_LIB_LOCATION}/liburma_*.so*")
 endif()
-
+if (BUILD_WITH_RDMA)
+        list(APPEND RPC_LIB_PATH "${UCX_LIB_PATH}/libuc*.so*")
+        list(APPEND UCX_LIB_PATH "${UCX_LIB_PATH}/libuc*.so*")
+endif()
 ############################################################
 # Datasystem header files and share libraries.
 ############################################################
@@ -220,6 +223,13 @@ if (BUILD_WITH_URMA)
     )
 endif()
 
+if (BUILD_WITH_RDMA)
+    install_file_pattern(
+        PATH_PATTERN ${UCX_LIB_PATH}
+        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}/rdma
+        PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
+    )
+endif()
 ############################################################
 # Datasystem deploy scripts generate zone.
 ############################################################

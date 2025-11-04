@@ -76,6 +76,21 @@ bool ValidateUrmaMode(const char *flagName, const std::string &value)
     return true;
 #endif
 }
+
+bool ValidateEnableRdma(const char *flagName, bool value)
+{
+    (void)flagName;
+#ifdef USE_RDMA
+    (void)value;
+    return true;
+#else
+    if (value) {
+        LOG(ERROR) << FormatString("Worker not build with UCX RDMA framework, but %s set to true", flagName);
+        return false;
+    }
+    return true;
+#endif
+}
 }  // namespace
 
 DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to worker data transfer, default false.");
@@ -88,3 +103,8 @@ DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(urma_event_mode, false, "Uses interrupt mode to poll completion events.");
 DS_DEFINE_bool(enable_worker_worker_batch_get, false, "Enable worker->worker OC batch get, default false.");
+
+DS_DEFINE_bool(enable_rdma, false, "Option to turn on rdma for OC worker to worker data transfer, default false.");
+DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
+DS_DEFINE_bool(rdma_register_whole_arena, true,
+               "Register the whole arena as segment during init, otherwise, register each object as a segment.");
