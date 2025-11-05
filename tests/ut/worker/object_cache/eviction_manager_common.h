@@ -30,7 +30,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/object_cache/safe_table.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"

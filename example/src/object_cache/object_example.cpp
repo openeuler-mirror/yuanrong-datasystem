@@ -20,7 +20,7 @@
 
 #include <iostream>
 
-#include "datasystem/object_cache.h"
+#include "datasystem/object_client.h"
 
 using datasystem::Buffer;
 using datasystem::ConnectOptions;

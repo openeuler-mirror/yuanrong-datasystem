@@ -20,7 +20,7 @@
 
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"

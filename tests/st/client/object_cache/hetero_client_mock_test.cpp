@@ -29,7 +29,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/client/object_cache/client_worker_api.h"
-#include "datasystem/hetero_cache/hetero_client.h"
+#include "datasystem/hetero_client.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 

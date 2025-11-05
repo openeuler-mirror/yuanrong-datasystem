@@ -1,5 +1,7 @@
 include(FetchContent)
 
+set(DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+
 set(THIRDPARTY_SAFE_FLAGS "-fPIC -D_FORTIFY_SOURCE=2 -O2 -fstack-protector-strong -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,relro,-z,noexecstack,-z,now ${EXT_FLAGS}")
 
 if (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "aarch64" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "9.1.0")

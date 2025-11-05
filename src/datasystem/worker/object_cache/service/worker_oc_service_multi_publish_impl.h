@@ -23,7 +23,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/utils/status.h"

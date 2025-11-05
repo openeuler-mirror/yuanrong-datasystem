@@ -18,7 +18,7 @@
  * Description: Data system Object Cache Client management.
  */
 
-#include "datasystem/hetero_cache/hetero_client.h"
+#include "datasystem/hetero_client.h"
 
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/object_client_impl.h"

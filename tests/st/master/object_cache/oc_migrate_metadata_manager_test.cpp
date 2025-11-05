@@ -41,7 +41,7 @@
 #include "datasystem/protos/generic_service.pb.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"

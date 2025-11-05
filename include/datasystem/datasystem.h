@@ -23,9 +23,9 @@
 
 #include <memory>
 
-#include "datasystem/hetero_cache/hetero_client.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/hetero_client.h"
+#include "datasystem/object_client.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

@@ -6,7 +6,6 @@ else()
 endif()
 set(spdlog_SHA256 "a0a22ed8e4932cf5f7abc354fc96d20217a8b45471e732d5e672cc01979fe588")
 
-set(spdlog_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(spdlog_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(spdlog_LINK_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
@@ -21,7 +20,6 @@ add_thirdparty_lib(SPDLOG
     SHA256 ${spdlog_SHA256}
     FAKE_SHA256 ${spdlog_FAKE_SHA256}
     VERSION ${spdlog_VERSION}
-    C_FLAGS ${spdlog_C_FLAGS}
     CXX_FLAGS ${spdlog_CXX_FLAGS}
     LINK_FLAGS ${spdlog_LINK_FLAGS}
     CONF_OPTIONS ${spdlog_CMAKE_OPTIONS}

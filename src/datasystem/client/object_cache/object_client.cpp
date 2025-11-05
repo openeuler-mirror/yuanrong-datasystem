@@ -18,7 +18,7 @@
  * Description: Data system Object Cache Client management.
  */
 
-#include "datasystem/object_cache/object_client.h"
+#include "datasystem/object_client.h"
 
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/access_recorder.h"

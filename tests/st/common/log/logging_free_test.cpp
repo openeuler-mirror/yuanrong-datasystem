@@ -25,7 +25,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/common/util/wait_post.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 
 namespace datasystem {
 namespace st {

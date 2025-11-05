@@ -36,8 +36,8 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object_client.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
  
 DS_DECLARE_string(etcd_address);

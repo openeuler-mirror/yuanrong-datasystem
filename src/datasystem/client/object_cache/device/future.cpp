@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/hetero_cache/future.h"
+#include "datasystem/hetero/future.h"
 #include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/format.h"

@@ -18,7 +18,7 @@
  * Description: Test the behavior after worker timeout.
  */
 
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 #include <string>
 #include <vector>
 #include <gtest/gtest.h>

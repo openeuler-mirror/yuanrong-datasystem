@@ -22,7 +22,7 @@
 
 #include <pybind11/numpy.h>
 
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/access_recorder.h"

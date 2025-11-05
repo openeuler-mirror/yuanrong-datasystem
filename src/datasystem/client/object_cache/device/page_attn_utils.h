@@ -22,7 +22,7 @@
 
 #include <algorithm>
 
-#include "datasystem/hetero_cache/device_common.h"
+#include "datasystem/hetero/device_common.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

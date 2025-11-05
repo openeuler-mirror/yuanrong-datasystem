@@ -21,7 +21,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CREATE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CREATE_IMPL_H
 
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 

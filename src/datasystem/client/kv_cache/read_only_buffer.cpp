@@ -20,7 +20,7 @@
 #include "datasystem/common/util/status_helper.h"
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/kv_cache/read_only_buffer.h"
+#include "datasystem/kv/read_only_buffer.h"
 
 namespace datasystem {
 int64_t ReadOnlyBuffer::GetSize() const

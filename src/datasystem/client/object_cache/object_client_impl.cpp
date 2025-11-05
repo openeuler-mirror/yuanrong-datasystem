@@ -60,7 +60,7 @@
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"

@@ -31,8 +31,8 @@
 #include <vector>
 
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/hetero_cache/future.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/hetero/future.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

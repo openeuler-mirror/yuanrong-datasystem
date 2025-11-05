@@ -33,7 +33,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"

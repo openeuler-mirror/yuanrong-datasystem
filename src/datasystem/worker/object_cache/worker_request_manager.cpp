@@ -30,7 +30,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"

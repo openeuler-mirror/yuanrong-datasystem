@@ -32,7 +32,7 @@
 #include "datasystem/master/object_cache/device/master_dev_hccl_rootinfo.h"
 #include "datasystem/master/object_cache/device/master_dev_npu_events.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_directory.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"

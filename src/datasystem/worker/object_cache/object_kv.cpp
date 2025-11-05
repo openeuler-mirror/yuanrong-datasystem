@@ -19,7 +19,7 @@
  */
 #include "datasystem/worker/object_cache/object_kv.h"
 
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
 namespace datasystem {

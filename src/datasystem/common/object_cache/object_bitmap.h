@@ -22,7 +22,7 @@
 #define DATASYSTEM_OBJECT_CACHE_OBJECT_INTERFACE_BITMAP_H
 
 #include <bitset>
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/common/util/bitmask_enum.h"
 
 namespace datasystem {

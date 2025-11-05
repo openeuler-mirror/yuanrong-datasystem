@@ -37,8 +37,8 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/random_data.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object_client.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "etcd/api/mvccpb/kv.pb.h"
 

@@ -262,6 +262,8 @@ Status HashRing::InitRing(const std::string &oldValue, std::unique_ptr<std::stri
         // If the reusedUuid is not empty, set the workerPb uuid after the uuid metadata is migrated back.
         if (reusedUuid.empty()) {
             workerPb.set_worker_uuid(workerUuid_);
+        } else {
+            isUpdateNode_ = true;
         }
         workerPb.set_state(WorkerPb::INITIAL);
         (void)newRing.mutable_workers()->insert({ workerAddr_, workerPb });
@@ -1160,6 +1162,7 @@ void HashRing::UpdateLocalState(bool forceUpdate)
 
     auto stateInEtcd = iter->second.state();
     if (stateInEtcd == WorkerPb::ACTIVE) {
+        isUpdateNode_ = false;
         ChangeStateTo(RUNNING);
     } else if (stateInEtcd == WorkerPb::LEAVING) {
         ChangeStateTo(PRE_LEAVING);
@@ -1788,6 +1791,23 @@ Status HashRing::GetRelatedWorkerImpl(const std::string &currWorkerUuid,
     }
     return Status(K_NOT_FOUND, FormatString("The %s node of worker %s not found on the ring.",
                                             (getNextNode ? "next" : "prev"), currWorkerUuid));
+}
+
+bool HashRing::CheckIsLocalNodeIsUpdate()
+{
+    if (!isUpdateNode_.load()) {
+        return false;
+    }
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    auto worker = ringInfo_.workers().find(workerAddr_);
+    if (worker != ringInfo_.workers().end()
+        && ringInfo_.update_worker_map().find(workerAddr_) != ringInfo_.update_worker_map().end()) {
+        if ((worker->second.state() == WorkerPb::INITIAL && worker->second.worker_uuid().empty())
+            || worker->second.state() == WorkerPb::JOINING) {
+            return true;
+        }
+    }
+    return false;
 }
 
 Status HashRing::GetNextWorker(const std::string &currWorkerUuid, std::string &nextWorkerUuid)

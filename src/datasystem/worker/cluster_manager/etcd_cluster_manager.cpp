@@ -1343,6 +1343,12 @@ Status EtcdClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std
     return replicaManager_->GetPrimaryReplicaDbNames(workerUuid, dbNames);
 }
 
+bool EtcdClusterManager::CheckIsLocalNodeIsUpdate(std::string &localAddr)
+{
+    localAddr = workerAddress_.ToString();
+    return hashRing_->CheckIsLocalNodeIsUpdate();
+}
+
 std::set<std::string> EtcdClusterManager::GetNodesInTable()
 {
     std::set<std::string> nodes;

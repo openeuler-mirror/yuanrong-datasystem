@@ -18,7 +18,7 @@
  * Description: State client evict tests.
  */
 
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 
 #include <unistd.h>
 #include <atomic>
@@ -41,7 +41,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"

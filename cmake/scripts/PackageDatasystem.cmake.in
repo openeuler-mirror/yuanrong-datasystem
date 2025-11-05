@@ -24,9 +24,12 @@ foreach(FILE ${FILE_LIST})
 endforeach()
 
 find_program(CMAKE_STRIP NAMES strip)
-file(GLOB SO_FILES "${DATASYSTEM_WHEEL_PATH}/lib/*.so*")
+file(GLOB SO_FILES "${DATASYSTEM_WHEEL_PATH}/lib/*.so*" EXCLUDE REGEX "libacl_plugin.so")
+#libacl_plugin.so need check sha256, can not strip
 foreach(SO_FILE ${SO_FILES})
-    execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
+    if (NOT SO_FILE MATCHES "libacl_plugin.so$")
+        execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
+    endif()
 endforeach()
 
 # Run python setup.py bdist_whell to generate origin wheel file.

@@ -59,7 +59,7 @@
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/worker_object.pb.h"

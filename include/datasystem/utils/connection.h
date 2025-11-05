@@ -20,7 +20,7 @@
 
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 
 namespace datasystem {
 struct ConnectOptions {

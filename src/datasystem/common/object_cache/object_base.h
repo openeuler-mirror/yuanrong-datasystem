@@ -30,8 +30,8 @@
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object_client.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 

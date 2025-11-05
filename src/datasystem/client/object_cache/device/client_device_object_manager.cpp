@@ -36,7 +36,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

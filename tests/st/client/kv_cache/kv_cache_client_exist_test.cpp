@@ -29,8 +29,8 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
-#include "datasystem/kv_cache/read_only_buffer.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv/read_only_buffer.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 
