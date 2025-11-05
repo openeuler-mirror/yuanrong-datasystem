@@ -17,16 +17,17 @@
 /**
  * Description: Data system state cache client management.
  */
-#ifndef DATASYSTEM_KV_CACHE_KV_CLIENT_H
-#define DATASYSTEM_KV_CACHE_KV_CLIENT_H
+#ifndef DATASYSTEM_KV_CLIENT_H
+#define DATASYSTEM_KV_CLIENT_H
 
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
-#include "datasystem/object_cache/buffer.h"
-#include "datasystem/object_cache/object_enum.h"
-#include "datasystem/kv_cache/read_only_buffer.h"
+#include "datasystem/context/context.h"
+#include "datasystem/object/buffer.h"
+#include "datasystem/object/object_enum.h"
+#include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"

@@ -18,8 +18,11 @@ file(COPY ${PYTHON_LIBPATH}/
 
 find_program(CMAKE_STRIP NAMES strip)
 file(GLOB SO_FILES "${PYTHON_PACKAGE_LIBPATH}/lib/*.so*")
+#libacl_plugin.so need check sha256, can not strip
 foreach(SO_FILE ${SO_FILES})
-    execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
+    if (NOT SO_FILE MATCHES "libacl_plugin.so$")
+        execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
+    endif()
 endforeach()
 
 file(RENAME ${PYTHON_PACKAGE_LIBPATH}/setup.py ${PYTHON_PACKAGE_PATH}/setup.py)

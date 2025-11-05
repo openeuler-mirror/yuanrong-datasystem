@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.14.1)
 
+# When downloading and extracting files from a URL, the timestamp is handled by using the current system time as the timestamp for the extracted files.
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+
+# Enable _ROOT variable support (e.g., ZLIB_ROOT, etc.)
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+
 project(Datasystem DESCRIPTION "DataSystem for Distributed Data Cache" LANGUAGES CXX C)
 
 # Version specified

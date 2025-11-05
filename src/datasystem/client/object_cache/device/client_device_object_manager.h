@@ -31,7 +31,7 @@
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
-#include "datasystem/object_cache/object_client.h"
+#include "datasystem/object_client.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

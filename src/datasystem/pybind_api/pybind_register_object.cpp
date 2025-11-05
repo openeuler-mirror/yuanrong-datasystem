@@ -31,9 +31,9 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/object_cache/buffer.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/buffer.h"
+#include "datasystem/object_client.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/pybind_api/pybind_register.h"
 #include "datasystem/utils/status.h"
 

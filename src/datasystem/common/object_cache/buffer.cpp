@@ -18,7 +18,7 @@
  * Description: This file is used to read and write data and publish data to the server.
  */
 
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 
 #include <securec.h>
 

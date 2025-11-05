@@ -19,8 +19,8 @@
  * Description: Definition of heterogeneous device tensor description structure.
  */
 
-#ifndef DATASYSTEM_HETERO_CACHE_DEVICE_COMMON_H
-#define DATASYSTEM_HETERO_CACHE_DEVICE_COMMON_H
+#ifndef DATASYSTEM_HETERO_DEVICE_COMMON_H
+#define DATASYSTEM_HETERO_DEVICE_COMMON_H
 
 #include <string>
 #include <vector>

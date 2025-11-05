@@ -24,7 +24,7 @@
 #include <memory>
 #include <vector>
 
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 
 namespace datasystem {

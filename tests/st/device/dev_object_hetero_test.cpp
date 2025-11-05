@@ -44,7 +44,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/hetero_cache/hetero_client.h"
+#include "datasystem/hetero_client.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "device/dev_test_helper.h"
 

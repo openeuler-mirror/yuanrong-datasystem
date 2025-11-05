@@ -80,33 +80,109 @@ MULTI_BUILD_PATH="$(realpath "${BUILD_PATH}/multi_build")"
 BUILD_THREAD_NUM=$2
 CMAKE_OPTIONS=("${@:3}")
 DEPENDENCY_DIR="${MULTI_BUILD_PATH}"/dependency
+TIME_DIR="${MULTI_BUILD_PATH}"/timing
+PROGRESS_DIR="${MULTI_BUILD_PATH}"/progress
 
-on_exit() {
-    local exit_status=$?
-    if [ $exit_status -eq 0 ]; then
-        echo -e "---- Compilie ${cmake_file%%.*} successfully ----"
-    else
-        echo -e "---- Compilie ${cmake_file%%.*} failed, see ${tmp_compile_dir}/log for more details ----"
-    fi
+# total libs number
+TOTAL_LIBS=$((${#CMAKE_FILES_L0[@]} + ${#CMAKE_FILES_L1[@]}))
+
+function log() {
+  local progress=$(get_progress_percent)
+  printf "[%3d%%] %s\n" "$progress" "$1"
+}
+
+function get_progress_percent() {
+  local completed_count=$(ls -1 "${PROGRESS_DIR}" 2>/dev/null | wc -l)
+  local percent=$((completed_count * 100 / TOTAL_LIBS))
+  echo "$percent"
+}
+
+function on_exit() {
+  local exit_status=$?
+  local lib_name="${cmake_file%%.*}"
+  local end_time=$(date +%s)
+  local total_duration=$((end_time - overall_start_time))
+  
+  if [ $exit_status -eq 0 ]; then
+      echo "$total_duration" > "${TIME_DIR}/${lib_name}.time"
+      touch "${PROGRESS_DIR}/${lib_name}.complete"
+      log "$lib_name build success - ${total_duration}s"
+  else
+      log "$lib_name build failed!!! see ${tmp_compile_dir}/log for details"
+  fi
+}
+
+function wait_for_dependencies() {
+  local lib_name=$1
+  local dependencies=$2
+  local lib_dependencies=()
+
+  if [ -n "$dependencies" ]; then
+    lib_dependencies_str=$(echo "$dependencies" | tr ':' ' ')
+    IFS=' ' read -r -a lib_dependencies <<< "${lib_dependencies_str}"
+
+    log "$lib_name is still waiting for: ${lib_dependencies_str}"
+    
+    local timeout=1800
+    local wait_start_time=$(date +%s)
+    
+    for ((i=1; i<=timeout; i++)); do
+        all_files_created=true
+        missing_deps=()
+        for file in "${lib_dependencies[@]}"; do
+            if [ ! -f "${DEPENDENCY_DIR}/${file}.complete" ]; then
+                all_files_created=false
+                missing_deps+=("$file")
+            fi
+        done
+
+        if [ "$all_files_created" = true ]; then
+            local current_time=$(date +%s)
+            local wait_duration=$((current_time - wait_start_time))
+            log "$lib_name all dependencies ready (waited ${wait_duration}s)"
+            return 0
+        fi
+
+        # 每30秒显示一次等待状态
+        if [ $((i % 30)) -eq 0 ]; then
+            local current_time=$(date +%s)
+            local elapsed=$((current_time - wait_start_time))
+            log "$lib_name still waiting for: ${missing_deps[*]} (${elapsed}s elapsed)"
+        fi
+        sleep 1
+    done
+    
+    log_failed "$lib_name timeout waiting for dependencies"
+    return 1
+  fi
+  return 0
 }
 
 function main() {
-  echo -e "---- Start compiling third-party libraries in parallel ----"
+  log "Start compiling thirdparty libraries in parallel"
   local start_time_s
   local end_time_s
   local sumTime
   start_time_s=$(date +%s)
   mkdir -p ${DEPENDENCY_DIR}
+  mkdir -p ${TIME_DIR}
+  mkdir -p ${PROGRESS_DIR}
+  
+  log "Total libraries to compile: $TOTAL_LIBS"
 
+  # 编译 L0 级别的库（无依赖）
+  log "Building independent libraries (L0)"
   for cmake_file in "${CMAKE_FILES_L0[@]}";
   do
     tmp_compile_dir="${MULTI_BUILD_PATH}/${cmake_file%%.*}"
     mkdir -p "${tmp_compile_dir}"
     (
-        echo -e "---- Start compiling ${cmake_file%%.*} ----"
-        trap on_exit EXIT
-        cd "${tmp_compile_dir}"
-        cat > "CMakeLists.txt" << EOF
+      lib_name="${cmake_file%%.*}"
+      overall_start_time=$(date +%s)
+      log "Building $lib_name..."
+      trap on_exit EXIT
+      cd "${tmp_compile_dir}"
+      cat > "CMakeLists.txt" << EOF
 cmake_minimum_required(VERSION 3.14.1)
 set(CMAKE_SOURCE_DIR ${DATASYSTEM_HOME})
 set(CMAKE_BINARY_DIR ${BUILD_PATH})
@@ -115,55 +191,43 @@ include(${DATASYSTEM_HOME}/cmake/options.cmake)
 include(${DATASYSTEM_HOME}/cmake/util.cmake)
 include(${DATASYSTEM_HOME}/cmake/external_libs/${cmake_file})
 EOF
-        mkdir -p build && cd build
-        cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
-        cmake --build . >> "${tmp_compile_dir}/log" 2>&1
-        touch ${DEPENDENCY_DIR}/${cmake_file%%.*}.complete
+      mkdir -p build && cd build
+      cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
+      cmake --build . >> "${tmp_compile_dir}/log" 2>&1
+      touch ${DEPENDENCY_DIR}/${lib_name}.complete
     ) &
   done
 
   touch ${MULTI_BUILD_PATH}/L1_ENV
+  
+  # 编译 L1 级别的库（有依赖）
+  log "Building dependent libraries (L1)"
   for cmake_file in "${CMAKE_FILES_L1[@]}";
   do
     tmp_compile_dir="${MULTI_BUILD_PATH}/${cmake_file%%.*}"
     mkdir -p "${tmp_compile_dir}"
-    for dep in "${DEPENDENCIES[@]}";
-    do
-      local lib_dependencies=()
-      dependencies=$(echo "${dep}" | grep "${cmake_file%%.*}:" | cut -d':' -f2-)
-        if [ -z "${dependencies}" ]; then
-          continue
-        else 
-          break
-        fi
-      done
+    
+    # 查找依赖关系
+    dependencies=""
+    for dep in "${DEPENDENCIES[@]}"; do
+      if [[ "$dep" == "${cmake_file%%.*}:"* ]]; then
+        dependencies=$(echo "${dep}" | cut -d':' -f2-)
+        break
+      fi
+    done
+
     (
-        lib_dependencies_str=$(echo ${dependencies} | tr ':' ' ')
-        IFS=' ' read -r -a lib_dependencies <<< "${lib_dependencies_str}"
-        timeout=1800
+      lib_name="${cmake_file%%.*}"
+      overall_start_time=$(date +%s)
+      # 等待依赖项完成
+      if ! wait_for_dependencies "$lib_name" "$dependencies"; then
+          exit 1
+      fi
 
-        echo -e "---- Prepare compiling ${cmake_file%%.*} ----"
-        for ((i=1; i<=timeout; i++)); do
-            all_files_created=true
-            for file in "${lib_dependencies[@]}"; do
-                if [ ! -f "${DEPENDENCY_DIR}/${file}.complete" ]; then
-                    echo "Waiting for file $file to be created... (Attempt $i of $timeout)"
-                    all_files_created=false
-                    break
-                fi
-            done
-
-            if [ "$all_files_created" = true ]; then
-                echo "All files have been created."
-                break
-            fi
-
-            sleep 1  # 每隔1秒检查一次
-        done
-        echo -e "---- Start compiling ${cmake_file%%.*} ----"
-        trap on_exit EXIT
-        cd "${tmp_compile_dir}"
-        cat > "CMakeLists.txt" << EOF
+      log "Building $lib_name..."
+      trap on_exit EXIT
+      cd "${tmp_compile_dir}"
+      cat > "CMakeLists.txt" << EOF
 cmake_minimum_required(VERSION 3.14.1)
 set(CMAKE_SOURCE_DIR ${DATASYSTEM_HOME})
 set(CMAKE_BINARY_DIR ${BUILD_PATH})
@@ -177,14 +241,15 @@ EOF
         mkdir -p build && cd build
         cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
         cmake --build . -j "${BUILD_THREAD_NUM}" >> "${tmp_compile_dir}/log" 2>&1
-        touch ${DEPENDENCY_DIR}/${cmake_file%%.*}.complete
+        touch ${DEPENDENCY_DIR}/${lib_name}.complete
     ) &
   done
   wait
 
   end_time_s=$(date +%s)
   sumTime=$(($end_time_s - $start_time_s))
-  echo -e "---- Finish compiling third-party libraries in parallel. Total use time:$sumTime seconds ----"
+
+  log "Compile thirdparty libraries success, total wall time: ${sumTime}s"
   exit 0
 }
 

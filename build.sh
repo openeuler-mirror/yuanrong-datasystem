@@ -296,9 +296,7 @@ function build_example() {
 
   cmake "${DATASYSTEM_DIR}/example" \
     -DCMAKE_PREFIX_PATH="${prefix_path}" \
-    -DBUILD_HETERO="${BUILD_HETERO}" \
-    -DBUILD_WITH_URMA="${BUILD_WITH_URMA}" \
-    -DENABLE_PERF=${ENABLE_PERF} || go_die "---- build example CMake project failed!"
+    -DBUILD_HETERO="${BUILD_HETERO}" || go_die "---- build example CMake project failed!"
   make || go_die "---- example make failed!"
 
   echo -e "---- build example success!"
@@ -489,12 +487,18 @@ function build_datasystem()
     "-DBUILD_THREAD_NUM:STRING=${BUILD_THREAD_NUM}"
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
-    "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
-    "-DDOWNLOAD_UB:BOOL=${DOWNLOAD_UB}"
-    "-DUB_URL:STRING=${UB_URL}"
-    "-DUB_SHA256:STRING=${UB_SHA256}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
+    "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
     )
+
+  if [[ "${BUILD_WITH_URMA}" == "on" ]]; then
+    cmake_options+=(
+      "-DDOWNLOAD_UB:BOOL=${DOWNLOAD_UB}"
+      "-DUB_URL:STRING=${UB_URL}"
+      "-DUB_SHA256:STRING=${UB_SHA256}"
+    )
+  fi
+
   if is_on "${PACKAGE_PYTHON}" && [ -n "${PYTHON_ROOT_DIR}" ]; then
     echo -e "-- Specify python root path: ${PYTHON_ROOT_DIR}"
     cmake_options=("${cmake_options[@]}" "-DPython3_ROOT_DIR:PATH=${PYTHON_ROOT_DIR}")

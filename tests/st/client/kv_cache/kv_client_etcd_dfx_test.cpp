@@ -28,7 +28,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

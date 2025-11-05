@@ -29,8 +29,8 @@
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/kv_cache/read_only_buffer.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv/read_only_buffer.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_bool(alsologtostderr);

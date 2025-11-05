@@ -33,7 +33,7 @@
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"

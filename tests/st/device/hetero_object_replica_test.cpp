@@ -20,8 +20,8 @@
 
 #include <gtest/gtest.h>
 #include "common.h"
-#include "datasystem/kv_cache/kv_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/kv_client.h"
+#include "datasystem/object/object_enum.h"
 #include "device/dev_test_helper.h"
 #include "gmock/gmock.h"
 

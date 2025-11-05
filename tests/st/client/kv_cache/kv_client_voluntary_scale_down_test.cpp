@@ -22,8 +22,8 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/object_cache/object_enum.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/object/object_enum.h"
+#include "datasystem/kv_client.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -372,6 +372,37 @@ TEST_F(KVClientVoluntaryScaleDownTest, NormalObjectConsecutiveVoluntaryScaleDown
     AssertWorkerNum(2);  // The number of worker is 2
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+}
+
+TEST_F(KVClientVoluntaryScaleDownTest, StartKeyWithWorkerUuid)
+{
+    auto key = client0_->GenerateKey();
+    std::string data = "aaaaaaaaaa";
+    DS_ASSERT_OK(client2_->Set(key, data));
+    for (size_t i = 1; i < DEFAULT_WORKER_NUM; i++) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "MigrateByRanges.Delay", "sleep(3000)"));
+    }
+    VoluntaryScaleDownInject(0);
+    InitTestKVClient(1, client1_, 10000);  // Init client1 to worker 1 with 10000ms timeout
+    bool stop = false;
+    std::thread t1([&stop, &key, &data, this] {
+        while (!stop) {
+            ReadParam readParam{ .key = key, .offset = 0, .size = data.size() - 1 };
+            std::vector<ReadParam> params = { readParam };
+            std::vector<Optional<ReadOnlyBuffer>> buffers;
+            DS_ASSERT_OK(client1_->Read(params, buffers));
+            Optional<ReadOnlyBuffer> buffer = buffers.back();
+            std::string getValue(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+            ASSERT_EQ(data.substr(0, data.size() - 1), getValue);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // wait for 100 ms
+        }
+    });
+    WaitAllNodesJoinIntoHashRing(3);  // The number of worker is 3
+    AssertWorkerNum(3);  // The number of worker is 3
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    WaitAllNodesJoinIntoHashRing(DEFAULT_WORKER_NUM);
+    stop = true;
+    t1.join();
 }
 
 TEST_F(KVClientVoluntaryScaleDownTest, LEVEL2_TestNotRemoveFailedWorkerWhenRestart)

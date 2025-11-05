@@ -94,8 +94,8 @@ private:
      * (Multi threads may check countRef_ is 0 and try to call erase)
      * It can be seen that a value is effectively erasable only when the delRef_ count goes down to 0.
      */
-    mutable std::atomic_int32_t delRef_;
-    mutable std::atomic_int32_t countRef_;
+    mutable std::atomic_int32_t delRef_{ 0 };
+    mutable std::atomic_int32_t countRef_{ 0 };
     std::string value_;
     size_t hash_;
 };

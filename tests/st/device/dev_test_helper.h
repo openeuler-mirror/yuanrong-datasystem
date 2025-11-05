@@ -41,11 +41,11 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object_client.h"
+#include "datasystem/object/object_enum.h"
 #include "mock/ascend_device_manager_mock.cpp"
 
 namespace datasystem {

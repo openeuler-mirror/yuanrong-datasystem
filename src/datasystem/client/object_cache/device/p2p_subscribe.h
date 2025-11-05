@@ -44,8 +44,8 @@
 #include "datasystem/common/util/queue/blocking_queue.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
-#include "datasystem/hetero_cache/future.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/hetero/future.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

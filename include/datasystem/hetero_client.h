@@ -18,15 +18,15 @@
  * Description: Data system Hetero cache client management.
  */
 
-#ifndef DATASYSTEM_HETERO_CACHE_HETERO_CLIENT_H
-#define DATASYSTEM_HETERO_CACHE_HETERO_CLIENT_H
+#ifndef DATASYSTEM_HETERO_CLIENT_H
+#define DATASYSTEM_HETERO_CLIENT_H
 
 #include <future>
 #include <vector>
 
-#include "datasystem/hetero_cache/device_common.h"
-#include "datasystem/hetero_cache/future.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/hetero/device_common.h"
+#include "datasystem/hetero/future.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 

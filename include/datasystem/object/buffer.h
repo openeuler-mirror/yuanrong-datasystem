@@ -18,8 +18,8 @@
  * Description: This file is used to read and write data and publish data to the server.
  */
 
-#ifndef DATASYSTEM_OBJECT_CACHE_BUFFER_H
-#define DATASYSTEM_OBJECT_CACHE_BUFFER_H
+#ifndef DATASYSTEM_OBJECT_BUFFER_H
+#define DATASYSTEM_OBJECT_BUFFER_H
 
 #include <cstdint>
 #include <cstring>

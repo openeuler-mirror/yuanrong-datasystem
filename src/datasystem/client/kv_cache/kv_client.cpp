@@ -17,7 +17,7 @@
 /**
  * Description: Data system State Cache Client management.
  */
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 
 #include <climits>
 #include <cstddef>
@@ -34,7 +34,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/kv_cache/read_only_buffer.h"
+#include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

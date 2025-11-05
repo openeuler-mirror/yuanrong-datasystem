@@ -18,13 +18,13 @@
  * Description: This file is used to read data in the server.
  */
 
-#ifndef DATASYSTEM_KV_CACHE_READ_ONLY_BUFFER_H
-#define DATASYSTEM_KV_CACHE_READ_ONLY_BUFFER_H
+#ifndef DATASYSTEM_KV_READ_ONLY_BUFFER_H
+#define DATASYSTEM_KV_READ_ONLY_BUFFER_H
 
 #include <memory>
 #include <vector>
 
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

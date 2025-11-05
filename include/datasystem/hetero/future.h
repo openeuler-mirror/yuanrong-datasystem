@@ -19,8 +19,8 @@
  * Description: Data system Future class implementation.
  */
 
-#ifndef DATASYSTEM_HETERO_CACHE_FUTURE_H
-#define DATASYSTEM_HETERO_CACHE_FUTURE_H
+#ifndef DATASYSTEM_HETERO_FUTURE_H
+#define DATASYSTEM_HETERO_FUTURE_H
 
 #include <future>
 #include <memory>

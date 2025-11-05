@@ -36,7 +36,7 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"

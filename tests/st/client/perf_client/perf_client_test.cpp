@@ -19,7 +19,7 @@
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/kv_client.h"
 #include "datasystem/perf_client.h"
 
 namespace datasystem {

@@ -34,7 +34,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
-#include "datasystem/object_cache/buffer.h"
+#include "datasystem/object/buffer.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"

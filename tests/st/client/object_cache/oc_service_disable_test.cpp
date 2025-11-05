@@ -19,8 +19,8 @@
  */
 #include "common.h"
 #include "datasystem/common/util/random_data.h"
-#include "datasystem/object_cache/object_client.h"
-#include "datasystem/kv_cache/kv_client.h"
+#include "datasystem/object_client.h"
+#include "datasystem/kv_client.h"
 
 #include <cstdint>
 #include <memory>

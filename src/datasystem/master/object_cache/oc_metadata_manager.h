@@ -39,7 +39,7 @@
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/immutable_string/immutable_string.h"

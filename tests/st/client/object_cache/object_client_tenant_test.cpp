@@ -29,7 +29,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/context/context.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/common/log/log.h"
 #include "oc_client_common.h"
 

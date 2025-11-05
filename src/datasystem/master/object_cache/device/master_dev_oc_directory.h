@@ -33,7 +33,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/util/request_table.h"
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"

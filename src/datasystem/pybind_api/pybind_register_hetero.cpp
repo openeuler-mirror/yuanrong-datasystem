@@ -29,10 +29,10 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/hetero_cache/hetero_client.h"
-#include "datasystem/hetero_cache/future.h"
-#include "datasystem/kv_cache/kv_client.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/hetero_client.h"
+#include "datasystem/hetero/future.h"
+#include "datasystem/kv_client.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/pybind_api/pybind_register.h"
 
 using datasystem::ConnectOptions;

@@ -10,8 +10,6 @@ set(curl_CMAKE_OPTIONS
     -DCMAKE_CXX_STANDARD=11
     -DOPENSSL_ROOT_DIR:PATH=${OpenSSL_ROOT})
 
-set(curl_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
-
 set(curl_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 if (curl_VERSION STREQUAL "8.8.0")
@@ -33,7 +31,6 @@ add_thirdparty_lib(CURL
         FAKE_SHA256 ${curl_FAKE_SHA256}
         VERSION ${curl_VERSION}
         CONF_OPTIONS ${curl_CMAKE_OPTIONS}
-        CXX_FLAGS ${curl_CXX_FLAGS}
         C_FLAGS ${curl_C_FLAGS}
         PATCHES ${curl_PATCHES})
 

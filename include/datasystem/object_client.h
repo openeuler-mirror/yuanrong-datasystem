@@ -18,8 +18,8 @@
  * Description: Data system object cache client management.
  */
 
-#ifndef DATASYSTEM_OBJECT_CACHE_OBJECT_CLIENT_H
-#define DATASYSTEM_OBJECT_CACHE_OBJECT_CLIENT_H
+#ifndef DATASYSTEM_OBJECT_CLIENT_H
+#define DATASYSTEM_OBJECT_CLIENT_H
 
 #include <functional>
 #include <iostream>
@@ -29,11 +29,13 @@
 #include <unordered_set>
 #include <vector>
 
-#include "datasystem/object_cache/buffer.h"
-#include "datasystem/object_cache/object_enum.h"
+#include "datasystem/context/context.h"
+#include "datasystem/object/buffer.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/utils/string_view.h"
 
 namespace datasystem {
 namespace object_cache {
