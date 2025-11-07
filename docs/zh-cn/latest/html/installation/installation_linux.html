@@ -1,0 +1,913 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>安装 &#8212; openYuanrong datasystem  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=7308451e" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=9eb32ce0"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'installation/installation_linux';</script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="部署" href="../deployment/index.html" />
+    <link rel="prev" title="入门" href="../getting-started/getting_started.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo-small.png" class="logo__image only-light" alt="openYuanrong datasystem  documentation - Home"/>
+    <script>document.write(`<img src="../_static/logo-small.png" class="logo__image only-dark" alt="openYuanrong datasystem  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/getting_started.html">入门</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">安装</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/hetero.html">异构对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/kv.html">KV</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/object.html">Object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/api/index.html">API</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/python/index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.html">datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.init.html">datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.hetero.html">datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.kv.html">datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.object.html">datasystem.DsClient.object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.html">datasystem.DsTensorClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.init.html">datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mset_d2h.html">datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mget_h2d.html">datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_mset_d2h.html">datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_mget_h2d.html">datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.delete.html">datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_send.html">datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_recv.html">datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_mset.html">datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_mget.html">datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_local_delete.html">datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_delete.html">datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_dev_delete.html">datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.html">datasystem.hetero_client.HeteroClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.init.html">datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.mget_h2d.html">datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.mset_d2h.html">datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mget_h2d.html">datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mset_d2h.html">datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.delete.html">datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_publish.html">datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_subscribe.html">datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_mset.html">datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_mget.html">datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_local_delete.html">datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_delete.html">datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.set_dev_ptr.html">datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.set_size.html">datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.html">datasystem.hetero_client.DeviceBlobList</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.append_blob.html">datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.get_blob_list.html">datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Future.html">datasystem.hetero_client.Future</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Future.get.html">datasystem.hetero_client.Future.get</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.MetaInfo.html">datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.html">datasystem.kv_client.KVClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.init.html">datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.set.html">datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.set_value.html">datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.mset.html">datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.msettx.html">datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.get_read_only_buffers.html">datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.get.html">datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.read.html">datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.delete.html">datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.generate_key.html">datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.exist.html">datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.expire.html">datasystem.kv_client.KVClient.expire</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.html">datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.rlatch.html">datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.SetParam.html">datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadParam.html">datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.html">datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.init.html">datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.create.html">datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.put.html">datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.get.html">datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.g_increase_ref.html">datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.g_decrease_ref.html">datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.query_global_ref_num.html">datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.generate_object_key.html">datasystem.object_client.ObjectClient.generate_object_key</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.html">datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.wlatch.html">datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.unwlatch.html">datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.rlatch.html">datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.unrlatch.html">datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.mutable_data.html">datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.immutable_data.html">datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.memory_copy.html">datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.publish.html">datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.seal.html">datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.invalidate_buffer.html">datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.get_size.html">datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/installation/installation_linux.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>安装</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pypi">安装 PyPI 正式发布版本（推荐）</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">环境准备</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">基础依赖</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#python">安装 Python</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#cann">安装 CANN</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">源码编译额外依赖</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#wheelsetuptools">安装wheel和setuptools</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">安装依赖库</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nightly">安装 nightly 版本</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">安装</a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="overview-installation">
+<span id="id1"></span><h1>安装<a class="headerlink" href="#overview-installation" title="Link to this heading">#</a></h1>
+<!-- TOC -->
+<ul class="simple">
+<li><p><a class="reference internal" href="#pypi">安装 PyPI 正式发布版本（推荐）</a></p></li>
+<li><p><a class="reference internal" href="#id2">环境准备</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id3">基础依赖</a></p></li>
+<li><p><a class="reference internal" href="#id4">源码编译额外依赖</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#nightly">安装 nightly 版本</a></p></li>
+<li><p><a class="reference internal" href="#id6">源码编译安装</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id7">下载源码</a></p></li>
+<li><p><a class="reference internal" href="#id8">编译</a></p></li>
+<li><p><a class="reference internal" href="#id1">安装</a></p></li>
+</ul>
+</li>
+</ul>
+<!-- /TOC -->
+<section id="pypi">
+<h2>安装 PyPI 正式发布版本（推荐）<a class="headerlink" href="#pypi" title="Link to this heading">#</a></h2>
+<p>openYuanrong datasystem 在 PyPI 提供两个包，根据实际需求选一条命令安装即可：</p>
+<p>安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
+</pre></div>
+</div>
+<p>仅安装 openYuanrong datasystem Python SDK（不包含C++ SDK以及命令行工具）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem-sdk
+</pre></div>
+</div>
+<blockquote>
+<div><p>如果在安装过程中遇到如 <code class="docutils literal notranslate"><span class="pre">pip:</span> <span class="pre">command</span> <span class="pre">not</span> <span class="pre">found</span></code> 等报错，请参照<a class="reference internal" href="#id2">环境准备</a>章节安装相关依赖</p>
+</div></blockquote>
+</section>
+<section id="id2">
+<h2>环境准备<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<p>本节列出两类依赖：</p>
+<ul class="simple">
+<li><p><strong>基础依赖</strong>：运行和编译<strong>都必须</strong>满足</p></li>
+<li><p><strong>编译依赖</strong>：仅源码编译时需要，在基础依赖之上<strong>追加</strong></p></li>
+</ul>
+<section id="id3">
+<h3>基础依赖<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>软件名称</p></th>
+<th class="head"><p>版本</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>openEuler</p></td>
+<td><p>22.03</p></td>
+<td><p>运行/编译openYuanrong datasystem的操作系统</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#python">Python</a></p></td>
+<td><p>3.9-3.11</p></td>
+<td><p>openYuanrong datasystem的运行/编译依赖Python环境</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#cann">CANN</a></p></td>
+<td><p>8.2.RC1</p></td>
+<td><p>运行/编译异构相关特性的依赖库</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<section id="python">
+<h4>安装 Python<a class="headerlink" href="#python" title="Link to this heading">#</a></h4>
+<details>
+<summary>Python安装步骤（点我展开）</summary>
+<p><a class="reference external" href="https://www.python.org/">Python</a>可通过Conda进行安装。</p>
+<p>安装Miniconda：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/tmp
+curl<span class="w"> </span>-O<span class="w"> </span>https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-py311_23.10.0-1-Linux-<span class="k">$(</span>arch<span class="k">)</span>.sh
+bash<span class="w"> </span>Miniconda3-py311_23.10.0-1-Linux-<span class="k">$(</span>arch<span class="k">)</span>.sh<span class="w"> </span>-b
+<span class="nb">cd</span><span class="w"> </span>-
+.<span class="w"> </span>~/miniconda3/etc/profile.d/conda.sh
+conda<span class="w"> </span>init<span class="w"> </span>bash
+</pre></div>
+</div>
+<p>执行完上述命令后，重启shell，conda会在shell初始化完成后准备就绪。</p>
+<p>安装完成后，可以为Conda设置清华源加速下载，参考<a class="reference external" href="https://mirrors.tuna.tsinghua.edu.cn/help/anaconda/">此处</a>。</p>
+<p>创建虚拟环境，以Python 3.11.4为例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>py311<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11.4<span class="w"> </span>-y
+conda<span class="w"> </span>activate<span class="w"> </span>py311
+</pre></div>
+</div>
+<p>可以通过以下命令查看Python版本。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>--version
+</pre></div>
+</div>
+</details>
+</section>
+<section id="cann">
+<h4>安装 CANN<a class="headerlink" href="#cann" title="Link to this heading">#</a></h4>
+<blockquote>
+<div><p>如无需运行/编译异构对象特性，可跳过 CANN 安装步骤</p>
+</div></blockquote>
+<details>
+<summary>CANN安装步骤（点我展开）</summary>
+<p>CANN的安装依赖Python环境，请确保您在开始安装CANN之前环境中的Python已经就绪。</p>
+<p>在<a class="reference external" href="https://www.hiascend.com/developer/download/community/result?module=cann&amp;amp;cann=8.2.RC1">Ascend官网</a>下载CANN run包，安装 run 包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>chmod<span class="w"> </span>+x<span class="w"> </span>./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run
+./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run<span class="w"> </span>--install<span class="w"> </span>--quiet
+</pre></div>
+</div>
+<p>安装完成后，若显示如下信息，则说明软件安装成功：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>Toolkit:<span class="w">  </span>Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;<span class="w"> </span>install<span class="w"> </span>success
+</pre></div>
+</div>
+<p>如果用户未指定安装路径，则软件会安装到默认路径下，默认安装路径如下：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>用户身份</p></th>
+<th class="head"><p>默认路径</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>root</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/usr/local/Ascend</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>非 root</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">$HOME/Ascend</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>加载环境变量（非 root 示例）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/Ascend/ascend-toolkit/set_env.sh
+</pre></div>
+</div>
+</details>
+</section>
+</section>
+<section id="id4">
+<h3>源码编译额外依赖<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<blockquote>
+<div><p>如无需源码编译 openYuanrong datasystem，请跳过本章节。</p>
+</div></blockquote>
+<p>下表列出了源码编译openYuanrong datasystem所需额外第三方依赖：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>软件名称</p></th>
+<th class="head"><p>版本</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a class="reference internal" href="#wheelsetuptools">wheel</a></p></td>
+<td><p>0.32.0+</p></td>
+<td><p>openYuanrong datasystem使用的Python打包工具</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#wheelsetuptools">setuptools</a></p></td>
+<td><p>44.0+</p></td>
+<td><p>openYuanrong datasystem使用的Python包管理工具</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#id5">GCC</a></p></td>
+<td><p>7.5.0+</p></td>
+<td><p>用于编译openYuanrong datasystem的C编译器</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id5">G++</a></p></td>
+<td><p>7.5.0+</p></td>
+<td><p>用于编译openYuanrong datasystem的C++编译器</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#id5">libtool</a></p></td>
+<td><p>-</p></td>
+<td><p>编译构建openYuanrong datasystem的工具</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id5">git</a></p></td>
+<td><p>-</p></td>
+<td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#id5">Make</a></p></td>
+<td><p>-</p></td>
+<td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id5">CMake</a></p></td>
+<td><p>3.18.3+</p></td>
+<td><p>编译构建openYuanrong datasystem的工具</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#id5">patch</a></p></td>
+<td><p>2.5+</p></td>
+<td><p>openYuanrong datasystem使用的源代码补丁工具</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<section id="wheelsetuptools">
+<h4>安装wheel和setuptools<a class="headerlink" href="#wheelsetuptools" title="Link to this heading">#</a></h4>
+<p>在安装完成Python后，使用以下命令安装。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>wheel
+pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>setuptools
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h4>安装依赖库<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
+<p>使用以下命令安装。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>yum<span class="w"> </span>install<span class="w"> </span>gcc<span class="w"> </span>gcc-c++<span class="w"> </span>git<span class="w"> </span>patch<span class="w"> </span>make<span class="w"> </span>libtool<span class="w"> </span>cmake<span class="w"> </span>-y
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="nightly">
+<h2>安装 nightly 版本<a class="headerlink" href="#nightly" title="Link to this heading">#</a></h2>
+<p>如需安装指定版本（或未正式发布 wheel），可用官方 nightly 地址。wheel文件命名遵循：</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># 完整版wheel包（包含Python SDK、C++ SDK以及命令行工具）</span>
+openYuanrong_datasystem-<span class="o">{</span>version<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-manylinux_<span class="o">{</span>glibc_major<span class="o">}</span>_<span class="o">{</span>glibc_minor<span class="o">}</span>_<span class="o">{</span>arch<span class="o">}</span>.whl
+
+<span class="c1"># Python SDK wheel包（不包含C++ SDK以及命令行工具）</span>
+openYuanrong_datasystem_sdk-<span class="o">{</span>version<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-manylinux_<span class="o">{</span>glibc_major<span class="o">}</span>_<span class="o">{</span>glibc_minor<span class="o">}</span>_<span class="o">{</span>arch<span class="o">}</span>.whl
+</pre></div>
+</div>
+<p>占位符说明：</p>
+<ul class="simple">
+<li><p>version：openYuanrong datasystem的版本号，例如 <code class="docutils literal notranslate"><span class="pre">0.5.0</span></code></p></li>
+<li><p>major / minor：Python 解释器版本，例如 Python 3.9 → <code class="docutils literal notranslate"><span class="pre">39</span></code></p></li>
+<li><p>glibc_major / glibc_minor：GLIBC 版本，例如 GLIBC 2.34 → <code class="docutils literal notranslate"><span class="pre">2_34</span></code></p></li>
+<li><p>arch：CPU 架构，<code class="docutils literal notranslate"><span class="pre">x86_64</span></code> 或 <code class="docutils literal notranslate"><span class="pre">aarch64</span></code></p></li>
+</ul>
+<p>下面示例安装 0.5.0，Python3.9，GLIBC2.34，aarch64 的完整版wheel包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem-0.5.0-cp39-cp39-manylinux_2_34_aarch64.whl
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h2>源码编译安装<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<section id="id7">
+<h3>下载源码<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://gitee.com/openeuler/yuanrong-datasystem.git
+</pre></div>
+</div>
+</section>
+<section id="id8">
+<h3>编译<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<p>如果构建环境中没有CANN或者无需使用异构对象的功能，可以通过 <code class="docutils literal notranslate"><span class="pre">-X</span></code> 参数禁用异构对象的编译：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem
+bash<span class="w"> </span>build.sh<span class="w"> </span>-X<span class="w"> </span>off
+</pre></div>
+</div>
+<p>如需编译全量特性，需要在开始编译前需要初始化Ascend相关的环境变量，非 root 用户执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/Ascend/ascend-toolkit/set_env.sh
+</pre></div>
+</div>
+<p>root 用户执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>/usr/local/Ascend/ascend-toolkit/set_env.sh
+</pre></div>
+</div>
+<p>执行编译脚本:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem
+bash<span class="w"> </span>build.sh
+</pre></div>
+</div>
+<p>其中：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">build.sh</span></code>中默认的编译线程数为8，如果编译机性能较差可能会出现编译错误，可在执行中增加-j{线程数}来减少线程数量。如<code class="docutils literal notranslate"><span class="pre">bash</span> <span class="pre">build.sh</span> <span class="pre">-j4</span></code>。</p></li>
+<li><p>关于<code class="docutils literal notranslate"><span class="pre">build.sh</span></code>更多用法请执行<code class="docutils literal notranslate"><span class="pre">bash</span> <span class="pre">build.sh</span> <span class="pre">-h</span></code>获取帮助或者参看脚本头部的说明。</p></li>
+</ul>
+<p>编译成功后，会在output产生如下编译产物：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
+|-- openyuanrong_datasystem-0.5.0-cp311-cp311-manylinux_2_34_x86_64.whl
+`-- yr-datasystem-v0.5.0.tar.gz
+</pre></div>
+</div>
+</section>
+<section id="id9">
+<h3>安装<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>output/openyuanrong_datasystem-*.whl
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../getting-started/getting_started.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">入门</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../deployment/index.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">部署</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pypi">安装 PyPI 正式发布版本（推荐）</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">环境准备</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">基础依赖</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#python">安装 Python</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#cann">安装 CANN</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">源码编译额外依赖</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#wheelsetuptools">安装wheel和setuptools</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">安装依赖库</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nightly">安装 nightly 版本</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">安装</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By openYuanrong datasystem with CC BY 4.0 LICENSE
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025, openEuler openYuanrong datasystem.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+<div class="extra_footer">
+  
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    
+</div>
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

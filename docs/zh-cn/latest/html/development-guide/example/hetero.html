@@ -1,0 +1,1082 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>异构对象 &#8212; openYuanrong datasystem  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=7308451e" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../../_static/documentation_options.js?v=9eb32ce0"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/example/hetero';</script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="KV" href="kv.html" />
+    <link rel="prev" title="编程指南" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/logo-small.png" class="logo__image only-light" alt="openYuanrong datasystem  documentation - Home"/>
+    <script>document.write(`<img src="../../_static/logo-small.png" class="logo__image only-dark" alt="openYuanrong datasystem  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/getting_started.html">入门</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installation/installation_linux.html">安装</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../deployment/index.html">部署</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="index.html">编程指南</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">异构对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="kv.html">KV</a></li>
+<li class="toctree-l3"><a class="reference internal" href="object.html">Object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api/index.html">API</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api/python/index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.DsClient.html">datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsClient.init.html">datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsClient.hetero.html">datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsClient.kv.html">datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsClient.object.html">datasystem.DsClient.object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.html">datasystem.DsTensorClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.init.html">datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.mset_d2h.html">datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.mget_h2d.html">datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.async_mset_d2h.html">datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.async_mget_h2d.html">datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.delete.html">datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.dev_send.html">datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.dev_recv.html">datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.dev_mset.html">datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.dev_mget.html">datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.dev_local_delete.html">datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.dev_delete.html">datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.async_dev_delete.html">datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.html">datasystem.hetero_client.HeteroClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.init.html">datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.mget_h2d.html">datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.mset_d2h.html">datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.async_mget_h2d.html">datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.async_mset_d2h.html">datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.delete.html">datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.dev_publish.html">datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.dev_subscribe.html">datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.dev_mset.html">datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.dev_mget.html">datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.dev_local_delete.html">datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.dev_delete.html">datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.Blob.set_dev_ptr.html">datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.Blob.set_size.html">datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.hetero_client.DeviceBlobList.html">datasystem.hetero_client.DeviceBlobList</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.DeviceBlobList.append_blob.html">datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.DeviceBlobList.get_blob_list.html">datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.hetero_client.Future.html">datasystem.hetero_client.Future</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.hetero_client.Future.get.html">datasystem.hetero_client.Future.get</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/python/datasystem.hetero_client.MetaInfo.html">datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.html">datasystem.kv_client.KVClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.init.html">datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.set.html">datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.set_value.html">datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.mset.html">datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.msettx.html">datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.get_read_only_buffers.html">datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.get.html">datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.read.html">datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.delete.html">datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.generate_key.html">datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.exist.html">datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.KVClient.expire.html">datasystem.kv_client.KVClient.expire</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.kv_client.ReadOnlyBuffer.html">datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.ReadOnlyBuffer.rlatch.html">datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/python/datasystem.kv_client.SetParam.html">datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/python/datasystem.kv_client.ReadParam.html">datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.html">datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.init.html">datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.create.html">datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.put.html">datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.get.html">datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.g_increase_ref.html">datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.g_decrease_ref.html">datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.query_global_ref_num.html">datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.ObjectClient.generate_object_key.html">datasystem.object_client.ObjectClient.generate_object_key</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.html">datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.wlatch.html">datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.unwlatch.html">datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.rlatch.html">datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.unrlatch.html">datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.mutable_data.html">datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.immutable_data.html">datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.memory_copy.html">datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.publish.html">datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.seal.html">datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.invalidate_buffer.html">datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/datasystem.object_client.Buffer.get_size.html">datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../../_sources/development-guide/example/hetero.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>异构对象</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">基本概念</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#d2d-device-to-device">D2D(Device to Device) 数据传输</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#h2d-host-to-device-d2h-device-to-host">H2D(Host to Device)/D2H(Device to Host) 数据传输</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">使用限制</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="id1">
+<h1>异构对象<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<section id="id2">
+<h2>基本概念<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<p>yuanrong-datasystem (下文中称为数据系统)的 Hetero 语义中，基于 Device 侧的 HBM 内存抽象异构对象接口，实现昇腾 NPU 卡间数据高速直通传输。同时提供 H2D/D2H 高速迁移接口，实现数据快速在 DRAM/HBM 之间传输。</p>
+<blockquote>
+<div><p><strong>注意</strong>：<br />
+数据系统并不直接负责 HBM 内存的申请及释放，用户调用 hetero 接口将 HBM 的指针注册关联到数据系统中并指定 key，数据系统将用户指定的 key 及 HBM 指针抽象为数据对象，控制在不同卡之间的流转。<br />
+因此将 HBM 的指针注册给数据系统后，上层业务需要保证指针的有效性，避免被释放或修改。</p>
+</div></blockquote>
+</section>
+<section id="d2d-device-to-device">
+<h2>D2D(Device to Device) 数据传输<a class="headerlink" href="#d2d-device-to-device" title="Link to this heading">#</a></h2>
+<p>异构对象针对 D2D 数据传输，提供了两种语义：</p>
+<p><strong>DevPublish / DevSubscribe</strong>：数据传输语义，数据生成端执行 DevPublish 将 HBM 上的数据发布为异构对象，数据接收端申请 HBM 内存后，执行 DevSubscribe 订阅接收数据，数据系统使用卡间直通传输数据并写入用户提供的 HBM 内存中。当数据被接收后，数据系统会自动删除对象，不再关联发布的 HBM 内存。<br />
+DevPublish / DevSubscribe 为异步接口，提供了返回 Future 供用户获取执行结果，每个key返回一个 Future。当 Future::Get 获取到结果为 OK 时，表示数据已经被对端接收成功。</p>
+<blockquote>
+<div><p><strong>注意</strong>：<br />
+DevPublish / DevSubscribe 传入的 Device 内存地址不能归属于同一张 NPU 卡。<br />
+在执行 DevSubscribe 过程中，执行了 DevPublish 的进程不能退出，否则 DevSubscribe 会失败。<br />
+在key，devBlobList内存地址映射关系均一致的情况下，DevPublish在同进程支持重试。
+DevSubscribe单Key的订阅超时时间为20s，多key为60s。</p>
+</div></blockquote>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-0">
+Python</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">seed</span> <span class="o">=</span> <span class="s2">&quot;1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-&quot;</span>
+    <span class="n">sa</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">slen</span><span class="p">):</span>
+        <span class="n">sa</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">seed</span><span class="p">))</span>
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">sa</span><span class="p">)</span>
+
+<span class="c1"># hetero_dev_publish and hetero_dev_subscribe must be executed in different processes</span>
+<span class="c1"># because they need to be bound to different NPUs.</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_publish</span><span class="p">():</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+
+    <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+    <span class="n">device_idx</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">set_device</span><span class="p">(</span><span class="n">device_idx</span><span class="p">)</span>
+
+    <span class="n">key_list</span> <span class="o">=</span> <span class="p">[</span> <span class="s1">&#39;key1&#39;</span><span class="p">,</span> <span class="s1">&#39;key2&#39;</span><span class="p">,</span> <span class="s1">&#39;key3&#39;</span> <span class="p">]</span>
+    <span class="n">data_size</span> <span class="o">=</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">test_value</span> <span class="o">=</span> <span class="n">random_str</span><span class="p">(</span><span class="n">data_size</span><span class="p">)</span>
+
+    <span class="n">in_data_blob_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">key_list</span><span class="p">:</span>
+        <span class="n">tmp_batch_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+            <span class="n">dev_ptr</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">malloc</span><span class="p">(</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">memcpy</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">,</span> <span class="n">acl</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">bytes_to_ptr</span><span class="p">(</span><span class="n">test_value</span><span class="o">.</span><span class="n">encode</span><span class="p">()),</span> <span class="n">data_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">blob</span> <span class="o">=</span> <span class="n">Blob</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+            <span class="n">tmp_batch_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+        <span class="n">blob_list</span> <span class="o">=</span> <span class="n">DeviceBlobList</span><span class="p">(</span><span class="n">device_idx</span><span class="p">,</span> <span class="n">tmp_batch_list</span><span class="p">)</span>
+        <span class="n">in_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
+    <span class="n">pub_futures</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">dev_publish</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">in_data_blob_list</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">future</span> <span class="ow">in</span> <span class="n">pub_futures</span><span class="p">:</span>
+        <span class="n">future</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_subscribe</span><span class="p">():</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+
+    <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+    <span class="n">device_idx</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">set_device</span><span class="p">(</span><span class="n">device_idx</span><span class="p">)</span>
+
+    <span class="n">key_list</span> <span class="o">=</span> <span class="p">[</span> <span class="s1">&#39;key1&#39;</span><span class="p">,</span> <span class="s1">&#39;key2&#39;</span><span class="p">,</span> <span class="s1">&#39;key3&#39;</span> <span class="p">]</span>
+    <span class="n">data_size</span> <span class="o">=</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">out_data_blob_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">key_list</span><span class="p">:</span>
+        <span class="n">tmp_batch_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+            <span class="n">dev_ptr</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">malloc</span><span class="p">(</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">blob</span> <span class="o">=</span> <span class="n">Blob</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+            <span class="n">tmp_batch_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+        <span class="n">blob_list</span> <span class="o">=</span> <span class="n">DeviceBlobList</span><span class="p">(</span><span class="n">device_idx</span><span class="p">,</span> <span class="n">tmp_batch_list</span><span class="p">)</span>
+        <span class="n">out_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
+    <span class="n">sub_futures</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">dev_subscribe</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">out_data_blob_list</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">future</span> <span class="ow">in</span> <span class="n">sub_futures</span><span class="p">:</span>
+        <span class="n">future</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-1">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;datasystem/datasystem.h&quot;</span>
+
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;acl/acl.h&gt;</span>
+
+<span class="c1">// HeteroDevPublish and HeteroDevSubscribe must be executed in different processes</span>
+<span class="c1">// because they need to be bound to different NPUs.</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">HeteroDevPublish</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ConnectOptions</span><span class="w"> </span><span class="n">connectOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">31501</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">DsClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">connectOptions</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="c1">// Initialize the ACL interface.</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">deviceId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceId</span><span class="p">);</span><span class="w"> </span><span class="c1">// Bind the NPU card.</span>
+
+<span class="w">    </span><span class="c1">// The sender constructs data and publishes it to the data system.</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;test-key1&quot;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">blobSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">blobNum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">DeviceBlobList</span><span class="o">&gt;</span><span class="w"> </span><span class="n">inBlobList</span><span class="p">;</span>
+<span class="w">    </span><span class="n">inBlobList</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">keys</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+<span class="w">    </span><span class="c1">// Enter the Device address information on the device to the devblob.</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">inBlobList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">inBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">blobNum</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">],</span><span class="w"> </span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
+<span class="w">            </span><span class="c1">// Copying Data to the Device Memory.</span>
+<span class="w">            </span><span class="c1">// aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)</span>
+<span class="w">            </span><span class="n">ASSERT_EQ</span><span class="p">(</span><span class="n">code</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">            </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="n">inBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">blobs</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">blob</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Future</span><span class="o">&gt;</span><span class="w"> </span><span class="n">inFutureVecEnque</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">DevPublish</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">inBlobList</span><span class="p">,</span><span class="w"> </span><span class="n">inFutureVecEnque</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="c1">// The sender checks the future.</span>
+<span class="w">    </span><span class="c1">// If OK is returned, it indicates that the receiver has received the HBM successfully</span>
+<span class="w">    </span><span class="c1">// and the HBM memory is disconnected from the data system.</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">inFutureVecEnque</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">inFutureVecEnque</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">Get</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">HeteroDevSubscribe</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ConnectOptions</span><span class="w"> </span><span class="n">connectOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">31501</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">DsClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">connectOptions</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="c1">// Initialize the ACL interface.</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">deviceId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceId</span><span class="p">);</span><span class="w"> </span><span class="c1">// Bind the NPU card.</span>
+
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;test-key1&quot;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">blobSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">blobNum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">DeviceBlobList</span><span class="o">&gt;</span><span class="w"> </span><span class="n">outBlobList</span><span class="p">;</span>
+<span class="w">    </span><span class="n">outBlobList</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">keys</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+<span class="w">    </span><span class="c1">// The receiver allocates HBM memory and subscribes to receive data from the data system.</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">outBlobList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">outBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">blobNum</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">],</span><span class="w"> </span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
+<span class="w">            </span><span class="n">ASSERT_EQ</span><span class="p">(</span><span class="n">code</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">            </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="n">outBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">blobs</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">blob</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Future</span><span class="o">&gt;</span><span class="w"> </span><span class="n">outFutureVecDeque</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">DevSubscribe</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">outBlobList</span><span class="p">,</span><span class="w"> </span><span class="n">outFutureVecDeque</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="c1">// The receiver checks the future.</span>
+<span class="w">    </span><span class="c1">// If ok is returned, the data is received successfully.</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">outFutureVecDeque</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">outFutureVecDeque</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">Get</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p><strong>DevMSet / DevMGet</strong>：数据缓存语义，数据生成端执行 DevMSet 将 HBM 数据发布到数据系统，数据接收端申请 HBM 内存后，执行 DevMGet 接口读取数据。当数据被读取后，数据系统不会删除对象，该数据可被反复读取。数据使用完成后需要调用 DevLocalDelete/DevDelete 删除对象。</p>
+<blockquote>
+<div><p><strong>注意</strong>：<br />
+DevMSet / DevMGet 传入的 Device 内存地址不能归属于同一张 NPU 卡。<br />
+在执行 DevMGet 过程中，执行了 DevMSet 的进程不能退出，否则 DevMGet 会失败。<br />
+在key，devBlobList内存地址映射关系均一致的情况下，DevMGet在同进程支持重试。</p>
+</div></blockquote>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-2">
+Python</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datasystem.ds_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">seed</span> <span class="o">=</span> <span class="s2">&quot;1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-&quot;</span>
+    <span class="n">sa</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">slen</span><span class="p">):</span>
+        <span class="n">sa</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">seed</span><span class="p">))</span>
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">sa</span><span class="p">)</span>
+
+<span class="c1"># hetero_dev_mset and hetero_dev_mget must be executed in different processes</span>
+<span class="c1"># because they need to be bound to different NPUs.</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_mset</span><span class="p">():</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+
+    <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+    <span class="n">device_idx</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">set_device</span><span class="p">(</span><span class="n">device_idx</span><span class="p">)</span>
+
+    <span class="n">key_list</span> <span class="o">=</span> <span class="p">[</span> <span class="s1">&#39;key1&#39;</span><span class="p">,</span> <span class="s1">&#39;key2&#39;</span><span class="p">,</span> <span class="s1">&#39;key3&#39;</span> <span class="p">]</span>
+    <span class="n">data_size</span> <span class="o">=</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">test_value</span> <span class="o">=</span> <span class="n">random_str</span><span class="p">(</span><span class="n">data_size</span><span class="p">)</span>
+
+    <span class="n">in_data_blob_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">key_list</span><span class="p">:</span>
+        <span class="n">tmp_batch_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+            <span class="n">dev_ptr</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">malloc</span><span class="p">(</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">memcpy</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">,</span> <span class="n">acl</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">bytes_to_ptr</span><span class="p">(</span><span class="n">test_value</span><span class="o">.</span><span class="n">encode</span><span class="p">()),</span> <span class="n">data_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">blob</span> <span class="o">=</span> <span class="n">Blob</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+            <span class="n">tmp_batch_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+        <span class="n">blob_list</span> <span class="o">=</span> <span class="n">DeviceBlobList</span><span class="p">(</span><span class="n">device_idx</span><span class="p">,</span> <span class="n">tmp_batch_list</span><span class="p">)</span>
+        <span class="n">in_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">dev_mset</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">in_data_blob_list</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_mget</span><span class="p">():</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+
+    <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+    <span class="n">device_idx</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">set_device</span><span class="p">(</span><span class="n">device_idx</span><span class="p">)</span>
+
+    <span class="n">key_list</span> <span class="o">=</span> <span class="p">[</span> <span class="s1">&#39;key1&#39;</span><span class="p">,</span> <span class="s1">&#39;key2&#39;</span><span class="p">,</span> <span class="s1">&#39;key3&#39;</span> <span class="p">]</span>
+    <span class="n">data_size</span> <span class="o">=</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">out_data_blob_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">key_list</span><span class="p">:</span>
+        <span class="n">tmp_batch_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+            <span class="n">dev_ptr</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">malloc</span><span class="p">(</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">blob</span> <span class="o">=</span> <span class="n">Blob</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+            <span class="n">tmp_batch_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+        <span class="n">blob_list</span> <span class="o">=</span> <span class="n">DeviceBlobList</span><span class="p">(</span><span class="n">device_idx</span><span class="p">,</span> <span class="n">tmp_batch_list</span><span class="p">)</span>
+        <span class="n">out_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">dev_mget</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">out_data_blob_list</span><span class="p">,</span> <span class="mi">60000</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">dev_delete</span><span class="p">(</span><span class="n">key_list</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-3">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;datasystem/datasystem.h&quot;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;acl/acl.h&gt;</span>
+
+<span class="c1">// HeteroDevMSet and HeteroDevMGet must be executed in different processes</span>
+<span class="c1">// because they need to be bound to different NPUs.</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">HeteroDevMSet</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ConnectOptions</span><span class="w"> </span><span class="n">connectOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">31501</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">DsClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">connectOptions</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="c1">// Initialize the ACL interface.</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">deviceId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceId</span><span class="p">);</span><span class="w">  </span><span class="c1">// Bind the NPU card.</span>
+
+<span class="w">    </span><span class="c1">// The data generator constructs data and writes it to the data system.</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;test-key1&quot;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">blobSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">blobNum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">DeviceBlobList</span><span class="o">&gt;</span><span class="w"> </span><span class="n">inBlobList</span><span class="p">;</span>
+<span class="w">    </span><span class="n">inBlobList</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">keys</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">inBlobList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">inBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">blobNum</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">],</span><span class="w"> </span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
+<span class="w">            </span><span class="c1">// Copying Data to the Device Memory.</span>
+<span class="w">            </span><span class="c1">// aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)</span>
+<span class="w">            </span><span class="n">ASSERT_EQ</span><span class="p">(</span><span class="n">code</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">            </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="n">inBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">blobs</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">blob</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">setFailedKeys</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">DevMSet</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">inBlobList</span><span class="p">,</span><span class="w"> </span><span class="n">setFailedKeys</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">setFailedKeys</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">HeteroDevMGet</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ConnectOptions</span><span class="w"> </span><span class="n">connectOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">31501</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">DsClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">connectOptions</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="c1">// Initialize the ACL interface.</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">deviceId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceId</span><span class="p">);</span><span class="w"> </span><span class="c1">// Bind the NPU card.</span>
+
+<span class="w">    </span><span class="c1">// The data obtainer allocates the HBM memory and invokes the DevMGet interface to receive data.</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;test-key1&quot;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">blobSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">blobNum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">DeviceBlobList</span><span class="o">&gt;</span><span class="w"> </span><span class="n">outBlobList</span><span class="p">;</span>
+<span class="w">    </span><span class="n">outBlobList</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">keys</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+<span class="w">    </span><span class="c1">// Allocate the HBM memory and fill it in the outBlobList.</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">outBlobList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">outBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">blobNum</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">],</span><span class="w"> </span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
+<span class="w">            </span><span class="n">ASSERT_EQ</span><span class="p">(</span><span class="n">code</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">            </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="p">};</span>
+<span class="w">            </span><span class="n">outBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">blobs</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">blob</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">getFailedKeys</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">DevMGet</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">outBlobList</span><span class="p">,</span><span class="w"> </span><span class="n">getFailedKeys</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">getFailedKeys</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delFailedKeys</span><span class="p">;</span>
+<span class="w">    </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">DevDelete</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">delFailedKeys</span><span class="p">);</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+<span class="w">    </span><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">delFailedKeys</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</div>
+<blockquote>
+<div><p><strong>注意</strong>：<br />
+这里提到的删除对象，是指解除数据系统与 HBM 内存的绑定，并不会直接影响 HBM 中的数据，HBM 的内存由上层应用自己释放。</p>
+</div></blockquote>
+</section>
+<section id="h2d-host-to-device-d2h-device-to-host">
+<h2>H2D(Host to Device)/D2H(Device to Host) 数据传输<a class="headerlink" href="#h2d-host-to-device-d2h-device-to-host" title="Link to this heading">#</a></h2>
+<p>异构对象接口提供了 MGetH2D 和 MSetD2H 接口，实现数据在 HBM 和 DRAM 之间快速 swap。<br />
+MSetD2H 接口：将 HBM 上的内存，写入到host中的指定 key 中。当数据系统在 HBM 中是零散的多个小块内存时，在 MSetD2H 接口中，会自动将这些小块数据拼接后写入到 host 内存中。<br />
+MGetH2D 接口：从 host 的指定 key 中读取数据，并写入到 Device 的 HBM 内存中。MGetH2D 接口需要用户提前申请 HBM 内存将地址写入到 devBlobList 参数中。<br />
+MGetH2D / MSetD2H 需配套使用。当 MSetD2H 对 HBM 的小数据块合并后，在 MGetH2D 中会重新还原为小数据块。<br />
+若 host 的 key 不再使用，可调用 Delete 接口删除。</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-4">
+Python</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datasystem.ds_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">seed</span> <span class="o">=</span> <span class="s2">&quot;1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-&quot;</span>
+    <span class="n">sa</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">slen</span><span class="p">):</span>
+        <span class="n">sa</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">seed</span><span class="p">))</span>
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">sa</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_mset_d2h_mget_h2d</span><span class="p">():</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+
+    <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+    <span class="n">device_idx</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">set_device</span><span class="p">(</span><span class="n">device_idx</span><span class="p">)</span>
+
+    <span class="n">key_list</span> <span class="o">=</span> <span class="p">[</span> <span class="s1">&#39;key1&#39;</span><span class="p">,</span> <span class="s1">&#39;key2&#39;</span><span class="p">,</span> <span class="s1">&#39;key3&#39;</span> <span class="p">]</span>
+    <span class="n">data_size</span> <span class="o">=</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span>
+    <span class="n">test_value</span> <span class="o">=</span> <span class="n">random_str</span><span class="p">(</span><span class="n">data_size</span><span class="p">)</span>
+
+    <span class="n">in_data_blob_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">key_list</span><span class="p">:</span>
+        <span class="n">tmp_batch_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+            <span class="n">dev_ptr</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">malloc</span><span class="p">(</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">memcpy</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">,</span> <span class="n">acl</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">bytes_to_ptr</span><span class="p">(</span><span class="n">test_value</span><span class="o">.</span><span class="n">encode</span><span class="p">()),</span> <span class="n">data_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">blob</span> <span class="o">=</span> <span class="n">Blob</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+            <span class="n">tmp_batch_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+        <span class="n">blob_list</span> <span class="o">=</span> <span class="n">DeviceBlobList</span><span class="p">(</span><span class="n">device_idx</span><span class="p">,</span> <span class="n">tmp_batch_list</span><span class="p">)</span>
+        <span class="n">in_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
+
+    <span class="n">out_data_blob_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">key_list</span><span class="p">:</span>
+        <span class="n">tmp_batch_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+            <span class="n">dev_ptr</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">acl</span><span class="o">.</span><span class="n">rt</span><span class="o">.</span><span class="n">malloc</span><span class="p">(</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">blob</span> <span class="o">=</span> <span class="n">Blob</span><span class="p">(</span><span class="n">dev_ptr</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+            <span class="n">tmp_batch_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+        <span class="n">blob_list</span> <span class="o">=</span> <span class="n">DeviceBlobList</span><span class="p">(</span><span class="n">device_idx</span><span class="p">,</span> <span class="n">tmp_batch_list</span><span class="p">)</span>
+        <span class="n">out_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
+
+    <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">mset_d2h</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">in_data_blob_list</span><span class="p">)</span>
+
+    <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">mget_h2d</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">out_data_blob_list</span><span class="p">,</span> <span class="mi">60000</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-5">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;datasystem/hetero_client.h&quot;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;acl/acl.h&gt;</span>
+
+<span class="n">ConnectOptions</span><span class="w"> </span><span class="n">connectOptions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">31501</span><span class="w"> </span><span class="p">};</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">DsClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">connectOptions</span><span class="p">);</span>
+<span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="c1">// Initialize the ACL interface.</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">deviceId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
+<span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceId</span><span class="p">);</span><span class="w"> </span><span class="c1">// Bind the NPU card.</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;test-key1&quot;</span><span class="w"> </span><span class="p">};</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">blobSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="w"> </span><span class="p">};</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">blobNum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">DeviceBlobList</span><span class="o">&gt;</span><span class="w"> </span><span class="n">swapOutBlobList</span><span class="p">;</span>
+<span class="n">swapOutBlobList</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">keys</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+<span class="c1">// Allocate the HBM memory and fill it in the swapOutBlobList.</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">swapOutBlobList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">swapOutBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">blobNum</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">],</span><span class="w"> </span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// Copying Data to the Device Memory.</span>
+<span class="w">        </span><span class="c1">// aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)</span>
+<span class="w">        </span><span class="n">ASSERT_EQ</span><span class="p">(</span><span class="n">code</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="n">swapOutBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">blobs</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">blob</span><span class="p">));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">MSetD2H</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">swapOutBlobList</span><span class="p">);</span>
+<span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">DeviceBlobList</span><span class="o">&gt;</span><span class="w"> </span><span class="n">swapInBlobList</span><span class="p">;</span>
+<span class="n">swapInBlobList</span><span class="p">.</span><span class="n">resize</span><span class="p">(</span><span class="n">keys</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+<span class="c1">// Allocate the HBM memory and fill it in the swapInBlobList.</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">swapInBlobList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">swapInBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deviceId</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">blobNum</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">],</span><span class="w"> </span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
+<span class="w">        </span><span class="n">ASSERT_EQ</span><span class="p">(</span><span class="n">code</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">blobSize</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="p">};</span>
+<span class="w">        </span><span class="n">swapInBlobList</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">blobs</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">blob</span><span class="p">));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">failedList</span><span class="p">;</span>
+<span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Hetero</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">MGetH2D</span><span class="p">(</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">swapInBlobList</span><span class="p">,</span><span class="w"> </span><span class="n">failedList</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">status</span><span class="p">.</span><span class="n">IsOk</span><span class="p">());</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="id3">
+<h2>使用限制<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>key 仅支持大写字母、小写字母、数字以及如下特定字符：<code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>。</p></li>
+<li><p>key 的最大长度为 255 字节。</p></li>
+<li><p>DevPublish 和 DevSubscribe 需配套使用，不能和 DevMSet 及 DevMGet 混合使用。</p></li>
+<li><p>DevMSet 及 DevMGet 配套使用，写入的 key 使用 DevDelete 及 DevLocalDelete 删除。</p></li>
+<li><p>MSetD2H 和 MGetH2D 需要配套使用，MGetH2D 接口中只能传入 MSetD2H 接口写入的key。写入的 key 使用 delete 接口删除。</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">编程指南</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="kv.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">KV</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">基本概念</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#d2d-device-to-device">D2D(Device to Device) 数据传输</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#h2d-host-to-device-d2h-device-to-host">H2D(Host to Device)/D2H(Device to Host) 数据传输</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">使用限制</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By openYuanrong datasystem with CC BY 4.0 LICENSE
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025, openEuler openYuanrong datasystem.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+<div class="extra_footer">
+  
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    
+</div>
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

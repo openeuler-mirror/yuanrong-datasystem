@@ -1,0 +1,1845 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>openYuanrong datasystem Kubernetes配置项 &#8212; openYuanrong datasystem  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=7308451e" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=9eb32ce0"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/k8s_configuration';</script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="编程接口" href="../development-guide/index.html" />
+    <link rel="prev" title="dscli命令行工具" href="dscli.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo-small.png" class="logo__image only-light" alt="openYuanrong datasystem  documentation - Home"/>
+    <script>document.write(`<img src="../_static/logo-small.png" class="logo__image only-dark" alt="openYuanrong datasystem  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/getting_started.html">入门</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation/installation_linux.html">安装</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">部署</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="deploy.html">部署 openYuanrong datasystem</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">openYuanrong datasystem Kubernetes配置项</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/hetero.html">异构对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/kv.html">KV</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/object.html">Object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/api/index.html">API</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/python/index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.html">datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.init.html">datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.hetero.html">datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.kv.html">datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.object.html">datasystem.DsClient.object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.html">datasystem.DsTensorClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.init.html">datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mset_d2h.html">datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mget_h2d.html">datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_mset_d2h.html">datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_mget_h2d.html">datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.delete.html">datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_send.html">datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_recv.html">datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_mset.html">datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_mget.html">datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_local_delete.html">datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_delete.html">datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_dev_delete.html">datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.html">datasystem.hetero_client.HeteroClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.init.html">datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.mget_h2d.html">datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.mset_d2h.html">datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mget_h2d.html">datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mset_d2h.html">datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.delete.html">datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_publish.html">datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_subscribe.html">datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_mset.html">datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_mget.html">datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_local_delete.html">datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_delete.html">datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.set_dev_ptr.html">datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.set_size.html">datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.html">datasystem.hetero_client.DeviceBlobList</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.append_blob.html">datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.get_blob_list.html">datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Future.html">datasystem.hetero_client.Future</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Future.get.html">datasystem.hetero_client.Future.get</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.MetaInfo.html">datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.html">datasystem.kv_client.KVClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.init.html">datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.set.html">datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.set_value.html">datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.mset.html">datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.msettx.html">datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.get_read_only_buffers.html">datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.get.html">datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.read.html">datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.delete.html">datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.generate_key.html">datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.exist.html">datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.expire.html">datasystem.kv_client.KVClient.expire</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.html">datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.rlatch.html">datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.SetParam.html">datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadParam.html">datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.html">datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.init.html">datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.create.html">datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.put.html">datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.get.html">datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.g_increase_ref.html">datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.g_decrease_ref.html">datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.query_global_ref_num.html">datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.generate_object_key.html">datasystem.object_client.ObjectClient.generate_object_key</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.html">datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.wlatch.html">datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.unwlatch.html">datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.rlatch.html">datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.unrlatch.html">datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.mutable_data.html">datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.immutable_data.html">datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.memory_copy.html">datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.publish.html">datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.seal.html">datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.invalidate_buffer.html">datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.get_size.html">datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/deployment/k8s_configuration.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>openYuanrong datasystem Kubernetes配置项</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">最小化配置项</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">详细配置项</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">镜像相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">命名空间相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">资源相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ipc-rpc">IPC/RPC相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#etcd">ETCD相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill">Spill相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">日志与可观测相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">二级缓存相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#az">AZ相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">元数据相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">可靠性相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">优雅退出相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">性能相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ak-sk">AK/SK相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#kubernetes">Kubernetes亲和性相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">挂载路径相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">混合部署相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id14">Kubernetes精细化控制配置</a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="openyuanrong-datasystem-kubernetes">
+<h1>openYuanrong datasystem Kubernetes配置项<a class="headerlink" href="#openyuanrong-datasystem-kubernetes" title="Link to this heading">#</a></h1>
+<!-- TOC -->
+<ul class="simple">
+<li><p><a class="reference internal" href="#id1">最小化配置项</a></p></li>
+<li><p><a class="reference internal" href="#id2">详细配置项</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id3">镜像相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id4">命名空间相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id5">资源相关配置</a></p></li>
+<li><p><a class="reference internal" href="#ipc-rpc">IPC/RPC相关配置</a></p></li>
+<li><p><a class="reference internal" href="#etcd">ETCD相关配置</a></p></li>
+<li><p><a class="reference internal" href="#spill">Spill相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id6">日志与可观测相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id7">二级缓存相关配置</a></p></li>
+<li><p><a class="reference internal" href="#az">AZ相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id8">元数据相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id9">可靠性相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id10">优雅退出相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id11">性能相关配置</a></p></li>
+<li><p><a class="reference internal" href="#ak-sk">AK/SK相关配置</a></p></li>
+<li><p><a class="reference internal" href="#kubernetes">Kubernetes亲和性相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id12">挂载路径相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id13">混合部署相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id14">Kubernetes精细化控制配置</a></p></li>
+</ul>
+</li>
+</ul>
+<!-- /TOC -->
+<p><a class="reference external" href="https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_zh_cn/deployment/k8s_configuration.md"><img alt="查看源文件" src="https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg" /></a></p>
+<p>本文档描述了openYuanrong datasystem Kubernetes快速启动以及详细配置项说明。</p>
+<section id="id1">
+<h2>最小化配置项<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<p>本节描述了在Kubernetes部署openYuanrong datasystem的必须配置项，最小化配置项如下表所示：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a class="reference internal" href="#id3">global.imageRegistry</a></p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>镜像仓库 url</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id3">global.images.datasystem</a></p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;yr_datasystem:v0.1&quot;</span></code></p></td>
+<td><p>镜像名称和镜像标签</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#etcd">global.etcd.etcdAddress</a></p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>ETCD 服务端访问地址，openYuanrong datasystem的集群管理依赖ETCD</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/openeuler&quot;</span>
+
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong_datasystem:0.5.0&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span>
+</pre></div>
+</div>
+<p>部署openYuanrong datasystem请参考：<a class="reference internal" href="deploy.html#openyuanrong-datasystem-kubernetes"><span class="std std-ref">openYuanrong datasystem Kubernetes部署</span></a>。</p>
+<p>默认情况下，每个 openYuanrong datasystem DaemonSet 最大可使用 2GB 共享内存空间用于缓存数据，如果需要调整该值，可以通过 <a class="reference internal" href="#id5">global.resources.datasystemWorker.sharedMemory</a> 调整。</p>
+<blockquote>
+<div><p><strong>注意事项：</strong></p>
+<p><a class="reference internal" href="#id5">global.resources.datasystemWorker.sharedMemory</a> 的大小必须小于 <a class="reference internal" href="#id5">global.resources.requests.memory</a></p>
+</div></blockquote>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/openeuler&quot;</span>
+
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong_datasystem:0.5.0&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span>
+
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystemWorker</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3&quot;</span>
+<span class="w">        </span><span class="c1"># 该值必须大于等于 requests.memory</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;5Gi&quot;</span>
+<span class="w">      </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3&quot;</span>
+<span class="w">        </span><span class="c1"># 该值必须大于 shreadMemory</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;5Gi&quot;</span>
+<span class="w">      </span><span class="c1"># 将共享内存最大使用容量调整为4GB</span>
+<span class="w">      </span><span class="nt">sharedMemory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p><strong>注意事项：</strong></p>
+<ul>
+<li><p>openYuanrong datasystem依赖ETCD进行集群管理，请确保部署前ETCD服务处于可用状态。</p></li>
+<li><p>openYuanrong datasystem默认占用端口号 <code class="docutils literal notranslate"><span class="pre">31501</span></code>，请确保Kubernetes集群中每个节点的31501端口处于空闲状态，或者通过<a class="reference internal" href="#ipc-rpc">global.port.datasystemWorker</a>更换默认端口号。</p></li>
+<li><p>请确保Kubernetes集群中每个节点拥有至少3核4G的资源剩余，或者通过<a class="reference internal" href="#id5">资源相关配置</a>减少默认的资源需求。</p></li>
+<li><p>openYuanrong datasystem Pod内容器默认会挂载以下宿主机目录，请确保容器运行用户具备以下目录的可读可写可访问权限（rwx）：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>宿主机目录</p></th>
+<th class="head"><p>配置项</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>/home/sn/datasystem/logs</p></td>
+<td><p><a class="reference internal" href="#id6">global.log.logDir</a></p></td>
+<td><p>日志持久化目录</p></td>
+</tr>
+<tr class="row-odd"><td><p>/home/uds</p></td>
+<td><p><a class="reference internal" href="#ipc-rpc">global.ipc.udsDir</a></p></td>
+<td><p>Unix Domain Socket目录，用于启用共享内存免拷贝能力</p></td>
+</tr>
+<tr class="row-even"><td><p>/home/sn/datasystem/rocksdb</p></td>
+<td><p><a class="reference internal" href="#id8">global.metadata.rocksdbStoreDir</a></p></td>
+<td><p>元数据持久化目录</p></td>
+</tr>
+<tr class="row-odd"><td><p>/dev/shm</p></td>
+<td><p>-</p></td>
+<td><p>共享内存目录</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</li>
+</ul>
+</div></blockquote>
+</section>
+<section id="id2">
+<h2>详细配置项<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<section id="id3">
+<h3>镜像相关配置<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.imageRegistry</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>镜像仓库 url</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.images.datasystem</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;yr_datasystem:v0.1&quot;</span></code></p></td>
+<td><p>镜像名称和镜像标签</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/mindspore&quot;</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong_datasystem:0.5.0&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h3>命名空间相关配置<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.namespace</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;default&quot;</span></code></p></td>
+<td><p>命名空间名称</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.autoCreatedNamespace</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否自动创建不存在的命名空间</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id5">
+<h3>资源相关配置<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.resources.datasystemWorker.limits.cpu</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;3&quot;</span></code></p></td>
+<td><p>openYuanrong datasystem单个DaemonSet占用的最大CPU核数</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.resources.datasystemWorker.limits.memory</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;4Gi&quot;</span></code></p></td>
+<td><p>openYuanrong datasystem单个DaemonSet占用的最大内存量</p></td>
+</tr>
+<tr class="row-even"><td><p>global.resources.datasystemWorker.requests.cpu</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;3&quot;</span></code></p></td>
+<td><p>openYuanrong datasystem单个DaemonSet初始化时需要的CPU核数，该值的大小必须小于等于 <code class="docutils literal notranslate"><span class="pre">global.resources.datasystemWorker.limits.cpu</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>global.resources.datasystemWorker.requests.memory</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;3Gi&quot;</span></code></p></td>
+<td><p>openYuanrong datasystem单个DaemonSet初始化时需要的内存量，该值的大小必须小于等于 <code class="docutils literal notranslate"><span class="pre">global.resources.datasystemWorker.limits.memory</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>global.resources.datasystemWorker.maxClientNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
+<td><p>openYuanrong datasystem单个DaemonSet最大可同时连接的客户端数</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.resources.datasystemWorker.sharedMemory</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
+<td><p>openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位），该值的大小必须小于 <code class="docutils literal notranslate"><span class="pre">global.resources.datasystemWorker.requests.memory</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="ipc-rpc">
+<h3>IPC/RPC相关配置<a class="headerlink" href="#ipc-rpc" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.ipc.ipcThroughSharedMemory</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>datasystem-worker共享内存启用开关</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.ipc.udsDir</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/uds&quot;</span></code></p></td>
+<td><p>Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限</p></td>
+</tr>
+<tr class="row-even"><td><p>global.port.datasystemWorker</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">31501</span></code></p></td>
+<td><p>openYuanrong datasystem DaemonSet占用的主机端口号</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.enableCurveZmq</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否开启服务端组件间认证鉴权功能</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.curveKeyDir</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/sn/datasystem/curve_key_dir&quot;</span></code></p></td>
+<td><p>用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.curveZmqKey.clientPublicKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>客户端公钥</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.curveZmqKey.workerPublicKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>datasystem-worker的公钥</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.curveZmqKey.workerSecretKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>datasystem-worker的私钥</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.ocWorkerWorkerDirectPort</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.ocWorkerWorkerPoolSize</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">3</span></code></p></td>
+<td><p>datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 <code class="docutils literal notranslate"><span class="pre">ocWorkerWorkerDirectPort</span></code> 指定为非0值时该配置才生效</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.payloadNocopyThreshold</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;104857600&quot;</span></code></p></td>
+<td><p>datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位）</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.rpcThreadNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
+<td><p>配置服务端的RPC线程数，必须为大于0的数</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.ocThreadNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
+<td><p>配置服务端用于处理对象/KV缓存的业务线程数</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.zmqServerIoContext</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.zmqClientIoContext</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.rpc.zmqChunkSz</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
+<td><p>并行负载分块大小配置（以字节为单位）</p></td>
+</tr>
+<tr class="row-even"><td><p>global.rpc.maxRpcSessionNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
+<td><p>单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000]</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：
+配置一个Unix Domain Socket路径为 “/home/uds”，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystemWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">31501</span>
+
+<span class="w">  </span><span class="nt">ipc</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">ipcThroughSharedMemory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">udsDir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/uds</span>
+</pre></div>
+</div>
+</section>
+<section id="etcd">
+<h3>ETCD相关配置<a class="headerlink" href="#etcd" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.etcd.etcdAddress</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>ETCD 服务端访问地址</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.etcd.enableEtcdAuth</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否启用 ETCD 认证</p></td>
+</tr>
+<tr class="row-even"><td><p>global.etcd.etcdCa</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>CA明文证书，使用Base64编码</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.etcd.etcdCert</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>客户端明文证书，使用Base64转码</p></td>
+</tr>
+<tr class="row-even"><td><p>global.etcd.etcdKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语.</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.etcd.etcdCertDir</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/sn/datasystem/etcd_cert_dir&quot;</span></code></p></td>
+<td><p>已加密 etcd 证书的挂载路径，<code class="docutils literal notranslate"><span class="pre">global.etcd.enableEtcdAuth</span></code> 为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 必须指定此参数</p></td>
+</tr>
+<tr class="row-even"><td><p>global.etcd.passphraseValue</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>密码短语的值，需加密并进行Base64转码。</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.etcd.etcdMetaPoolSize</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>ETCD元数据异步队列大小，用于将KV接口 <code class="docutils literal notranslate"><span class="pre">WRITE_BACK_L2_CACHE</span></code> 可靠性配置的key的元数据异步写入ETCD持久化</p></td>
+</tr>
+<tr class="row-even"><td><p>global.etcd.etcdTargetNameOverride</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 连接一个无需认证鉴权的ETCD服务</span>
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span>
+<span class="w">    </span><span class="nt">enableEtcdAuth</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">etcdTargetNameOverride</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">    </span><span class="nt">etcdCa</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">    </span><span class="nt">etcdCert</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">    </span><span class="nt">etcdKey</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">    </span><span class="nt">etcdCertDir</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">    </span><span class="nt">passphraseValue</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">    </span><span class="nt">etcdMetaPoolSize</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+</pre></div>
+</div>
+</section>
+<section id="spill">
+<h3>Spill相关配置<a class="headerlink" href="#spill" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.spill.spillDirectory</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>配置缓存溢出功能的本地磁盘路径，为空表示禁用缓存溢出功能。当配置该路径后，溢出的缓存数据将保存在该路径下的 <code class="docutils literal notranslate"><span class="pre">datasystem_spill_data</span></code> 目录下</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.spill.spillSizeLimit</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;0&quot;</span></code></p></td>
+<td><p>配置缓存溢出的最大容量（以字节为单位）</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.spillThreadNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>表示溢出数据写文件的最大并行度，线程数越多会消耗越多的CPU和I/O资源</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.spill.spillFileMaxSizeMb</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
+<td><p>单个溢出文件的最大大小（以MB为单位）；对于小于此值的对象，会聚合存储于同一个文件中；对于超过此值的对象，将以单个对象单独存为一个文件</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.spillFileOpenLimit</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">512</span></code></p></td>
+<td><p>溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.spill.spillEnableReadahead</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 <code class="docutils literal notranslate"><span class="pre">Read</span></code> 接口偏移读取导致的读放大问题</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.evictionThreadNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><p><strong>样例1</strong>：</p>
+<p>Spill目录为 “/opt/spill/yr_datasystem_spill”，大小为10GB。</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">spill</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
+<span class="w">    </span><span class="nt">spillSizeLimit</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;10737418240&quot;</span>
+<span class="w">    </span><span class="nt">spillThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
+<span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>样例2</strong>：</p>
+<p>Spill目录为 “/opt/spill/yr_datasystem_spill”，需要使用宿主机的SSD盘提升Spill性能（宿主机的SSD路径假设为：“/data/ssd”），大小同样为10GB。这种场景下需要配合<a class="reference internal" href="#id12">挂载路径相关配置</a>一起使用。</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">spill</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
+<span class="w">    </span><span class="nt">spillSizeLimit</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;10737418240&quot;</span>
+<span class="w">    </span><span class="nt">spillThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
+<span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+
+<span class="nt">mount</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 宿主机挂载目录，该场景下即为宿主机的SSD路径</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/data/ssd/yr_datasystem_spill&quot;</span>
+<span class="w">  </span><span class="c1"># 容器内挂载目录，需要和 `spillDirectory` 保持一致</span>
+<span class="w">  </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
+<section id="id6">
+<h3>日志与可观测相关配置<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.log.logDir</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/sn/datasystem/logs&quot;</span></code></p></td>
+<td><p>日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.logLevel</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3]</p></td>
+</tr>
+<tr class="row-even"><td><p>global.log.logAsync</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否开启异步刷新日志功能</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.logAsyncQueueSize</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
+<td><p>异步日志的消息队列大小</p></td>
+</tr>
+<tr class="row-even"><td><p>global.log.logCompress</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.logBufSecs</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10</span></code></p></td>
+<td><p>最多缓冲这么多秒的日志消息</p></td>
+</tr>
+<tr class="row-even"><td><p>global.log.logFilename</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>日志前缀名，当值为空时前缀名为 <code class="docutils literal notranslate"><span class="pre">datasystem_worker</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.logRetentionDay</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>日志保留天数，当该值大于0时，最后修改时间早于 <code class="docutils literal notranslate"><span class="pre">logRetentionDay</span></code> 的日志文件将会被删除；当该值为0时表示禁用该功能</p></td>
+</tr>
+<tr class="row-even"><td><p>global.log.maxLogFileNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">25</span></code></p></td>
+<td><p>最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.maxLogSize</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">400</span></code></p></td>
+<td><p>单个日志文件最大大小（以MB为单位）</p></td>
+</tr>
+<tr class="row-even"><td><p>global.observability.logMonitor</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否开启接口性能与资源观测日志</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.observability.logMonitorExporter</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code></p></td>
+<td><p>指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下</p></td>
+</tr>
+<tr class="row-even"><td><p>global.observability.logMonitorIntervalMs</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10000</span></code></p></td>
+<td><p>观测日志收集导出的间隔时间（以毫秒为单位）</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.minLogLevel</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>设置记录冗余日志的最低级别，低于这个级别的日志不会被记录</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 配置日志路径为 &#39;/home/sn/datasystem/openeuler_datasystem/logs&#39;，日志前缀名为 &#39;openeuler_datasystem&#39;</span>
+<span class="w">  </span><span class="nt">log</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">logDir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/sn/datasystem/openeuler_datasystem/logs</span>
+<span class="w">    </span><span class="nt">logAsyncQueueSize</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65536</span>
+<span class="w">    </span><span class="nt">logLevel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<span class="w">    </span><span class="nt">maxLogSize</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">400</span>
+<span class="w">    </span><span class="nt">maxLogFileNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25</span>
+<span class="w">    </span><span class="nt">logRetentionDay</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<span class="w">    </span><span class="nt">logAsync</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">logBufSecs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<span class="w">    </span><span class="c1"># 开启日志压缩功能，历史日志将被压缩成gzip格式节约磁盘空间</span>
+<span class="w">    </span><span class="nt">logCompress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="c1"># 日志前缀名，配置为 &#39;openeuler_datasystem&#39;</span>
+<span class="w">    </span><span class="nt">logFilename</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openeuler_datasystem&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="id7">
+<h3>二级缓存相关配置<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.l2Cache.l2CacheType</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;none&quot;</span></code></p></td>
+<td><p>配置二级缓存类型，<code class="docutils literal notranslate"><span class="pre">none</span></code> 表示不配置二级缓存，可选择二级缓存类型：[<code class="docutils literal notranslate"><span class="pre">obs</span></code>, <code class="docutils literal notranslate"><span class="pre">sfs</span></code>]</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.l2CacheDeleteThreadNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">32</span></code></p></td>
+<td><p>配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-0">
+OBS</label><div class="sd-tab-content docutils">
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.l2Cache.obs.obsAccessKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>对象存储服务(OBS) AK/SK认证的访问密钥(Access Key)</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.obs.obsSecretKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>对象存储服务(OBS) AK/SK认证的密钥(Secret Key)</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.obs.obsEndpoint</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>对象存储服务(OBS) 访问域名</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.obs.obsBucket</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>对象存储服务(OBS) 桶的名称</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.obs.obsHttpsEnabled</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否启用HTTPS连接对象存储服务（OBS），默认为HTTP</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.enable</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否使用CCMS凭据轮换模式访问OBS，默认值为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。若启用此模式，则至少需指定 <code class="docutils literal notranslate"><span class="pre">iamHostName</span></code>（IAM服务地址）、<code class="docutils literal notranslate"><span class="pre">identityProvider</span></code>（身份提供商）、<code class="docutils literal notranslate"><span class="pre">projectId</span></code>（项目ID）及 <code class="docutils literal notranslate"><span class="pre">regionId</span></code>（区域ID）。</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.iamHostName</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>需要获取的IAM token的域名。例如：iam.cn-beijing-4.myhuaweicloud.com</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.identityProvider</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>为 openYuanrong datasystem 提供权限的 Provider。例如：csms-datasystem</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.projectId</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>对象存储服务(OBS) 的项目ID。例如：fb6a00ff7ae54a5fbb8ff855d0841d00。</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.regionId</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>对象存储服务(OBS) 的区域ID。例如：cn-north-7</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.enableTokenByAgency</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否通过委托代理访问其他账号的 对象存储服务(OBS) ，默认值为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。若设为 <code class="docutils literal notranslate"><span class="pre">true</span></code>，需指定 <code class="docutils literal notranslate"><span class="pre">tokenAgencyName</span></code> 和 <code class="docutils literal notranslate"><span class="pre">tokenAgencyDomain</span></code>。</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyDomain</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>用于代理访问其他账号的委托名称。例如：obs_access</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyName</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>用于代理访问其他账号的委托方域名。例如：op_svc_cff</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-1">
+SFS</label><div class="sd-tab-content docutils">
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.l2Cache.sfsTurbo.endpoint</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>sfs-turbo 的接入点，例如：127.0.0.1</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.sfsTurbo.subPath</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>挂载到 datasystem-worker 的 sfs-turbo 子路径。若未指定该参数，默认挂载 sfs-turbo 的根目录 “/”</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.sfsTurbo.id</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;0&quot;</span></code></p></td>
+<td><p>指定 sfs-turbo 的 ID，该 ID 可在 sfs-turbo 页面查看</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.l2Cache.sfsTurbo.projectId</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;0&quot;</span></code></p></td>
+<td><p>指定sfs-turbo的企业项目ID，该ID可在sfs-turbo页面查看</p></td>
+</tr>
+<tr class="row-even"><td><p>global.l2Cache.sfsTurbo.capacity</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;500Gi&quot;</span></code></p></td>
+<td><p>指定 sfs-turbo 的最大可用容量，该值必须要小于 sfs-turbo 的实际可用大小</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</section>
+<section id="az">
+<h3>AZ相关配置<a class="headerlink" href="#az" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.azName</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;AZ1&quot;</span></code></p></td>
+<td><p>可用区的名称</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.crossAz.otherAzNames</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>指定其他可用区的名称，如果需要指定多个可用区通过’,’进行分隔</p></td>
+</tr>
+<tr class="row-even"><td><p>global.crossAz.crossAzGetDataFromWorker</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则将直接从二级缓存中检索数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.crossAz.crossAzGetMetaFromWorker</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否从其他可用区的datasystem-worker获取元数据，如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则从本地可用区获取元数据</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">azName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;az1&quot;</span>
+
+<span class="w">  </span><span class="nt">crossAz</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">otherAzNames</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;az2,az3,az4&quot;</span>
+<span class="w">    </span><span class="nt">crossAzGetDataFromWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">crossAzGetMetaFromWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</pre></div>
+</div>
+</section>
+<section id="id8">
+<h3>元数据相关配置<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.metadata.enableMetaReplica</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否开启元数据多副本功能</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.metadata.rocksdbStoreDir</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/sn/datasystem/rocksdb&quot;</span></code></p></td>
+<td><p>配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中</p></td>
+</tr>
+<tr class="row-even"><td><p>global.metadata.rocksdbBackgroundThreads</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
+<td><p>RocksDB的后台线程数，用于元数据的刷盘和压缩</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.metadata.rocksdbMaxOpenFile</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
+<td><p>RocksDB可使用的最大打开文件个数</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id9">
+<h3>可靠性相关配置<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.reliability.clientReconnectWaitS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>客户端断链重连最大等待时间（单位为秒）</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.reliability.clientDeadTimeoutS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">120</span></code></p></td>
+<td><p>客户端存活检测最大时间间隔（单位为秒）</p></td>
+</tr>
+<tr class="row-even"><td><p>global.reliability.heartbeatIntervalMs</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1000</span></code></p></td>
+<td><p>服务端与ETCD的心跳间隔时间（单位为毫秒）</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.reliability.nodeTimeoutS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>服务端节点超时最大时间间隔（单位为秒）</p></td>
+</tr>
+<tr class="row-even"><td><p>global.reliability.nodeDeadTimeoutS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 <code class="docutils literal notranslate"><span class="pre">nodeTimeoutS</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>global.reliability.enableReconciliation</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>当节点重启时是否启用对账功能</p></td>
+</tr>
+<tr class="row-even"><td><p>global.reliability.enableHashRingSelfHealing</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否启用哈希环自愈功能，如果该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code>，当哈希环状态异常时会启用自愈修复哈希环</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.reliability.livenessProbeTimeoutS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">150</span></code></p></td>
+<td><p>Kubernetes 存活探针超时时间配置</p></td>
+</tr>
+<tr class="row-even"><td><p>global.reliability.addNodeWaitTimeS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>新节点加入哈希环的等待超时时间</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.reliability.autoDelDeadNode</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否启用死亡节点自动清理功能，当该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，会将死亡节点剔除出集群管理，并触发被动缩容</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id10">
+<h3>优雅退出相关配置<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.gracefulShutdown.scaleInTaint</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;datasystem/offline=true:NoExecute&quot;</span></code></p></td>
+<td><p>识别优雅退出的污点，格式为 <code class="docutils literal notranslate"><span class="pre">key=value:effect</span></code>。当节点打上与 <code class="docutils literal notranslate"><span class="pre">scaleInTaint</span></code> 相匹配的污点时，该节点上的 datasystem-worker 会触发主动缩容优雅退出</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.gracefulShutdown.enableLosslessDataExitMode</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否启用无损数据退出模式，当该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失</p></td>
+</tr>
+<tr class="row-even"><td><p>global.gracefulShutdown.checkAsyncQueueEmptyTimeS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">15</span></code></p></td>
+<td><p>datasystem-worker检测异步队列为空的时间，单位为秒</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.gracefulShutdown.dataMigrateRateLimitMb</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">40</span></code></p></td>
+<td><p>配置优雅退出数据迁移的流控（以MB/s为单位）</p></td>
+</tr>
+<tr class="row-even"><td><p>global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>优雅退出的最大处理时间，0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id11">
+<h3>性能相关配置<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.performance.enableHugeTlb</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.performance.enableFallocate</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。缺省情况下，fallocate是使能的。启用fallocate会降低内存分配的效率</p></td>
+</tr>
+<tr class="row-even"><td><p>global.performance.sharedMemoryPopulate</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，’arenaPerTenant’必须设置为1，’enableFallocate’必须设置为false</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.performance.enableThp</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加</p></td>
+</tr>
+<tr class="row-even"><td><p>global.performance.arenaPerTenant</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
+<td><p>每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32]</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.performance.memoryReclamationTimeSecond</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
+<td><p>释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率</p></td>
+</tr>
+<tr class="row-even"><td><p>global.performance.asyncDelete</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否异步删除对象，如果设置为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="ak-sk">
+<h3>AK/SK相关配置<a class="headerlink" href="#ak-sk" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.akSk.systemAccessKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>系统访问密钥</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.akSk.systemSecretKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>系统密钥</p></td>
+</tr>
+<tr class="row-even"><td><p>global.akSk.tenantAccessKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>租户访问密钥</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.akSk.tenantSecretKey</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>租户密钥</p></td>
+</tr>
+<tr class="row-even"><td><p>global.akSk.requestExpireTimeS</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>请求过期时间，单位为秒，最大值为300</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="kubernetes">
+<h3>Kubernetes亲和性相关配置<a class="headerlink" href="#kubernetes" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.affinity.nodeSelector</p></td>
+<td><p>object</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
+<td><p>亲和标签，控制Pod调度到符合特定条件的Node节点</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.affinity.nodeAffinity</p></td>
+<td><p>object</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
+<td><p>亲和标签，精确控制Pod调度到符合特定条件的Node节点，相比 <code class="docutils literal notranslate"><span class="pre">nodeSelector</span></code> 支持更强大的高级调度策略</p></td>
+</tr>
+<tr class="row-even"><td><p>global.affinity.tolerations</p></td>
+<td><p>list</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
+<td><p>污点容忍标签，Pod被动接受节点的排斥，不会被驱逐</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id12">
+<h3>挂载路径相关配置<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<p>挂载路径相关配置一般与<a class="reference internal" href="#spill">Spill相关配置</a>相配合使用。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.mount.hostPath</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>主机路径</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.mount.mountPath</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>容器内挂载路径</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">mount</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># Spill挂载路径1</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/data/ssd1/yr_datasystem_spill&quot;</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill1&quot;</span>
+<span class="w">    </span><span class="c1"># Spill挂载路径2</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/data/ssd2/yr_datasystem_spill&quot;</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill2&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h3>混合部署相关配置<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.multiSpec</p></td>
+<td><p>list</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
+<td><p>混合部署支持，默认情况下所有openYuanrong datasystem的DaemonSet Pod都是相同规格的，如果需要配置不同规格的Pod，需要使用该配置，该配置需要与节点亲和性标签一起配合使用</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>样例</strong>：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># ...</span>
+<span class="w">  </span><span class="nt">multiSpec</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 在亲和性标签为 `mid` 的节点部署第一种规格的Pod</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ds-worker-mid&quot;</span>
+<span class="w">    </span><span class="nt">affinityLabel</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;mid&quot;</span>
+<span class="w">    </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3&quot;</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4Gi&quot;</span>
+<span class="w">      </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3&quot;</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4Gi&quot;</span>
+<span class="w">    </span><span class="nt">workerResources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">sharedMemory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<span class="w">  </span><span class="c1"># 在亲和性标签为 `small` 的节点部署第一种规格的Pod</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ds-worker-small&quot;</span>
+<span class="w">    </span><span class="nt">affinityLabel</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;small&quot;</span>
+<span class="w">    </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;2&quot;</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3Gi&quot;</span>
+<span class="w">      </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1&quot;</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;2Gi&quot;</span>
+<span class="w">    </span><span class="nt">workerResources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">sharedMemory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<span class="w">  </span><span class="c1"># 在亲和性标签为 `big` 的节点部署第一种规格的Pod</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ds-worker-big&quot;</span>
+<span class="w">    </span><span class="nt">affinityLabel</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;big&quot;</span>
+<span class="w">    </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;5&quot;</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;6Gi&quot;</span>
+<span class="w">      </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4&quot;</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;5Gi&quot;</span>
+<span class="w">    </span><span class="nt">workerResources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">sharedMemory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2048</span>
+</pre></div>
+</div>
+</section>
+<section id="id14">
+<h3>Kubernetes精细化控制配置<a class="headerlink" href="#id14" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置项</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>global.annotations</p></td>
+<td><p>object</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
+<td><p>Kubernetes 元注解</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.enableNonPreemptive</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>配置priorityClass。如果该值为false，则默认priorityClass为system-cluster-key。如果为true，则会创建一个preemptionPolicy Never的priorityClass</p></td>
+</tr>
+<tr class="row-even"><td><p>global.fsGid</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;1002&quot;</span></code></p></td>
+<td><p>fsGroup配置。容器的所有进程也是附加组ID的一部分</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="dscli.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">dscli命令行工具</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../development-guide/index.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">编程接口</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">最小化配置项</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">详细配置项</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">镜像相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">命名空间相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">资源相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ipc-rpc">IPC/RPC相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#etcd">ETCD相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill">Spill相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">日志与可观测相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">二级缓存相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#az">AZ相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">元数据相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">可靠性相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">优雅退出相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">性能相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ak-sk">AK/SK相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#kubernetes">Kubernetes亲和性相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">挂载路径相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">混合部署相关配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id14">Kubernetes精细化控制配置</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By openYuanrong datasystem with CC BY 4.0 LICENSE
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025, openEuler openYuanrong datasystem.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+<div class="extra_footer">
+  
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    
+</div>
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
