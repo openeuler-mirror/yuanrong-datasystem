@@ -12,163 +12,135 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import glob
-import os
-import re
-import shutil
 import sys
-from sphinx.ext import autodoc as sphinx_autodoc
-import sphinx.ext.autosummary.generate as g
+import os
+import logging
+from pathlib import Path
+import datetime
 
-sys.path.append(os.path.abspath('../_ext'))
-from myautosummary import DsCnAutoSummary
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
-# Fix some dl-label lack class='simple'
-from docutils.writers import _html_base
+sys.path.append(str(Path("..", "api", "python").resolve()))
 
-with open(_html_base.__file__, "r", encoding="utf-8") as f:
-    code_str = f.read()
-    old_str = '''        if self.is_compactable(node):
-            classes.append('simple')'''
-    new_str = '''        if classes == []:
-            classes.append('simple')'''
-    code_str = code_str.replace(old_str, new_str)
-    exec(code_str, _html_base.__dict__)
+ENV_YR_GIT_COMMIT_ID = os.environ.get("YR_DOC_GIT_COMMIT_ID", "")
 
-# -- Project information -----------------------------------------------------
+build_time = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(
+    hours=8
+)
+current_time_str = build_time.strftime("%Y-%m-%d %H:%M:%S")
 
-project = 'openYuanrong datasystem'
-copyright = 'openYuanrong datasystem'
-author = 'openYuanrong datasystem'
+project = "openYuanrong datasystem"
+copyright = f"{build_time.year}, openEuler openYuanrong datasystem"
+author = "openYuanrong datasystem with CC BY 4.0 LICENSE"
 
-# The full version, including alpha/beta/rc tags
-release = 'master'
+logging.info(
+    f"""Doc build configs:
+ENV_YR_GIT_COMMIT_ID: {ENV_YR_GIT_COMMIT_ID}
+
+current_date: {current_time_str}
+project: {project}
+copyright: {copyright}
+author: {author}
+"""
+)
+
+templates_path = ["../_templates"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+
+    "README.md",
+    "sample_code",
+    "multi_language_function_programming_interface/api/distributed_programming/C++",
+    "multi_language_function_programming_interface/api/distributed_programming/Java",
+    "multi_language_function_programming_interface/api/distributed_programming/Python",
+
+    ""
+]
 
 # -- General configuration ---------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-html_static_path = [os.path.abspath('../_static')]
-
-html_css_files = [
-    'custom.css',
-]
-
-# Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
-# ones.
-myst_enable_extensions = ["dollarmath", "amsmath", "colon_fence"]
-
-myst_heading_anchors = 5
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.doctest',
-    'sphinx.ext.intersphinx',
-    'sphinx.ext.todo',
-    'sphinx.ext.coverage',
-    'sphinx.ext.napoleon',
-    'sphinx.ext.mathjax',
-    'IPython.sphinxext.ipython_console_highlighting',
-    'myst_parser',
-    'sphinx_design',
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.viewcode",
+    "sphinx_design",
+    "sphinx_copybutton",
+    "sphinx_togglebutton",
+    "myst_parser",
+    "breathe",
+    "sphinxcontrib.openapi",  # 添加 sphinxcontrib-openapi 扩展
 ]
 
-source_suffix = {
-    '.rst': 'restructuredtext',
-    '.md': 'markdown',
-}
+autoclass_content = "both"
+copybutton_exclude = ".linenos, .gp, .go"
 
-# Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
 
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
-mathjax_path = 'https://mindspore-website.obs.cn-north-4.myhuaweicloud.com/mathjax/MathJax-3.2.2/es5/tex-mml-chtml.js'
-
-mathjax_options = {
-    'async':'async'
-}
-
-nbsphinx_requirejs_path = 'https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js'
-
-nbsphinx_requirejs_options = {
-    "crossorigin": "anonymous",
-    "integrity": "sha256-1fEPhSsRKlFKGfK3eO710tEweHh1fwokU5wFGDHO+vg="
-}
-
-smartquotes_action = 'De'
-
-exclude_patterns = []
-
-pygments_style = 'sphinx'
-
-autodoc_inherit_docstrings = False
+# -----------------------------------------------------------------------------
+#   FOR PYTHON API GENEREATE
+# -----------------------------------------------------------------------------
+autodoc_mock_imports = ["acl", "requests", "fastapi", "numpy"]
 
 autosummary_generate = True
-
-autosummary_generate_overwrite = False
-
-html_search_language = 'zh'
-
-# -- Options for HTML output -------------------------------------------------
-
-# Reconstruction of sphinx auto generated document translation.
-
-language = 'zh_CN'
-locale_dirs = ['../../../../resource/locale/']
-gettext_compact = False
-
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-#
-html_theme = 'sphinx_rtd_theme'
-
-# Modify regex for sphinx.ext.autosummary.generate.find_autosummary_in_lines.
-gfile_abs_path = os.path.abspath(g.__file__)
-autosummary_re_line_old = r"autosummary_re = re.compile(r'^(\s*)\.\.\s+autosummary::\s*')"
-autosummary_re_line_new = r"autosummary_re = re.compile(r'^(\s*)\.\.\s+(ms[a-z]*)?autosummary::\s*')"
-with open(gfile_abs_path, "r+", encoding="utf8") as f:
-    data = f.read()
-    data = data.replace(autosummary_re_line_old, autosummary_re_line_new)
-    exec(data, g.__dict__)
-
-# Modify default signatures for autodoc.
-autodoc_source_path = os.path.abspath(sphinx_autodoc.__file__)
-autodoc_source_re = re.compile(r'stringify_signature\(.*?\)')
-get_param_func_str = r"""\
-import re
-import inspect as inspect_
-
-def get_param_func(func):
-    try:
-        source_code = inspect_.getsource(func)
-        if func.__doc__:
-            source_code = source_code.replace(func.__doc__, '')
-        all_params_str = re.findall(r"def [\w_\d\-]+\(([\S\s]*?)(\):|\) ->.*?:)", source_code)
-        if "@classmethod" in source_code:
-            all_params = re.sub("(self|cls)(,|, )?", '', all_params_str[0][0].replace("\n", ""))
-        else:
-            all_params = re.sub("(self)(,|, )?", '', all_params_str[0][0].replace("\n", ""))
-        return all_params
-    except:
-        return ''
-
-def get_obj(obj):
-    if isinstance(obj, type):
-        return obj.__init__
-
-    return obj
-"""
-
-with open(autodoc_source_path, "r+", encoding="utf8") as f:
-    code_str = f.read()
-    code_str = autodoc_source_re.sub('"(" + get_param_func(get_obj(self.object)) + ")"', code_str, count=0)
-    exec(get_param_func_str, sphinx_autodoc.__dict__)
-    exec(code_str, sphinx_autodoc.__dict__)
+autosummary_generate_overwrite = True  # 覆盖已生成的文件
+autosummary_ignore_module_all = False  # 不忽略 __all__ 的限制
+autosummary_imported_members = True
 
 
+# -----------------------------------------------------------------------------
+#   HTML templates
+# -----------------------------------------------------------------------------
+html_logo = "./images/logo-small.png"
+html_theme = "sphinx_book_theme"
 
-def setup(app):
-    app.add_directive('dscnautosummary', DsCnAutoSummary)
-    app.add_config_value('rst_files', set(), False)
+html_static_path = ["../_static"]
+html_css_files = [
+    "custom.css",
+]
 
+html_theme_options = {
+    "show_navbar_depth": 1,
+    "max_navbar_depth": 7,
+    "collapse_navigation": True,
+    "extra_footer": """
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    """
+}
+
+# -----------------------------------------------------------------------------
+#   Myst extensions
+# -----------------------------------------------------------------------------
+myst_enable_extensions = [
+    "dollarmath",
+    "amsmath",
+    "deflist",
+    "fieldlist",
+    "html_admonition",
+    "html_image",
+    "colon_fence",
+    "smartquotes",
+    "replacements",
+    "strikethrough",
+    "substitution",
+    "tasklist",
+    "attrs_inline",
+    "attrs_block",
+]
+
+myst_heading_anchors = 4
+
+# -----------------------------------------------------------------------------
+#   breathe config
+# -----------------------------------------------------------------------------
+breathe_projects = {"openYuanrong_datasystem": "./../.doxygendocs/xml"}
+breathe_default_project = "openYuanrong_datasystem"

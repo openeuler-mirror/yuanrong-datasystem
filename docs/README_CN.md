@@ -19,7 +19,7 @@ docs
 
 openYuanrong datasystem的教程和API文档均可由[Sphinx](https://www.sphinx-doc.org/en/master/)工具生成，操作前需完成openYuanrong datasystem的安装。
 
-1. 使用pip安装openYuanrong datasystem模块，API文档需要根据安装后的openYuanrong datasystem模块生成，参考[安装](source_zh_cn/getting-started/install.md)。
+1. 使用pip安装openYuanrong datasystem模块，API文档需要根据安装后的openYuanrong datasystem模块生成，参考[安装](source_zh_cn/installation/installation_linux.md)。
 
    ```bash
    pip install openyuanrong_datasystem-*.whl
