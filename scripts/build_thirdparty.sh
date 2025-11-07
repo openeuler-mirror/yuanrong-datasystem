@@ -104,11 +104,11 @@ function on_exit() {
   local total_duration=$((end_time - overall_start_time))
   
   if [ $exit_status -eq 0 ]; then
-      echo "$total_duration" > "${TIME_DIR}/${lib_name}.time"
-      touch "${PROGRESS_DIR}/${lib_name}.complete"
-      log "$lib_name build success - ${total_duration}s"
+    echo "$total_duration" > "${TIME_DIR}/${lib_name}.time"
+    touch "${PROGRESS_DIR}/${lib_name}.complete"
+    log "$lib_name build success - ${total_duration}s"
   else
-      log "$lib_name build failed!!! see ${tmp_compile_dir}/log for details"
+    log "$lib_name build failed, see ${tmp_compile_dir}/log for details"
   fi
 }
 
@@ -127,29 +127,29 @@ function wait_for_dependencies() {
     local wait_start_time=$(date +%s)
     
     for ((i=1; i<=timeout; i++)); do
-        all_files_created=true
-        missing_deps=()
-        for file in "${lib_dependencies[@]}"; do
-            if [ ! -f "${DEPENDENCY_DIR}/${file}.complete" ]; then
-                all_files_created=false
-                missing_deps+=("$file")
-            fi
-        done
-
-        if [ "$all_files_created" = true ]; then
-            local current_time=$(date +%s)
-            local wait_duration=$((current_time - wait_start_time))
-            log "$lib_name all dependencies ready (waited ${wait_duration}s)"
-            return 0
+      all_files_created=true
+      missing_deps=()
+      for file in "${lib_dependencies[@]}"; do
+        if [ ! -f "${DEPENDENCY_DIR}/${file}.complete" ]; then
+          all_files_created=false
+          missing_deps+=("$file")
         fi
+      done
 
-        # 每30秒显示一次等待状态
-        if [ $((i % 30)) -eq 0 ]; then
-            local current_time=$(date +%s)
-            local elapsed=$((current_time - wait_start_time))
-            log "$lib_name still waiting for: ${missing_deps[*]} (${elapsed}s elapsed)"
-        fi
-        sleep 1
+      if [ "$all_files_created" = true ]; then
+        local current_time=$(date +%s)
+        local wait_duration=$((current_time - wait_start_time))
+        log "$lib_name all dependencies ready (waited ${wait_duration}s)"
+        return 0
+      fi
+
+      # Display wait status every 30 seconds.
+      if [ $((i % 30)) -eq 0 ]; then
+        local current_time=$(date +%s)
+        local elapsed=$((current_time - wait_start_time))
+        log "$lib_name still waiting for: ${missing_deps[*]} (${elapsed}s elapsed)"
+      fi
+      sleep 1
     done
     
     log_failed "$lib_name timeout waiting for dependencies"
@@ -170,7 +170,7 @@ function main() {
   
   log "Total libraries to compile: $TOTAL_LIBS"
 
-  # 编译 L0 级别的库（无依赖）
+  # Compile L0-level libraries (dependency-free)
   log "Building independent libraries (L0)"
   for cmake_file in "${CMAKE_FILES_L0[@]}";
   do
@@ -200,14 +200,14 @@ EOF
 
   touch ${MULTI_BUILD_PATH}/L1_ENV
   
-  # 编译 L1 级别的库（有依赖）
+  # Compile L1-level libraries
   log "Building dependent libraries (L1)"
   for cmake_file in "${CMAKE_FILES_L1[@]}";
   do
     tmp_compile_dir="${MULTI_BUILD_PATH}/${cmake_file%%.*}"
     mkdir -p "${tmp_compile_dir}"
     
-    # 查找依赖关系
+    # Find dependencies
     dependencies=""
     for dep in "${DEPENDENCIES[@]}"; do
       if [[ "$dep" == "${cmake_file%%.*}:"* ]]; then
@@ -219,7 +219,7 @@ EOF
     (
       lib_name="${cmake_file%%.*}"
       overall_start_time=$(date +%s)
-      # 等待依赖项完成
+      # Wait for dependencies to complete
       if ! wait_for_dependencies "$lib_name" "$dependencies"; then
           exit 1
       fi
@@ -238,10 +238,10 @@ include(${DATASYSTEM_HOME}/cmake/options.cmake)
 include(${DATASYSTEM_HOME}/cmake/util.cmake)
 include(${DATASYSTEM_HOME}/cmake/external_libs/${cmake_file})
 EOF
-        mkdir -p build && cd build
-        cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
-        cmake --build . -j "${BUILD_THREAD_NUM}" >> "${tmp_compile_dir}/log" 2>&1
-        touch ${DEPENDENCY_DIR}/${lib_name}.complete
+      mkdir -p build && cd build
+      cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
+      cmake --build . -j "${BUILD_THREAD_NUM}" >> "${tmp_compile_dir}/log" 2>&1
+      touch ${DEPENDENCY_DIR}/${lib_name}.complete
     ) &
   done
   wait
