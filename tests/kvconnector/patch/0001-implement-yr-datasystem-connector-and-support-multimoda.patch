@@ -1392,9 +1392,9 @@ index 0000000..9b7407a
 +            if len(key_list) != len(block_id_list):
 +                logger.error(f"mget_tensors_h2d fail, request.request_id:{request.request_id}.")
 +
-+            future = self.kvc_store.mget_page_attn_blockwise_h2d(key_list, self.key_caches, block_id_list)
++            future = self.kvc_store.mget_page_attn_blockwise_h2d(key_list, self.key_caches, block_id_list, 10000)
 +            future_1 = self.kvc_store.mget_page_attn_blockwise_h2d(value_cache_key_list, self.value_caches,
-+                                                                   block_id_list)
++                                                                   block_id_list, 10000)
 +            if not self.do_async_save:
 +                get_future(future, SYNC_FUTURE_TIMEOUT)
 +                get_future(future_1, SYNC_FUTURE_TIMEOUT)
