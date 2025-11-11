@@ -573,7 +573,7 @@ private:
      * @param[out] failedIds Failed get object keys.
      * @return Status of the call.
      */
-    void BatchGetObjectHandleIndividualStatus(Status &status, const std::string &objectKey, ReadKey readKey,
+    void BatchGetObjectHandleIndividualStatus(Status &status, const std::string &objectKey, const ReadKey &readKey,
                                               std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                               std::unordered_set<std::string> &failedIds);
 

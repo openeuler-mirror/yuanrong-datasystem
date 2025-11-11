@@ -104,6 +104,7 @@ Status ZmqFrontend::ExchangeJfr()
         // Send our own jfr
         UrmaHandshakeReqPb rq;
         UrmaManager::Instance().GetLocalUrmaInfo().ToProto(rq);
+        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(rq));
         MetaPb meta = CreateMetaData("", ZMQ_EXCHANGE_JFR_METHOD, ZMQ_INVALID_PAYLOAD_INX, GetStringUuid());
         ZmqMsgFrames p;
         RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, p));

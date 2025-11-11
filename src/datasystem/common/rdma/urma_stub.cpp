@@ -22,6 +22,12 @@ namespace datasystem {
 __attribute__((weak)) UrmaManager::UrmaManager() = default;
 __attribute__((weak)) UrmaManager::~UrmaManager() = default;
 
+Status __attribute__((weak)) UrmaManager::GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq)
+{
+    (void)handshakeReq;
+    return Status::OK();
+}
+
 Status __attribute__((weak)) UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
 {
     (void)req;

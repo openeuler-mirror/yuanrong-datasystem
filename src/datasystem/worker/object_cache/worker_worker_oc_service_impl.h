@@ -120,7 +120,7 @@ private:
      * @param[out] keys The request id to wait for if not blocking.
      * @return Status of the call.
      */
-    Status GetObjectRemoteBatchWrite(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+    Status GetObjectRemoteBatchWrite(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                      std::vector<RpcMessage> &payload, std::vector<uint64_t> &keys);
 
     /**
@@ -132,7 +132,7 @@ private:
      * @param[out] keys The request id to wait for if not blocking.
      * @return Status of the call.
      */
-    Status GetObjectRemoteHandler(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+    Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &keys);
 
     /**

@@ -20,13 +20,14 @@
 #include "datasystem/common/rdma/urma_manager.h"
 
 #include "datasystem/common/constants.h"
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/utils/status.h"
 #include "urma_opcode.h"
@@ -470,33 +471,28 @@ Status AddUbBondSegInfo(urma_context_t *ctx, urma_bond_add_remote_seg_info_in_t 
 #endif
 }  // namespace
 
-Status UrmaManager::GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, const uint64_t &shmOffset,
-                                   const uint64_t &metaSz, const HostPort &localAddress, UrmaImportSegmentPb &segInfo)
+Status UrmaManager::GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq)
 {
-    SegmentMap::ConstAccessor constAccessor;
-    RETURN_IF_NOT_OK(GetOrRegisterSegment(segAddress, segSize, constAccessor));
-    auto &localSegment = constAccessor.entry->data.segment_;
-    auto segPb = segInfo.mutable_seg();
-    UrmaSeg::ToProto(localSegment->seg, *segPb);
-    LOG(INFO) << "local seg info: " << UrmaSeg::ToString(localSegment->seg);
-
-    if (IsRegisterWholeArenaEnabled()) {
-        segInfo.set_seg_data_offset(shmOffset + metaSz);
-    } else {
-        segInfo.set_seg_data_offset(metaSz);
-    }
-    segInfo.mutable_request_address()->set_host(localAddress.Host());
-    segInfo.mutable_request_address()->set_port(localAddress.Port());
+    PerfPoint point(PerfKey::WORKER_URMA_GET_SEGMENT);
+    // Traverse the list of local registered segments.
+    std::unique_lock<std::shared_timed_mutex> l(localMapMutex_);
+    for (auto iter = localSegmentMap_->begin(); iter != localSegmentMap_->end(); iter++) {
+        auto *segInfo = handshakeReq.add_seg_infos();
+        auto &localSegment = iter->second.data.segment_;
+        auto segPb = segInfo->mutable_seg();
+        UrmaSeg::ToProto(localSegment->seg, *segPb);
+        LOG(INFO) << "local seg info: " << UrmaSeg::ToString(localSegment->seg);
 #ifdef URMA_OVER_UB
-    // UB bond prehandling for segment.
-    if (GetUrmaMode() == UrmaMode::UB) {
-        UrmaBondSegInfo info;
-        RETURN_IF_NOT_OK(GetUbBondSegInfo(localSegment.get(), info.raw));
-        auto *bondInfo = segInfo.mutable_bond_info();
-        info.ToProto(*bondInfo);
-        LOG(INFO) << "local bond seg info: " << info.ToString();
-    }
+        // UB bond prehandling for segment.
+        if (GetUrmaMode() == UrmaMode::UB) {
+            UrmaBondSegInfo info;
+            RETURN_IF_NOT_OK(GetUbBondSegInfo(localSegment.get(), info.raw));
+            auto *bondInfo = segInfo->mutable_bond_info();
+            info.ToProto(*bondInfo);
+            LOG(INFO) << "local bond seg info: " << info.ToString();
+        }
 #endif
+    }
     return Status::OK();
 }
 
@@ -740,8 +736,6 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
 Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
 {
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
-    // Do not need to import jfr for the local node.
-    RETURN_OK_IF_TRUE(localUrmaInfo_.localAddress == urmaInfo.localAddress);
     const std::string remoteDeviceId = urmaInfo.localAddress.ToString();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     // Insert or update the import jfr (in case the sending worker restarts)
@@ -807,15 +801,36 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     return Status::OK();
 }
 
-Status UrmaManager::ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo, const uint64_t &localSegAddress,
-                                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                             const uint64_t &readOffset, const uint64_t &readSize,
-                                             const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys)
+Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
+{
+    const HostPort requestAddress(req.address().host(), req.address().port());
+    const std::string remoteDeviceId = requestAddress.ToString();
+    PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
+    std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
+    RemoteDeviceMap::ConstAccessor constAccessor;
+    // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
+    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
+                                         FormatString("Failed to find jfr from %s", remoteDeviceId));
+    point1.Record();
+    PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
+    for (int i = 0; i < req.seg_infos_size(); i++) {
+        auto &segInfo = req.seg_infos(i);
+        RETURN_IF_NOT_OK(constAccessor.entry->data.ImportRemoteSeg(urmaContext_, segInfo));
+    }
+    point2.Record();
+    return Status::OK();
+}
+
+Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                     const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                     const uint64_t &readOffset, const uint64_t &readSize,
+                                     const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys)
 {
     // Note that the returned keys only contain the new key(s).
     keys.clear();
     PerfPoint point(PerfKey::URMA_IMPORT_AND_WRITE_PAYLOAD);
-    auto segVa = urmaInfo.seg().va();
+    auto segVa = urmaInfo.seg_va();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
     const std::string remoteDeviceId = requestAddress.ToString();
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
@@ -828,7 +843,7 @@ Status UrmaManager::ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo
     point1.Record();
     PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
     SegmentMap::ConstAccessor remoteSegAccessor;
-    RETURN_IF_NOT_OK(constAccessor.entry->data.GetOrImportRemoteSeg(urmaContext_, urmaInfo, remoteSegAccessor));
+    RETURN_IF_NOT_OK(constAccessor.entry->data.GetRemoteSeg(segVa, remoteSegAccessor));
     point2.Record();
 
     PerfPoint point3(PerfKey::URMA_REGISTER_LOCAL_SEGMENT);
@@ -922,7 +937,10 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
         UrmaJfrInfo urmaInfo;
         RETURN_IF_NOT_OK(urmaInfo.FromProto(req));
         LOG(INFO) << "Start import remote jfr, remote urma info: " << urmaInfo.ToString();
+        // Do not need to import remote jfr or segment for the local node.
+        RETURN_OK_IF_TRUE(localUrmaInfo_.localAddress == urmaInfo.localAddress);
         LOG_IF_ERROR(mgr.ImportRemoteJfr(urmaInfo), "Error in import incoming jfr");
+        LOG_IF_ERROR(mgr.ImportRemoteInfo(req), "Error in import remote segments");
         // Do not need to fill in jfr response for urma_write scenario.
     }
     return Status::OK();
@@ -998,12 +1016,19 @@ void RemoteDevice::SetJfrs(std::vector<urma_target_jetty_t *> &jetties)
     }
 }
 
-Status RemoteDevice::GetOrImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &importSegmentInfo,
-                                          SegmentMap::ConstAccessor &constAccessor)
+Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor)
 {
+    if (remoteSegments_.Find(constAccessor, segVa)) {
+        return Status::OK();
+    }
+    RETURN_STATUS(K_NOT_FOUND, "Remote segment is not found");
+}
+
+Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &importSegmentInfo)
+{
+    SegmentMap::Accessor accessor;
     auto segVa = importSegmentInfo.seg().va();
-    if (!remoteSegments_.Find(constAccessor, segVa)) {
-        SegmentMap::Accessor accessor;
+    if (!remoteSegments_.Find(accessor, segVa)) {
         if (remoteSegments_.Insert(accessor, segVa)) {
             bool needErase = true;
             Raii eraseSegment([this, &accessor, &needErase]() {
@@ -1031,10 +1056,6 @@ Status RemoteDevice::GetOrImportRemoteSeg(urma_context_t *urmaContext, const Urm
             accessor.entry->data.Set(segment, false);
             needErase = false;
         }
-        accessor.Release();
-        // Switch to const accessor so it does not block the others.
-        CHECK_FAIL_RETURN_STATUS(remoteSegments_.Find(constAccessor, segVa), K_RUNTIME_ERROR,
-                                 "Failed to operate on remote segment map.");
     }
     return Status::OK();
 }

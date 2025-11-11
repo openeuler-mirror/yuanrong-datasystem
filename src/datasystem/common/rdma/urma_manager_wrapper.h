@@ -82,7 +82,7 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 
 /**
  * @brief Trigger UrmaManager logic to import segment and write payload.
- * @param[in] UrmaImportSegmentPb Protobuf contians remote worker URMA info.
+ * @param[in] UrmaRemoteAddrPb  Protobuf contians remote host address, remote urma segment address and data offset
  * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address).
  * @param[in] localSegSize Total size of the segment (e.g. Arena size).
  * @param[in] localObjectAddress Object address.
@@ -93,19 +93,9 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
  * @param[out] keys The new request id to wait for if not blocking.
  * @return Status of the call.
  */
-Status ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo, const uint64_t &localSegAddress,
-                                const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                bool blocking, std::vector<uint64_t> &keys);
+Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
+                        const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
+                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys);
 
-/**
- * @brief Fill in import segment pb for URMA.
- * @param[in] shmUnit The shared memory unit.
- * @param[in] metaSz The metadata size of shared memory.
- * @param[out] urmaInfo Protobuf contians remote worker URMA info.
- * @return Status of the call.
- */
-Status FillUrmaInfo(std::shared_ptr<ShmUnit> shmUnit, const HostPort &localAddress, uint64_t metaSz,
-                    UrmaImportSegmentPb &urmaInfo);
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RDMA_URMA_MANAGER_WRAPPER_H

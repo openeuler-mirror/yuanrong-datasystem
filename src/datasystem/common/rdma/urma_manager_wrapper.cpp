@@ -102,29 +102,9 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 #endif
 }
 
-Status FillUrmaInfo(std::shared_ptr<ShmUnit> shmUnit, const HostPort &localAddress, uint64_t metaSz,
-                    UrmaImportSegmentPb &urmaInfo)
-{
-    (void)shmUnit;
-    (void)localAddress;
-    (void)metaSz;
-    (void)urmaInfo;
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled()) {
-        uint64_t segAddress;
-        uint64_t segSize;
-        GetSegmentInfoFromShmUnit(shmUnit, reinterpret_cast<uint64_t>(shmUnit->GetPointer()), segAddress, segSize);
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(segAddress, segSize, shmUnit->GetOffset(), metaSz,
-                                                                localAddress, urmaInfo));
-    }
-#endif
-    return Status::OK();
-}
-
-Status ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo, const uint64_t &localSegAddress,
-                                const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                bool blocking, std::vector<uint64_t> &keys)
+Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
+                        const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
+                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys)
 {
     (void)urmaInfo;
     (void)localSegAddress;
@@ -136,9 +116,9 @@ Status ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo, const uint6
     (void)blocking;
     (void)keys;
 #ifdef USE_URMA
-    RETURN_IF_NOT_OK(UrmaManager::Instance().ImportSegAndWritePayload(urmaInfo, localSegAddress, localSegSize,
-                                                                      localObjectAddress, readOffset, readSize,
-                                                                      metaDataSize, blocking, keys));
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(urmaInfo, localSegAddress, localSegSize,
+                                                              localObjectAddress, readOffset, readSize, metaDataSize,
+                                                              blocking, keys));
 #endif
     return Status::OK();
 }

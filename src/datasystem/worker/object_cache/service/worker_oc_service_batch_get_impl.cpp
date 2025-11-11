@@ -236,7 +236,8 @@ void WorkerOcServiceGetImpl::GroupQueryMeta(
 }
 
 void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status, const std::string &objectKey,
-                                                                  ReadKey readKey, std::vector<std::string> &successIds,
+                                                                  const ReadKey &readKey,
+                                                                  std::vector<std::string> &successIds,
                                                                   std::vector<ReadKey> &needRetryIds,
                                                                   std::unordered_set<std::string> &failedIds)
 {

@@ -820,7 +820,21 @@ Status WorkerOcServiceGetImpl::PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &
         entry->SetShmUnit(shmUnit);
         shmUnitAllocated = true;
     }
-    RETURN_IF_NOT_OK(FillUrmaInfo(shmUnit, localAddress_, metaSz, *reqPb.mutable_urma_info()));
+    uint64_t segAddress;
+    uint64_t dataOffset;
+    if (FLAGS_urma_register_whole_arena) {
+        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer()) - shmUnit->GetOffset();
+        dataOffset = shmUnit->GetOffset() + metaSz;
+    } else {
+        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+        dataOffset = metaSz;
+    }
+    auto *urmaInfo = reqPb.mutable_urma_info();
+    urmaInfo->set_seg_va(segAddress);
+    urmaInfo->set_seg_data_offset(dataOffset);
+    auto *remoteAddr = urmaInfo->mutable_request_address();
+    remoteAddr->set_host(localAddress_.Host());
+    remoteAddr->set_port(localAddress_.Port());
     return Status::OK();
 }
 
@@ -857,11 +871,12 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
             lastRc = status;
             continue;
         }
-        datasystem::BatchGetObjectRemoteReqPb_GetObjectRemoteBaseReqPb subReq;
+        GetObjectRemoteReqPb subReq;
         subReq.set_object_key(objectKey);
         subReq.set_version((*entry)->GetCreateTime());
         subReq.set_read_offset(objectKV.GetReadOffset());
         subReq.set_read_size(objectKV.GetReadSize());
+        subReq.set_data_size(meta->data_size());
         // Prepare the protobuf with urma info for data transfer if applicable.
         // BatchGetObjectHandleIndividualStatus will free ShmUnit upon error, so no need to actually record it here.
         bool shmUnitAllocated = false;

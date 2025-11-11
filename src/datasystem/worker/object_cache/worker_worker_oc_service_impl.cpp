@@ -101,7 +101,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                             std::vector<RpcMessage> &payload,
                                                             std::vector<uint64_t> &keys)
 {
@@ -109,7 +109,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(GetObjectRemoteReqPb
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &keys)
 {
@@ -249,8 +249,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
             uint64_t localSegSize;
             GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                ImportSegAndWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset,
-                                         size, entry->GetMetadataSize(), blocking, keys),
+                UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset, size,
+                                 entry->GetMetadataSize(), blocking, keys),
                 "");
             rsp.set_data_in_payload(true);
         }
@@ -307,20 +307,9 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     for (int i = 0; i < req.requests_size(); i++) {
-        auto tempReq = req.requests(i);
-        GetObjectRemoteReqPb subReq;
-        GetObjectRemoteRspPb subRsp;
+        const auto &subReq = req.requests(i);
+        auto &subRsp = *(rsp.add_responses());
         std::vector<RpcMessage> subPayload;
-        // Note: Request id is remained empty, trace id should be able to identify the request.
-        subReq.set_object_key(tempReq.object_key());
-        subReq.set_try_lock(tempReq.try_lock());
-        subReq.set_version(tempReq.version());
-        subReq.set_read_offset(tempReq.read_offset());
-        subReq.set_read_size(tempReq.read_size());
-        if (tempReq.has_urma_info()) {
-            subReq.set_data_size(tempReq.data_size());
-            *subReq.mutable_urma_info() = std::move(tempReq.urma_info());
-        }
         std::vector<uint64_t> subKeys;
         auto status = GetObjectRemoteBatchWrite(subReq, subRsp, subPayload, subKeys);
         if (status.IsOk()) {
@@ -337,23 +326,21 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
             subRsp.mutable_error()->set_error_code(status.GetCode());
             subRsp.mutable_error()->set_error_msg(status.GetMsg());
         }
-        getObjRemoteSubRsp.emplace_back(std::move(subRsp));
     }
     pointImpl.Record();
     // Wait for urma events if the events are created and not already waited.
     for (auto &pair : keys) {
         int index = pair.first;
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
-        auto errorHandler = [index, &getObjRemoteSubRsp](Status &status) {
-            getObjRemoteSubRsp[index].mutable_error()->set_error_code(status.GetCode());
-            getObjRemoteSubRsp[index].mutable_error()->set_error_msg(status.GetMsg());
+        auto errorHandler = [index, &rsp](Status &status) {
+            rsp.mutable_responses()->at(index).mutable_error()->set_error_code(status.GetCode());
+            rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(status.GetMsg());
             return status;
         };
         (void)WaitUrmaEvent(pair.second.first, remainingTime, errorHandler);
         // Early release of ShmGuard.
         pair.second.second.clear();
     }
-    *rsp.mutable_responses() = { getObjRemoteSubRsp.begin(), getObjRemoteSubRsp.end() };
     PerfPoint pointWrite(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointWrite.Record();

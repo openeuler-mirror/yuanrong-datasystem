@@ -51,9 +51,12 @@ message UrmaBondSegInfoPb{
 }
 
 message UrmaImportSegmentPb {
-  HostPortPb request_address = 1;
-  /* segment */
-  UrmaSegPb seg = 2;
-  uint64 seg_data_offset = 3;
-  UrmaBondSegInfoPb bond_info = 4;
+  UrmaSegPb seg = 1;
+  UrmaBondSegInfoPb bond_info = 2;
+}
+
+message UrmaRemoteAddrPb {
+  uint64 seg_va = 1;
+  uint64 seg_data_offset = 2;
+  HostPortPb request_address = 3;
 }

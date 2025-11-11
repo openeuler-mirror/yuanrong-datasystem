@@ -104,14 +104,20 @@ public:
     void SetJfrs(std::vector<urma_target_jetty_t *> &jetties);
 
     /**
-     * @brief Get remote segment or import remote segment from the device.
-     * @param[in] urmaContext The urma context.
-     * @param[in] UrmaImportSegmentPb Pb with remote segment info.
-     * @param[out] constAccessor Accessor in segment table.
+     * @brief Get remote segment from the device
+     * @param[in] segVa The remote segment address
+     * @param[out] constAccessor Accessor in segment table
      * @return Status of the call.
      */
-    Status GetOrImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &urmaInfo,
-                                SegmentMap::ConstAccessor &constAccessor);
+    Status GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor);
+
+    /**
+     * @brief Import remote segment and keep record in the device
+     * @param[in] urmaContext The urma context
+     * @param[in] UrmaImportSegmentPb Pb with remote segment info
+     * @return Status of the call.
+     */
+    Status ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &urmaInfo);
 
     /**
      * @brief Unimport a remote segment
@@ -261,24 +267,25 @@ public:
     Status RegisterSegment(const uint64_t &segAddress, const uint64_t &segSize);
 
     /**
-     * @brief Fill segment info. Register the segment if not already registered.
-     * @param[in] segAddress Starting address of the segment.
-     * @param[in] segSize Size of the segment.
-     * @param[in] shmOffset The shared memory offset of the object.
-     * @param[in] metaSz The size of the shared memory metadata size.
-     * @param[in] localAddress The local worker hostport.
-     * @param[out] segInfo The urma segment info for import purposes.
+     * @brief Fill segment info into request
+     * @param[out] handshakeReq The protobuf to fill with segment info
      * @return Status of the call.
      */
-    Status GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, const uint64_t &shmOffset,
-                          const uint64_t &metaSz, const HostPort &localAddress, UrmaImportSegmentPb &segInfo);
+    Status GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq);
+
+    /**
+     * @brief Import segment info from request
+     * @param[in] handshakeReq The protobuf to import segment info from
+     * @return Status of the call.
+     */
+    Status ImportRemoteInfo(const UrmaHandshakeReqPb &req);
 
     /**
      * @brief Does a RDMA write to remote worker memory location
      * 1. Registers the segment if address is not already registered
      * 2. Imports remote segment
      * 3. does a urma write
-     * @param[in] UrmaImportSegmentPb Protobuf contians remote worker URMA info
+     * @param[in] UrmaRemoteAddrPb Protobuf contians remote host address, remote urma segment address and data offset
      * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address)
      * @param[in] localSegSize Total size of the segment (e.g. Arena size)
      * @param[in] localObjectAddress Object address
@@ -289,10 +296,10 @@ public:
      * @param[out] keys The new request id to wait for if not blocking.
      * @return Status of the call.
      */
-    Status ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo, const uint64_t &localSegAddress,
-                                    const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                    const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                    bool blocking, std::vector<uint64_t> &keys);
+    Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                            const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                            const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                            bool blocking, std::vector<uint64_t> &keys);
 
     /**
      * @brief Remove Remote Device and all associated segments

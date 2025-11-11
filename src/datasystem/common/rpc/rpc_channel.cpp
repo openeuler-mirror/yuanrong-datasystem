@@ -20,7 +20,6 @@
  */
 #include <sstream>
 #include "datasystem/common/rpc/rpc_channel.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
 
 namespace datasystem {
 RpcChannel::RpcChannel(std::string zmqEndPoint, const RpcCredential &cred)

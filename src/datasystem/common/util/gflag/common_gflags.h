@@ -29,4 +29,5 @@ DS_DECLARE_bool(enable_multi_stubs);
 DS_DECLARE_bool(enable_tcp_direct_for_multi_stubs);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
+DS_DECLARE_bool(urma_register_whole_arena);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

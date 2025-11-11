@@ -31,10 +31,10 @@ message GetObjectRemoteReqPb {
   string request_id = 2;
   bool try_lock = 3;
   uint64 version = 4;
-  uint64 read_offset = 5; // new
-  uint64 read_size = 6; // new
+  uint64 read_offset = 5;
+  uint64 read_size = 6;
   uint64 data_size = 7;
-  UrmaImportSegmentPb urma_info = 8;
+  UrmaRemoteAddrPb urma_info = 8;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -51,16 +51,7 @@ message GetObjectRemoteRspPb {
 }
 
 message BatchGetObjectRemoteReqPb {
-  message GetObjectRemoteBaseReqPb {
-    string object_key = 1;
-    bool try_lock = 2;
-    uint64 version = 3;
-    uint64 read_offset = 4;
-    uint64 read_size = 5;
-    uint64 data_size = 6;
-    UrmaImportSegmentPb urma_info = 7;
-  }
-  repeated GetObjectRemoteBaseReqPb requests = 1;
+  repeated GetObjectRemoteReqPb requests = 1;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

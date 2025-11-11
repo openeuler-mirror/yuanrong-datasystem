@@ -105,8 +105,8 @@ message UrmaHandshakeReqPb {
     repeated uint32 jfr_ids = 3;
     HostPortPb address = 4;
     repeated JfrBondInfo bond_infos = 5;
+    repeated UrmaImportSegmentPb seg_infos = 6;
 }
 
-// Exchange of jfr. Remote's jfr
 message UrmaHandshakeRspPb {
 }
