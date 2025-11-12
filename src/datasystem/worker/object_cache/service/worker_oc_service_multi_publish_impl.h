@@ -134,29 +134,45 @@ private:
     /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.
      * @param[in] objectKeys Object key list.
-     * @param[in] successIndex success index of object list
      * @param[in] entries The object entries.
      * @param[in] pubReq The request of multipublish.
-     * @param[out] resp responese info of CreateMultiMeta
+     * @param[out] versions The versions of objects
      * @return Status of the call.
      */
-    Status CreateMultiMetaToCentralMaster(const std::vector<std::string> &objectKeys, std::vector<size_t> &successIndex,
+    Status CreateMultiMetaToCentralMaster(const std::vector<std::string> &objectKeys,
                                           const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                          const MultiPublishReqPb &pubReq, master::CreateMultiMetaRspPb &resp);
+                                          const MultiPublishReqPb &pubReq, std::vector<uint64_t> &versions);
 
     /**
      * @brief Construct the request info for create multiple meta.
-     * @param[in] objectKey Object key .
-     * @param[in] entries The object entry.
+     * @param[in] entry The object entry.
      * @param[in] pubReq The request of multipublish.
-     * @param[in] blobSizes the blob size of key
-     * @param[out] req request info of CreateMultiMetaReqPb
+     * @param[out] req The multimeta request to construct.
      */
-    void ConstructCreateReq(const std::string &objectKey, const std::shared_ptr<SafeObjType> &entry,
-                            const MultiPublishReqPb &pubReq,
-                            const google::protobuf::RepeatedField<unsigned long> blobSizes,
+    void ConstructCreateReqCommon(SafeObjType &entry, const MultiPublishReqPb &pubReq,
+                                  master::CreateMultiMetaReqPb &req);
+
+    /**
+     * @brief Construct the request info for create multiple meta.
+     * @param[in] objectInfos Object info list.
+     * @param[in] entries The object entries.
+     * @param[in] pubReq The request of multipublish.
+     * @param[out] req The multimeta request to construct.
+     */
+    void ConstructCreateReq(const std::vector<std::pair<std::string, size_t>> &objectInfos,
+                            const std::vector<std::shared_ptr<SafeObjType>> &entries, const MultiPublishReqPb &pubReq,
                             master::CreateMultiMetaReqPb &req);
 
+    /**
+     * @brief Construct the request info for create multiple meta.
+     * @param[in] objectKeys Object key list.
+     * @param[in] entries The object entries.
+     * @param[in] pubReq The request of multipublish.
+     * @param[out] req The multimeta request to construct.
+     */
+    void ConstructCreateReq(const std::vector<std::string> &objectKeys,
+                            const std::vector<std::shared_ptr<SafeObjType>> &entries, const MultiPublishReqPb &pubReq,
+                            master::CreateMultiMetaReqPb &req);
     /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.
      * @param[in] objectKeys Object key list.
@@ -164,12 +180,14 @@ private:
      * @param[in] entries The object entries.
      * @param[in] pubReq The request of multipublish.
      * @param[out] resp responese info of CreateMultiMeta
+     * @param[out] versions The versions of objects.
      * @return Status of the call.
      */
     Status CreateMultiMetaToDistributedMasterNtx(const std::vector<std::string> &objectKeys,
                                                  std::vector<size_t> &successIndex,
                                                  const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                                 const MultiPublishReqPb &pubReq, master::CreateMultiMetaRspPb &resp);
+                                                 const MultiPublishReqPb &pubReq, master::CreateMultiMetaRspPb &resp,
+                                                 std::vector<uint64_t> &versions);
 
     /**
      * @brief Fill multimeta request.
@@ -187,12 +205,12 @@ private:
      * @param[in] objectKeys Object key list.
      * @param[in] entries The object entries.
      * @param[in] pubReq The request of multipublish.
-     * @param[out] resp The responese info of CreateMultiMeta.
+     * @param[out] versions The versions of objects.
      * @return Status of the call.
      */
     Status CreateMultiMetaToDistributedMaster(const std::vector<std::string> &objectKeys,
                                               const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                              const MultiPublishReqPb &pubReq, master::CreateMultiMetaRspPb &resp);
+                                              const MultiPublishReqPb &pubReq, std::vector<uint64_t> &versions);
 
     /**
      * @brief Create multimeta request to master in parallel.
@@ -242,21 +260,21 @@ private:
      * @brief Create multimeta phase two request to master.
      * @param[in] objGroup The group of objects.
      * @param[in] pubReq The request of multipublish.
-     * @param[out] resp The responese info of CreateMultiMeta.
+     * @param[out] versions The versions of objects.
      * @return Status of the call.
      */
     Status CreateMultiMetaPhaseTwo(const ObjGroupMap &objGroup, const MultiPublishReqPb &pubReq,
-                                   master::CreateMultiMetaRspPb &resp);
+                                   std::vector<uint64_t> &versions);
 
     /**
      * @brief Process 2PC results.
      * @param[in] futures The 2PC request futures.
      * @param[in] objGroup The group of objects.
-     * @param[out] resp The responese info of CreateMultiMeta.
+     * @param[out] versions The versions of objects.
      * @return Status of the call.
      */
     Status Process2PCResults(std::vector<std::future<CreateMeta2PCRes>> &futures, const ObjGroupMap &objGroup,
-                             master::CreateMultiMetaRspPb &resp);
+                             std::vector<uint64_t> &versions);
 
     /**
      * @brief Rollback metadata request to master.
@@ -300,12 +318,12 @@ private:
      * @brief Fill the entry and save object to L2 cache if success to create meta.
      * @param[in] objectKeys Object key list.
      * @param[in] entries The object entries.
-     * @param[in] rsp Response from master.
+     * @param[in] versions The versions of objects.
      * @return K_OK on success; the error code otherwise.
      */
     void UpdateObjectAfterCreatingMeta(std::vector<std::string> &objectKeys,
                                        std::vector<std::shared_ptr<SafeObjType>> entries,
-                                       const master::CreateMultiMetaRspPb &rsp, std::vector<size_t> &successIndex);
+                                       const std::vector<uint64_t> &versions, std::vector<size_t> &successIndex);
 
     /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.

@@ -247,25 +247,31 @@ message ChangePrimaryCopyRspPb {
   repeated string success_ids = 1;
 }
 
+message ConfigPb {
+  // The config of object
+
+  // For the meaning of the value, see 'WriteMode' enum class.
+  uint32 write_mode = 1;
+
+  // For the meaning of the value, see 'DataFormat' enum class.
+  uint32 data_format = 2;
+
+  // For the meaning of the value, see 'ConsistencyType' enum class.
+  uint32 consistency_type = 3;
+
+  uint32 cache_type = 4;
+
+  // If true, this won't invalidate existing copies.
+  bool is_replica = 5;
+}
+
+message ObjectBaseInfoPb {
+  string object_key = 1;
+  uint64 data_size = 2;
+  DeviceMetaInfoPb device_info = 3;
+}
+
 message ObjectMetaPb {
-  message ConfigPb {
-    // The config of object
-
-    // For the meaning of the value, see 'WriteMode' enum class.
-    uint32 write_mode = 1;
-
-    // For the meaning of the value, see 'DataFormat' enum class.
-    uint32 data_format = 2;
-
-    // For the meaning of the value, see 'ConsistencyType' enum class.
-    uint32 consistency_type = 3;
-
-    uint32 cache_type = 4;
-
-    // If true, this won't invalidate existing copies.
-    bool is_replica = 5;
-  }
-
   string object_key = 1;
   uint64 data_size = 2;
   uint64 version = 3; // version control

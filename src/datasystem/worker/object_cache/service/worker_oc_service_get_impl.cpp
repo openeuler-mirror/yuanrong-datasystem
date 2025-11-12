@@ -1822,7 +1822,7 @@ void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectM
                                                                    bool ifWorkerConnected, ObjectKV &objectKV,
                                                                    Status &status)
 {
-    const ObjectMetaPb::ConfigPb &configPb = meta.config();
+    const ConfigPb &configPb = meta.config();
     bool writeToL2Storage = WriteMode(configPb.write_mode()) != WriteMode::NONE_L2_CACHE
                             && WriteMode(configPb.write_mode()) != WriteMode::NONE_L2_CACHE_EVICT;
     // If a copy exists and the worker where the copy is located is disconnected, the data will not be cached locally

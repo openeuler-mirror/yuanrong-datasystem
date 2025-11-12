@@ -294,6 +294,16 @@ public:
     void SetMetaInfo(const ObjectMetaPb &newMeta, const std::string &address, int64_t version, ObjectMeta &metaCache);
 
     /**
+     * @brief Construct meta info for meta
+     * @param[in] req request info
+     * @param[in] info object base info
+     * @param[in] version object version
+     * @param[out] meta out meta info.
+     */
+    void ConstructMetaInfo(const CreateMultiMetaReqPb &req, const ObjectBaseInfoPb &info, int64_t version,
+                           ObjectMetaPb &meta);
+
+    /**
      * @brief Insert to etcd memory table.
      * @param[in] objectKey The key of object.
      * @param[in] tableName table name.
@@ -1223,6 +1233,27 @@ private:
                              bool &firstOne);
 
     /**
+     * @brief Update meta info in cache and rocksdb.
+     * @param[in] meta The meta info
+     * @param[in] newMeta The new meta info
+     * @param[in] address The request address
+     * @param[in] version The object version
+     * @param[out] firstOne Create first time or not
+     */
+    Status UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address, int64_t &version);
+
+    /**
+     * @brief Create meta info in cache and rocksdb.
+     * @param[in] objectKey The object key.
+     * @param[in] newMeta The new meta info
+     * @param[in] address The request address
+     * @param[in] version The object version
+     * @param[out] firstOne Create first time or not
+     */
+    Status CreateMeta(const std::string &objectKey, ObjectMeta &newMeta, const std::string &address, int64_t &version,
+                      bool &firstOne);
+
+    /**
      * @brief Recovery object locations
      * @param[in] objLocMap The map record object and locations.
      * @return Status of the call
@@ -1662,10 +1693,10 @@ private:
      * Note: Hash type keys will care about this.
      * @param[in] objectKey The object key.
      * @param[in] version The new meta's version.
-     * @param[in] newMeta Metadata of object.
+     * @param[in] type write type.
      * @return Status of the call.
      */
-    Status NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version, const ObjectMetaPb &newMeta);
+    Status NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version, ObjectMetaStore::WriteType type);
 
     /**
      * @brief Process remove meta notification from other az.

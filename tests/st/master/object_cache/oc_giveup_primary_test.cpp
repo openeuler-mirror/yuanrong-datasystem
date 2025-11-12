@@ -183,7 +183,7 @@ public:
             metadata->set_data_size(dataSize);
             metadata->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
             metadata->set_ttl_second(0);
-            ObjectMetaPb::ConfigPb *configPb = metadata->mutable_config();
+            ConfigPb *configPb = metadata->mutable_config();
             configPb->set_write_mode(static_cast<uint32_t>(mode));
             configPb->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
             configPb->set_consistency_type(static_cast<uint32_t>(ConsistencyType::CAUSAL));

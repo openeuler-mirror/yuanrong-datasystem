@@ -222,13 +222,13 @@ size_t WorkerOcServiceCrudCommonApi::GetMetadataSize() const
     return metadataSize_;
 }
 
-Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const std::string &clientId, const std::string &objectKey,
+Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const bool &shmEnabled, const std::string &objectKey,
                                                            const std::string &shmUnitId, uint64_t dataSize,
                                                            SafeObjType &entry)
 {
     INJECT_POINT("AttachShmUnitToObject.error");
     std::shared_ptr<ShmUnit> shmUnit;
-    if (ClientShmEnabled(clientId) && ShmEnable() && !shmUnitId.empty()) {
+    if (shmEnabled && ShmEnable() && !shmUnitId.empty()) {
         RETURN_IF_NOT_OK(memoryRefTable_->GetShmUnit(shmUnitId, shmUnit));
     } else {
         // non-shm case, create first

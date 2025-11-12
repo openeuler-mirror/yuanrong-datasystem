@@ -140,12 +140,12 @@ const std::vector<std::string> &DeleteObjectMediator::GetToBeNotifiedNestedRefs(
     return toBeNotifiedNestedRefs_;
 }
 
-void DeleteObjectMediator::SetObjKey2Version(std::unordered_map<std::string, int64_t> &&objKey2Version)
+void DeleteObjectMediator::SetObjKey2Version(std::unordered_map<std::string, uint64_t> &&objKey2Version)
 {
     objKey2Version_ = std::move(objKey2Version);
 }
 
-bool DeleteObjectMediator::CheckIfExpired(const std::string &objKey, int64_t currVersion)
+bool DeleteObjectMediator::CheckIfExpired(const std::string &objKey, uint64_t currVersion)
 {
     auto iter = objKey2Version_.find(objKey);
     return iter != objKey2Version_.end() && currVersion > iter->second;

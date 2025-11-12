@@ -97,6 +97,15 @@ public:
     Status Init();
 
     /**
+     * @brief Is persistence enabled or not.
+     * @return true If persistence enable.
+     */
+    bool IsPersistenceEnabled() const
+    {
+        return isPersistenceEnabled_;
+    }
+
+    /**
      * @brief Create the serialized string of object meta.
      * @param[in] objectKey id of the object meta.
      * @param[in] meta The object meta to be serialized.

@@ -90,7 +90,7 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, Ob
 
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
 
-    return AttachShmUnitToObject(req.client_id(), objectKey, req.shm_id(), req.data_size(), safeObj);
+    return AttachShmUnitToObject(ClientShmEnabled(req.client_id()), objectKey, req.shm_id(), req.data_size(), safeObj);
 }
 
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
@@ -110,7 +110,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     metadata->set_life_state(static_cast<uint32_t>(params.lifeState));
     metadata->set_ttl_second(params.ttlSecond);
     metadata->set_existence(static_cast<::datasystem::ExistenceOptPb>(params.existence));
-    ObjectMetaPb::ConfigPb *configPb = metadata->mutable_config();
+    ConfigPb *configPb = metadata->mutable_config();
     configPb->set_write_mode(static_cast<uint32_t>(safeObj->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));
     configPb->set_consistency_type(static_cast<uint32_t>(safeObj->modeInfo.GetConsistencyType()));

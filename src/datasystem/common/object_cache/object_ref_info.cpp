@@ -322,7 +322,7 @@ void ObjectGlobalRefTable::GetObjRefIds(const std::string &objectKey, std::vecto
 
 Status SharedMemoryRefTable::GetShmUnit(const std::string &shmId, std::shared_ptr<ShmUnit> &shmUnit)
 {
-    TbbMemoryObjectRefTable::accessor shmAccessor;
+    TbbMemoryObjectRefTable::const_accessor shmAccessor;
     auto found = shmRefTable_.find(shmAccessor, shmId);
     if (!found) {
         RETURN_STATUS(K_NOT_FOUND, FormatString("Get a not found shm: %s ", shmId));

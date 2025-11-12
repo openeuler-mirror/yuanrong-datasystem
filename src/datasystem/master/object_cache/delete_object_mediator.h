@@ -165,7 +165,7 @@ public:
      * @brief If the object in the delete request carries a version, store the version here.
      * @param[in] objKey2Version The object2Version massage in delete request.
      */
-    void SetObjKey2Version(std::unordered_map<std::string, int64_t> &&objKey2Version);
+    void SetObjKey2Version(std::unordered_map<std::string, uint64_t> &&objKey2Version);
 
     /**
      * @brief Check whether the version of the object in the delete request is expired.
@@ -173,7 +173,7 @@ public:
      * @param[in] currVersion The version of this object in this node.
      * @return T/F
      */
-    bool CheckIfExpired(const std::string &objKey, int64_t currVersion);
+    bool CheckIfExpired(const std::string &objKey, uint64_t currVersion);
 
     /**
      * @brief Get the version of the object in the delete request.
@@ -200,7 +200,7 @@ private:
     std::unordered_set<std::string> failedIds_;
     std::unordered_set<std::string> successDelIds_;
     std::unordered_set<std::string> hashObjsWithoutMeta_;
-    std::unordered_map<std::string, int64_t> objKey2Version_;
+    std::unordered_map<std::string, uint64_t> objKey2Version_;
     std::vector<std::string> outdatedObjs_;
     /**
      * The key of idsNeedToNotifyWorker_ is objectKeys, value is set of worker addresses which master need to notify.

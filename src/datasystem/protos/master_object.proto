@@ -60,12 +60,18 @@ message CreateMetaRspPb {
 }
 
 message CreateMultiMetaReqPb {
-  repeated ObjectMetaPb metas = 1;
+  repeated ObjectBaseInfoPb metas = 1;
   string address = 2;
   int64 timeout = 3;
   bool isTx = 4;
   bool is_pre_commit = 5;
   bool redirect = 6;
+  ConfigPb config = 7;
+  uint64 version = 8; // version control
+  // For the meaning of the value, see 'ObjectLifeState' enum class.
+  uint32 life_state = 9;
+  uint32 ttl_second = 10;
+  ExistenceOptPb existence = 11;
   
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -74,7 +80,7 @@ message CreateMultiMetaReqPb {
 }
 
 message CreateMultiMetaRspPb {
-  repeated uint64 version = 1;
+  uint64 version = 1;
   repeated string failed_object_keys = 2;
   ErrorInfoPb last_rc = 3;
   repeated RedirectMetaInfo info = 4;

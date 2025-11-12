@@ -58,8 +58,8 @@ Status WorkerDeviceOcManager::PublishDeviceObject(const std::string &devObjectKe
         devObj->SetOffset(req.offset());
         devObj->stateInfo.SetDataFormat(DataFormat::HETERO);
         entry->SetRealObject(std::move(devObj));
-        workerOcImpl_->publishProc_->AttachShmUnitToObject(req.client_id(), req.dev_object_key(), req.shm_id(),
-                                                           req.data_size(), *entry);
+        workerOcImpl_->publishProc_->AttachShmUnitToObject(WorkerOcServiceCreateImpl::ClientShmEnabled(req.client_id()),
+                                                           req.dev_object_key(), req.shm_id(), req.data_size(), *entry);
     } else {
         CHECK_FAIL_RETURN_STATUS(!(*entry)->IsHetero(), K_INVALID,
                                  "The key you publish already exists, which is not published as a device object");
@@ -94,7 +94,7 @@ Status WorkerDeviceOcManager::CreateDeviceMetaToMaster(const ObjectKV &objectKV)
 
     metadata->set_object_key(objectKey);
     metadata->set_data_size(safeObj->GetDataSize());
-    ObjectMetaPb::ConfigPb *configPb = metadata->mutable_config();
+    ConfigPb *configPb = metadata->mutable_config();
     configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));
     metaReq.set_address(workerOcImpl_->localAddress_.ToString());
 

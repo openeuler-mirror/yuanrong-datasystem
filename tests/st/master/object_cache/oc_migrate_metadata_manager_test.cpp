@@ -150,7 +150,7 @@ public:
             metadata->set_data_size(dataSize_);
             metadata->set_life_state(static_cast<uint32_t>(lifeState_));
             metadata->set_ttl_second(ttlSecond_);
-            ObjectMetaPb::ConfigPb *configPb = metadata->mutable_config();
+            ConfigPb *configPb = metadata->mutable_config();
             configPb->set_write_mode(static_cast<uint32_t>(writeMode_));
             configPb->set_data_format(static_cast<uint32_t>(dataFormat_));
             configPb->set_consistency_type(static_cast<uint32_t>(consistencyType_));
@@ -389,15 +389,15 @@ public:
         CreateMultiMetaReqPb request;
         CreateMultiMetaRspPb response;
         for (int i = 0; i < num; ++i) {
-            datasystem::ObjectMetaPb *metadata = request.add_metas();
+            datasystem::ObjectBaseInfoPb *metadata = request.add_metas();
             std::string objectKey = "MigrateMetadataTestId" + std::to_string(i);
             objectKeys_.emplace_back(objectKey);
             metadata->set_object_key(objectKey);
             metadata->set_data_size(dataSize_);
-            metadata->set_life_state(static_cast<uint32_t>(lifeState_));
-            metadata->set_ttl_second(ttlSecond_);
-            metadata->set_existence(ExistenceOptPb::NX);
-            ObjectMetaPb::ConfigPb *configPb = metadata->mutable_config();
+            request.set_life_state(static_cast<uint32_t>(lifeState_));
+            request.set_ttl_second(ttlSecond_);
+            request.set_existence(ExistenceOptPb::NX);
+            ConfigPb *configPb = request.mutable_config();
             configPb->set_write_mode(static_cast<uint32_t>(writeMode_));
             configPb->set_data_format(static_cast<uint32_t>(dataFormat_));
             configPb->set_consistency_type(static_cast<uint32_t>(consistencyType_));

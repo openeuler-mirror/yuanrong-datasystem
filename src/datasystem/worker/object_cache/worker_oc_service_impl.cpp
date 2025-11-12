@@ -997,7 +997,7 @@ void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const MetaA
     if ((*currSafeObj)->IsBinary()) {
         SetObjectMetaFields(metadata, objectKey, *currSafeObj);
     }
-    ObjectMetaPb::ConfigPb *configPb = metadata->mutable_config();
+    ConfigPb *configPb = metadata->mutable_config();
     configPb->set_write_mode((uint64_t)(*currSafeObj)->modeInfo.GetWriteMode());
     configPb->set_data_format((uint64_t)(*currSafeObj)->stateInfo.GetDataFormat());
     isFill = true;

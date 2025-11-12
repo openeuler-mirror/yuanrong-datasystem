@@ -256,6 +256,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                                                               std::vector<RpcMessage> &payloads, Status &lastRc)
 {
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
+    const bool shmEnabled = ClientShmEnabled(req.client_id());
     for (auto index = successIndex.begin(); index != successIndex.end();) {
         auto i = *index;
         if (entries[i]->Get() != nullptr) {
@@ -274,7 +275,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                               GetMetadataSize(), *entries[i]);
         }
 
-        lastRc = AttachShmUnitToObject(req.client_id(), objectKeys[i], req.object_info(i).shm_id(),
+        lastRc = AttachShmUnitToObject(shmEnabled, objectKeys[i], req.object_info(i).shm_id(),
                                        req.object_info(i).data_size(), *entries[i]);
         if (lastRc.IsError()) {
             LOG(ERROR) << "objKey: " << objectKeys[i] << " AttachShmUnitToObject failed, status: " << lastRc.ToString();
@@ -320,6 +321,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
                                                            std::vector<RpcMessage> &payloads)
 {
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
+    const bool shmEnabled = ClientShmEnabled(req.client_id());
     size_t idx = 0;
     for (size_t i = 0; i < objectKeys.size(); ++i) {
         if (entries[i]->Get() != nullptr) {
@@ -332,7 +334,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
                               static_cast<CacheType>(req.cache_type()), req.object_info(i).data_size(),
                               GetMetadataSize(), *entries[i]);
         }
-        RETURN_IF_NOT_OK(AttachShmUnitToObject(req.client_id(), objectKeys[i], req.object_info(i).shm_id(),
+        RETURN_IF_NOT_OK(AttachShmUnitToObject(shmEnabled, objectKeys[i], req.object_info(i).shm_id(),
                                                req.object_info(i).data_size(), *entries[i]));
         // Small object use payload to transfer the value, the object and RpcMessage is one-to-one.
         if (req.object_info(i).shm_id().empty()) {
@@ -349,18 +351,18 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
         }
     }
 
-    CreateMultiMetaRspPb resp;
+    std::vector<uint64_t> versions(objectKeys.size());
     std::vector<size_t> successIndex;
     for (size_t i = 0; i < objectKeys.size(); i++) {
         successIndex.emplace_back(i);
     }
     if (FLAGS_enable_distributed_master) {
-        RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMaster(objectKeys, entries, req, resp));
+        RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMaster(objectKeys, entries, req, versions));
     } else {
-        RETURN_IF_NOT_OK(CreateMultiMetaToCentralMaster(objectKeys, successIndex, entries, req, resp));
+        RETURN_IF_NOT_OK(CreateMultiMetaToCentralMaster(objectKeys, entries, req, versions));
     }
 
-    UpdateObjectAfterCreatingMeta(objectKeys, entries, resp, successIndex);
+    UpdateObjectAfterCreatingMeta(objectKeys, entries, versions, successIndex);
 
     return Status::OK();
 }
@@ -372,25 +374,27 @@ void WorkerOcServiceMultiPublishImpl::FillMultiMetaReqPhaseOne(
 {
     for (const auto &obj : objectKeys) {
         auto entry = entries[obj.second];
-        datasystem::ObjectMetaPb metadata;
+        ObjectBaseInfoPb metadata;
         metadata.set_object_key(obj.first);
         metadata.set_data_size((*entry)->GetDataSize());
-        metadata.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
-        metadata.set_ttl_second(pubReq.ttl_second());
-        metadata.set_existence(static_cast<::datasystem::ExistenceOptPb>(pubReq.existence()));
-        ObjectMetaPb::ConfigPb *configPb = metadata.mutable_config();
-        configPb->set_write_mode(static_cast<uint32_t>((*entry)->modeInfo.GetWriteMode()));
-        configPb->set_data_format(static_cast<uint32_t>((*entry)->stateInfo.GetDataFormat()));
-        configPb->set_consistency_type(static_cast<uint32_t>((*entry)->modeInfo.GetConsistencyType()));
-        configPb->set_cache_type(pubReq.cache_type());
         req.mutable_metas()->Add(std::move(metadata));
     }
-    std::sort(req.mutable_metas()->begin(), req.mutable_metas()->end(),
-              [](const ObjectMetaPb &fir, const ObjectMetaPb &sec) { return fir.object_key() < sec.object_key(); });
+    std::sort(
+        req.mutable_metas()->begin(), req.mutable_metas()->end(),
+        [](const ObjectBaseInfoPb &fir, const ObjectBaseInfoPb &sec) { return fir.object_key() < sec.object_key(); });
     req.set_address(localAddress_.ToString());
     req.set_istx(true);
     req.set_is_pre_commit(true);
     req.set_redirect(true);
+    req.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
+    req.set_ttl_second(pubReq.ttl_second());
+    req.set_existence(static_cast<::datasystem::ExistenceOptPb>(pubReq.existence()));
+    auto &firstEntry = *entries[0];
+    ConfigPb *configPb = req.mutable_config();
+    configPb->set_write_mode(static_cast<uint32_t>(firstEntry->modeInfo.GetWriteMode()));
+    configPb->set_data_format(static_cast<uint32_t>(firstEntry->stateInfo.GetDataFormat()));
+    configPb->set_consistency_type(static_cast<uint32_t>(firstEntry->modeInfo.GetConsistencyType()));
+    configPb->set_cache_type(pubReq.cache_type());
 }
 
 Status WorkerOcServiceMultiPublishImpl::RetryRollbackMultiMetaWhenMoving(std::shared_ptr<WorkerMasterOCApi> api,
@@ -653,7 +657,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseOne(
 }
 
 Status WorkerOcServiceMultiPublishImpl::Process2PCResults(std::vector<std::future<CreateMeta2PCRes>> &futures,
-                                                          const ObjGroupMap &objGroup, CreateMultiMetaRspPb &resp)
+                                                          const ObjGroupMap &objGroup, std::vector<uint64_t> &versions)
 {
     std::vector<std::shared_ptr<WorkerMasterOCApi>> needRollBack;
     Status lastRc;
@@ -665,16 +669,11 @@ Status WorkerOcServiceMultiPublishImpl::Process2PCResults(std::vector<std::futur
             continue;
         }
         const auto &objs = objGroup.at(res.api->GetHostPort());
-        const size_t verSize = static_cast<size_t>(res.rsp.version_size());
-        if (objs.size() != verSize) {
-            LOG(WARNING) << FormatString("[Process2PCResults] The objs size(%lu) and version size(%d) does not match",
-                                         objs.size(), verSize);
-        }
-        if (verSize == 0) {
-            continue;
-        }
         for (size_t i = 0; i < objs.size(); i++) {
-            resp.set_version(objs[i].second, res.rsp.version(i % verSize));
+            if (objs[i].second > versions.size()) {
+                continue;
+            }
+            versions[objs[i].second] = res.rsp.version();
         }
     }
     if (lastRc.IsError()) {
@@ -685,7 +684,7 @@ Status WorkerOcServiceMultiPublishImpl::Process2PCResults(std::vector<std::futur
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseTwo(const ObjGroupMap &objGroup,
                                                                 const MultiPublishReqPb &pubReq,
-                                                                CreateMultiMetaRspPb &resp)
+                                                                std::vector<uint64_t> &versions)
 {
     std::vector<std::shared_ptr<WorkerMasterOCApi>> apis(objGroup.size());
     std::vector<std::vector<std::string>> objs(objGroup.size());
@@ -724,12 +723,12 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseTwo(const ObjGroupMa
             return CreateMeta2PCRes{ rc, rsp, apis[i] };
         }));
     }
-    return Process2PCResults(futures, objGroup, resp);
+    return Process2PCResults(futures, objGroup, versions);
 }
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMaster(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &entries,
-    const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &resp)
+    const MultiPublishReqPb &pubReq, std::vector<uint64_t> &versions)
 {
     CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack(objectKeys), K_OC_KEY_ALREADY_EXIST,
                              "The object is being rolled back.");
@@ -750,23 +749,24 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMaster(
     // If phase one causes an asynchronous rollback, we need return.
     CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack(objectKeys), K_OC_KEY_ALREADY_EXIST,
                              "The object is being rolled back.");
-    resp.mutable_version()->Resize(objectKeys.size(), 0);
-    RETURN_IF_NOT_OK(CreateMultiMetaPhaseTwo(objGroup, pubReq, resp));
+    RETURN_IF_NOT_OK(CreateMultiMetaPhaseTwo(objGroup, pubReq, versions));
     return Status::OK();
 }
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const std::vector<std::string> &objectKeys, std::vector<size_t> &successIndex,
     const std::vector<std::shared_ptr<SafeObjType>> &entries, const MultiPublishReqPb &pubReq,
-    CreateMultiMetaRspPb &totalResp)
+    CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions)
 {
     ObjGroupMap objGroup;
+    std::unordered_map<std::string, std::shared_ptr<WorkerMasterOCApi>> workerAddrToApi;
     for (const auto index : successIndex) {
         std::shared_ptr<WorkerMasterOCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(objectKeys[index], etcdCM_, api),
                                          "Getting master api failed. ObjectKey = " + objectKeys[index]);
         auto addr = api->GetHostPort();
         objGroup[addr].emplace_back(objectKeys[index], index);
+        workerAddrToApi[addr] = api;
     }
 
     std::vector<std::shared_ptr<WorkerMasterOCApi>> apis(objGroup.size());
@@ -775,13 +775,8 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     int idx = 0;
     for (const auto &[masterAddr, objInfos] : objGroup) {
         auto &req = createReqs[idx];
-        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApiByAddr(masterAddr, etcdCM_, apis[idx]));
-        for (const auto &obj : objInfos) {
-            ConstructCreateReq(objectKeys[obj.second], entries[obj.second], pubReq,
-                               pubReq.object_info(obj.second).blob_sizes(), req);
-        }
-        req.set_address(localAddress_.ToString());
-        req.set_istx(false);
+        apis[idx] = workerAddrToApi[masterAddr];
+        ConstructCreateReq(objInfos, entries, pubReq, req);
         idx++;
     }
 
@@ -792,18 +787,14 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     CHECK_FAIL_RETURN_STATUS(respRes.size() == createReqs.size(), K_RUNTIME_ERROR,
                              "The object size and the versions is not equal");
 
-    totalResp.mutable_version()->Resize(objectKeys.size(), 0);
     for (size_t index = 0; index < respRes.size(); index++) {
         auto &resp = respRes[index].rsp;
         for (const auto &failedId : resp.failed_object_keys()) {
             totalResp.add_failed_object_keys(failedId);
         }
         LOG_IF_ERROR(respRes[index].rc, "Get error with createMeta");
-        CHECK_FAIL_RETURN_STATUS(createReqs[index].metas().size() == resp.version().size(), K_RUNTIME_ERROR,
-                                 "The object size and the versions is not equal");
-        uint64_t version = resp.version_size() > 0 ? resp.version(0) : 0;
         for (const auto &obj : objGroup.at(respRes[index].api->GetHostPort())) {
-            totalResp.set_version(obj.second, version);
+            versions[obj.second] = resp.version();
         }
         if (resp.has_last_rc() && static_cast<StatusCode>(resp.last_rc().error_code()) != StatusCode::K_OK) {
             totalResp.mutable_last_rc()->set_error_code(resp.last_rc().error_code());
@@ -813,32 +804,69 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     return Status::OK();
 }
 
-void WorkerOcServiceMultiPublishImpl::ConstructCreateReq(const std::string &objectKey,
-                                                         const std::shared_ptr<SafeObjType> &entry,
-                                                         const MultiPublishReqPb &pubReq,
-                                                         const google::protobuf::RepeatedField<unsigned long> blobSizes,
-                                                         CreateMultiMetaReqPb &req)
+void WorkerOcServiceMultiPublishImpl::ConstructCreateReqCommon(SafeObjType &entry, const MultiPublishReqPb &pubReq,
+                                                               CreateMultiMetaReqPb &req)
 {
-    datasystem::ObjectMetaPb metadata;
-    metadata.set_object_key(objectKey);
-    metadata.set_data_size((*entry)->GetDataSize());
-    metadata.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
-    metadata.set_ttl_second(pubReq.ttl_second());
-    metadata.set_existence(static_cast<::datasystem::ExistenceOptPb>(pubReq.existence()));
-    metadata.mutable_device_info()->mutable_blob_sizes()->Add(blobSizes.begin(), blobSizes.end());
-    ObjectMetaPb::ConfigPb *configPb = metadata.mutable_config();
-    configPb->set_write_mode(static_cast<uint32_t>((*entry)->modeInfo.GetWriteMode()));
-    configPb->set_data_format(static_cast<uint32_t>((*entry)->stateInfo.GetDataFormat()));
-    configPb->set_consistency_type(static_cast<uint32_t>((*entry)->modeInfo.GetConsistencyType()));
-    configPb->set_cache_type(static_cast<uint32_t>((*entry)->modeInfo.GetCacheType()));
+    if (pubReq.istx()) {
+        // Optimize the scenario when worker1 set key1 and key2, while worker2 set key2 and key1, if both request
+        // arrives the master concurrently, master generate meta for key1 of the worker1 and key2 of the worker2
+        // initially, then master try to process key2 of the worker1 and key1 of the worker2, it will find the keys have
+        // already been occupied that will caused both request failed.
+        std::sort(req.mutable_metas()->begin(), req.mutable_metas()->end(),
+                  [](const ObjectBaseInfoPb &fir, const ObjectBaseInfoPb &sec) {
+                      return fir.object_key() < sec.object_key();
+                  });
+    }
+    req.set_address(localAddress_.ToString());
+    req.set_istx(pubReq.istx());
+    req.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
+    req.set_ttl_second(pubReq.ttl_second());
+    req.set_existence(static_cast<::datasystem::ExistenceOptPb>(pubReq.existence()));
+    ConfigPb *configPb = req.mutable_config();
+    configPb->set_write_mode(static_cast<uint32_t>(entry->modeInfo.GetWriteMode()));
+    configPb->set_data_format(static_cast<uint32_t>(entry->stateInfo.GetDataFormat()));
+    configPb->set_consistency_type(static_cast<uint32_t>(entry->modeInfo.GetConsistencyType()));
+    configPb->set_cache_type(static_cast<uint32_t>(entry->modeInfo.GetCacheType()));
     configPb->set_is_replica(pubReq.is_replica());
-    req.mutable_metas()->Add(std::move(metadata));
+}
+
+void WorkerOcServiceMultiPublishImpl::ConstructCreateReq(const std::vector<std::pair<std::string, size_t>> &objectInfos,
+                                                         const std::vector<std::shared_ptr<SafeObjType>> &entries,
+                                                         const MultiPublishReqPb &pubReq, CreateMultiMetaReqPb &req)
+{
+    for (const auto &[objectKey, i] : objectInfos) {
+        ObjectBaseInfoPb meta;
+        meta.set_object_key(objectKey);
+        meta.set_data_size((*entries[i])->GetDataSize());
+        if (pubReq.object_info(i).blob_sizes_size() > 0) {
+            meta.mutable_device_info()->mutable_blob_sizes()->Add(pubReq.object_info(i).blob_sizes().begin(),
+                                                                  pubReq.object_info(i).blob_sizes().end());
+        }
+        req.mutable_metas()->Add(std::move(meta));
+    }
+    ConstructCreateReqCommon(*entries[0], pubReq, req);
+}
+
+void WorkerOcServiceMultiPublishImpl::ConstructCreateReq(const std::vector<std::string> &objectInfos,
+                                                         const std::vector<std::shared_ptr<SafeObjType>> &entries,
+                                                         const MultiPublishReqPb &pubReq, CreateMultiMetaReqPb &req)
+{
+    for (size_t i = 0; i < objectInfos.size(); i++) {
+        ObjectBaseInfoPb meta;
+        meta.set_object_key(objectInfos[i]);
+        meta.set_data_size((*entries[i])->GetDataSize());
+        if (pubReq.object_info(i).blob_sizes_size() > 0) {
+            meta.mutable_device_info()->mutable_blob_sizes()->Add(pubReq.object_info(i).blob_sizes().begin(),
+                                                                  pubReq.object_info(i).blob_sizes().end());
+        }
+        req.mutable_metas()->Add(std::move(meta));
+    }
+    ConstructCreateReqCommon(*entries[0], pubReq, req);
 }
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToCentralMaster(
-    const std::vector<std::string> &objectKeys, std::vector<size_t> &successIndex,
-    const std::vector<std::shared_ptr<SafeObjType>> &entries, const MultiPublishReqPb &pubReq,
-    CreateMultiMetaRspPb &resp)
+    const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &entries,
+    const MultiPublishReqPb &pubReq, std::vector<uint64_t> &versions)
 {
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
         workerMasterApiManager_->GetWorkerMasterApi(objectKeys[0], etcdCM_);
@@ -847,38 +875,26 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToCentralMaster(
     LOG(INFO) << FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort());
 
     CreateMultiMetaReqPb req;
-    for (auto index = successIndex.begin(); index != successIndex.end(); index++) {
-        auto i = *index;
-        auto blobSizes = pubReq.object_info(i).blob_sizes();
-        ConstructCreateReq(objectKeys[i], entries[i], pubReq, blobSizes, req);
-    }
-    if (pubReq.istx()) {
-        // Optimize the scenario when worker1 set key1 and key2, while worker2 set key2 and key1, if both request
-        // arrives the master concurrently, master generate meta for key1 of the worker1 and key2 of the worker2
-        // initially, then master try to process key2 of the worker1 and key1 of the worker2, it will find the keys have
-        // already been occupied that will caused both request failed.
-        std::sort(req.mutable_metas()->begin(), req.mutable_metas()->end(),
-                  [](const ObjectMetaPb &fir, const ObjectMetaPb &sec) { return fir.object_key() < sec.object_key(); });
-    }
-    req.set_address(localAddress_.ToString());
-    req.set_istx(pubReq.istx());
+    std::vector<std::pair<std::string, size_t>> objectInfos;
+    ConstructCreateReq(objectKeys, entries, pubReq, req);
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
+
+    CreateMultiMetaRspPb resp;
     Status status =
         RetryWhenDeadlock([&workerMasterApi, &req, &resp] { return workerMasterApi->CreateMultiMeta(req, resp); });
     point.Record();
-    if (status.IsOk()) {
-        CHECK_FAIL_RETURN_STATUS(req.metas().size() == resp.version().size(), K_RUNTIME_ERROR,
-                                 "The object size and the versions is not equal");
+    for (auto &version : versions) {
+        version = resp.version();
     }
     return status;
 }
 
 void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(std::vector<std::string> &objectKeys,
                                                                     std::vector<std::shared_ptr<SafeObjType>> entries,
-                                                                    const master::CreateMultiMetaRspPb &rsp,
+                                                                    const std::vector<uint64_t> &versions,
                                                                     std::vector<size_t> &successIndex)
 {
-    auto rollBackPersistenceIfFail = [this, &rsp, &objectKeys](const Status &rc, const ObjectKV &kv, int idx) {
+    auto rollBackPersistenceIfFail = [this, &versions, &objectKeys](const Status &rc, const ObjectKV &kv, int idx) {
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", objectKeys[idx]);
             std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
@@ -887,15 +903,17 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(std::vector<
             master::RollbackMultiMetaRspPb resp;
             req.set_persistence_only(true);
             req.add_object_keys(kv.GetObjKey());
-            req.add_versions(rsp.version(idx));
+            req.add_versions(versions[idx]);
             workerMasterApi->RollbackMultiMeta(req, resp);
         }
     };
 
+    std::vector<std::string> objectKeysSucc;
+    objectKeysSucc.reserve(successIndex.size());
     for (auto index = successIndex.begin(); index != successIndex.end(); index++) {
         auto i = *index;
         ObjectKV objectKV(objectKeys[i], *entries[i]);
-        objectKV.GetObjEntry()->SetCreateTime(rsp.version(i));
+        objectKV.GetObjEntry()->SetCreateTime(versions[i]);
         // Save object to L2 cache
         if ((*entries[i])->IsWriteThroughMode()) {
             if (IsSupportL2Storage(supportL2Storage_)) {
@@ -910,8 +928,6 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(std::vector<
         }
         // Update entry information
         (*entries[i])->stateInfo.SetNeedToDelete(false);
-        LOG_IF_ERROR(workerRequestManager_.UpdateRequestForPublish(objectKV, memoryRefTable_),
-                     FormatString("Multiple set fails to update object %s get request.", objectKeys[i]));
         (*entries[i])->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         (*entries[i])->stateInfo.SetPrimaryCopy(true);
         (*entries[i])->stateInfo.SetCacheInvalid(false);
@@ -921,8 +937,29 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(std::vector<
             LOG_IF_ERROR(DeleteObjectFromDisk(objectKV),
                          FormatString("Multiple set fails to delete spilled object %s from disk.", objectKeys[i]));
         }
-        evictionManager_->Add(objectKeys[i]);
+        objectKeysSucc.emplace_back(objectKeys[i]);
     }
+    threadPool_->Execute([this, objectKeys = std::move(objectKeysSucc)] () {
+        Status rc;
+        for (const auto &key : objectKeys) {
+            evictionManager_->Add(key);
+            std::shared_ptr<SafeObjType> entry;
+            Raii raii([key, &rc]() {
+                LOG_IF_ERROR(rc, FormatString("Fails to update object %s get request.", key));
+            });
+            rc = objectTable_->Get(key, entry);
+            if (rc.IsError()) {
+                continue;
+            }
+            rc = entry->RLock();
+            if (rc.IsError()) {
+                continue;
+            }
+            ObjectKV objectKV(key, *entry);
+            rc = workerRequestManager_.UpdateRequestForPublish(objectKV, memoryRefTable_);
+            entry->RUnlock();
+        }
+    });
 }
 
 Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
@@ -936,7 +973,8 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
         objectIndexMap[objectKeys[index]] = index;
     }
 
-    RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMasterNtx(objectKeys, successIndex, entries, req, rsp));
+    std::vector<uint64_t> versions(objectKeys.size());
+    RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMasterNtx(objectKeys, successIndex, entries, req, rsp, versions));
 
     std::vector<std::string> failedObjectKey(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
     std::set<size_t> sortedFailedIndex;
@@ -972,7 +1010,7 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
         Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
         lastRc = recvRc.IsOk() ? lastRc : recvRc;
     }
-    UpdateObjectAfterCreatingMeta(objectKeys, entries, rsp, successIndex);
+    UpdateObjectAfterCreatingMeta(objectKeys, entries, versions, successIndex);
 
     return Status::OK();
 }
@@ -1071,6 +1109,9 @@ Status WorkerOcServiceMultiPublishImpl::BatchLockForSetNtx(const std::vector<std
     size_t keyNum = objectKeys.size();
     std::map<std::string, size_t> objectToIdx;
     for (size_t i = 0; i < keyNum; ++i) {
+        if (objectToIdx.find(objectKeys[i]) != objectToIdx.end()) {
+            continue;
+        }
         objectToIdx[objectKeys[i]] = i;
     }
     std::vector<bool> isFinish(keyNum, false);

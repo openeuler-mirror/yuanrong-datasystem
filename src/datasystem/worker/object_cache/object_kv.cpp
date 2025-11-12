@@ -79,7 +79,7 @@ void SetDeviceObjEntry(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjT
 void SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjType &entry)
 {
     const std::string &objectKey = meta.object_key();
-    const ObjectMetaPb::ConfigPb &configPb = meta.config();
+    const ConfigPb &configPb = meta.config();
     auto dataFormat = static_cast<DataFormat>(configPb.data_format());
     if (dataFormat == DataFormat::HETERO) {
         SetDeviceObjEntry(meta, metaDataSize, entry);

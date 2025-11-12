@@ -105,10 +105,11 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
       persistApi_(persistApi),
       newNode_(newNode)
 {
+    bool isEnabled = FLAGS_rocksdb_write_mode != "none" || FLAGS_oc_io_from_l2cache_need_metadata;
     if (FLAGS_enable_meta_replica && !etcdCM_->IsCentralized()) {
-        objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, nullptr, true);
+        objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, nullptr, isEnabled);
     } else {
-        objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, true);
+        objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, isEnabled);
     }
     if (etcdCM_ != nullptr && !etcdCM_->IsCentralized()) {
         dbName_ = dbName;
@@ -444,11 +445,10 @@ void OCMetadataManager::SetMetaInfo(const ObjectMetaPb &newMeta, const std::stri
 }
 
 Status OCMetadataManager::NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version,
-                                                      const ObjectMetaPb &newMeta)
+                                                      ObjectMetaStore::WriteType type)
 {
-    if (!FLAGS_other_cluster_names.empty()) {
-        LOG(INFO) << "Notify nodes in other clusters to remove meta for object: " << objectKey;
-    }
+    RETURN_OK_IF_TRUE(FLAGS_other_cluster_names.empty());
+    LOG(INFO) << "Notify nodes in other clusters to remove meta for object: " << objectKey;
     std::unordered_map<std::string, MetaAddrInfo> metaAddrInfos;
     RETURN_IF_NOT_OK(etcdCM_->GetAllNodesInOtherAzsByHash(objectKey, metaAddrInfos, true));
     for (const auto &item : metaAddrInfos) {
@@ -459,8 +459,7 @@ Status OCMetadataManager::NotifyOtherAzNodeRemoveMeta(const std::string &objectK
             LOG(WARNING) << "Fail to notify other az's node to remove meta: " << rc.ToString();
             // DFX
             LOG_IF_ERROR(notifyWorkerManager_->InsertAsyncWorkerOp(
-                             "", objectKey, { NotifyWorkerOpType::REMOVE_META, version, { item.first } }, true,
-                             WriteMode2MetaType(newMeta.config().write_mode())),
+                             "", objectKey, { NotifyWorkerOpType::REMOVE_META, version, { item.first } }, true, type),
                          "Insert remote meta notification to AsyncWorkerOpTable failed, obj: " + objectKey);
         }
     }
@@ -472,6 +471,7 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
                                               TbbMetaTable::accessor &accessor)
 {
     const std::string &objectKey = newMeta.object_key();
+    ObjectMetaStore::WriteType type = WriteMode2MetaType(newMeta.config().write_mode());
     ObjectMeta metaCache;
     SetMetaInfo(newMeta, address, version, metaCache);
     accessor->second = metaCache;
@@ -479,12 +479,11 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
     std::string serializedStr;
     RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr));
     // Create meta info in rocksDB.
-    RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                                      WriteMode2MetaType(metaCache.meta.config().write_mode())));
+    RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, type));
     accessor.release();
 
     if (!HasWorkerId(objectKey)) {
-        RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, newMeta));
+        RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
     }
 
     // Update subscribeCache. if multiset_state == pending, create not finish, don't update subscribe.
@@ -595,7 +594,7 @@ Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const s
             // If the timestamp of the object does not exceed multiSetTimestamp, return K_TRY_AGAIN.
             // Except for the same address, we can refresh meta.
             if (address != accessor->second.meta.primary_address()
-                && GetSteadyClockTimeStampUs() < accessor->second.multiSetTimestamp) {
+                && GetSystemClockTimeStampUs() < accessor->second.multiSetTimestamp) {
                 return rc;
             }
             LOG(INFO) << FormatString("[ObjectKey %s] PreCommit changed from %s to %s", objectKey,
@@ -655,7 +654,6 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
     // it is not allowed to double Set.
     RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
     version = static_cast<int64_t>(GetSystemClockTimeStampUs());
-    uint64_t versionForTTL = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
 
     RaiiPlus raiiP;
     if (!firstOne && !HasWorkerId(objectKey)) {
@@ -692,12 +690,12 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
         if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
             RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
         }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, versionForTTL, newMeta.ttl_second()));
+        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
         return s;
     }
     // Case 2: first time creating meta.
     RETURN_IF_NOT_OK(CreateMetaFirstTime(newMeta, address, version, nestedObjectKeys, accessor));
-    RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, versionForTTL, newMeta.ttl_second()));
+    RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
     VLOG(1) << FormatString("[ObjectKey %s] CreateMeta finished: objectKey: %s, worker address: %s", objectKey,
                             objectKey, address);
     return Status::OK();
@@ -719,44 +717,153 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
     return CreateMultiMetaNtx(req, rsp);
 }
 
+Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address,
+                                     int64_t &version)
+{
+    const std::string &objectKey = newMeta.object_key();
+    // In the NX Set scenario, when the worker restarts, if there is data in the L2 cache,
+    // it is not allowed to double Set.
+    bool firstOne = false;
+    RETURN_IF_NOT_OK(CheckExistenceOpt(meta, objectKey, newMeta.existence(), firstOne));
+    RaiiPlus raiiP;
+    if (!HasWorkerId(objectKey)) {
+        MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
+    }
+    CHECK_FAIL_RETURN_STATUS(
+        meta.multiSetState != PENDING, K_TRY_AGAIN,
+        FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
+    BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
+                                             .dataFormat = newMeta.config().data_format(),
+                                             .consistencyType = newMeta.config().consistency_type(),
+                                             .cacheType = newMeta.config().cache_type(),
+                                             .isReplica = newMeta.config().is_replica() };
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate), "Check format failed");
+
+    // Cache Invalidation Logic.
+    Status s = DoBinaryCacheInvalidationUnlocked(objectKey, meta,
+                                                 { .newAddress = address,
+                                                   .newVersion = version,
+                                                   .newDataSz = newMeta.data_size(),
+                                                   .newLifeState = newMeta.life_state(),
+                                                   .newBlobSizes = newMeta.device_info().blob_sizes() });
+    if (s.IsError()) {
+        // If the cache invalid processing fails, delete the address from the meta.
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
+                                         "Remove location failed from rocksdb.");
+        (void)meta.locations.erase(address);
+    }
+
+    RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
+    return s;
+}
+
+Status OCMetadataManager::CreateMeta(const std::string &objectKey, ObjectMeta &newMeta, const std::string &address,
+                                     int64_t &version, bool &firstOne)
+{
+    INJECT_POINT("master.create_meta_failure");
+    auto &metaPb = newMeta.meta;
+    const auto ttl = metaPb.ttl_second();
+    ObjectMetaStore::WriteType type = WriteMode2MetaType(metaPb.config().write_mode());
+    std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
+    TbbMetaTable::accessor accessor;
+    firstOne = metaTable_.insert(accessor, objectKey);
+    if (!firstOne) {
+        return UpdateMeta(accessor->second, metaPb, address, version);
+    }
+    ObjectMeta metaCache;
+    if (objectStore_->IsPersistenceEnabled()) {
+        std::string serializedStr;
+        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, metaPb, serializedStr));
+        RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, type));
+    }
+    accessor->second = std::move(newMeta);
+    accessor.release();
+    if (!FLAGS_other_cluster_names.empty() && !HasWorkerId(objectKey)) {
+        RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
+    }
+    return expiredObjectManager_->InsertObject(objectKey, version, ttl);
+}
+
+void OCMetadataManager::ConstructMetaInfo(const CreateMultiMetaReqPb &req, const ObjectBaseInfoPb &info,
+                                          int64_t version, ObjectMetaPb &meta)
+{
+    meta.set_object_key(info.object_key());
+    meta.set_data_size(info.data_size());
+    meta.set_version(version);
+    meta.set_life_state(req.life_state());
+    *meta.mutable_config() = req.config();
+    meta.set_primary_address(req.address());
+    meta.set_ttl_second(req.ttl_second());
+    meta.set_existence(req.existence());
+    if (info.has_device_info()) {
+        *meta.mutable_device_info() = info.device_info();
+    }
+}
 Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
 {
     std::vector<std::string> rollBackIds;
     Status lastRc;
-    int64_t version = 0;
-    int64_t failVersion = 0;
-    for (const auto &metaInfo : req.metas()) {
-        if (metaInfo.object_key().empty() || req.address().empty()) {
-            rsp.add_failed_object_keys(metaInfo.object_key());
-            rsp.add_version(failVersion);
-            lastRc = Status(K_INVALID, "CreateMeta: Cannot CreateMeta with empty objectKey or server address.");
+    if (req.address().empty()) {
+        return Status(K_INVALID, "CreateMeta: Cannot CreateMeta with server address.");
+    }
+    std::vector<std::string> objsFirst;
+    objsFirst.reserve(req.metas_size());
+    int64_t version = static_cast<int64_t>(GetSystemClockTimeStampUs());
+    std::vector<ObjectMeta> newMetas;
+    newMetas.reserve((req.metas_size()));
+    for (int i = 0; i < req.metas_size(); i++) {
+        const ObjectBaseInfoPb &info = req.metas(i);
+        ObjectMeta &meta = newMetas.emplace_back();
+        meta.locations.emplace(req.address());
+        ConstructMetaInfo(req, info, version, meta.meta);
+    }
+    for (int i = 0; i < req.metas_size(); i++) {
+        const auto &objectKey = req.metas(i).object_key();
+        if (objectKey.empty()) {
+            rsp.add_failed_object_keys(objectKey);
+            lastRc = Status(K_INVALID, "CreateMeta: Cannot CreateMeta with server address.");
+            continue;
         }
         bool firstOne = false;
-        auto status = CreateMeta(metaInfo, req.address(), {}, version, firstOne);
+        auto status = CreateMeta(objectKey, newMetas[i], req.address(), version, firstOne);
+        if (firstOne) {
+            objsFirst.emplace_back(objectKey);
+        }
         if (status.IsError()) {
             // meta maybe already insert to metatable. if not first one, no need delete old meta.
             if (firstOne) {
-                rollBackIds.emplace_back(metaInfo.object_key());
+                rollBackIds.emplace_back(objectKey);
             }
-            rsp.add_failed_object_keys(metaInfo.object_key());
-            rsp.add_version(failVersion);
+            rsp.add_failed_object_keys(objectKey);
             lastRc = status;
-        } else {
-            rsp.add_version(version);
         }
     }
+    ExecuteAsyncTask([this, objsFirst]() {
+        for (const auto &objKey : objsFirst) {
+            std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
+            TbbMetaTable::const_accessor accessor;
+            if (!metaTable_.find(accessor, objKey)) {
+                LOG(WARNING) << "Object " << objKey << " can't found in metaTable, notify subscribe failed";
+                continue;
+            }
+            ObjectMeta metaCache = accessor->second;
+            accessor.release();
+            UpdateSubscribeCache(objKey, metaCache);
+        }
+    });
     RollBackMultiMetaWhenCreateFailed(rollBackIds, req.address());
     rsp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     rsp.mutable_last_rc()->set_error_code(lastRc.GetCode());
+    rsp.set_version(version);
     return Status::OK();
 }
 
 Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
 {
     std::vector<std::string> successIds;
-    int64_t pendingTtl = GetSteadyClockTimeStampUs() + MSET_PENDING_TTL_US;
+    int64_t pendingTtl = GetSystemClockTimeStampUs() + MSET_PENDING_TTL_US;
     INJECT_POINT("master.CreateMultiMetaTx.pendingTtl", [&pendingTtl](int ttlUs) {
-        pendingTtl = GetSteadyClockTimeStampUs() + ttlUs;
+        pendingTtl = GetSystemClockTimeStampUs() + ttlUs;
         return Status::OK();
     });
     for (const auto &metaInfo : req.metas()) {
@@ -764,8 +871,10 @@ Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, Cre
             RollBackMultiMetaWhenCreateFailed(successIds, req.address());
             RETURN_STATUS(K_INVALID, "CreateMeta: Cannot CreateMeta with empty objectKey or server address.");
         }
+        ObjectMetaPb meta;
+        ConstructMetaInfo(req, metaInfo, 0, meta);
         bool firstOne = false;
-        auto status = CreatePendingMeta(metaInfo, req.address(), pendingTtl, firstOne);
+        auto status = CreatePendingMeta(meta, req.address(), pendingTtl, firstOne);
         if (status.IsError()) {
             // meta maybe already insert to metatable. if not first one, no need delete old meta.
             if (firstOne) {
@@ -781,7 +890,7 @@ Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, Cre
     if (req.is_pre_commit()) {
         return Status::OK();
     }
-    auto type = WriteMode2MetaType(req.metas().begin()->config().write_mode());
+    auto type = WriteMode2MetaType(req.config().write_mode());
     uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
     auto status = PublishMultiMeta(successIds, req.address(), type, version, rsp);
     if (status.IsError()) {
@@ -830,7 +939,6 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
                                            ObjectMetaStore::WriteType type, uint64_t version, CreateMultiMetaRspPb &rsp)
 {
     std::unordered_map<std::string, std::string> metaInfos;
-    uint64_t versionForTTL = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
     for (const auto &objKey : objectKeys) {
         std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
         TbbMetaTable::accessor accessor;
@@ -846,12 +954,12 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
         if (objectMeta.config().data_format() != (uint64_t)DataFormat::HASH_MAP) {
             UpdateSubscribeCache(objKey, accessor->second);
         }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, versionForTTL, objectMeta.ttl_second()));
+        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, version, objectMeta.ttl_second()));
         std::string serializedStr;
         RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objKey, objectMeta, serializedStr));
         metaInfos.emplace(objKey, serializedStr);
-        rsp.add_version(version);
     }
+    rsp.set_version(version);
     return objectStore_->CreateOrUpdateBatchMeta(metaInfos, type);
 }
 
@@ -1638,7 +1746,7 @@ void OCMetadataManager::DeleteAllCopyMetaImpl(
 {
     const std::string &sourceWorker = request.address();
     std::vector<std::string> objectKeys = { request.object_keys().begin(), request.object_keys().end() };
-    std::unordered_map<std::string, int64_t> objKey2Version;
+    std::unordered_map<std::string, uint64_t> objKey2Version;
     for (const auto &objWithVersion : request.ids_with_version()) {
         objectKeys.emplace_back(objWithVersion.id());
         objKey2Version.emplace(objWithVersion.id(), objWithVersion.version());
@@ -2076,8 +2184,7 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
         RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
     }
     LOG(INFO) << "UpdateMeta finished";
-    uint64_t versionForTTL = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
-    return expiredObjectManager_->InsertObject(objectKey, versionForTTL, request.ttl_second());
+    return expiredObjectManager_->InsertObject(objectKey, version, request.ttl_second());
 }
 
 Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaRspPb &response)
@@ -2187,8 +2294,8 @@ void OCMetadataManager::InsertExpireObjects(ObjectMetaPb &metaPb,
 {
     if (metaPb.ttl_second() > 0) {
         INJECT_POINT("master.LoadMeta.steadyClockIsDifferent", [&metaPb]() { metaPb.set_version(0); });
-        long curSteadyClock = GetSteadyClockTimeStampUs();
-        expireObjects.emplace_back(metaPb.object_key(), curSteadyClock, metaPb.ttl_second());
+        long curSystemClock = GetSystemClockTimeStampUs();
+        expireObjects.emplace_back(metaPb.object_key(), curSystemClock, metaPb.ttl_second());
     }
 }
 
@@ -3584,8 +3691,8 @@ void OCMetadataManager::AsyncDeleteByExpired(DeleteObjectMediator &mediator)
     // For those objs that do not have metadata on this node, we will notify other az masters in the asynchronous queue
     // to delete the metadata.
     for (auto &objectKey : mediator.GetObjKeys()) {
-        uint64_t versionForTTL = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
-        Status rc = expiredObjectManager_->InsertObject(objectKey, versionForTTL, MIN_TTL_SECOND, true);
+        uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
+        Status rc = expiredObjectManager_->InsertObject(objectKey, version, MIN_TTL_SECOND, true);
         // if object is being delete, don't need to insert again.
         if (rc.IsOk() || rc.GetCode() == K_TRY_AGAIN) {
             mediator.AddSuccessDelId(objectKey);
@@ -3660,7 +3767,7 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
         return false;
     }
 
-    uint64_t currentTime = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    uint64_t currentTime = static_cast<uint64_t>(GetSystemClockTimeStampUs());
     // Theoretically, inserts don't fail.
     (void)expiredObjectManager_->InsertObject(objectKey, currentTime, objMeta.remain_ttl_second(),
                                               objMeta.enable_ttl());
@@ -3892,7 +3999,7 @@ void OCMetadataManager::HandleMetaDataMigrationFailed(
     const MetaForMigrationPb &objMeta,
     const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
 {
-    expiredObjectManager_->InsertObject(objMeta.object_key(), GetSteadyClockTimeStampUs(), objMeta.remain_ttl_second(),
+    expiredObjectManager_->InsertObject(objMeta.object_key(), GetSystemClockTimeStampUs(), objMeta.remain_ttl_second(),
                                         objMeta.enable_ttl());
     for (auto &async_op : objMeta.async_ops()) {
         // FillMetadataForMigration does not delete data from etcd. Therefore, type is set to ROCKS_ONLY.
@@ -4357,8 +4464,8 @@ Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
             }
             accessor->second.meta.set_ttl_second(req.ttl_second());
         }
-        uint64_t versionForTTL = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
-        auto rc = expiredObjectManager_->InsertObject(objectKey, versionForTTL, req.ttl_second());
+        uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
+        auto rc = expiredObjectManager_->InsertObject(objectKey, version, req.ttl_second());
         if (rc.IsError()) {
             LOG(WARNING) << "Faied to insert object[" << objectKey << "] with new ttl second.";
             rsp.add_failed_object_keys(objectKey);

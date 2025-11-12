@@ -140,6 +140,11 @@ void ExpiredObjectManager::ReloadExpireObjects(const std::vector<std::tuple<std:
 Status ExpiredObjectManager::InsertObject(const std::string &objectKey, const uint64_t version,
                                           const uint32_t ttlSecond, bool acceptZero)
 {
+    // If objectKey in timeObj_ and we insert the same objectKey again, it means the object is being updated.
+    // If ttl is not zero, we should remove the object key and old expire time, and insert with new expire time again.
+    if (!acceptZero && ttlSecond == 0) {
+        return Status::OK();
+    }
     Timer timer;
     std::lock_guard<std::mutex> lock(mutex_);
     masterOperationTimeCost.Append("InsertObject", timer.ElapsedMilliSecond());
@@ -147,12 +152,6 @@ Status ExpiredObjectManager::InsertObject(const std::string &objectKey, const ui
     // updated data will be deleted soon.
     RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(objectKey, K_RUNTIME_ERROR));
     RemoveObjectIfExistUnlock(objectKey);
-    // If objectKey in timeObj_ and we insert the same objectKey again, it means the object is being updated.
-    // If ttl is not zero, we should remove the object key and old expire time, and insert with new expire time again.
-    // If ttl is zero, we should remove the object key to keep the new data won't be deleted.
-    if (!acceptZero && ttlSecond == 0) {
-        return Status::OK();
-    }
     return InsertObjectUnlock(objectKey, version, ttlSecond);
 }
 
@@ -163,7 +162,7 @@ Status ExpiredObjectManager::InsertObjectUnlock(const std::string &objectKey, co
     auto iter = timedObj_.insert({ expiredTime, objectKey });
     obj2Timed_[objectKey] = iter;
     VLOG(1) << FormatString("Insert the object %s with version %llu, ttl second %u, expireTime %llu, remain time %llu",
-                            objectKey, version, ttlSecond, expiredTime, expiredTime - GetSteadyClockTimeStampUs());
+                            objectKey, version, ttlSecond, expiredTime, expiredTime - GetSystemClockTimeStampUs());
     statisticsInfo_.IncreaseObj();
     return Status::OK();
 }
@@ -202,7 +201,7 @@ void ExpiredObjectManager::AddSucceedObject(const std::unordered_map<std::string
         auto &objectKey = item.first;
         auto &expiredTime = item.second;
         uint64_t delayTimeSecond =
-            (GetSteadyClockTimeStampUs() - expiredTime) / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
+            (GetSystemClockTimeStampUs() - expiredTime) / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
         statisticsInfo_.IncreaseDelayDeleteObj(delayTimeSecond);
         if (failedObjects_.count(objectKey)) {
             VLOG(1) << FormatString("The expired object: %s had been deleted after %llu times retry.", objectKey,
@@ -225,7 +224,7 @@ void ExpiredObjectManager::AddFailedObject(const std::set<std::string> &objectKe
         uint64_t newTtlSecond = (UINT64_MAX - 1) / failedObjects_[objectKey] < RETRY_WAIT_TIME
                                     ? UINT64_MAX
                                     : static_cast<uint64_t>(RETRY_WAIT_TIME) * failedObjects_[objectKey] + 1;
-        uint64_t expiredTime = CalcExpireTime(GetSteadyClockTimeStampUs(), newTtlSecond);
+        uint64_t expiredTime = CalcExpireTime(GetSystemClockTimeStampUs(), newTtlSecond);
         auto iter = timedObj_.insert({ expiredTime, objectKey });
         obj2Timed_[objectKey] = iter;
         LOG(INFO) << FormatString(
@@ -238,7 +237,7 @@ void ExpiredObjectManager::AddFailedObject(const std::set<std::string> &objectKe
 std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject()
 {
     std::unordered_map<std::string, uint64_t> expiredObject;
-    uint64_t currentTime = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    uint64_t currentTime = static_cast<uint64_t>(GetSystemClockTimeStampUs());
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto iter = timedObj_.begin();
          iter != timedObj_.end() && iter->first <= currentTime && expiredObject.size() < MAX_DEL_BATCH_NUM;) {
@@ -246,7 +245,7 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject
                                 currentTime);
         expiredObject[iter->second] = iter->first;
         uint64_t delayTimeSecond =
-            (GetSteadyClockTimeStampUs() - iter->first) / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
+            (GetSystemClockTimeStampUs() - iter->first) / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
         statisticsInfo_.IncreaseDelayGetObj(delayTimeSecond);
         (void)readyExpiredObjects_.emplace(iter->second);
         (void)obj2Timed_.erase(iter->second);
@@ -261,7 +260,7 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
         std::this_thread::sleep_for(std::chrono::seconds(sleepTime));
         return Status::OK();
     });
-    auto startTimeUs = GetSteadyClockTimeStampUs();
+    auto startTimeUs = GetSystemClockTimeStampUs();
     LOG(INFO) << "Expire objects size is: " << expiredObjMap.size();
     std::unordered_map<std::string, bool> requestObjectKeyMap;
     std::transform(expiredObjMap.begin(), expiredObjMap.end(),
@@ -274,6 +273,7 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     // the sanity check in metadata manager with an invalid address, let's use loopback IP without port number.
     timeoutDuration.Init(NOTIFY_DELETE_TIMEOUT);
     DeleteObjectMediator mediator("127.0.0.1", requestObjectKeyMap);
+    mediator.SetObjKey2Version(std::move(expiredObjMap));
     ocMetadataManager_->FindNeedDeleteIds(mediator);
 
     std::unordered_set<std::string> hashObjsWithoutMeta = mediator.GetHashObjsWithoutMeta();
@@ -297,7 +297,7 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     AddSucceedObject(succeedIds);
     AddFailedObject(failedIds);
     LOG(INFO) << FormatString("It cost %llu ms to delete expire object, succeed num:%lzu, failed num:%zu",
-                              (GetSteadyClockTimeStampUs() - startTimeUs) / TIME_UNIT_CONVERSION, succeedIds.size(),
+                              (GetSystemClockTimeStampUs() - startTimeUs) / TIME_UNIT_CONVERSION, succeedIds.size(),
                               failedIds.size());
     return Status::OK();
 }
@@ -308,7 +308,7 @@ Status ExpiredObjectManager::GetObjectRemainTimeAndRemove(const std::string &obj
     if (obj2Timed_.find(objectKey) == obj2Timed_.end()) {
         RETURN_STATUS(StatusCode::K_INVALID, FormatString("The object[%s] not set ttl", objectKey));
     }
-    uint64_t currentUs = GetSteadyClockTimeStampUs();
+    uint64_t currentUs = GetSystemClockTimeStampUs();
     uint64_t remainUs = obj2Timed_[objectKey]->first > currentUs ? obj2Timed_[objectKey]->first - currentUs : 0;
     remainTimeSecond = remainUs / TIME_UNIT_CONVERSION / TIME_UNIT_CONVERSION;
     RemoveObjectIfExistUnlock(objectKey);
