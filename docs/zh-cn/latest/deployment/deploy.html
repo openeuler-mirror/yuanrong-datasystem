@@ -562,7 +562,6 @@ document.write(`
 </li>
 </ul>
 <!-- /TOC -->
-<p><a class="reference internal" href="#"><span class="std std-doc"><img alt="查看源文件" src="https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg" /></span></a></p>
 <p>本文档介绍如何将openYuanrong datasystem通过裸进程或者Kubernetes的方式进行部署。</p>
 <section id="id1">
 <h2>openYuanrong datasystem进程部署<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
@@ -935,11 +934,11 @@ dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </sp
 <td><p>3.5</p></td>
 <td><p>openYuanrong datasystem集群管理依赖组件</p></td>
 </tr>
-<tr class="row-even"><td><p>[openYuanrong datasystem镜像](#获取openYuanrong datasystem镜像)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#id20">openYuanrong datasystem镜像</a></p></td>
 <td><p>-</p></td>
 <td><p>openYuanrong datasystem服务端组件镜像</p></td>
 </tr>
-<tr class="row-odd"><td><p>[openYuanrong datasystem helm chart](#获取openYuanrong datasystem-helm-chart包)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#openyuanrong-datasystem-helm-chart">openYuanrong datasystem helm chart</a></p></td>
 <td><p>-</p></td>
 <td><p>openYuanrong datasystem helm chart包</p></td>
 </tr>
@@ -1020,10 +1019,10 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/c
 <span class="w">  </span><span class="c1"># 其他配置项...</span>
 
 <span class="w">  </span><span class="c1"># 镜像仓地址，不涉及可以留空</span>
-<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/openeuler/&quot;</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 <span class="w">  </span><span class="c1"># 镜像名字和镜像tag，&lt;VERSION&gt;需要替换为对应的版本号</span>
 <span class="w">  </span><span class="nt">images</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openYuanrong</span><span class="nv"> </span><span class="s">datasystem:&lt;VERSION&gt;&quot;</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.5.0&quot;</span>
 <span class="w">  </span>
 <span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
 <span class="w">    </span><span class="c1"># ETCD集群地址</span>

@@ -18,8 +18,6 @@
 
 <!-- /TOC -->
 
-[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](deploy.md)
-
 本文档介绍如何将openYuanrong datasystem通过裸进程或者Kubernetes的方式进行部署。
 
 ## openYuanrong datasystem进程部署
@@ -342,8 +340,8 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 |[Helm](#安装helm)|-|openYuanrong datasystem dscli的使用依赖Python环境|
 |[Docker](#安装docker)|-|提供容器化平台，支持openYuanrong datasystem容器化部署和运行|
 |[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
-|[openYuanrong datasystem镜像](#获取openYuanrong datasystem镜像)|-|openYuanrong datasystem服务端组件镜像|
-|[openYuanrong datasystem helm chart](#获取openYuanrong datasystem-helm-chart包)|-|openYuanrong datasystem helm chart包|
+|[openYuanrong datasystem镜像](#获取openyuanrong-datasystem镜像)|-|openYuanrong datasystem服务端组件镜像|
+|[openYuanrong datasystem helm chart](#获取openyuanrong-datasystem-helm-chart包)|-|openYuanrong datasystem helm chart包|
 
 下面给出以上软件的获取及安装方法。
 
@@ -421,10 +419,10 @@ global:
   # 其他配置项...
 
   # 镜像仓地址，不涉及可以留空
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler/"
+  imageRegistry: ""
   # 镜像名字和镜像tag，<VERSION>需要替换为对应的版本号
   images:
-    datasystem: "openYuanrong datasystem:<VERSION>"
+    datasystem: "openyuanrong-datasystem:0.5.0"
   
   etcd:
     # ETCD集群地址

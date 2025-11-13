@@ -533,7 +533,6 @@ document.write(`
 </li>
 </ul>
 <!-- /TOC -->
-<p><a class="reference external" href="https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_zh_cn/deployment/k8s_configuration.md"><img alt="查看源文件" src="https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg" /></a></p>
 <p>本文档描述了openYuanrong datasystem Kubernetes快速启动以及详细配置项说明。</p>
 <section id="id1">
 <h2>最小化配置项<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
@@ -567,11 +566,11 @@ document.write(`
 </div>
 <p><strong>样例</strong>：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
-<span class="w">  </span><span class="c1"># 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0</span>
-<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/openeuler&quot;</span>
+<span class="w">  </span><span class="c1"># 镜像：openyuanrong_datasystem:0.5.0</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 
 <span class="w">  </span><span class="nt">images</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong_datasystem:0.5.0&quot;</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.5.0&quot;</span>
 <span class="w">  </span>
 <span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span>
@@ -584,11 +583,11 @@ document.write(`
 <p><a class="reference internal" href="#id5">global.resources.datasystemWorker.sharedMemory</a> 的大小必须小于 <a class="reference internal" href="#id5">global.resources.requests.memory</a></p>
 </div></blockquote>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
-<span class="w">  </span><span class="c1"># 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0</span>
-<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/openeuler&quot;</span>
+<span class="w">  </span><span class="c1"># 镜像：openyuanrong_datasystem:0.5.0</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 
 <span class="w">  </span><span class="nt">images</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong_datasystem:0.5.0&quot;</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.5.0&quot;</span>
 <span class="w">  </span>
 <span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span>
@@ -673,10 +672,10 @@ document.write(`
 </div>
 <p><strong>样例</strong>：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
-<span class="w">  </span><span class="c1"># 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0</span>
-<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swr.cn-south-1.myhuaweicloud.com/mindspore&quot;</span>
+<span class="w">  </span><span class="c1"># 镜像：openyuanrong_datasystem:0.5.0</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 <span class="w">  </span><span class="nt">images</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong_datasystem:0.5.0&quot;</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.5.0&quot;</span>
 </pre></div>
 </div>
 </section>

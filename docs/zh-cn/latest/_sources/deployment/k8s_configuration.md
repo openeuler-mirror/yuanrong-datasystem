@@ -25,8 +25,6 @@
 
 <!-- /TOC -->
 
-[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_zh_cn/deployment/k8s_configuration.md)
-
 本文档描述了openYuanrong datasystem Kubernetes快速启动以及详细配置项说明。
 
 ## 最小化配置项
@@ -42,11 +40,11 @@
 **样例**：
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
+  # 镜像：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
 
   images:
-    datasystem: "openyuanrong_datasystem:0.5.0"
+    datasystem: "openyuanrong-datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
@@ -62,11 +60,11 @@ global:
 
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
+  # 镜像：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
 
   images:
-    datasystem: "openyuanrong_datasystem:0.5.0"
+    datasystem: "openyuanrong-datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
@@ -110,10 +108,10 @@ global:
 **样例**：
 ```yaml
 global:
-  # 镜像：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/mindspore"
+  # 镜像：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
   images:
-    datasystem: "openyuanrong_datasystem:0.5.0"
+    datasystem: "openyuanrong-datasystem:0.5.0"
 ```
 
 ### 命名空间相关配置

@@ -616,7 +616,7 @@ document.write(`
 <li><p><strong>keys</strong> - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">·-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节. key的最大个数为10,000，推荐单次设置的key个数小于等于64个。</p></li>
 <li><p><strong>sizes</strong> - 设置共享内存Buffer的大小，以字节为单位. 该数组长度需要与 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 的长度相等。</p></li>
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
-<li><p><strong>buffers</strong> - 传出参数，表示创建好的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 数组，该数组的长度与 <cite>keys</cite> 相等，索引位置一一对应，即每个 <code class="docutils literal notranslate"><span class="pre">buffers[i]</span></code> 的值与 <code class="docutils literal notranslate"><span class="pre">keys[i]</span></code> 相对应。</p></li>
+<li><p><strong>buffers</strong> - 传出参数，表示创建好的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 数组，该数组的长度与 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 相等，索引位置一一对应，即每个 <code class="docutils literal notranslate"><span class="pre">buffers[i]</span></code> 的值与 <code class="docutils literal notranslate"><span class="pre">keys[i]</span></code> 相对应。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
@@ -714,7 +714,7 @@ document.write(`
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示至少有一个数据获取成功。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示存在key校验不通过。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code> 时表示请求遇到了网络错误。</p></li>
-<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示所有`keys`不存在。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示所有 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 不存在。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code> 表示 worker 侧存在错误。</p></li>
 </ul>
 </dd>
@@ -736,7 +736,7 @@ document.write(`
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示至少有一个数据获取成功。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示存在key校验不通过。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code> 时表示请求遇到了网络错误。</p></li>
-<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示所有`keys`不存在。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示所有 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 不存在。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code> 表示 worker 侧存在错误。</p></li>
 </ul>
 </dd>
@@ -832,7 +832,7 @@ document.write(`
 <dt>返回：</dt><dd><ul class="simple">
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示至少有一个键设置生命周期成功。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示提供的键中包含非法字符或为空。</p></li>
-<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示所有`keys`不存在。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示所有 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 不存在。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code> 表示请求遇到了网络错误。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_READY</span></code> 表示服务当前无法处理请求。</p></li>
 <li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code> 表示 worker 侧存在错误。</p></li>
