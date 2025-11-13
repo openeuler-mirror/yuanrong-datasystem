@@ -240,9 +240,6 @@ export GONOSUMDB=*
 export GOPROXY=https://goproxy.cn,direct
 export PATH=$GOROOT/bin:$GOPATH/bin:$PATH
 
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
 # --- Python ---
 sudo tee /etc/profile.d/python-env.sh > /dev/null << 'EOF'
 export PYTHON_PATH_3911=/opt/buildtools/python3.9
