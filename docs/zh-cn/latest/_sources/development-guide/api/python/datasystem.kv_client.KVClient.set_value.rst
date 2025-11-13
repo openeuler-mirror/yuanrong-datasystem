@@ -8,7 +8,7 @@ datasystem.kv_client.KVClient.set_value
     参数：
         - **val** (Union[memoryview, bytes, bytearray, str]) - 要设置的数据。
         - **write_mode** (WriteMode) - 控制数据是否写入二级缓存以增强数据可靠性。
-        - **ttl_second** (int) - 控制数据的过期时间，超时会自动删除，单位为秒。0表示不会自动过期，需要通过调用 :func:`datasystem.kv_client.KVClient.delete` 接口删除 `keys` 才能退出生命周期。默认值：``0``。
+        - **ttl_second** (int) - 控制数据的过期时间，超时会自动删除，单位为秒。0表示不会自动过期，需要通过调用 :func:`datasystem.kv_client.KVClient.delete` 接口删除 ``keys`` 才能退出生命周期。默认值：``0``。
 
     返回：
         数据的键。如果设置失败，将返回空字符串。

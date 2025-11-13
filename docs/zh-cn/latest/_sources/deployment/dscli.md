@@ -32,8 +32,6 @@
 
 <!-- /TOC -->
 
-[![查看源文件](https://Mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source.svg)](https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_zh_cn/deployment/dscli.md)
-
 本文档介绍dscli集群管理工具的使用方法、命令行参数以及配置项说明。
 
 ## 环境准备

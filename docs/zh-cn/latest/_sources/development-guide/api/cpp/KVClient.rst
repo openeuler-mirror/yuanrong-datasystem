@@ -82,7 +82,7 @@ KVClient
             - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``·-_!@#%^*()+=:;``，单个key最大长度为255字节. key的最大个数为10,000，推荐单次设置的key个数小于等于64个。
             - **sizes** - 设置共享内存Buffer的大小，以字节为单位. 该数组长度需要与 ``keys`` 的长度相等。
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
-            - **buffers** - 传出参数，表示创建好的共享内存 :cpp:class:`Buffer` 数组，该数组的长度与 `keys` 相等，索引位置一一对应，即每个 ``buffers[i]`` 的值与 ``keys[i]`` 相对应。
+            - **buffers** - 传出参数，表示创建好的共享内存 :cpp:class:`Buffer` 数组，该数组的长度与 ``keys`` 相等，索引位置一一对应，即每个 ``buffers[i]`` 的值与 ``keys[i]`` 相对应。
 
         返回：
             返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
@@ -156,7 +156,7 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
-            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有`keys`不存在。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
 
@@ -173,7 +173,7 @@ KVClient
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
-            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有`keys`不存在。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
     .. cpp:function:: Status Del(const std::string &key)
@@ -241,7 +241,7 @@ KVClient
         返回：
             - 返回 ``StatusCode::K_OK`` 表示至少有一个键设置生命周期成功。
             - 返回 ``StatusCode::K_INVALID`` 表示提供的键中包含非法字符或为空。
-            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有`keys`不存在。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 表示请求遇到了网络错误。
             - 返回 ``StatusCode::K_NOT_READY`` 表示服务当前无法处理请求。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。

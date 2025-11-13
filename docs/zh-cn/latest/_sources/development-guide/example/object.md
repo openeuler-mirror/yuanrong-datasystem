@@ -2,7 +2,7 @@
 
 ## 基本概念
 
-yuanrong-datasystem (下文中称为数据系统)的object接口，基于共享内存实现 host上的 Object 语义读写，提供基于引用计数管理生命周期，将共享内存抽象为 buffer，直接映射共享内存指针，提供更底层灵活的编程接口。
+openYuanrong datasystem (下文中称为数据系统)的object接口，基于共享内存实现 host上的 Object 语义读写，提供基于引用计数管理生命周期，将共享内存抽象为 buffer，直接映射共享内存指针，提供更底层灵活的编程接口。
 
 ## 样例代码
 
