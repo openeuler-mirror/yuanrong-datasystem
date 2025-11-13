@@ -56,6 +56,7 @@ constexpr bool DEFAULT_LOG_COMPRESS = true;
 constexpr bool DEFAULT_LOG_TO_STDERR = false;
 constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
+constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;  // Maximum allowed by spdlog's rotating_file_sink.
 
 DS_DEFINE_string(log_filename, "",
                  "Prefix of log filename, default is program invocation short name. Use standard characters only.");
@@ -169,7 +170,9 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
     loggerParam.logLevel = GetLogSeverityName(FLAGS_minloglevel);
     loggerParam.logAsync = FLAGS_log_async;
     loggerParam.maxSize = MaxLogSize();
-    loggerParam.maxFiles = FLAGS_max_log_file_num;
+    // Disable spdlog's auto-deletion of old log files, only use its file splitting (by size/time).
+    // Log rotation is managed externally by the log manager.
+    loggerParam.maxFiles = HIGHEST_SPDLOG_MAX_FILE_NUM;  // Set max log file limit to spdlog's MaxFiles.
 
     // Create LoggerProvider
     GlobalLogParam globalLogParam;

@@ -13,7 +13,9 @@ set(spdlog_CMAKE_OPTIONS
     -DCMAKE_BUILD_TYPE:STRING=Release
     -DSPDLOG_BUILD_SHARED:BOOL=ON)
 
-set(spdlog_PATCHES ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-filename.patch)
+set(spdlog_PATCHES 
+    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-filename.patch 
+    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-rotating-file-sink.patch)
 
 add_thirdparty_lib(SPDLOG
     URL ${spdlog_URL}

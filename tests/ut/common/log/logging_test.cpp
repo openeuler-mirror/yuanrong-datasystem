@@ -81,16 +81,9 @@ public:
                 filename << "_" << getpid();
             }
 
-            filename << ".INFO.";
-            if (enableCompress) {
-                // timestamp + .log.gz
-                std::string timestamp = GetCurrentTimestamp();
-                filename << timestamp << ".log.gz";
-            } else {
-                // i + .log
-                filename << i << ".log";
-            }
-
+            filename << ".INFO." << GetCurrentTimestamp();
+            const std::string log_suffix = enableCompress ? ".log.gz" : ".log";
+            filename << log_suffix;
             DS_EXPECT_OK(CreateTextFile(filename.str(), fileSize));
             auto interval = std::chrono::milliseconds(1000);
             std::this_thread::sleep_for(interval);
@@ -144,25 +137,28 @@ public:
         return count == leftFileNum;
     }
 
-    void RollingGZFiles()
+    void TestRollingFiles(bool enableCompress)
     {
-        FLAGS_log_compress = true;
+        FLAGS_log_compress = enableCompress;
         FLAGS_log_filename = "ds_llt";
         FLAGS_max_log_size = 1;
         FLAGS_max_log_file_num = 5;
-        DS_EXPECT_OK(CreateLogFiles(10, 1024 * 1024, true, false));
+        DS_EXPECT_OK(CreateLogFiles(10, 1024 * 1024, enableCompress, false));
+        std::string logPattern = "ds_llt\\.INFO\\.\\d{14}\\.log";
 
-        std::string pattern = "ds_llt\\.INFO\\.\\d{14}\\.log.gz";
-        while (true) {
-            bool execute = false;
-            DS_ASSERT_OK(LogManager::DoLogFileCompress(execute));
-            if (!execute) {
-                break;
+        if (enableCompress) {
+            logPattern += ".gz";
+            while (true) {
+                bool execute = false;
+                DS_ASSERT_OK(LogManager::DoLogFileCompress(execute));
+                if (!execute) {
+                    break;
+                }
             }
         }
 
         DS_EXPECT_OK(LogManager::DoLogFileRolling());
-        ASSERT_TRUE(VerifyLogFiles(FLAGS_log_dir, pattern, FLAGS_max_log_file_num));
+        ASSERT_TRUE(VerifyLogFiles(FLAGS_log_dir, logPattern, FLAGS_max_log_file_num));
     }
 
     void MultiTimeCostLogger()
@@ -268,7 +264,7 @@ TEST_F(LoggingTest, TestCompressFiles)
     int num = 5;
     for (int i = 0; i < num; ++i) {
         std::stringstream filename;
-        filename << "compress_test.INFO." << i << ".log";
+        filename << "compress_test.INFO.2025102016493" << i << ".log";
         DS_EXPECT_OK(CreateTextFile(filename.str(), 1000 * 1000));
         auto interval = std::chrono::milliseconds(1000);
         std::this_thread::sleep_for(interval);
@@ -289,9 +285,14 @@ TEST_F(LoggingTest, TestCompressFiles)
     DeleteFilesMatching(FLAGS_log_dir, gz_pattern);
 }
 
+TEST_F(LoggingTest, TestRollingFiles)
+{
+    TestRollingFiles(false);
+}
+
 TEST_F(LoggingTest, TestRollingGZFiles)
 {
-    RollingGZFiles();
+    TestRollingFiles(true);
 }
 
 TEST_F(LoggingTest, TestEnvSucceed)

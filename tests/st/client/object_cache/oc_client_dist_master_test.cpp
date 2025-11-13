@@ -1115,5 +1115,37 @@ TEST_F(OCClientCentralizedMaster, LEVEL1_AfterRestartPutGet)
     ASSERT_EQ(buffers.size(), (size_t)1);
 }
 
+class OCClientDistMasterHeartbeatTest : public OCClientDistMasterTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 3;
+        opts.numOBS = 1;
+        opts.numEtcd = 1;
+        opts.workerGflagParams = " -node_timeout_s=1800 -node_dead_timeout_s=864000 -client_reconnect_wait_s=5";
+        opts.waitWorkerReady = false;
+        opts.enableDistributedMaster = "true";
+    }
+};
+
+TEST_F(OCClientDistMasterHeartbeatTest, TestMasterRecoverRefAfterWorkerRestart)
+{
+    InitTestClient(0, objClient0_);
+    InitTestClient(1, objClient1_);
+    std::string objId = "obj1";
+    std::string val = "val";
+    std::vector<std::string> failedIds;
+    DS_ASSERT_OK(objClient0_->GIncreaseRef({ objId }, failedIds));
+    ASSERT_EQ(failedIds.size(), 0ul);
+    DS_ASSERT_OK(objClient0_->Put(objId, reinterpret_cast<const uint8_t *>(val.data()), val.size(), CreateParam()));
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(objClient1_->Get({ objId }, 0, buffers));
+    ASSERT_EQ(buffers.size(), 1ul);
+
+    auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 0 }));
+    DS_ASSERT_OK(objClient1_->Get({ objId }, 0, buffers));
+}
+
 }  // namespace st
 }  // namespace datasystem

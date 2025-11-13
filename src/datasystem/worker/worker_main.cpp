@@ -213,7 +213,8 @@ void InitWorkerLogConfig()
     if (FLAGS_log_dir.empty() || !Validator::ValidatePathString("log_dir", FLAGS_log_dir)) {
         SetCommandLineOption("log_dir", DEFAULT_LOG_DIR, errMsg);
     }
-    if (!Validator::ValidateInt32("max_log_size", FLAGS_max_log_size)) {
+
+    if (!Validator::ValidateUint32("max_log_size", FLAGS_max_log_size)) {
         auto val = std::to_string(DEFAULT_MAX_LOG_SIZE_MB);
         SetCommandLineOption("max_log_size", val, errMsg);
     }

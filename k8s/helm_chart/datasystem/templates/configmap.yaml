@@ -8,7 +8,6 @@ data:
     -loglevel_only_for_workers=
     -v={{ .Values.global.logLevel }}
     -log_async_queue_size={{ .Values.global.log.logAsyncQueueSize }}
-    -logbufsecs={{ .Values.global.log.logBufSecs }}
     -log_compress={{ .Values.global.log.logCompress }}
     -max_log_file_num={{ .Values.global.log.maxLogFileNum }}
     -arena_per_tenant={{ .Values.global.performance.arenaPerTenant }}
