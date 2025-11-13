@@ -68,6 +68,7 @@ DS_DECLARE_bool(enable_huge_tlb);
 DS_DEFINE_uint64(oc_shm_transfer_threshold_kb, 500u,
                  "The data threshold to transfer obj data between client and worker via shm, unit is KB");
 DS_DECLARE_bool(enable_p2p_transfer);
+DS_DECLARE_uint32(client_reconnect_wait_s);
 
 namespace datasystem {
 namespace worker {
@@ -273,6 +274,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     auto clientDeadTimeoutSec = std::min<uint64_t>(FLAGS_client_dead_timeout_s, FLAGS_node_timeout_s);
     rsp.set_client_dead_timeout_s(clientDeadTimeoutSec);
     rsp.set_enable_p2p_transfer(FLAGS_enable_p2p_transfer);
+    rsp.set_client_reconnect_wait_s(FLAGS_client_reconnect_wait_s);
 
     INJECT_POINT("worker.RegisterClient.end", [&rsp](int fd) {
         rsp.set_store_fd(fd);

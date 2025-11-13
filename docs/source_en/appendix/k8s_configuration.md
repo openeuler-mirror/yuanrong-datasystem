@@ -24,8 +24,6 @@
 
 <!-- /TOC -->
 
-[![View Source On Gitee](https://mindspore-website.obs.cn-north-4.myhuaweicloud.com/website-images/master/resource/_static/logo_source_en.svg)](https://gitee.com/openeuler/yuanrong-datasystem/blob/master/docs/source_en/appendix/k8s_configuration.md)
-
 This document describes openYuanrong datasystem Kubernetes configuration items.
 
 ## Minimal Configurations
@@ -39,11 +37,11 @@ This document describes openYuanrong datasystem Kubernetes configuration items.
 **Example**:
 ```yaml
 global:
-  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
+  # image：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
 
   images:
-    datasystem: "openyuanrong_datasystem:0.5.0"
+    datasystem: "openyuanrong-datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
@@ -59,11 +57,11 @@ Each openYuanrong datasystem DaemonSet can use a maximum of 2GB shared memory sp
 
 ```yaml
 global:
-  # swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
+  # openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
 
   images:
-    datasystem: "openyuanrong_datasystem:0.5.0"
+    datasystem: "openyuanrong-datasystem:0.5.0"
   
   etcd:
     etcdAddress: "127.0.0.1:2379"
@@ -107,10 +105,10 @@ global:
 **Example**:
 ```yaml
 global:
-  # image：swr.cn-south-1.myhuaweicloud.com/openeuler/openyuanrong_datasystem:0.5.0
-  imageRegistry: "swr.cn-south-1.myhuaweicloud.com/openeuler"
+  # image：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
   images:
-    datasystem: "openyuanrong_datasystem:0.5.0"
+    datasystem: "openyuanrong-datasystem:0.5.0"
 ```
 
 ### Namespace Configurations

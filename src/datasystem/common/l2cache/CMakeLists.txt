@@ -20,6 +20,7 @@ add_subdirectory(sfs_client)
 set(PERSIST_API_SRC persistence_api.cpp)
 add_library(common_persistence_api STATIC ${PERSIST_API_SRC})
 set(PERSIST_API_DEPEND_LIBS
+        CURL::libcurl
         common_obs
         common_sfs_client)
 target_link_libraries(common_persistence_api PRIVATE ${PERSIST_API_DEPEND_LIBS})

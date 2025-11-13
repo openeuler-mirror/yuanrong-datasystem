@@ -105,6 +105,18 @@ public:
      */
     std::string GetL2CacheRequestSuccessRate() const;
 
+    /**
+     * @brief we need url encode the objectPath for the below reason:
+     *  1) l2cache not support continuous slash
+     *  2) a objectPath contain # will cause objectPath truncate in l2cache
+     *  3) objectPath abc and abc/123 will cause overlap when list all version
+     *
+     * @param[in] objectPath object path
+     * @param[out] encodePath url encode and replace % to ￥
+     * @return real object path in l2cache
+     */
+    static Status UrlEncode(const std::string &objectPath, std::string &encodePath);
+
 protected:
     /**
      * @brief list all the version of the object in persistence

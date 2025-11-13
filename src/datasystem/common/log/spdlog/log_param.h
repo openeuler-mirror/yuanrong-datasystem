@@ -28,12 +28,12 @@ namespace datasystem {
 namespace log_param {
 // GlobalLogParam
 constexpr int DEFAULT_LOG_BUF_SECONDS = 10;               // 10s
-constexpr uint32_t DEFAULT_MAX_ASYNC_QUEUE_SIZE = 65536;  // 64 * 1024
 constexpr uint32_t DEFAULT_ASYNC_THREAD_COUNT = 1;
+constexpr uint32_t DEFAULT_MAX_ASYNC_QUEUE_SIZE = 65536;  // 64 * 1024
 
 // LogParam
+constexpr std::size_t DEFAULT_MAX_FILES = 5;
 constexpr uint32_t DEFAULT_MAX_SIZE = 400;  // 400 MB
-constexpr uint32_t DEFAULT_MAX_FILES = 5;
 constexpr uint32_t SIZE_MEGA_BYTES = 1024 * 1024;  // 1 MB
 
 const std::string DEFAULT_FILE_LOG_LEVEL = "INFO";
@@ -51,7 +51,7 @@ struct LogParam {
     bool alsoLog2Stderr = false;
     bool logAsync = false;
     uint32_t maxSize = log_param::DEFAULT_MAX_SIZE;
-    uint32_t maxFiles = log_param::DEFAULT_MAX_FILES;
+    std::size_t maxFiles = log_param::DEFAULT_MAX_FILES;
     std::string stderrLogLevel = log_param::DEFAULT_STDERR_LOG_LEVEL;
 };
 

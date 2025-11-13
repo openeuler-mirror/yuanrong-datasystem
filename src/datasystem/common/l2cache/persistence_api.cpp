@@ -18,9 +18,13 @@
  * Description: persistence api for the cloud persistence service
  */
 #include "datasystem/common/l2cache/persistence_api.h"
+
+#include <curl/curl.h>
+
 #include "datasystem/common/l2cache/sfs_client/sfs_client.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 
@@ -55,7 +59,7 @@ Status PersistenceApi::Save(const std::string &objectKey, uint64_t version, int6
     INJECT_POINT("persistence.service.save");
 
     std::string encodeKey;
-    RETURN_IF_NOT_OK(L2CacheClient::UrlEncode(objectKey, encodeKey));
+    RETURN_IF_NOT_OK(PersistenceApi::UrlEncode(objectKey, encodeKey));
     std::string objectPath;
     objectPath.append(encodeKey).append("/").append(std::to_string(version));
     auto rc = client_->Upload(objectPath, timeoutMs, body, asyncElapse);
@@ -83,7 +87,7 @@ Status PersistenceApi::Get(const std::string &objectKey, uint64_t version, int64
     LOG(INFO) << FormatString("invoke get object from persistence. objectKey: %s, version: %llu", objectKey, version);
 
     std::string encodeKey;
-    RETURN_IF_NOT_OK(L2CacheClient::UrlEncode(objectKey, encodeKey));
+    RETURN_IF_NOT_OK(PersistenceApi::UrlEncode(objectKey, encodeKey));
 
     std::string objectPath;
     objectPath.append(encodeKey).append("/").append(std::to_string(version));
@@ -110,7 +114,7 @@ Status PersistenceApi::GetWithoutVersion(const std::string &objectKey, int64_t t
     LOG(INFO) << FormatString("invoke get object from persistence without version parameter. objectKey: %s", objectKey);
 
     std::string encodeKey;
-    RETURN_IF_NOT_OK(L2CacheClient::UrlEncode(objectKey, encodeKey));
+    RETURN_IF_NOT_OK(PersistenceApi::UrlEncode(objectKey, encodeKey));
 
     std::string objectPath;
     std::vector<L2CacheObjectInfo> objInfoList;
@@ -145,7 +149,7 @@ Status PersistenceApi::Del(const std::string &objectKey, uint64_t maxVerToDelete
     LOG(INFO) << FormatString("invoke delete object from persistence. objectKey: %s, max version is %llu", objectKey,
                               maxVerToDelete);
     std::string encodeKey;
-    RETURN_IF_NOT_OK(L2CacheClient::UrlEncode(objectKey, encodeKey));
+    RETURN_IF_NOT_OK(PersistenceApi::UrlEncode(objectKey, encodeKey));
 
     std::string objectPathWithoutVersion;
     // append '/', use max prefix to list all version
@@ -229,6 +233,32 @@ Status PersistenceApi::ListAllVersion(const std::string &objectKey, int64_t time
     } while (resp->IsTruncated());
 
     LOG(INFO) << "List version of " << objectKey << " from persistence, num = " << objInfoList.size();
+    return Status::OK();
+}
+
+Status PersistenceApi::UrlEncode(const std::string &objectPath, std::string &encodePath)
+{
+    std::ostringstream uniqSlash;
+    CURL *curl = curl_easy_init();
+    if (curl == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Failed to init curl, encode the object key failed.");
+    }
+    Raii raii([&curl] { curl_easy_cleanup(curl); });
+    char *urlEncode = curl_easy_escape(curl, objectPath.c_str(), objectPath.size());
+    if (urlEncode == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Failed to curl_easy_escape, encode the object key failed.");
+    }
+
+    Raii raiiEncode([&urlEncode] { curl_free(urlEncode); });
+    std::string path(urlEncode);
+    for (size_t i = 0; i < path.size(); i++) {
+        if (path.at(i) == '%') {
+            uniqSlash << L2CACHE_PERCENT_SIGN_ENCODE;
+        } else {
+            uniqSlash << path.at(i);
+        }
+    }
+    encodePath = uniqSlash.str();
     return Status::OK();
 }
 

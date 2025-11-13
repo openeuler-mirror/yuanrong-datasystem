@@ -22,8 +22,6 @@
 #include <initializer_list>
 #include <limits.h>
 
-#include <nlohmann/json.hpp>
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/format.h"
@@ -34,63 +32,6 @@
 DS_DECLARE_string(obs_bucket);
 
 namespace datasystem {
-const std::string KEY_BUCKET = "bucket";
-const std::string KEY_PRODUCT_ID = "productId";
-const std::string KEY_IS_TRUNCATED = "isTruncated";
-const std::string KEY_NEXT_MARKER = "nextMarker";
-const std::string KEY_CONTENTS = "contents";
-const std::string KEY_CONTENT_SIZE = "size";
-const std::string KEY_CONTENT_KEY = "key";
-const std::string KEY_CONTENT_CONTENTTYPE = "contentType";
-const std::string KEY_CONTENT_LASTMODIFIED = "lastModified";
-
-namespace {
-bool ParseFromJson(const nlohmann::json &objJson, std::string &bucket, std::string &productId, bool &isTruncated,
-                   std::string &nextMarker)
-{
-    if (!objJson.is_object()) {
-        LOG(ERROR) << "The response is not a json object.";
-        return false;
-    }
-
-    if (objJson.contains(KEY_BUCKET) && objJson[KEY_BUCKET].is_string()) {
-        bucket = objJson[KEY_BUCKET];
-    }
-
-    if (objJson.contains(KEY_PRODUCT_ID) && objJson[KEY_PRODUCT_ID].is_string()) {
-        productId = objJson[KEY_PRODUCT_ID];
-    }
-
-    if (objJson.contains(KEY_IS_TRUNCATED) && objJson[KEY_IS_TRUNCATED].is_boolean()) {
-        isTruncated = objJson[KEY_IS_TRUNCATED];
-    }
-
-    if (objJson.contains(KEY_NEXT_MARKER) && objJson[KEY_NEXT_MARKER].is_string()) {
-        nextMarker = objJson[KEY_NEXT_MARKER];
-    }
-
-    if ((isTruncated && nextMarker.empty()) || (!isTruncated && !nextMarker.empty())) {
-        LOG(ERROR) << FormatString("Property isTruncated(%d) and nextMarker(%s) not match", isTruncated, nextMarker);
-        // Property mismatch, set to false to indicate no remaining objects
-        isTruncated = false;
-        nextMarker.clear();
-    }
-
-    // if no object match the request's query prefix, then server response body has no contents field.
-    return !objJson.contains(KEY_CONTENTS) || objJson[KEY_CONTENTS].is_array();
-}
-
-bool IsObjectContainsStringKeys(const nlohmann::json &object, const std::initializer_list<std::string> &keys)
-{
-    for (const auto &key : keys) {
-        if (!object.contains(key) || !object[key].is_string()) {
-            return false;
-        }
-    }
-    return object.is_object();
-}
-}  // namespace
-
 void GetObjectInfoListResp::FillInListObjectData(const ObsClient::ListObjectData &listObjData)
 {
     bucket_.clear();
@@ -140,68 +81,5 @@ bool GetObjectInfoListResp::IsTruncated() const
 const std::vector<L2CacheObjectInfo> &GetObjectInfoListResp::GetObjectInfo() const
 {
     return contents_;
-}
-
-class GetObjectInfoListRespWrapper : public GetObjectInfoListResp {
-public:
-    /**
-     * @brief construct from GetObjectInfoListResp
-     */
-    explicit GetObjectInfoListRespWrapper(GetObjectInfoListResp resp) : GetObjectInfoListResp(std::move(resp))
-    {
-    }
-
-    /**
-     * @brief parse list json to GetObjectInfoListResp object
-     * @param[in] objJson response body in json format
-     * @param[out] resp get object list parse result
-     * @return Status of the call
-     */
-    friend Status ParseGetObjectInfoListRespJson(const nlohmann::json &objJson, GetObjectInfoListResp &resp);
-};
-
-Status ParseGetObjectInfoListRespJson(const nlohmann::json &objJson, GetObjectInfoListResp &resp)
-{
-    GetObjectInfoListRespWrapper respWrapper(resp);
-    if (!ParseFromJson(objJson, respWrapper.bucket_, respWrapper.productId_, respWrapper.isTruncated_,
-                       respWrapper.nextMarker_)) {
-        return Status(K_RUNTIME_ERROR, "Failed to parse obj list json result.");
-    }
-    if (!objJson.contains(KEY_CONTENTS)) {
-        return Status::OK();
-    }
-
-    nlohmann::json::array_t contents = objJson[KEY_CONTENTS];
-    auto keys = { KEY_CONTENT_SIZE, KEY_CONTENT_KEY, KEY_CONTENT_CONTENTTYPE, KEY_CONTENT_LASTMODIFIED };
-    for (auto item = contents.begin(); item < contents.end(); item++) {
-        const auto &content = *item;
-        if (!IsObjectContainsStringKeys(content, keys)) {
-            LOG(ERROR) << "Parse List response failed, Attributes <" << VectorToString(keys)
-                       << "> should both exist and be strings, invalid content:" << content << VectorToString(keys);
-            continue;
-        }
-        std::string size = content[KEY_CONTENT_SIZE];
-        std::string key = content[KEY_CONTENT_KEY];
-
-        uint64_t integerSize;
-        try {
-            integerSize = StrToUnsignedLongLong(size);
-        } catch (const std::out_of_range &e) {
-            LOG(ERROR) << "The string is out of range : " << size;
-            integerSize = LONG_MAX;
-        } catch (const std::invalid_argument &e) {
-            LOG(ERROR) << "Got invalid size : " << size;
-            integerSize = 0;
-        }
-        L2CacheObjectInfo obj{ .contentType = content[KEY_CONTENT_CONTENTTYPE],
-                               .lastModified = content[KEY_CONTENT_LASTMODIFIED],
-                               .size = integerSize,
-                               .key = key,
-                               .version = respWrapper.ParseVersion(key) };
-        respWrapper.contents_.emplace_back(obj);
-    }
-
-    resp = std::move(respWrapper);
-    return Status::OK();
 }
 }  // namespace datasystem

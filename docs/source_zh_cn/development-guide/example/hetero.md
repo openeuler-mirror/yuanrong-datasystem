@@ -2,7 +2,7 @@
 
 ## 基本概念
 
-yuanrong-datasystem (下文中称为数据系统)的 Hetero 语义中，基于 Device 侧的 HBM 内存抽象异构对象接口，实现昇腾 NPU 卡间数据高速直通传输。同时提供 H2D/D2H 高速迁移接口，实现数据快速在 DRAM/HBM 之间传输。  
+openYuanrong datasystem (下文中称为数据系统)的 Hetero 语义中，基于 Device 侧的 HBM 内存抽象异构对象接口，实现昇腾 NPU 卡间数据高速直通传输。同时提供 H2D/D2H 高速迁移接口，实现数据快速在 DRAM/HBM 之间传输。  
 
 > **注意**：  
 > 数据系统并不直接负责 HBM 内存的申请及释放，用户调用 hetero 接口将 HBM 的指针注册关联到数据系统中并指定 key，数据系统将用户指定的 key 及 HBM 指针抽象为数据对象，控制在不同卡之间的流转。  

@@ -135,13 +135,5 @@ protected:
     // the max version in the response list
     uint64_t maxVersion_ {0};
 };
-
-/**
- * @brief parse response body to GetObjectInfoListResp object with format of api v1
- * @param[in] respBody get object list response body
- * @param[out] resp get object list parse result
- * @return Status of the call
- */
-Status CreateGetObjectInfoListRespV1(const std::string &respBody, GetObjectInfoListResp &resp);
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_GET_OBJECT_LIST_RESP_H

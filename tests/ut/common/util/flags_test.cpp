@@ -35,11 +35,11 @@ DS_DECLARE_bool(log_compress);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(log_async_queue_size);
 DS_DECLARE_uint32(max_log_file_num);
+DS_DECLARE_int32(logbufsecs);
 
 namespace datasystem {
 namespace ut {
-class FlagsTest : public CommonTest {
-};
+class FlagsTest : public CommonTest {};
 
 TEST_F(FlagsTest, TestTrimSpace)
 {
@@ -94,10 +94,20 @@ TEST_F(FlagsTest, TestIsToHandle)
 TEST_F(FlagsTest, TestUpdateFlagParameter)
 {
     Flags flag;
-    std::unordered_map<std::string, std::string> flagMap{ { "v", "3" }, { "max_log_file_num", "20" } };
+    std::unordered_map<std::string, std::string> flagMap{ { "v", "3" },
+                                                          { "max_log_file_num", "20" },
+                                                          { "logbufsecs", "15" } };
     flag.UpdateFlagParameter(flagMap);
     EXPECT_EQ(FLAGS_v, 3);
     EXPECT_EQ(FLAGS_max_log_file_num, 20ul);
+    EXPECT_EQ(FLAGS_logbufsecs, 15);  // 15s
+}
+
+TEST_F(FlagsTest, TestValidateFlagName)
+{
+    Flags flag;
+    EXPECT_FALSE(flag.ValidateFlagName("logbufsecs"));
+    EXPECT_TRUE(flag.ValidateFlagName("log_compress"));
 }
 
 TEST_F(FlagsTest, TestFindFirstSeparator)

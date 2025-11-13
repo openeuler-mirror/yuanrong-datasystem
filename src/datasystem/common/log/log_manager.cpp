@@ -161,17 +161,17 @@ Status LogManager::FetchLogWithPattern(std::vector<std::string> &files, bool isR
 
 Status LogManager::DoLogFileRolling()
 {
-    if (!FLAGS_log_compress) {
-        return Status::OK();
-    }
-
     for (int i = 0; i < NUM_SEVERITIES; ++i) {
         // 1st: get log files based on regular expressions.
         std::vector<std::string> files;
-        // log gzip filename format: <program name>.<severity level>.<date>.<time>.log.gz
+        // log gzip filename format: <program name>.<severity level>.<timestamp>.log.gz
         std::stringstream ss;
         ss << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "\\." << GetLogSeverityName(LogSeverity(i))
-           << "\\." << "*[0-9]\\.log" << "\\.gz";
+           << "\\." << "*[0-9]\\.log";
+        if (FLAGS_log_compress) {
+            ss << "\\.gz";
+        }
+
         std::string pattern = ss.str();
         RETURN_IF_NOT_OK(Glob(pattern, files));
 
@@ -222,10 +222,11 @@ Status LogManager::DoLogFileCompress(bool &isCompressed)
     for (int i = 0; i < NUM_SEVERITIES; ++i) {
         // 1st: get log files based on regular expressions.
         std::vector<std::string> files;
-        // log filename format: <program name>.<severity level>.<date>.<time>.log
+        // log filename format: <program name>.<severity level>.<timestamp>.log
         std::stringstream ss;
         ss << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "\\." << GetLogSeverityName(LogSeverity(i))
            << "\\." << "*[0-9]\\.log";
+
         std::string pattern = ss.str();
         RETURN_IF_NOT_OK(Glob(pattern, files));
 
@@ -242,30 +243,16 @@ Status LogManager::DoLogFileCompress(bool &isCompressed)
         // 2nd: compress these file in '.gz' format
         int num = 0;
         for (const auto &file : files) {
-            std::string targetFile = file;
-            if (i < NUM_SEVERITIES - 1) {
-                // e.g: datasystem_worker.INFO.1.log -> datasystem_worker.INFO.{TIME}.log
-                int64_t timestamp;
-                GetFileModifiedTime(file, timestamp);
-
-                std::string basename, ext, idx;
-                std::tie(basename, ext) = spdlog::details::file_helper::split_by_extension(file);
-                std::tie(basename, idx) = spdlog::details::file_helper::split_by_extension(basename);
-
-                targetFile = basename + "." + FormatTimestampToString(timestamp) + ext;
-                RETURN_IF_NOT_OK(RenameFile(file, targetFile));
-            }
-
             // e.g: datasystem_worker.INFO.{TIME}.log -> datasystem_worker.INFO.{TIME}.log.gz
-            std::string gzFile = targetFile + ".gz";
+            std::string gzFile = file + ".gz";
             if (FileExist(gzFile)) {
                 continue;
             }
 
             // Compress the file and delete the origin file, we just need the compress files!
             isCompressed = true;
-            RETURN_IF_NOT_OK(CompressFile(targetFile, gzFile));
-            RETURN_IF_NOT_OK(DeleteFile(targetFile));
+            RETURN_IF_NOT_OK(CompressFile(file, gzFile));
+            RETURN_IF_NOT_OK(DeleteFile(file));
             if (++num == PER_OPERATION_NUM) {
                 break;
             }

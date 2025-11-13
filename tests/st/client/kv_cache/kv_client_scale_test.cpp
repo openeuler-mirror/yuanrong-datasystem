@@ -1856,6 +1856,7 @@ TEST_F(STCScaleDownTest, LEVEL1_NodeTimeoutWhenScaleDownTaskRunning)
             std::string key2 = client->Set(value2, param);
             ASSERT_TRUE(!key2.empty());
         }
+        client.reset();
     }
 
     for (int i = 1; i < initNodeCount; i++) {
@@ -1876,6 +1877,9 @@ TEST_F(STCScaleDownTest, LEVEL1_NodeTimeoutWhenScaleDownTaskRunning)
     for (int i = 1; i < initNodeCount; i++) {
         DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "master.SelectPrimaryCopy"));
     }
+
+    // shut down here and ignore the error code to prevent assertion failure in TearDown because w2 exited by SIGKILL
+    (void)cluster_->ShutdownNodes(WORKER);
 }
 
 TEST_F(STCScaleDownTest, TestScaleDownDuringScaleUp)

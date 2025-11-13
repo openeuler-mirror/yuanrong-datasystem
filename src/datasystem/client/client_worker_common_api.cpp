@@ -381,10 +381,12 @@ Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t t
         heartBeatTimeoutMsOptions.emplace_back(clientDeadTimeoutMs / retryNum);
     }
     heartBeatTimeoutMs_ = *std::min_element(heartBeatTimeoutMsOptions.begin(), heartBeatTimeoutMsOptions.end());
+    uint64_t clientReconnectWaitMs = rsp.client_reconnect_wait_s() * TO_MILLISECOND;
     const int32_t reduceRatio = 5;
     heartBeatIntervalMs_ =
-        std::min(std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
-                 static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS));
+        std::min({ std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
+                   static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS),
+                   clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
     return Status::OK();

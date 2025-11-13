@@ -56,24 +56,25 @@ message RegisterClientReqPb {
 }
 
 message RegisterClientRspPb {
-    bytes client_id = 1;
-    double quorum_timeout_mult = 2;
-    uint32 lock_id = 3;
-    uint64 shm_threshold = 4;
-    bytes worker_start_id = 5;
-    string worker_uuid = 6;
-    string standby_worker = 7;
-    uint64 node_timeout_s = 8;
-    string az_name = 9;
-    int64 store_fd = 10;
-    uint64 mmap_size = 11;
-    uint64 offset = 12;
-    string shm_id = 13;
-    uint64 client_dead_timeout_s = 14;
-    bool enable_huge_tlb = 15; // the status of HUGE_TLB switch
-    bool unhealthy = 16;
-    repeated string available_workers = 17;
-    bool enable_p2p_transfer = 18;
+    bytes client_id = 2;
+    double quorum_timeout_mult = 3;
+    uint32 lock_id = 4;
+    uint64 shm_threshold = 5;
+    bytes worker_start_id = 6;
+    string worker_uuid = 7;
+    string standby_worker = 8;
+    uint64 node_timeout_s = 9;
+    string az_name = 10;
+    int64 store_fd = 11;
+    uint64 mmap_size = 12;
+    uint64 offset = 13;
+    string shm_id = 14;
+    uint64 client_dead_timeout_s = 15;
+    bool enable_huge_tlb = 16; // the status of HUGE_TLB switch
+    bool unhealthy = 17;
+    repeated string available_workers = 18;
+    bool enable_p2p_transfer = 19;
+    uint64 client_reconnect_wait_s = 20;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

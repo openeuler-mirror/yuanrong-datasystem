@@ -7,7 +7,7 @@ global:
   imageRegistry: ""
   images:
     # Image name and tag in 'name:tag' format
-    datasystem: "yr_datasystem:v0.1"
+    datasystem: "openyuanrong-datasystem:0.5.0"
 
   # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
   azName: "AZ1"
@@ -403,7 +403,7 @@ global:
   # For example:
   # affinity:
   #   nodeSelector:
-  #     node-role.kubernetes.io/datasystem: "true"
+  #     node-role.kubernetes.io/datasystem: "openyuanrong-datasystem:0.5.0"
   #   tolerations:
   #   - key: "testAffinity"
   #     operator: "Equal"
