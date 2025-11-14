@@ -3,9 +3,7 @@ datasystem.hetero_client.HeteroClient.dev_mset
 
 .. py:method:: datasystem.hetero_client.HeteroClient.dev_mset(keys, data_blob_list)
 
-    通过数据系统缓存 Device 上的数据，将 data_blob_list 对应的 key 的元数据写入数据系统，可供其他 client 访问。
-
-    dev_mset 和 dev_mget 需配套使用。dev_mset 和 dev_mget 传入的 Device 内存地址不能归属于同一张 NPU 卡。
+    通过数据系统缓存 Device 上的数据，将 data_blob_list 对应的 key 的元数据写入数据系统，可供其他 client 访问。dev_mset 和 dev_mget 需配套使用。
 
     dev_mget 后不会自动删除异构对象，如对象不再使用，可调用 dev_local_delete 或 dev_delete 删除。
 

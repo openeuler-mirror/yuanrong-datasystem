@@ -488,8 +488,7 @@ document.write(`
 <dl class="py method">
 <dt class="sig sig-object py" id="datasystem.DsTensorClient.dev_mget">
 <span class="sig-prename descclassname"><span class="pre">datasystem.DsTensorClient.</span></span><span class="sig-name descname"><span class="pre">dev_mget</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tensors</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_timeout_ms</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.DsTensorClient.dev_mget" title="Link to this definition">#</a></dt>
-<dd><p>获取 device 中的数据，并写入到 tensors 的 Tensor 中。数据通过 device to device 通道直接传输。</p>
-<p>dev_mset 和 dev_mget 需配套使用。dev_mset 和 dev_mget 传入的 Device 内存地址不能归属于同一张 NPU 卡。</p>
+<dd><p>获取 device 中的数据，并写入到 tensors 的 Tensor 中。数据通过 device to device 通道直接传输。dev_mset 和 dev_mget 需配套使用。</p>
 <p>dev_mget 后不会自动删除异构对象，如对象不再使用，可调用 dev_local_delete 或 dev_delete 删除。</p>
 <p>在执行 dev_mget 过程中，执行了 dev_mset 的进程不能退出，否则 dev_mget 会失败。</p>
 <dl class="simple">
