@@ -50,6 +50,7 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
@@ -72,6 +73,8 @@ const size_t BATCH_SET_MAX_KEY_COUNT = 2000;
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 static constexpr size_t QUERY_SIZE_OBJECT_LIMIT = 10000;
 const std::string K_SEPARATOR = "$";
+const std::string CLIENT_PARALLEL_THREAD_MIN_NUM_ENV = "CLIENT_PARALLEL_THREAD_MIN_NUM";
+const std::string CLIENT_PARALLEL_THREAD_MAX_NUM_ENV = "CLIENT_PARALLEL_THREAD_MAX_NUM";
 
 namespace datasystem {
 inline void ReadFromEnv(std::string &param, std::string env)
@@ -246,7 +249,29 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     StartPerfThread();
+    InitParallelFor();
     return Status::OK();
+}
+
+void ObjectClientImpl::InitParallelFor()
+{
+    static const int defaultThreadNum = 4;
+    auto getEnvInt = [](const std::string& envName, int defaultValue) -> int {
+        const char* val = std::getenv(envName.c_str());
+        int result = defaultValue;
+        if (val && !Uri::StrToInt(val, result)) {
+            result = defaultValue;
+        }
+        return result;
+    };
+    parallismNum_ = getEnvInt(CLIENT_PARALLEL_THREAD_MIN_NUM_ENV, defaultThreadNum);
+    int maxThreadNum = getEnvInt(CLIENT_PARALLEL_THREAD_MAX_NUM_ENV, 0);
+    LOG(INFO) << "Init parallel for with parallismNum: " << parallismNum_
+              << ", maxThreadNum: " << std::max(maxThreadNum, parallismNum_);
+    if (parallismNum_ == 0) {
+        return;
+    }
+    datasystem::Parallel::InitParallelThreadPool(parallismNum_, maxThreadNum);
 }
 
 void ObjectClientImpl::MGetAsyncRpcThread(const std::shared_ptr<MGetAsyncRPCSource> &resourcePtr)
@@ -1974,6 +1999,41 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
     return Status::OK();
 }
 
+Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
+                                            const std::vector<StringView> &vals, const FullParam &creatParam,
+                                            std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                            std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList)
+{
+    const int sz = static_cast<int>(bufferList.size());
+    auto memoryCopy = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            auto &buffer = bufferList[i];
+            if (buffer == nullptr) {
+                bufferInfoList[i] = std::make_shared<ObjectBufferInfo>(
+                    SetObjectBufferInfo(keys[i], reinterpret_cast<uint8_t *>(const_cast<char *>(vals[i].data())),
+                                        vals[i].size(), 0, creatParam, false, 0));
+                continue;
+            }
+            RETURN_IF_NOT_OK(buffer->CheckDeprecated());
+            CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED,
+                                     "Client object is already sealed");
+            RETURN_IF_NOT_OK(buffer->MemoryCopy(vals[i].data(), vals[i].size()));
+            bufferInfoList[i] = buffer->bufferInfo_;
+        }
+        return Status::OK();
+    };
+    if (!isParallel || parallismNum_ == 0) {
+        return memoryCopy(0, sz);
+    }
+    int workerNum = parallismNum_;
+    size_t chunkSize = 4;
+    if (sz <= parallismNum_) {
+        workerNum = sz;
+        chunkSize = 1;
+    }
+    return Parallel::ParallelFor<size_t>(0, bufferInfoList.size(), memoryCopy, chunkSize, workerNum);
+}
+
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &param, std::vector<std::string> &outFailedKeys)
 {
@@ -2000,29 +2060,24 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     }
     PerfPoint point(PerfKey::CLIENT_MSET_MULTICREATE);
     std::vector<uint64_t> dataSizeList;
+    uint64_t dataSizeSum = 0;
+    dataSizeList.reserve(filteredValues.size());
     for (const auto &val : filteredValues) {
         dataSizeList.emplace_back(val.size());
+        dataSizeSum += val.size();
     }
     std::vector<std::shared_ptr<Buffer>> bufferList;
     std::vector<bool> exist;
     RETURN_IF_NOT_OK(MultiCreate(filteredKeys, dataSizeList, creatParam, true, bufferList, exist));
-    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
-    bufferInfoList.reserve(bufferList.size());
+    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList(bufferList.size());
+    static const int minSizeThreshold = 500 * KB;
+    static const int sizeThreshold = 4 * MB_TO_BYTES;
+    static const int countThreshold = 32;
+    bool isParallel =
+        dataSizeSum > minSizeThreshold && (dataSizeSum >= sizeThreshold || filteredKeys.size() >= countThreshold);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
-    auto idx = 0;
-    for (auto &buffer : bufferList) {
-        if (buffer == nullptr) {
-            bufferInfoList.emplace_back(std::make_shared<ObjectBufferInfo>(SetObjectBufferInfo(
-                filteredKeys[idx], reinterpret_cast<uint8_t *>(const_cast<char *>(filteredValues[idx].data())),
-                filteredValues[idx].size(), 0, creatParam, false, 0)));
-            continue;
-        }
-        RETURN_IF_NOT_OK(buffer->CheckDeprecated());
-        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
-        RETURN_IF_NOT_OK(buffer->MemoryCopy(filteredValues[idx].data(), filteredValues[idx].size()));
-        bufferInfoList.emplace_back(buffer->bufferInfo_);
-        idx++;
-    }
+    RETURN_IF_NOT_OK(
+        MemoryCopyParallel(isParallel, filteredKeys, filteredValues, creatParam, bufferList, bufferInfoList));
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLSIH);
     MultiPublishRspPb rsp;
     PublishParam publishParam{

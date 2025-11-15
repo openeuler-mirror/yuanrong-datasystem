@@ -50,7 +50,8 @@ list(APPEND CLIENT_DEPEND_LIBS
         worker_stream_protos_client
         common_acl_device
         common_shared_memory
-        common_rdma)
+        common_rdma
+        common_parallel)
 
 if (ENABLE_PERF)
     file(GLOB_RECURSE PERF_CLIENT_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} perf_client/*.cpp )

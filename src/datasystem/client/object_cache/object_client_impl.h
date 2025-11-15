@@ -585,6 +585,11 @@ private:
     };
 
     /**
+     * @brief Init ParallelFor thread pool.
+     */
+    void InitParallelFor();
+
+    /**
      * @brief process too handler MGetH2D rpc response.
      * @param[in] asyncResource A struct type containing a future with rpc, a buffer that cannot be destructured for the
      * time being, and a promise to be used for return. Passed to the thread to use to avoid destructuring the current
@@ -1069,6 +1074,21 @@ private:
     void StartPerfThread();
     void ShutdownPerfThread();
 
+    /**
+     * @brief Memory copy in parallel or serial mode.
+     * @param[in] isParallel Enable parallel or not.
+     * @param[in] keys Object keys.
+     * @param[in] vals Object values.
+     * @param[in] creatParam The creating parameter of the buffer.
+     * @param[in] bufferList The buffer of the objects.
+     * @param[out] bufferInfoList The buffers information for creating buffers..
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
+                              const std::vector<StringView> &vals, const FullParam &creatParam,
+                              std::vector<std::shared_ptr<Buffer>> &bufferList,
+                              std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
+
     std::string ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
@@ -1114,6 +1134,7 @@ private:
     WaitPost switchPost_;
 
     bool clientEnableP2Ptransfer_ = false;
+    int parallismNum_ = 0;
 };
 }  // namespace object_cache
 }  // namespace datasystem

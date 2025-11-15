@@ -22,6 +22,7 @@ set(DS_UT_DEPEND_LIBS
         common_persistence_api
         common_immutable_string
         string_ref
+        common_parallel
         httpclient
         master_object_cache
         worker_object_cache
