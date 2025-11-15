@@ -122,7 +122,7 @@ def main():
     )
 
     parser.add_argument(
-        "--version", action="version", version="%(prog)s ({})".format(__version__)
+        "--version", action="version", version="%(prog)s {}".format(__version__)
     )
 
     subparsers = parser.add_subparsers(

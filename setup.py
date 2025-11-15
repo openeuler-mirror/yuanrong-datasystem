@@ -56,7 +56,7 @@ def recursive_package_files(directory):
 
 package_datas = {
     '': (
-        ['sdk_lib_list', 'datasystem_worker', '*.py',
+        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py',
         'worker_config.json', 'cluster_config.json'] +
         recursive_package_files('include') +
         recursive_package_files('helm_chart') +

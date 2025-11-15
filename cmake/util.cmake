@@ -734,6 +734,8 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   # Copy worker and worker_config to package lib path
   install(FILES ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_worker ${CMAKE_SOURCE_DIR}/cli/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/cluster_config.json
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
+  # Copy dsbench_cpp to package lib path
+  install(TARGETS dsbench_cpp DESTINATION ${DATASYSTEM_WHEEL_PATH})
 
   find_package(Python3 COMPONENTS Interpreter Development)
   set(CONFIG_PACKAGE_SCRIPT ${CMAKE_BINARY_DIR}/PackageDatasystem.cmake)

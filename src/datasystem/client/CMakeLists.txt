@@ -68,7 +68,13 @@ target_link_libraries(datasystem_static PRIVATE "${CLIENT_DEPEND_LIBS}")
 add_library(datasystem SHARED ${CLIENT_SRCS})
 target_compile_options(datasystem PRIVATE "-fvisibility=hidden")
 target_link_libraries(datasystem PRIVATE "${CLIENT_DEPEND_LIBS}")
-clean_build_rpath(datasystem)
+
+add_custom_target(clean_datasystem_rpath
+    COMMAND ${CMAKE_COMMAND} -D "BIN_FILE=$<TARGET_FILE:datasystem>" -P "${CMAKE_SOURCE_DIR}/cmake/scripts/CleanBuildRpath.cmake"
+    COMMENT "Cleaning RPATH for datasystem.so"
+)
+
+add_dependencies(clean_datasystem_rpath dsbench_cpp)
 
 list(APPEND common_etcd_client
         common_util
