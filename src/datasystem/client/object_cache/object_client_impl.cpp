@@ -1211,14 +1211,13 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objKeys, int32_t su
 
     Status result = Status::OK();
     for (size_t i = 0; i < objKeys.size(); i++) {
-        std::string idenfier = GetFutureMapIdentifier(objKeys[i], buffers[i]);
         Status rc = futureVec[i].Get(std::max(RPC_TIMEOUT, subTimeoutMs));
         INJECT_POINT("ObjectClientImpl.Get", [&rc] {
             rc = Status(K_INVALID, "inject error");
             return Status::OK();
         });
         if (rc != Status::OK()) {
-            failedList.emplace_back(idenfier);
+            failedList.emplace_back(objKeys[i]);
             result = rc;
         }
     }
@@ -2276,13 +2275,6 @@ Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefix
         key = prefixKey + suffix;
     }
     return Status::OK();
-}
-
-std::string ObjectClientImpl::GetFutureMapIdentifier(const std::string &devObjKey,
-                                                     std::shared_ptr<DeviceBuffer> deviceBuffer)
-{
-    std::string identifier = FormatString("%s,%s", devObjKey, deviceBuffer->GetDeviceIdx());
-    return identifier;
 }
 
 Status ObjectClientImpl::GetPrefix(const std::string &key, std::string &prefix)

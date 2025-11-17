@@ -123,8 +123,9 @@ TraceGuard Trace::SetSubTraceID(const std::string &subTraceID)
     subPosition_ = strlen(traceID_);
     auto copySize = subTraceID.size();
     if (subTraceID.size() > static_cast<size_t>(TRACEID_MAX_SIZE) - subPosition_) {
-        LOG(WARNING) << FormatString("The traceID length %zu exceeds the maximum length %d.", subTraceID.size(),
-                                     TRACEID_MAX_SIZE);
+        LOG(WARNING) << FormatString("The traceID length %zu exceeds the maximum length %d.",
+            subTraceID.size() + subPosition_,
+            TRACEID_MAX_SIZE);
         copySize = TRACEID_MAX_SIZE - subPosition_;
     }
     int ret = strncpy_s(traceID_ + subPosition_, TRACEID_MAX_SIZE - subPosition_ + 1, subTraceID.c_str(), copySize);

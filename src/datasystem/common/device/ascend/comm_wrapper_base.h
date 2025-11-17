@@ -233,10 +233,9 @@ private:
     std::mutex mutex_;
     bool hasShutDown_ = false;
 
-    std::atomic<bool> commReady_{false};                 // Atomic flag indicating communication domain readiness
-    std::mutex stateMutex_;                              // Mutex protecting callback queue and execution state
-    std::vector<std::function<void()>> readyCallbacks_;  // Queue of callbacks waiting for communication readiness
-    bool executingCallbacks_ = false;                    // Flag indicating if callbacks are currently being executed
+    std::atomic<bool> commReady_{false};
+    std::mutex callbackMutex_;  // Mutex ensuring callbacks are executed in the order they were added
+    std::vector<std::function<void()>> readyCallbacks_;
 
     friend class HcclCommWrapper;
     friend class P2PHcclCommWrapper;

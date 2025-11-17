@@ -68,6 +68,7 @@ bool CommWrapperBase::IsCommReady() const
 
 void CommWrapperBase::SetCommReady(bool ready)
 {
+    std::lock_guard<std::mutex> lock(callbackMutex_);
     bool wasReady = commReady_.exchange(ready);
     if (ready && !wasReady) {
         ExecuteReadyCallbacks();
@@ -77,61 +78,21 @@ void CommWrapperBase::SetCommReady(bool ready)
 void CommWrapperBase::ExecuteReadyCallbacks()
 {
     std::vector<std::function<void()>> callbacksToExecute;
-    {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+    callbacksToExecute = std::move(readyCallbacks_);
+    readyCallbacks_.clear();
 
-        // Move all pending callbacks to local vector for execution
-        callbacksToExecute = std::move(readyCallbacks_);
-        readyCallbacks_.clear();
-
-        // Set flag to indicate callback execution is in progress
-        executingCallbacks_ = true;
-    }
-
-    // Execute all callbacks without holding the lock
     for (auto &callback : callbacksToExecute) {
         callback();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(stateMutex_);
-
-        // Reset execution flag after all callbacks are completed
-        executingCallbacks_ = false;
     }
 }
 
 void CommWrapperBase::AddReadyCallback(std::function<void()> callback)
 {
-    bool shouldExecute = false;
-    {
-        std::lock_guard<std::mutex> lock(stateMutex_);
-
-        // If communication is ready, no callbacks are pending, and not currently executing,
-        // the callback can be executed immediately
-        if (IsCommReady() && !executingCallbacks_ && readyCallbacks_.empty()) {
-            shouldExecute = true;
-        } else {
-            // Add callback to the queue for ordered execution
-            readyCallbacks_.push_back(callback);
-
-            // If communication is ready and not currently executing callbacks,
-            // trigger execution after releasing the lock
-            if (IsCommReady() && !executingCallbacks_) {
-                shouldExecute = true;
-            }
-        }
-    }
-
-    // Execute callback or trigger execution outside of lock
-    if (shouldExecute) {
-        if (readyCallbacks_.empty()) {
-            // Direct execution for immediate case
-            callback();
-        } else {
-            // Batch execution for queued callbacks
-            ExecuteReadyCallbacks();
-        }
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    if (IsCommReady()) {
+        callback();
+    } else {
+        readyCallbacks_.push_back(callback);
     }
 }
 

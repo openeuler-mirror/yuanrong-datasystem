@@ -181,6 +181,20 @@ private:
                                int32_t timeoutMs, const std::vector<StatusCode> retryableErrors,
                                std::function<void(std::shared_ptr<CommWrapperBase>, Status, Status)> finalHandler);
 
+    /**
+     * Generates a formatted sub-communication ID string for the given communicator.
+     *
+     * Extracts the communicator ID from the provided CommWrapperBase object and formats it
+     * by truncating to the specified length (7 characters) if necessary, then enclosing it
+     * in square brackets.
+     *
+     * @param comm Shared pointer to the communicator wrapper object
+     * @return Formatted sub-communication ID string in the format "[XXXXXXX]" where
+     *         XXXXXXX represents the first 7 characters of the original comm ID if
+     *         its length is 7 or more, or the full comm ID if shorter than 7 characters.
+     */
+    std::string GetSubCommIdForIdentifier(std::shared_ptr<CommWrapperBase> &comm);
+
     TbbHcclCommTable commTable_;
     // To prevent two threads from trying to create a communication domain at the same time.
     std::shared_timed_mutex mutex_;

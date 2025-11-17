@@ -96,6 +96,8 @@ Status HcclCommFactory::GetOrCreateHcclComm(P2PEventType eventType, int32_t loca
         comm = acc->second;
         return CreateHcclCommCheckError(comm);
     }
+    LOG(INFO) << FormatString(
+        "Comm cache miss, initialize new %s comm, commId: %s", enableP2Ptransfer ? "p2phccl" : "hccl", commKey);
 
     // If insert failed, mean the hccl comm exist, get it and return.
     if (!commTable_.insert(acc, commKey)) {
@@ -104,7 +106,6 @@ Status HcclCommFactory::GetOrCreateHcclComm(P2PEventType eventType, int32_t loca
     }
 
     if (enableP2Ptransfer) {
-        LOG(INFO) << "used p2phccl comm";
         comm = std::make_shared<P2PHcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, hcclThreadControl_,
                                                     aclResourceMgr_);
         acc->second = comm;
@@ -115,7 +116,6 @@ Status HcclCommFactory::GetOrCreateHcclComm(P2PEventType eventType, int32_t loca
         CreateHcclCommInRecv(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
         return CreateHcclCommCheckError(comm);
     }
-    LOG(INFO) << "used hccl comm";
     comm =
         std::make_shared<HcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, hcclThreadControl_, aclResourceMgr_);
     acc->second = comm;
@@ -134,14 +134,15 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
     auto traceId = Trace::Instance().GetTraceID();
     auto processFunc = [this, comm, localDeviceId, remoteDeviceId, remoteClientId, isSameNode, traceId]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
         INJECT_POINT("CreateHcclCommInSend.sleep");
         PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_SEND);
         auto localClientId = clientWorkerApi_->GetClientId();
         auto peerId = GetHcclPeerId(localClientId, localDeviceId, remoteClientId, remoteDeviceId);
-        VLOG(1) << FormatString("[Sender] Sender try to acquire write lock, peerId: %s", peerId);
+        VLOG(1) << FormatString("Sender try to acquire write lock, peerId: %s", peerId);
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
 
-        LOG(INFO) << FormatString("[Sender] Start to recv RootInfo from worker, peerId: %s", peerId);
+        LOG(INFO) << FormatString("Start to recv RootInfo from worker, peerId: %s", peerId);
         RecvRootInfoReqPb rootInfoReq;
         rootInfoReq.set_dst_client_id(remoteClientId);
         rootInfoReq.set_dst_device_id(remoteDeviceId);
@@ -151,7 +152,7 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clientWorkerApi_->RecvRootInfo(rootInfoReq, rootInfoResp),
                                          "Failed with receive");
         if (rootInfoResp.is_dead_lock()) {
-            std::string msg = "[Sender] Deadlock detected, releasing lock and retrying.";
+            std::string msg = "Deadlock detected, releasing lock and retrying.";
             LOG(WARNING) << msg;
             RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_CLIENT_DEADLOCK, msg)));
         }
@@ -172,7 +173,7 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
         if (ret != EOK) {
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Copy root info failed, the memcpy_s return: %d", ret));
         }
-        LOG(INFO) << "[Sender] Start init hccl comm";
+        LOG(INFO) << "Start init hccl comm";
         PrintRootInfo(rootInfo);
         auto rc = comm->InitCommunicator(rootInfo, HcclCommDirection::SEND, isSameNode);
         RETURN_IF_NOT_OK(SetStateIfError(comm, rc));
@@ -261,11 +262,12 @@ void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::str
     auto traceId = Trace::Instance().GetTraceID();
     auto process = [this, comm, localDeviceId, remoteDeviceId, remoteClientId, isSameNode, traceId]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
         INJECT_POINT("CreateHcclCommInRecv.sleep");
         PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_RECV);
         auto localClientId = clientWorkerApi_->GetClientId();
         auto peerId = GetHcclPeerId(remoteClientId, remoteDeviceId, localClientId, localDeviceId);
-        VLOG(1) << FormatString("[Receiver] Try to acquire write lock, peerId: %s", peerId);
+        VLOG(1) << FormatString("Try to acquire write lock, peerId: %s", peerId);
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
 
         HcclRootInfo rootInfo;
@@ -280,15 +282,15 @@ void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::str
         req.set_src_client_id(remoteClientId);
         req.set_src_device_id(remoteDeviceId);
 
-        LOG(INFO) << "[Receiver] Send root info to worker, peerId: " << peerId;
+        LOG(INFO) << "Send root info to worker, peerId: " << peerId;
         SendRootInfoRspPb rsp;
         auto rc = clientWorkerApi_->SendRootInfo(req, rsp);
         if (rc.GetCode() == StatusCode::K_CLIENT_DEADLOCK) {
-            LOG(WARNING) << "[Receiver] Deadlock occurred, release the lock and retry";
+            LOG(WARNING) << "Deadlock occurred, release the lock and retry";
             RETURN_IF_NOT_OK(SetStateIfError(comm, rc));
         }
 
-        LOG(INFO) << "[Receiver] Start init hccl comm";
+        LOG(INFO) << "Start init hccl comm";
         PrintRootInfo(rootInfo);
         rc = comm->InitCommunicator(rootInfo, HcclCommDirection::RECV, isSameNode);
         RETURN_IF_NOT_OK(SetStateIfError(comm, rc));
@@ -346,5 +348,15 @@ void HcclCommFactory::DestroyHcclComm(std::string commId)
         comm->ShutDown();
         (void)commTable_.erase(acc);
     }
+}
+
+std::string HcclCommFactory::GetSubCommIdForIdentifier(std::shared_ptr<CommWrapperBase> &comm)
+{
+    const size_t SUB_STR_LENGTH = 7;
+    std::string commId = comm->GetCommId();
+    if (commId.size() >= SUB_STR_LENGTH) {
+        return FormatString("[%s]", commId.substr(0, SUB_STR_LENGTH));
+    }
+    return FormatString("[%s]", commId);
 }
 }  // namespace datasystem

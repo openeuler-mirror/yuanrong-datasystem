@@ -76,8 +76,13 @@ std::string VectorToString(const Vec &vec, bool allowCut = true)
     std::stringstream out;
     auto totalCount = vec.size();
     decltype(totalCount) count = 0;
+    bool first = true;
     for (auto &item : vec) {
-        out << item << " ";
+        if (!first) {
+            out << ", ";
+        }
+        out << item;
+        first = false;
         auto length = GetSize(&out);
         count++;
         if (length > static_cast<decltype(length)>(LOG_MAX_SIZE_LIMIT) && allowCut) {
