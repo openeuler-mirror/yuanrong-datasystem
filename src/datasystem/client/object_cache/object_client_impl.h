@@ -608,7 +608,7 @@ private:
     Status ConstructMultiCreateParam(const std::vector<std::string> &objectKeyList,
                                      const std::vector<uint64_t> &dataSizeList,
                                      std::vector<std::shared_ptr<Buffer>> &bufferList,
-                                     std::vector<MultiCreateParam> &multiCreateParamList);
+                                     std::vector<MultiCreateParam> &multiCreateParamList, uint64_t &dataSizeSum);
 
     /**
      * @brief For device object, to async get multiple objects

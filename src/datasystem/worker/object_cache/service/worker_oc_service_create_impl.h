@@ -61,6 +61,33 @@ private:
     Status CreateImpl(const std::string &tenantId, const std::string &clientId, const std::string &rawObjectKey,
                       size_t dataSize, CreateRspPb &resp, CacheType cacheType = CacheType::MEMORY);
 
+    /**
+     * @brief Helper function to allocate aggregated memory for objects creation.
+     * @param[in] req The multi create request.
+     * @param[out] shmOwners The allocated shared memory chunks.
+     * @param[out] shmIndexMapping The object key to shmOwners index mapping.
+     * @return Status of the call.
+     */
+    Status AggregateAllocateHelper(const MultiCreateReqPb &req, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                   std::vector<uint32_t> &shmIndexMapping);
+
+    /**
+     * @brief The implementation of MultiCreate.
+     * @param[in] req The MultiCreate request.
+     * @param[in] tenantId The tenant id.
+     * @param[out] resp The MultiCreate response.
+     * @return Status of the call.
+     */
+    Status MultiCreateImpl(const MultiCreateReqPb &req, const std::string &tenantId, MultiCreateRspPb &resp);
+
+    /**
+     * @brief Check existence of object.
+     * @param[in] req The MultiCreate request.
+     * @param[in] tenantId The tenant id.
+     * @param[in] resp The MultiCreate response.
+     */
+    void CheckExistence(const MultiCreateReqPb &req, const std::string &tenantId, MultiCreateRspPb &resp);
+
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     std::atomic<uint64_t> shmIdCounter{0};

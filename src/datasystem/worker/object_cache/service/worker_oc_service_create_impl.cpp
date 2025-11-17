@@ -107,26 +107,81 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     return Status::OK();
 }
 
-Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp)
+Status WorkerOcServiceCreateImpl::AggregateAllocateHelper(const MultiCreateReqPb &req,
+                                                          std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                                          std::vector<uint32_t> &shmIndexMapping)
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
-    std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_key_size()),
-                                         StatusCode::K_INVALID, "invalid object size");
-    CHECK_FAIL_RETURN_STATUS(req.object_key_size() == req.data_size_size(), K_INVALID,
-                             FormatString("object key count %zu not match with data size count %zu",
-                                          req.object_key_size(), req.data_size_size()));
-    auto lastRc = Status::OK();
-    auto totalSize = 0u;
-    for (int i = 0; i < req.object_key().size(); i++) {
-        auto objectKey = req.object_key(i);
+    const size_t metaSz = GetMetadataSize();
+    std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> traversalHelper =
+        [&req, &metaSz](const std::function<void(uint64_t, uint64_t, uint32_t)> &collector, bool &needAggregate) {
+            needAggregate = req.object_key_size() > 1;
+            for (int i = 0; i < req.object_key_size(); i++) {
+                collector(req.data_size(i), req.data_size(i) + metaSz, i);
+            }
+        };
+    const auto &firstObjectKey = *req.object_key().begin();
+    return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping);
+}
+
+Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, const std::string &tenantId,
+                                                  MultiCreateRspPb &resp)
+{
+    std::vector<std::shared_ptr<ShmOwner>> shmOwners;
+    std::vector<uint32_t> shmIndexMapping(req.object_key_size(), std::numeric_limits<uint32_t>::max());
+    AggregateAllocateHelper(req, shmOwners, shmIndexMapping);
+
+    std::vector<std::shared_ptr<ShmUnit>> shmUnits(req.object_key_size());
+    for (int i = 0; i < req.object_key_size(); i++) {
+        if (!req.skip_check_existence() && resp.exists(i)) {
+            resp.add_results();
+            continue;
+        }
+        auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key(i));
+
+        std::shared_ptr<ShmOwner> shmOwner = nullptr;
+        if (shmIndexMapping.size() > static_cast<size_t>(i) && shmOwners.size() > shmIndexMapping[i]) {
+            shmOwner = shmOwners[shmIndexMapping[i]];
+        }
+        // Given size, construct shmUnit, generate shm uuid and add client's reference on shmUnit.
+        auto shmUnit = std::make_shared<ShmUnit>();
+        auto metadataSize = GetMetadataSize();
         auto dataSize = req.data_size(i);
+        if (shmOwner) {
+            RETURN_IF_NOT_OK(DistributeMemoryForObject(objectKey, dataSize, metadataSize, true, shmOwner, *shmUnit));
+        } else {
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                AllocateMemoryForObject(objectKey, dataSize, metadataSize, true, evictionManager_, *shmUnit),
+                "worker allocate memory failed");
+        }
+
+        std::string shmUnitId;
+        IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
+        shmUnit->id = shmUnitId;
+        shmUnits[i] = shmUnit;
+
+        // Construct CreateRespPb.
+        CreateRspPb subResp;
+        subResp.set_store_fd(shmUnit->GetFd());
+        subResp.set_mmap_size(shmUnit->GetMmapSize());
+        subResp.set_offset(shmUnit->GetOffset());
+        subResp.set_shm_id(shmUnit->GetId());
+        subResp.set_metadata_size(metadataSize);
+        resp.mutable_results()->Add(std::move(subResp));
+    }
+    memoryRefTable_->AddShmUnits(req.client_id(), shmUnits);
+    return Status::OK();
+}
+
+void WorkerOcServiceCreateImpl::CheckExistence(const MultiCreateReqPb &req, const std::string &tenantId,
+                                               MultiCreateRspPb &resp)
+{
+    for (int i = 0; i < req.object_key().size(); i++) {
+        const auto &objectKey = req.object_key(i);
         // Check whether the object is in local.
         {
             auto key = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, objectKey);
             std::shared_ptr<SafeObjType> entry;
-            if (!req.skip_check_existence() && objectTable_->Get(key, entry).IsOk() && entry->RLock(false).IsOk()) {
+            if (objectTable_->Get(key, entry).IsOk() && entry->RLock(false).IsOk()) {
                 Raii unlock([&entry]() { entry->RUnlock(); });
                 if ((*entry)->IsBinary() && !(*entry)->IsInvalid()) {
                     resp.add_exists(true);
@@ -135,39 +190,33 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
             }
         }
         resp.add_exists(false);
-        totalSize += dataSize;
     }
-    for (int i = 0; i < req.object_key().size(); i++) {
-        if (resp.exists(i) || totalSize < FLAGS_oc_shm_transfer_threshold_kb * KB) {
-            resp.add_results();
-            continue;
-        }
-         const auto &objectKey = req.object_key(i);
-        auto dataSize = req.data_size(i);
-        // If some buffer create failed, need to rollback, remove shm-unit.
-        CreateRspPb subResp;
-        Status rc = CreateImpl(tenantId, req.client_id(), objectKey, dataSize, subResp);
-        INJECT_POINT("WorkerOCServiceImpl.MultiCreate.Allocate", [&i, &rc](int failedIndex) {
-            if (failedIndex == i) {
-                rc = Status(StatusCode::K_RUNTIME_ERROR, "Set runtime error");
-            }
-            return Status::OK();
-        });
-        resp.mutable_results()->Add(std::move(subResp));
-        if (rc.IsError()) {
-            lastRc = rc;
-            break;
-        }
+}
+
+Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp)
+{
+    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
+    std::string tenantId;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_key_size()), StatusCode::K_INVALID,
+                                         "invalid object size");
+    CHECK_FAIL_RETURN_STATUS(req.object_key_size() == req.data_size_size(), K_INVALID,
+                             FormatString("object key count %zu not match with data size count %zu",
+                                          req.object_key_size(), req.data_size_size()));
+    auto lastRc = Status::OK();
+    if (!req.skip_check_existence()) {
+        CheckExistence(req, tenantId, resp);
     }
-    // Rollback all memory if failed.
-    if (lastRc.IsError()) {
+    Status rc = MultiCreateImpl(req, tenantId, resp);
+    if (rc.IsError()) {
+        // Rollback all memory if failed.
         const auto &clientId = req.client_id();
         for (auto &subResp : resp.results()) {
             memoryRefTable_->RemoveShmUnit(clientId, subResp.shm_id());
         }
         resp.Clear();
     }
-    return lastRc;
+    return rc;
 }
 }  // namespace object_cache
 }  // namespace datasystem

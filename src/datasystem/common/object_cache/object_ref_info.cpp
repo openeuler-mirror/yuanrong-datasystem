@@ -358,6 +358,38 @@ void SharedMemoryRefTable::AddShmUnit(const std::string &clientId, std::shared_p
     VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
 }
 
+void SharedMemoryRefTable::AddShmUnits(const std::string &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
+{
+    TbbMemoryClientRefTable::accessor clientAccessor;
+    if (!clientRefTable_.find(clientAccessor, clientId)) {
+        auto clientInfo = std::make_shared<ObjectRefInfo>();
+        clientRefTable_.emplace(clientAccessor, clientId, std::move(clientInfo));
+    }
+    TbbMemoryObjectRefTable::accessor objectAccessor;
+    for (auto &shmUnit : shmUnits) {
+        if (shmUnit == nullptr) {
+            continue;
+        }
+        const auto &shmId = shmUnit->GetId();
+        if (clientAccessor->second->AddRef(shmId)) {
+            shmUnit->IncrementRefCount();
+        }
+        if (!shmRefTable_.find(objectAccessor, shmId)) {
+            shmRefTable_.emplace(objectAccessor, shmId,
+                                 std::make_pair(shmUnit, std::unordered_set<ImmutableString>{ clientId }));
+        } else {
+            objectAccessor->second.second.emplace(clientId);
+        }
+        objectAccessor.release();
+
+        if (shmUnit->GetRefCount() == 1) {
+            datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(-1);
+            datasystem::memory::Allocator::Instance()->ChangeRefPageCount(1);
+        }
+        VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
+    }
+}
+
 Status SharedMemoryRefTable::RemoveShmUnit(const std::string &clientId, const std::string &shmId)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;

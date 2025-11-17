@@ -183,14 +183,16 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
         createParams.size() == static_cast<size_t>(rsp.results().size()), K_INVALID,
         FormatString("The length of objectKeyList (%zu) and dataSizeList (%zu) should be the same.",
                      createParams.size(), rsp.results().size()));
-    auto rspExists = rsp.exists();
-    CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rspExists.size()) == createParams.size(), K_INVALID,
-                             "The size of rspExists is not consistent with createParams");
-    exists.reserve(createParams.size());
-    for (auto val : rspExists) {
-        exists.emplace_back(val);
+    if (!skipCheckExistence) {
+        auto rspExists = rsp.exists();
+        CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rspExists.size()) == createParams.size(), K_INVALID,
+                                "The size of rspExists is not consistent with createParams");
+        exists.reserve(createParams.size());
+        for (auto val : rspExists) {
+            exists.emplace_back(val);
+        }
     }
-    for (auto res : rsp.results()) {
+    for (const auto& res : rsp.results()) {
         if (!res.shm_id().empty()) {
             useShmTransfer = true;
             break;
@@ -200,7 +202,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
         return Status::OK();
     }
     for (auto i = 0ul; i < createParams.size(); i++) {
-        if (exists[i]) {
+        if (!skipCheckExistence && exists[i]) {
             continue;
         }
         auto &shmBuf = createParams[i].shmBuf;

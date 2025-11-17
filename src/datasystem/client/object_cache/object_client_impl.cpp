@@ -865,7 +865,8 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
 Status ObjectClientImpl::ConstructMultiCreateParam(const std::vector<std::string> &objectKeyList,
                                                    const std::vector<uint64_t> &dataSizeList,
                                                    std::vector<std::shared_ptr<Buffer>> &bufferList,
-                                                   std::vector<MultiCreateParam> &multiCreateParamList)
+                                                   std::vector<MultiCreateParam> &multiCreateParamList,
+                                                   uint64_t &dataSizeSum)
 {
     CHECK_FAIL_RETURN_STATUS(objectKeyList.size() == dataSizeList.size(), K_INVALID,
                              "The length of objectKeyList and dataSizeList should be the same.");
@@ -875,6 +876,7 @@ Status ObjectClientImpl::ConstructMultiCreateParam(const std::vector<std::string
         CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
         RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
         CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
+        dataSizeSum += dataSize;
     }
     bufferList.resize(objectKeyList.size());
     // if total size >=500k , transfer by shm
@@ -899,21 +901,20 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     std::vector<MultiCreateParam> multiCreateParamList;
-    RETURN_IF_NOT_OK(ConstructMultiCreateParam(objectKeyList, dataSizeList, bufferList, multiCreateParamList));
+    uint64_t dataSizeSum = 0;
+    RETURN_IF_NOT_OK(
+        ConstructMultiCreateParam(objectKeyList, dataSizeList, bufferList, multiCreateParamList, dataSizeSum));
     // If failed with create, need to rollback.
     auto version = 0u;
     auto useShmTransfer = false;
-    auto sizeSum = std::accumulate(dataSizeList.begin(), dataSizeList.end(), 0);
-    if (!skipCheckExistence || static_cast<uint64_t>(sizeSum) >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
+    if (dataSizeSum >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
         RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
                                                                exists, useShmTransfer));
-    } else {
-        exists.resize(objectKeyList.size(), false);
     }
 
     if (!useShmTransfer) {
         for (size_t i = 0; i < objectKeyList.size(); i++) {
-            if (exists[i]) {
+            if (!skipCheckExistence && exists[i]) {
                 continue;
             }
             auto &objectKey = objectKeyList[i];
@@ -945,7 +946,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     });
     Status injectRC = Status::OK();
     for (auto &createParam : multiCreateParamList) {
-        if (exists[createParam.index]) {
+        if (!skipCheckExistence && exists[createParam.index]) {
             continue;
         }
         PerfPoint mmapPoint(PerfKey::CLIENT_LOOK_UP_MMAP_FD);
@@ -1912,7 +1913,7 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidationNtx(const std::vector<
                                                               std::vector<std::string> &outFailedKeys,
                                                               std::map<std::string, StringView> &kv)
 {
-    CHECK_FAIL_RETURN_STATUS(keys.size() > 0, K_INVALID, "The keys should not be empty.");
+    CHECK_FAIL_RETURN_STATUS(!keys.empty(), K_INVALID, "The keys should not be empty.");
     CHECK_FAIL_RETURN_STATUS(keys.size() == vals.size(), K_INVALID, "The number of key and value is not the same.");
     for (size_t i = 0; i < keys.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");

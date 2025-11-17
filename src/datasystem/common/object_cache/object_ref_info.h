@@ -263,6 +263,13 @@ public:
     void AddShmUnit(const std::string &clientId, std::shared_ptr<ShmUnit> &shmUnit);
 
     /**
+     * @brief Add shared memory units reference to the client table.
+     * @param[in] clientId uuid of client.
+     * @param[in] shmUnits The safe objects.
+     */
+    void AddShmUnits(const std::string &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits);
+
+    /**
      * @brief Check one shared memory unit whether be referred by client.
      * @param[in] objectKey Shared memory unit id of object.
      * @param[out] shmUnit Shared memory unit shared ptr.
