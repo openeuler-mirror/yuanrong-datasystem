@@ -25,6 +25,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -151,7 +152,10 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
     }
     bool insert = false;
-    RETURN_IF_NOT_OK(ocClientWorkerSvc_->objectTable_->ReserveGetAndLock(objectKey, safeEntry, insert, false, false));
+    auto func = [this, &objectKey, &safeEntry, &insert]() {
+        return ocClientWorkerSvc_->objectTable_->ReserveGetAndLock(objectKey, safeEntry, insert, false, false);
+    };
+    RETURN_IF_NOT_OK(RetryWhenDeadlock(func));
     if (insert) {
         Raii innerUnlock([&safeEntry]() { safeEntry->WUnlock(); });
         StatusCode code;

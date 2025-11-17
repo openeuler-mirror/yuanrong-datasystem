@@ -40,6 +40,8 @@
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 
+DS_DECLARE_bool(enable_redirect);
+
 namespace datasystem {
 namespace master {
 using TbbMigratingTable = tbb::concurrent_hash_map<ImmutableString, bool>;
@@ -146,7 +148,7 @@ protected:
     void FillRedirectResponseInfo(Rsp &response, const std::string &id, bool &redirect)
     {
         std::string newMetaAddr;
-        if (!redirect) {
+        if (!redirect || !FLAGS_enable_redirect) {
             VLOG(1) << "receive redirect object: " << id;
             return;
         }
@@ -188,7 +190,7 @@ protected:
     template <typename Rsp>
     void FillRedirectResponseInfos(Rsp &rsp, std::vector<std::string> &ids, bool redirect)
     {
-        if (!redirect) {
+        if (!redirect || !FLAGS_enable_redirect) {
             return;
         }
         std::string localAddr;

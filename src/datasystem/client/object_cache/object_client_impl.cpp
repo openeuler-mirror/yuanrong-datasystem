@@ -1930,9 +1930,9 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidationNtx(const std::vector<
     keySet.reserve(keys.size());
     CHECK_FAIL_RETURN_STATUS(!keys.empty(), K_INVALID, "The keys should not be empty.");
     CHECK_FAIL_RETURN_STATUS(keys.size() == vals.size(), K_INVALID, "The number of key and value is not the same.");
+    RETURN_IF_NOT_OK(CheckValidObjectKey(*keys.begin()));
     for (size_t i = 0; i < keys.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
-        RETURN_IF_NOT_OK(CheckValidObjectKey(keys[i]));
         CHECK_FAIL_RETURN_STATUS(vals[i].data() != nullptr, K_INVALID,
                                  FormatString("The value associated with key %s should not be empty.", keys[i]));
         auto [it, inserted] = keySet.emplace(keys[i]);
@@ -1967,9 +1967,9 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidation(const std::vector<std
                              "The maximum size of keys in single operation is 8.");
     CHECK_FAIL_RETURN_STATUS(keys.size() == vals.size(), K_INVALID, "The number of key and value is not the same.");
     std::unordered_set<std::string> keyRecord;
+    RETURN_IF_NOT_OK(CheckValidObjectKey(*keys.begin()));
     for (size_t i = 0; i < keys.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
-        RETURN_IF_NOT_OK(CheckValidObjectKey(keys[i]));
         CHECK_FAIL_RETURN_STATUS(vals[i].data() != nullptr, K_INVALID,
                                  FormatString("The value associated with key %s should not be empty.", keys[i]));
         CHECK_FAIL_RETURN_STATUS(kv.find(keys[i]) == kv.end(), K_INVALID,

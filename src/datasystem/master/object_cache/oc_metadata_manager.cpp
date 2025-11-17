@@ -75,6 +75,8 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata "
                  "in the master, so that the metadata before the restart can be re-obtained when the master restarts.");
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
+DS_DEFINE_bool(enable_redirect, "true",
+                 "enable query meta redirect when scale up or voluntary scale down, default is false");
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
@@ -2917,7 +2919,7 @@ Status OCMetadataManager::RecoverMasterAppRef(std::function<bool(const std::stri
 
 bool OCMetadataManager::RedirectClientIdRef(const std::string &remoteClientId, bool needRedirect, std::string &newAddr)
 {
-    if (!needRedirect) {
+    if (!needRedirect || !FLAGS_enable_redirect) {
         VLOG(1) << "receive redirect object: " << remoteClientId;
         return false;
     }
@@ -2933,6 +2935,9 @@ bool OCMetadataManager::RedirectClientIdRef(const std::string &remoteClientId, b
 void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr,
                                         bool &isMoving)
 {
+    if (!FLAGS_enable_redirect) {
+        return;
+    }
     HostPort masterAddr;
     needRedirect = etcdCM_->NeedRedirect(objectKey, masterAddr);
     if (!needRedirect) {

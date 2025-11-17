@@ -1756,9 +1756,6 @@ Status WorkerOCServiceImpl::DeleteObject(const std::string &objectKey, uint64_t 
 {
     LOG(INFO) << FormatString("[ObjectKey %s] DeleteObject begin%s.", objectKey,
                               (version > 0 ? ", version " + std::to_string(version) : ""));
-    if (getProc_->IsObjectInGetProcess(objectKey)) {
-        return Status::OK();
-    }
     std::shared_ptr<SafeObjType> entry;
     RETURN_IF_NOT_OK(objectTable_->Get(objectKey, entry));
     ObjectKV objectKV(objectKey, *entry);

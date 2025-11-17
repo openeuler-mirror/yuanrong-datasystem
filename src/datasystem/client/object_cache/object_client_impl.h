@@ -853,12 +853,10 @@ private:
     static Status CheckValidObjectKeyVector(const Vec &vec, bool nullable = false)
     {
         CHECK_FAIL_RETURN_STATUS(nullable || !vec.empty(), K_INVALID, "The keys are empty");
-        size_t index = 0;
-        for (const auto &objectKey : vec) {
-            CHECK_FAIL_RETURN_STATUS(
-                !objectKey.empty(), K_INVALID, FormatString("The objectKey at position %d is empty", index));
-            RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
-            index++;
+        if (!vec.empty()) {
+            CHECK_FAIL_RETURN_STATUS(!vec.begin()->empty(), K_INVALID,
+                                     FormatString("The objectKey at position %d is empty", 0));
+            RETURN_IF_NOT_OK(CheckValidObjectKey(*vec.begin()));
         }
         return Status::OK();
     }

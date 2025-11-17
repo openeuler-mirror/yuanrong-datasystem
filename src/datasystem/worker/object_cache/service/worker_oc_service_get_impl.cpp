@@ -254,10 +254,6 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     });
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_OBJECT);
 
-    MarkObjectsInGetProcess(request->GetRawObjectKeys());
-
-    Raii getProcessGuard([this, &request]() { UnmarkObjectsInGetProcess(request->GetRawObjectKeys()); });
-
     // Try get from local.
     std::set<ReadKey> remoteObjectKeys;
     RETURN_IF_NOT_OK(TryGetObjectFromLocal(request, remoteObjectKeys));
@@ -310,33 +306,6 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     return Status::OK();
 }
 
-void WorkerOcServiceGetImpl::MarkObjectsInGetProcess(const std::vector<std::string> &keys)
-{
-    std::lock_guard<std::shared_mutex> lock(objectsInGetProcessMutex_);
-    for (const auto &key : keys) {
-        objectsInGetProcess_[key]++;
-    }
-}
-
-void WorkerOcServiceGetImpl::UnmarkObjectsInGetProcess(const std::vector<std::string> &keys)
-{
-    std::lock_guard<std::shared_mutex> lock(objectsInGetProcessMutex_);
-    for (const auto &key : keys) {
-        if (--objectsInGetProcess_[key] <= 0) {
-            objectsInGetProcess_.erase(key);
-        }
-    }
-}
-
-bool WorkerOcServiceGetImpl::IsObjectInGetProcess(const std::string &key)
-{
-    std::shared_lock<std::shared_mutex> lock(objectsInGetProcessMutex_);
-    if (objectsInGetProcess_.count(key) > 0 && objectsInGetProcess_[key] > 1) {
-        return true;
-    }
-    return false;
-}
-
 static Status CheckAndResetStatus(const Status &status, std::set<StatusCode> &bypassCode)
 {
     // If the error is RPC error, return them directly, other error would be covered up as RUNTIME_ERROR.
@@ -350,8 +319,11 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
 {
     Status lastRc;
     auto &uniqueObjectMap = request->GetObjects();
+
+    asyncRollbackManager_->UpdateIsRollback(uniqueObjectMap);
+
     for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
-        if (asyncRollbackManager_->IsObjectsInRollBack({ objectKey })) {
+        if (objectInfo.isRollBack) {
             objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
         } else {
             ReadKey readKey(objectKey, objectInfo.offsetInfo);

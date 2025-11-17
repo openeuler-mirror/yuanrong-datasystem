@@ -146,13 +146,6 @@ public:
      */
     Status GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp);
 
-    /**
-     * @brief Check whether the specified object key is still in the Get process.
-     * @param[in] key The object key to check.
-     * @return true if the key is still in the Get process and should not be deleted; false otherwise.
-     */
-    bool IsObjectInGetProcess(const std::string &key);
-
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
 
@@ -797,18 +790,6 @@ private:
     void RemoveInRemoteGetObject(const std::string &objectKey);
 
     /**
-     * @brief Mark the specified object keys as being in the Get process.
-     * @param[in] keys The list of object keys that are entering the Get process.
-     */
-    void MarkObjectsInGetProcess(const std::vector<std::string> &keys);
-
-    /**
-     * @brief Unmark the specified object keys from the Get process.
-     * @param[in] keys The list of object keys that are exiting the Get process.
-     */
-    void UnmarkObjectsInGetProcess(const std::vector<std::string> &keys);
-
-    /**
      * @brief Fill the GetObjMetaInfoRspPb.
      * @param[in] objectKeys The objects for obtaining meta info.
      * @param[in] result The meta info result of objects
@@ -911,10 +892,6 @@ private:
     std::unordered_set<std::string> inRemoteGetIds_;  // the object keys that in remote get
 
     std::vector<std::string> otherAZNames_;
-
-    std::shared_mutex objectsInGetProcessMutex_;  // the mutex for objectsInGetProcess_
-
-    std::unordered_map<std::string, int> objectsInGetProcess_;
 
     static constexpr size_t OBJECTS_NOT_EXIST_IDX = 0;
     static constexpr size_t OBJECTS_PUZZLED_IDX = 1;

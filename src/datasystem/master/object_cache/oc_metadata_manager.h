@@ -566,7 +566,7 @@ public:
                          }
                      });
         response.set_ref_is_moving(false);
-        if (!redirect) {
+        if (!redirect || !FLAGS_enable_redirect) {
             VLOG(1) << "receive redirect req";
             return;
         }

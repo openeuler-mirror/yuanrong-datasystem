@@ -90,6 +90,7 @@ struct GetObjInfo {
     OffsetInfo offsetInfo;
     std::unique_ptr<GetObjEntryParams> params;
     Status rc;
+    bool isRollBack = false;
     bool NotFound() const
     {
         return params == nullptr && rc.IsOk();

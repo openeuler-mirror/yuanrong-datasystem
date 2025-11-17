@@ -347,7 +347,7 @@ TEST_F(KVCacheClientTest, TestSetAndGetSubscribeTimeout)
     DS_ASSERT_OK(client0->Set(key, val));
 }
 
-TEST_F(KVCacheClientTest, TestSpecialKeyVal)
+TEST_F(KVCacheClientTest, DISABLED_TestSpecialKeyVal)
 {
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client);

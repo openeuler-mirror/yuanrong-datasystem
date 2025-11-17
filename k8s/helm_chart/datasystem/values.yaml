@@ -212,6 +212,8 @@ global:
     rocksdbBackgroundThreads: 16
     # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
     rocksdbWriteMode: "async"
+    # enable query meta redirect when scale up or voluntary scale down, default is false
+    enableRedirect: "true"
 
   rpc:
     # Whether to enable the authentication function between components(worker, master)

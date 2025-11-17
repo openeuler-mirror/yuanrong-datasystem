@@ -26,6 +26,7 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/worker/object_cache/worker_request_manager.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -81,6 +82,17 @@ public:
             }
         }
         return false;
+    }
+
+    void UpdateIsRollback(std::unordered_map<std::string, GetObjInfo> &objectKeys)
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        for (auto &[objectKey, objectInfo] : objectKeys) {
+            if (pendingObject_.find(objectKey) != pendingObject_.end()
+                || processingObject_.find(objectKey) != processingObject_.end()) {
+                objectInfo.isRollBack = true;
+            }
+        }
     }
 
 private:
