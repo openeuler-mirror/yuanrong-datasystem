@@ -20,6 +20,7 @@
  */
 
 #include "datasystem/common/shared_memory/shm_unit_info.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/memory.h"
 
 namespace datasystem {
@@ -28,14 +29,14 @@ ShmUnitInfo::ShmUnitInfo(int fd, uint64_t mmapSz) : fd(fd), mmapSize(mmapSz)
 {
 }
 
-ShmUnitInfo::ShmUnitInfo(ImmutableString id, ShmView shmView, void *pointer)
+ShmUnitInfo::ShmUnitInfo(ShmKey id, ShmView shmView, void *pointer)
     : fd(shmView.fd),
       mmapSize(shmView.mmapSz),
       pointer(pointer),
       offset(shmView.off),
       size(shmView.sz),
       refCount(0),
-      id(id)
+      id(std::move(id))
 {
 }
 

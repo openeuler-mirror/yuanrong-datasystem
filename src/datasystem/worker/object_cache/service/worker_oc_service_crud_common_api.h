@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/l2cache/persistence_api.h"
@@ -177,7 +178,7 @@ public:
      * @param[out] entry The object entry
      * @return OK if attach success.
      */
-    Status AttachShmUnitToObject(const bool &shmEnabled, const std::string &objectKey, const std::string &shmUnitId,
+    Status AttachShmUnitToObject(const bool &shmEnabled, const std::string &objectKey, const ShmKey &shmUnitId,
                                  uint64_t dataSize, SafeObjType &entry);
 
     /**
@@ -195,7 +196,7 @@ public:
      * @return Status
      */
     static Status CheckShmUnitByTenantId(const std::string &tenantId, const std::string &clientId,
-                                         std::vector<std::string> &shmUnitIds,
+                                         std::vector<ShmKey> &shmUnitIds,
                                          std::shared_ptr<SharedMemoryRefTable> memoryRefTable);
 
     /**

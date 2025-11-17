@@ -20,6 +20,7 @@ set(MASTER_DEPEND_LIBS
         common_rocksdb
         common_rpc_zmq
         common_util
+        string_ref
         ds_server
         master_heartbeat_protos
         master_object_cache

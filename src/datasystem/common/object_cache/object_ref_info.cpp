@@ -21,8 +21,10 @@
 
 #include <algorithm>
 
+#include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/raii.h"
@@ -32,102 +34,6 @@
 
 namespace datasystem {
 namespace object_cache {
-bool ObjectRefInfo::AddRef(const std::string &objectKey, uint32_t ref)
-{
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    TbbObjKeyTable::accessor objAccessor;
-    VLOG(1) << "add object key " << objectKey << " ref:" << ref;
-    bool res = objectKeys_.emplace(objAccessor, objectKey, ref);
-    if (res) {
-        return true;
-    }
-    if (isUniqueCnt_) {
-        return false;
-    }
-    objAccessor->second += ref;
-    return true;
-}
-
-uint32_t ObjectRefInfo::GetRefCount(const std::string &objectKey)
-{
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    TbbObjKeyTable::const_accessor objAccessor;
-    if (objectKeys_.find(objAccessor, objectKey)) {
-        return objAccessor->second;
-    }
-    return 0;
-}
-
-Status ObjectRefInfo::UpdateRefCount(const std::string &objectKey, int count)
-{
-    if (count < 0) {
-        RETURN_STATUS(StatusCode::K_INVALID, FormatString("[ObjectId %s] Invalid count: %d", objectKey, count));
-    }
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    TbbObjKeyTable::accessor objAccessor;
-    if (objectKeys_.find(objAccessor, objectKey)) {
-        if (isUniqueCnt_ && count > 1) {
-            RETURN_STATUS(StatusCode::K_DUPLICATED, "object key is marked to be unique");
-        }
-        objAccessor->second = static_cast<uint32_t>(count);
-        return Status::OK();
-    }
-    auto result = objectKeys_.emplace(objAccessor, objectKey, count);
-    if (!result) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "emplace on objectKeys_ failed.");
-    }
-    return Status::OK();
-}
-
-bool ObjectRefInfo::RemoveRef(const std::string &objectKey)
-{
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    TbbObjKeyTable::accessor objAccessor;
-    if (!objectKeys_.find(objAccessor, objectKey)) {
-        return false;
-    }
-    if (isUniqueCnt_) {
-        auto result = objectKeys_.erase(objAccessor);
-        return result > 0;
-    }
-    objAccessor->second -= 1;
-    if (objAccessor->second == 0) {
-        (void)objectKeys_.erase(objAccessor);
-    }
-    return true;
-}
-
-bool ObjectRefInfo::Contains(const std::string &objectKey) const
-{
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    return objectKeys_.count(objectKey) == 1;
-}
-
-void ObjectRefInfo::GetRefIds(std::vector<std::string> &objectKeys) const
-{
-    std::lock_guard<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    std::transform(objectKeys_.begin(), objectKeys_.end(), std::back_inserter(objectKeys),
-                   [](auto &kv) { return kv.first; });
-}
-
-bool ObjectRefInfo::CheckIsNoneRef(const std::string &objectKey) const
-{
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    TbbObjKeyTable::const_accessor objAccessor;
-    if (!objectKeys_.find(objAccessor, objectKey)) {
-        return true;
-    } else if (objAccessor->second == 0) {
-        return true;
-    }
-    return false;
-}
-
-bool ObjectRefInfo::CheckIsRefIdsEmpty() const
-{
-    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
-    return objectKeys_.empty();
-}
-
 Status ObjectGlobalRefTable::GIncreaseRef(const std::string &clientId, const std::vector<std::string> &objectKeys,
                                           std::vector<std::string> &failedIncIds, std::vector<std::string> &firstIncIds,
                                           bool isRemoteClient)
@@ -136,7 +42,7 @@ Status ObjectGlobalRefTable::GIncreaseRef(const std::string &clientId, const std
     TbbClientRefTable::const_accessor clientAccessor;
     while (!clientRefTable_.find(clientAccessor, clientId)) {
         TbbClientRefTable::accessor accessor;
-        auto clientInfo = std::make_shared<ObjectRefInfo>();
+        auto clientInfo = std::make_shared<ObjectRefInfo<std::string>>(); // std::string -> ObjectKey
         clientRefTable_.emplace(accessor, clientId, std::move(clientInfo));
         // In the off-cloud reference counting scenario, if remoteClient appears for the first time, record it to
         // remoteClientIdTable_.
@@ -320,7 +226,7 @@ void ObjectGlobalRefTable::GetObjRefIds(const std::string &objectKey, std::vecto
     }
 }
 
-Status SharedMemoryRefTable::GetShmUnit(const std::string &shmId, std::shared_ptr<ShmUnit> &shmUnit)
+Status SharedMemoryRefTable::GetShmUnit(const ShmKey &shmId, std::shared_ptr<ShmUnit> &shmUnit)
 {
     TbbMemoryObjectRefTable::const_accessor shmAccessor;
     auto found = shmRefTable_.find(shmAccessor, shmId);
@@ -338,7 +244,7 @@ void SharedMemoryRefTable::AddShmUnit(const std::string &clientId, std::shared_p
     TbbMemoryObjectRefTable::accessor objectAccessor;
 
     if (!clientRefTable_.find(clientAccessor, clientId)) {
-        auto clientInfo = std::make_shared<ObjectRefInfo>();
+        auto clientInfo = std::make_shared<ObjectRefInfo<ShmKey>>();
         clientRefTable_.emplace(clientAccessor, clientId, std::move(clientInfo));
     }
     if (clientAccessor->second->AddRef(shmId)) {
@@ -362,7 +268,7 @@ void SharedMemoryRefTable::AddShmUnits(const std::string &clientId, std::vector<
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
     if (!clientRefTable_.find(clientAccessor, clientId)) {
-        auto clientInfo = std::make_shared<ObjectRefInfo>();
+        auto clientInfo = std::make_shared<ObjectRefInfo<ShmKey>>();
         clientRefTable_.emplace(clientAccessor, clientId, std::move(clientInfo));
     }
     TbbMemoryObjectRefTable::accessor objectAccessor;
@@ -390,7 +296,7 @@ void SharedMemoryRefTable::AddShmUnits(const std::string &clientId, std::vector<
     }
 }
 
-Status SharedMemoryRefTable::RemoveShmUnit(const std::string &clientId, const std::string &shmId)
+Status SharedMemoryRefTable::RemoveShmUnit(const std::string &clientId, const ShmKey &shmId)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
     TbbMemoryObjectRefTable::accessor shmAccessor;
@@ -424,7 +330,7 @@ void SharedMemoryRefTable::RemoveShmUnitDetail(const std::string &clientId,
             shmUnit->DecrementRefCount();
         } else {
             LOG(WARNING) << "RemoveShmUnit: The value of refCount is 0 and cannot be decreased. id:"
-                         << BytesUuidToString(shmId);
+                         << BytesUuidToString(shmId.ToString());
         }
     }
     if (clientAccessor->second->CheckIsRefIdsEmpty()) {
@@ -447,7 +353,8 @@ void SharedMemoryRefTable::RemoveShmUnitDetail(const std::string &clientId,
     }
 }
 
-bool SharedMemoryRefTable::Contains(const std::string &clientId, const std::string &shmId) const
+#ifdef WITH_TESTS
+bool SharedMemoryRefTable::Contains(const std::string &clientId, const ShmKey &shmId) const
 {
     TbbMemoryClientRefTable::accessor accessor;
     if (clientRefTable_.find(accessor, clientId)) {
@@ -455,8 +362,9 @@ bool SharedMemoryRefTable::Contains(const std::string &clientId, const std::stri
     }
     return false;
 }
+#endif
 
-void SharedMemoryRefTable::GetClientRefIds(const std::string &clientId, std::vector<std::string> &shmIds) const
+void SharedMemoryRefTable::GetClientRefIds(const std::string &clientId, std::vector<ShmKey> &shmIds) const
 {
     TbbMemoryClientRefTable::accessor accessor;
     if (clientRefTable_.find(accessor, clientId)) {
@@ -470,7 +378,7 @@ Status SharedMemoryRefTable::RemoveClient(const std::string &clientId)
     if (!clientRefTable_.find(clientAccessor, clientId)) {
         return Status::OK();
     }
-    std::vector<std::string> shmIds;
+    std::vector<ShmKey> shmIds;
     clientAccessor->second->GetRefIds(shmIds);
     for (const auto &shmId : shmIds) {
         TbbMemoryObjectRefTable::accessor shmAccessor;

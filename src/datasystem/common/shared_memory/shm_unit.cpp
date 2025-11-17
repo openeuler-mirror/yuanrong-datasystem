@@ -27,6 +27,7 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
@@ -36,7 +37,7 @@ ShmUnit::ShmUnit(int fd, uint64_t mmapSz) : ShmUnitInfo(fd, mmapSz)
 {
 }
 
-ShmUnit::ShmUnit(std::string id, ShmView shmView, void *pointer) : ShmUnitInfo(std::move(id), shmView, pointer)
+ShmUnit::ShmUnit(ShmKey id, ShmView shmView, void *pointer) : ShmUnitInfo(std::move(id), shmView, pointer)
 {
 }
 

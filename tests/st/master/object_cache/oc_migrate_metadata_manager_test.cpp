@@ -339,13 +339,13 @@ TEST_F(OCMigrateMetadataManagerTest, TestNestRefMigrateSuccess)
                                                                                failedObjectKeys));
     for (const auto &id : nestedKeys_) {
         LOG(INFO) << nestedKeys_.size();
-        ASSERT_TRUE(ocMetadataManager->CheckIsNoneNestedRefById()->CheckIsNoneNestedRefById(id));
+        ASSERT_TRUE(ocMetadataManager->GetNestedRefManager()->CheckIsNoneNestedRefById(id));
     }
 
     for (auto id : objectKeys_) {
         CheckMigrationMetadata(id, true);
         std::vector<std::string> objKeys;
-        ocMetadataManager->CheckIsNoneNestedRefById()->GetNestedRelationship(id, objKeys);
+        ocMetadataManager->GetNestedRefManager()->GetNestedRelationship(id, objKeys);
         ASSERT_TRUE(objKeys.empty());
     }
 }

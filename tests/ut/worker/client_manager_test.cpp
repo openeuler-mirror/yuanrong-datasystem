@@ -27,6 +27,7 @@
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 
@@ -63,7 +64,7 @@ TEST_F(ClientManagerTest, TestAddShmUnitUniqueCount)
     DS_ASSERT_OK(clientMgr.GetClientSocketFd(clientId, getSocketFd));
     ASSERT_TRUE(socketFd == getSocketFd);
     auto shmUnit = std::make_shared<ShmUnit>();
-    shmUnit->id = GetBytesUuid();
+    shmUnit->id = ShmKey::Intern(GetBytesUuid());
     shmUnit->fd = socketFd;
     DS_ASSERT_OK(clientMgr.AddShmUnit(clientId, shmUnit));
     ASSERT_EQ(shmUnit->refCount, 1);
@@ -87,14 +88,14 @@ TEST_F(ClientManagerTest, TestAddShmUnit)
     ASSERT_TRUE(clientInfo != nullptr);
 
     auto shmUnit = std::make_shared<ShmUnit>();
-    shmUnit->id = GetBytesUuid();
+    shmUnit->id = ShmKey::Intern(GetBytesUuid());
     shmUnit->fd = socketFd;
 
     DS_ASSERT_OK(clientMgr.AddShmUnit(clientId, shmUnit));
     DS_ASSERT_OK(clientMgr.AddShmUnit(clientId, shmUnit));
     DS_ASSERT_OK(clientMgr.AddShmUnit(clientId, shmUnit));
     ASSERT_GE(shmUnit->refCount, 3);
-    std::unordered_map<std::string, uint32_t> shmUnitIds;
+    std::unordered_map<ShmKey, uint32_t> shmUnitIds;
     clientInfo->GetShmUnitIds(shmUnitIds);
     ASSERT_TRUE(shmUnitIds.find(shmUnit->id) != shmUnitIds.end());
     ASSERT_EQ(shmUnitIds[shmUnit->id], static_cast<uint32_t>(3));
@@ -171,7 +172,7 @@ TEST_F(ClientManagerTest, TestRemoveShmUnitOfAllClient)
     DS_ASSERT_OK(clientMgr.GetClientSocketFd(clientId, getSocketFd));
     ASSERT_TRUE(socketFd == getSocketFd);
     auto shmUnit = std::make_shared<ShmUnit>();
-    shmUnit->id = GetBytesUuid();
+    shmUnit->id = ShmKey::Intern(GetBytesUuid());
     shmUnit->fd = socketFd;
     DS_ASSERT_OK(clientMgr.AddShmUnit(clientId, shmUnit));
     ASSERT_GE(shmUnit->refCount, 1);

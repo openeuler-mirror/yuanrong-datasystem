@@ -55,7 +55,7 @@ public:
      * @param[in] pointer The pointer to allocated data for the ShmUnit (This ShmUnit shall be responsible to free it
      * during it's destructor.
      */
-    ShmUnit(std::string id, ShmView shmView, void *pointer);
+    ShmUnit(ShmKey id, ShmView shmView, void *pointer);
 
     /**
      * @brief Destructor. ShmUnit own memory and will clean themself up and free the memory that they own.

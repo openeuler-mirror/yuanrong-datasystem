@@ -1250,7 +1250,7 @@ Status WorkerOCServer::Shutdown()
     return Status::OK();
 }
 
-Status WorkerOCServer::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, std::string &id)
+Status WorkerOCServer::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id)
 {
     if (!EnableOCService()) {
         fd = -1;

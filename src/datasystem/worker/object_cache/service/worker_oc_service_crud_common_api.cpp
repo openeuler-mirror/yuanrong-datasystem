@@ -22,6 +22,7 @@
 
 #include <cstddef>
 
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
@@ -195,12 +196,12 @@ size_t WorkerOcServiceCrudCommonApi::GetMetadataSize() const
 }
 
 Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const bool &shmEnabled, const std::string &objectKey,
-                                                           const std::string &shmUnitId, uint64_t dataSize,
+                                                           const ShmKey &shmUnitId, uint64_t dataSize,
                                                            SafeObjType &entry)
 {
     INJECT_POINT("AttachShmUnitToObject.error");
     std::shared_ptr<ShmUnit> shmUnit;
-    if (shmEnabled && ShmEnable() && !shmUnitId.empty()) {
+    if (shmEnabled && ShmEnable() && !shmUnitId.Empty()) {
         RETURN_IF_NOT_OK(memoryRefTable_->GetShmUnit(shmUnitId, shmUnit));
     } else {
         // non-shm case, create first
@@ -214,13 +215,13 @@ Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const bool &shmEnable
 }
 
 Status WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(const std::string &tenantId, const std::string &clientId,
-                                                            std::vector<std::string> &shmUnitIds,
+                                                            std::vector<ShmKey> &shmUnitIds,
                                                             std::shared_ptr<SharedMemoryRefTable> memoryRefTable)
 {
     RETURN_OK_IF_TRUE(!ClientShmEnabled(clientId));
     for (const auto &shmUnitId : shmUnitIds) {
         std::shared_ptr<ShmUnit> shmUnit;
-        if (!shmUnitId.empty()) {
+        if (!shmUnitId.Empty()) {
             RETURN_IF_NOT_OK(memoryRefTable->GetShmUnit(shmUnitId, shmUnit));
             if (tenantId != shmUnit->GetTenantId()) {
                 LOG(ERROR) << FormatString("req tenantId: %s is not equal shmUnit tenantId: %s", tenantId,

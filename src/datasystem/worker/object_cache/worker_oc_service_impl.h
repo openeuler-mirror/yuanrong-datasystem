@@ -626,7 +626,7 @@ public:
      * @param[out] id The id of this shmUnit.
      * @return Status of the call.
      */
-    Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, std::string &id);
+    Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id);
 
     /**
      * @brief Handle PublishDeviceObject request from the client.
@@ -852,7 +852,7 @@ private:
      * @param[in] shmIds The ids of object reference.
      * @return K_OK on success; the error code otherwise.
      */
-    Status DecreaseMemoryRef(const std::string &clientId, const std::vector<std::string> &shmIds);
+    Status DecreaseMemoryRef(const std::string &clientId, const std::vector<ShmKey> &shmIds);
 
     /**
      * @brief Get object data from remote cache (remote worker or redis) based on object meta.

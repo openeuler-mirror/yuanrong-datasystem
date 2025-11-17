@@ -27,6 +27,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/stream_cache/stream_data_page.h"
+#include "datasystem/common/string_intern/string_ref.h"
 
 DS_DECLARE_uint32(sc_cache_pages);
 
@@ -49,7 +50,7 @@ public:
         std::chrono::time_point<std::chrono::steady_clock> createTime;
         bool bigElement;
     };
-    using ShmPagesMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<ShmMemInfo>>;
+    using ShmPagesMap = tbb::concurrent_hash_map<ShmKey, std::shared_ptr<ShmMemInfo>>;
     using PageShmUnit = std::pair<uint64_t, std::shared_ptr<StreamDataPage>>;
 
     PageQueueBase();
@@ -213,9 +214,9 @@ public:
      */
     virtual RemoteWorkerManager *GetRemoteWorkerManager() const = 0;
 
-    virtual Status IncBigElementPageRefCount(const std::string &pageId);
+    virtual Status IncBigElementPageRefCount(const ShmKey &pageId);
     virtual Status ExtractBigElement(DataElement &ele, std::shared_ptr<StreamLobPage> &bigElementPage);
-    virtual Status DecBigElementPageRefCount(const std::string &pageId);
+    virtual Status DecBigElementPageRefCount(const ShmKey &pageId);
     virtual Status UpdatePageRefIfExist(const ShmView &v, const std::string &logPrefix, bool toggle);
 
     /**
@@ -249,7 +250,7 @@ protected:
                                        std::shared_ptr<StreamDataPage> &lastPage, bool retryOnOOM);
 
     Status CreateNewPage(std::shared_ptr<StreamDataPage> &lastPage, bool retryOnOOM);
-    Status AddPageToPool(const std::string &pageId, std::unique_ptr<ShmUnit> &&pageUnit, bool bigElement);
+    Status AddPageToPool(const ShmKey &pageId, std::unique_ptr<ShmUnit> &&pageUnit, bool bigElement);
     Status VerifyLastPageRefCountNotLocked() const;
     Status AppendFreePagesImplNotLocked(uint64_t timeoutMs, Optional<std::list<PageShmUnit>> &freeList, bool seal,
                                         const bool updateLocalPubLastPage = true);
@@ -259,12 +260,12 @@ protected:
                    StreamMetaShm *streamMetaShm = nullptr);
     Status ReleaseBigElementsUpTo(uint64_t cursor, std::shared_ptr<StreamDataPage> &page,
                                   std::vector<ShmView> &bigElementPages, bool &keepThisPageInChain);
-    Status GetBigElementPageRefCount(const std::string &pageId, int32_t &refCount);
+    Status GetBigElementPageRefCount(const ShmKey &pageId, int32_t &refCount);
     Status AppendFreePages(std::list<PageShmUnit> &freeList, const bool updateLocalPubLastPage = true);
     Status ProcessBigElementPages(std::vector<ShmView> &bigElementId, StreamMetaShm *streamMetaShm);
     Status LocatePage(const ShmView &v, std::shared_ptr<ShmUnitInfo> &out);
     Status ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> &freeList);
-    Status FreePages(std::vector<std::string> &pages, bool bigElementPage = false,
+    Status FreePages(std::vector<ShmKey> &pages, bool bigElementPage = false,
                      StreamMetaShm *streamMetaShm = nullptr);
     Status FreePendingList();
     Status MoveFreeListToPendFree(uint64_t cursor, std::list<PageShmUnit> &freeList);

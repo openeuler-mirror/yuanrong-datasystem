@@ -254,7 +254,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     int fd;
     uint64_t mmapSize;
     ptrdiff_t offset;
-    std::string id;
+    ShmKey id;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
                                      "worker process get ShmQ unit failed");
 

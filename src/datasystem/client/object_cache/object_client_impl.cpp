@@ -52,6 +52,7 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
@@ -980,7 +981,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
 
 void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffers)
 {
-    std::vector<std::pair<std::string, std::uint32_t>> shmInfos;
+    std::vector<std::pair<ShmKey, std::uint32_t>> shmInfos;
 
     for (auto &buffer : buffers) {
         if (!buffer || !buffer->isShm_) {
@@ -992,17 +993,17 @@ void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffer
     BatchDecreaseRefCnt(shmInfos);
 }
 
-void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<std::string, std::uint32_t>> &shmInfos)
+void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos)
 {
-    auto DecreaseRefCnt = [this](const std::vector<std::pair<std::string, std::uint32_t>> &shmInfos) {
+    auto DecreaseRefCnt = [this](const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos) {
         std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
         std::vector<std::shared_ptr<TbbMemoryRefTable::accessor>> batchLock;
-        std::vector<std::string> descreaseShms;
+        std::vector<ShmKey> descreaseShms;
         for (auto &info : shmInfos) {
             if (!IsBufferAlive(info.second)) {
                 continue;
             }
-            const std::string &shmId = info.first;
+            const auto &shmId = info.first;
             auto accessorPtr = std::make_shared<TbbMemoryRefTable::accessor>();
             auto &accessor = *accessorPtr;
             auto found = memoryRefCount_.find(accessor, shmId);
@@ -1040,11 +1041,11 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<std::stri
     }
 }
 
-void ObjectClientImpl::DecreaseReferenceCnt(const std::string &shmId, bool isShm, uint32_t version)
+void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version)
 {
     VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->GetClientId(),
                             shmId);
-    auto DecreaseRefCnt = [this](const std::string &shmId, bool isShm) {
+    auto DecreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
         std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
         TbbMemoryRefTable::accessor accessor;
         auto found = memoryRefCount_.find(accessor, shmId);
@@ -1384,12 +1385,12 @@ Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const 
     param.cacheType = CacheType(info.cache_type());
     ObjectBufferInfo bufferInfo =
         SetObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
-                            info.shm_id(), nullptr, std::move(mmapEntry));
+                            ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Update shared memory reference count.
     TbbMemoryRefTable::accessor accessor;
-    auto found = memoryRefCount_.insert(accessor, info.shm_id());
+    auto found = memoryRefCount_.insert(accessor, ShmKey::Intern(info.shm_id()));
     accessor->second = (found ? 1 : accessor->second + 1);
     return Buffer::CreateBuffer(bufferInfo, shared_from_this(), buffer);
 }
@@ -1412,7 +1413,7 @@ Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t of
 
 ObjectBufferInfo ObjectClientImpl::SetObjectBufferInfo(const std::string &objectKey, uint8_t *pointer, uint64_t size,
                                                        uint64_t metaSize, const FullParam &param, bool isSeal,
-                                                       uint32_t version, const std::string &shmId,
+                                                       uint32_t version, const ShmKey &shmId,
                                                        const std::shared_ptr<RpcMessage> &payloadPointer,
                                                        std::shared_ptr<client::MmapTableEntry> mmapEntry)
 {
@@ -1597,14 +1598,14 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
     param.cacheType = CacheType(info.cache_type());
     ObjectBufferInfo bufferInfo =
         SetObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
-                            info.shm_id(), nullptr, std::move(mmapEntry));
+                            ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Update shared memory reference count.
     std::shared_ptr<Buffer> tmpbuffer;
     {
         TbbMemoryRefTable::accessor accessor;
-        auto found = memoryRefCount_.insert(accessor, info.shm_id());
+        auto found = memoryRefCount_.insert(accessor, ShmKey::Intern(info.shm_id()));
         accessor->second = (found ? 1 : accessor->second + 1);
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), tmpbuffer));
     }

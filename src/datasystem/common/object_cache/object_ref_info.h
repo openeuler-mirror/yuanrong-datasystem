@@ -30,6 +30,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/utils/status.h"
@@ -37,8 +38,9 @@
 namespace datasystem {
 namespace object_cache {
 
-using TbbObjKeyTable = tbb::concurrent_hash_map<ImmutableString, uint32_t>;
+template  <typename T>
 class ObjectRefInfo {
+using TbbObjKeyTable = tbb::concurrent_hash_map<T, uint32_t>;
 public:
     explicit ObjectRefInfo(bool isUniqueCnt = true) : isUniqueCnt_(isUniqueCnt)
     {
@@ -52,28 +54,28 @@ public:
      * @param[in] ref ref num need to add.
      * @return True on success, false otherwise.
      */
-    bool AddRef(const std::string &objectKey, uint32_t ref = 1);
+    bool AddRef(const T &objectKey, uint32_t ref = 1);
 
     /**
      * @brief Remove the reference to the object.
      * @param[in] objectKey The object key to remove, it cannot be empty.
      * @return True on success, false otherwise.
      */
-    bool RemoveRef(const std::string &objectKey);
+    bool RemoveRef(const T &objectKey);
 
     /**
      * @brief Check if the id is contains.
      * @param[in] objectKey The id of object.
      * @return True on success, false otherwise.
      */
-    bool Contains(const std::string &objectKey) const;
+    bool Contains(const T &objectKey) const;
 
     /**
      * @brief Get number of references for a object key.
      * @param[in] objectKey The id of object.
      * @return reference count if Id is present, 0 otherwise.
      */
-    uint32_t GetRefCount(const std::string &objectKey);
+    uint32_t GetRefCount(const T &objectKey);
 
     /**
      * @brief Used to update reference count for a objectKey during recovery
@@ -81,20 +83,20 @@ public:
      * @param[in] count The reference count for the object.
      * @return Status of the call.
      */
-    Status UpdateRefCount(const std::string &objectKey, int count);
+    Status UpdateRefCount(const T &objectKey, int count);
 
     /**
      * @brief Get all ref ids.
      * @param[out] objectKeys The object keys.
      */
-    void GetRefIds(std::vector<std::string> &objectKeys) const;
+    void GetRefIds(std::vector<T> &objectKeys) const;
 
     /**
      * @brief Check if the obj is dependent on other objs.
      * @param[in] objectKey The id of object.
      * @return Whether it is no ref.
      */
-    bool CheckIsNoneRef(const std::string &objectKey) const;
+    bool CheckIsNoneRef(const T &objectKey) const;
 
     /**
      * @brief Check is objectKeys_ are empty.
@@ -110,7 +112,8 @@ private:
     bool isUniqueCnt_;
 };
 
-using TbbClientRefTable = tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<ObjectRefInfo>>;
+using TbbClientRefTable =
+    tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<ObjectRefInfo<std::string>>>;  // std::string -> ObjectKey
 using TbbObjRefTable = tbb::concurrent_hash_map<ImmutableString, std::unordered_set<ImmutableString>>;
 using TbbFirstRemoteClientTable = tbb::concurrent_hash_map<ImmutableString, std::nullptr_t>;
 class ObjectGlobalRefTable {
@@ -246,9 +249,9 @@ private:
     std::function<Status(const std::string &, const std::string &, bool)> removeFromKvStore_;
 };
 
-using TbbMemoryClientRefTable = tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<ObjectRefInfo>>;
+using TbbMemoryClientRefTable = tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<ObjectRefInfo<ShmKey>>>;
 using TbbMemoryObjectRefTable =
-    tbb::concurrent_hash_map<ImmutableString, std::pair<std::shared_ptr<ShmUnit>, std::unordered_set<ImmutableString>>>;
+    tbb::concurrent_hash_map<ShmKey, std::pair<std::shared_ptr<ShmUnit>, std::unordered_set<ImmutableString>>>;
 class SharedMemoryRefTable {
 public:
     SharedMemoryRefTable() = default;
@@ -275,7 +278,7 @@ public:
      * @param[out] shmUnit Shared memory unit shared ptr.
      * @return true on success, false otherwise.
      */
-    Status GetShmUnit(const std::string &shmId, std::shared_ptr<ShmUnit> &shmUnit);
+    Status GetShmUnit(const ShmKey &shmId, std::shared_ptr<ShmUnit> &shmUnit);
 
     /**
      * @brief Remove a client from the client table.
@@ -283,7 +286,7 @@ public:
      * @param[in] shmId The shared memory id.
      * @return Status of the call
      */
-    Status RemoveShmUnit(const std::string &clientId, const std::string &shmId);
+    Status RemoveShmUnit(const std::string &clientId, const ShmKey &shmId);
 
     /**
      * @brief Remove a client from the client table.
@@ -292,20 +295,22 @@ public:
      */
     Status RemoveClient(const std::string &clientId);
 
+#ifdef WITH_TESTS
     /**
      * @brief Check one object whether be referred by client.
      * @param[in] clientId uuid of client.
      * @param[in] shmId Shared memory unit id of object.
      * @return true on success, false otherwise.
      */
-    bool Contains(const std::string &clientId, const std::string &shmId) const;
+    bool Contains(const std::string &clientId, const ShmKey &shmId) const;
+#endif
 
     /**
      * @brief Get all share memory unit ids referred by client.
      * @param[in] clientId uuid of client.
      * @param[out] shmIds Shared memory unit id of object.
      */
-    void GetClientRefIds(const std::string &clientId, std::vector<std::string> &shmIds) const;
+    void GetClientRefIds(const std::string &clientId, std::vector<ShmKey> &shmIds) const;
 
 private:
     /**
@@ -324,6 +329,110 @@ private:
 
     mutable std::shared_timed_mutex mutex_;
 };
+
+template <typename T>
+bool ObjectRefInfo<T>::AddRef(const T &objectKey, uint32_t ref)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    typename TbbObjKeyTable::accessor objAccessor;
+    VLOG(1) << "add object key " << objectKey << " ref:" << ref;
+    bool res = objectKeys_.emplace(objAccessor, objectKey, ref);
+    if (res) {
+        return true;
+    }
+    if (isUniqueCnt_) {
+        return false;
+    }
+    objAccessor->second += ref;
+    return true;
+}
+
+template <typename T>
+uint32_t ObjectRefInfo<T>::GetRefCount(const T &objectKey)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    typename TbbObjKeyTable::const_accessor objAccessor;
+    if (objectKeys_.find(objAccessor, objectKey)) {
+        return objAccessor->second;
+    }
+    return 0;
+}
+
+template <typename T>
+Status ObjectRefInfo<T>::UpdateRefCount(const T &objectKey, int count)
+{
+    if (count < 0) {
+        RETURN_STATUS(StatusCode::K_INVALID, FormatString("[ObjectId %s] Invalid count: %d", objectKey, count));
+    }
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    typename TbbObjKeyTable::accessor objAccessor;
+    if (objectKeys_.find(objAccessor, objectKey)) {
+        if (isUniqueCnt_ && count > 1) {
+            RETURN_STATUS(StatusCode::K_DUPLICATED, "object key is marked to be unique");
+        }
+        objAccessor->second = static_cast<uint32_t>(count);
+        return Status::OK();
+    }
+    auto result = objectKeys_.emplace(objAccessor, objectKey, count);
+    if (!result) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "emplace on objectKeys_ failed.");
+    }
+    return Status::OK();
+}
+
+template <typename T>
+bool ObjectRefInfo<T>::RemoveRef(const T &objectKey)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    typename TbbObjKeyTable::accessor objAccessor;
+    if (!objectKeys_.find(objAccessor, objectKey)) {
+        return false;
+    }
+    if (isUniqueCnt_) {
+        auto result = objectKeys_.erase(objAccessor);
+        return result > 0;
+    }
+    objAccessor->second -= 1;
+    if (objAccessor->second == 0) {
+        (void)objectKeys_.erase(objAccessor);
+    }
+    return true;
+}
+
+template <typename T>
+bool ObjectRefInfo<T>::Contains(const T &objectKey) const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    return objectKeys_.count(objectKey) == 1;
+}
+
+template <typename T>
+void ObjectRefInfo<T>::GetRefIds(std::vector<T> &objectKeys) const
+{
+    std::lock_guard<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    std::transform(objectKeys_.begin(), objectKeys_.end(), std::back_inserter(objectKeys),
+                   [](auto &kv) { return kv.first; });
+}
+
+template <typename T>
+bool ObjectRefInfo<T>::CheckIsNoneRef(const T &objectKey) const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    typename TbbObjKeyTable::const_accessor objAccessor;
+    if (!objectKeys_.find(objAccessor, objectKey)) {
+        return true;
+    } else if (objAccessor->second == 0) {
+        return true;
+    }
+    return false;
+}
+
+template <typename T>
+bool ObjectRefInfo<T>::CheckIsRefIdsEmpty() const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
+    return objectKeys_.empty();
+}
 }  // namespace object_cache
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_OBJECT_CACHE_OBJECTREFINFO_H

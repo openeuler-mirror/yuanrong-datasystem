@@ -24,6 +24,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include "datasystem/common/string_intern/string_ref.h"
 #include "gtest/gtest.h"
 
 #define JEMALLOC_NO_DEMANGLE
@@ -818,7 +819,7 @@ void AllocatorTest::TestShmUnits1()
     ShmView currView = shmUnit1.GetShmView();
     std::string id("123");
     // test a construction from view
-    ShmUnit shmUnit2(id, currView, nullptr);
+    ShmUnit shmUnit2(ShmKey::Intern(id), currView, nullptr);
     // test a construction using fd/mmapsize
     ShmUnit shmUnit3(1, 1);
     // Test a copy

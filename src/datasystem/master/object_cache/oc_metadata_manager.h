@@ -1107,7 +1107,7 @@ public:
     std::shared_ptr<MasterDevOcManager> GetDeviceOcManager();
 
 #ifdef WITH_TESTS
-    OCNestedManager *CheckIsNoneNestedRefById()
+    OCNestedManager *GetNestedRefManager()
     {
         return nestedRefManager_.get();
     }

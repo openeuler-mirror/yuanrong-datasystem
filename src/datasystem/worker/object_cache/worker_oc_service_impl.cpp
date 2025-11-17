@@ -60,6 +60,7 @@
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -350,13 +351,13 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads));
     if (req.auto_release_memory_ref()) {
         std::set<std::string> failedSet{ resp.failed_object_keys().begin(), resp.failed_object_keys().end() };
-        std::vector<std::string> shmIds;
+        std::vector<ShmKey> shmIds;
         shmIds.reserve(req.object_info_size());
         for (auto &info : req.object_info()) {
             if (failedSet.find(info.object_key()) != failedSet.end()) {
                 continue;
             }
-            shmIds.emplace_back(info.shm_id());
+            shmIds.emplace_back(ShmKey::Intern(info.shm_id()));
         }
         VLOG(1) << "auto release ref " << VectorToString(shmIds);
         return DecreaseMemoryRef(req.client_id(), shmIds);
@@ -1299,7 +1300,7 @@ Status WorkerOCServiceImpl::RefreshMeta(const std::string &clientId)
         LOG_IF_ERROR(TryUnShmQueueLatch(lockId), "Failed to clear locked id");
     };
     // 0th: Release the object buffer resource
-    std::vector<std::string> shmIds;
+    std::vector<ShmKey> shmIds;
     memoryRefTable_->GetClientRefIds(clientId, shmIds);
     for (const auto &shmId : shmIds) {
         std::shared_ptr<ShmUnit> shmUnit;
@@ -1425,7 +1426,7 @@ void WorkerOCServiceImpl::EraseFailedWorkerMasterApi(HostPort &masterAddr)
 }
 
 Status WorkerOCServiceImpl::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset,
-                                            std::string &id)
+                                            ShmKey &id)
 {
     size_t index = lockId / SHM_QUEUE_SLOT_NUM;
     std::shared_ptr<ShmCircularQueue> circularQueue;
@@ -1459,7 +1460,7 @@ void WorkerOCServiceImpl::DecreaseHandlerForShmQueue(uint8_t *element)
         return;
     }
     std::string byteShmId((char *)element + sizeof(uint32_t), UUID_SIZE);
-    std::string shmId = BytesUuidToString(byteShmId);
+    auto shmId = ShmKey::Intern(BytesUuidToString(byteShmId));
     std::string byteClientId((char *)element + sizeof(uint32_t) + UUID_SIZE, UUID_SIZE);
     std::string clientId = BytesUuidToString(byteClientId);
     // to do clear all client ref with the shmId;
@@ -1493,7 +1494,7 @@ Status WorkerOCServiceImpl::InitShmCircularQueue(std::shared_ptr<ShmCircularQueu
     uint32_t elementSize = defaultMeta.elementFlagSize + defaultMeta.elementDataSize + defaultMeta.elementDataSize;
     uint32_t memorySize = sizeof(uint64_t) + sizeof(uint32_t) + sizeof(uint32_t) + defaultMeta.capacity * elementSize;
     auto shmUnit = std::make_shared<ShmUnit>();
-    shmUnit->id = GetStringUuid();
+    shmUnit->id = ShmKey::Intern(GetStringUuid());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(shmUnit->AllocateMemory(DEFAULT_TENANT_ID, memorySize, true),
                                      "Allocate memory failed");
     auto result = memset_s(shmUnit->pointer, memorySize, 0, memorySize);
@@ -1559,7 +1560,7 @@ Status WorkerOCServiceImpl::StartDecreaseReferenceProcess()
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::DecreaseMemoryRef(const std::string &clientId, const std::vector<std::string> &shmIds)
+Status WorkerOCServiceImpl::DecreaseMemoryRef(const std::string &clientId, const std::vector<ShmKey> &shmIds)
 {
     workerOperationTimeCost.Clear();
     Timer timer;
@@ -1586,7 +1587,11 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     if (req.object_keys_size() > 0) {
         LOG(INFO) << FormatString("[shmId %s] [client: %s] DoDecrease", req.object_keys(0), req.client_id());
     }
-    std::vector<std::string> shmIds = { req.object_keys().begin(), req.object_keys().end() };
+    std::vector<ShmKey> shmIds;
+    // Although the field in pb is called object key, its content is actually shmId, which is very misleading.
+    shmIds.reserve(req.object_keys().size());
+    std::transform(req.object_keys().begin(), req.object_keys().end(), std::back_inserter(shmIds),
+                   [](const auto &key) { return ShmKey::Intern(key); });
     auto rc = DecreaseMemoryRef(req.client_id(), shmIds);
     if (rc.IsError()) {
         resp.mutable_error()->set_error_code(rc.GetCode());
@@ -2010,7 +2015,7 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
 {
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    std::vector<std::string> shmUnits = { req.shm_id() };
+    std::vector<ShmKey> shmUnits = { ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, req.client_id(), shmUnits, memoryRefTable_));
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);

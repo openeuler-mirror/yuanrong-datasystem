@@ -42,6 +42,7 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -59,7 +60,7 @@
 
 namespace datasystem {
 namespace object_cache {
-using TbbMemoryRefTable = tbb::concurrent_hash_map<std::string, int>;
+using TbbMemoryRefTable = tbb::concurrent_hash_map<ShmKey, int>;
 using TbbGlobalRefTable = tbb::concurrent_hash_map<std::string, int>;
 using GlobalRefInfo = std::pair<int, std::shared_ptr<TbbGlobalRefTable::accessor>>;
 
@@ -149,7 +150,7 @@ public:
      * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
      * @param[in] version Worker version.
      */
-    void DecreaseReferenceCnt(const std::string &shmId, bool isShm, uint32_t version = 0);
+    void DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version = 0);
 
     /**
      * @brief Increase the global reference count to objects in worker.
@@ -754,7 +755,7 @@ private:
      * @brief Batch release local memory ref by zmq RPC.
      * @param[in] shmInfos The shared memory info of buffers.
      */
-    void BatchDecreaseRefCnt(const std::vector<std::pair<std::string, std::uint32_t>> &shmInfos);
+    void BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos);
 
     /**
      * @brief Set the offset read object buffer.
@@ -791,7 +792,7 @@ private:
      */
     static ObjectBufferInfo SetObjectBufferInfo(const std::string &objectKey, uint8_t *pointer, uint64_t size,
                                                 uint64_t metaSize, const FullParam &param, bool isSeal,
-                                                uint32_t version, const std::string &shmId = {},
+                                                uint32_t version, const ShmKey &shmId = {},
                                                 const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
                                                 std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
 

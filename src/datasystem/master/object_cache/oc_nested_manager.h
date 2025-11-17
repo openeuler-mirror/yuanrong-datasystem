@@ -61,7 +61,8 @@ namespace master {
 class OCNestedManager {
 public:
     OCNestedManager(std::shared_ptr<ObjectMetaStore> objectRockStore, EtcdClusterManager *cm)
-        : objectStore_(std::move(objectRockStore)), nestedRef_(std::make_unique<object_cache::ObjectRefInfo>(false))
+        : objectStore_(std::move(objectRockStore)),
+          nestedRef_(std::make_unique<object_cache::ObjectRefInfo<std::string>>(false))
     {
         etcdCM_ = cm;
     }
@@ -177,7 +178,7 @@ public:
 private:
     std::unordered_map<ImmutableString, std::set<ImmutableString>> dependencyTable_;
     std::shared_ptr<ObjectMetaStore> objectStore_;
-    std::unique_ptr<object_cache::ObjectRefInfo> nestedRef_;
+    std::unique_ptr<object_cache::ObjectRefInfo<std::string>> nestedRef_;  // std::string -> ObjectKey
     std::shared_timed_mutex mutex_;
     EtcdClusterManager *etcdCM_ = nullptr;
 };

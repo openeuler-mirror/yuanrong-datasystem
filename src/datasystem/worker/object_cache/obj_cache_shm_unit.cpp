@@ -22,6 +22,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -290,7 +291,7 @@ Status AllocateNewShmUnit(const std::string &objectKey, uint64_t dataSize, uint6
     shmUnit = std::make_shared<ShmUnit>();
     RETURN_IF_NOT_OK(
         AllocateMemoryForObject(objectKey, dataSize, metadataSize, populate, evictionManager, *shmUnit, cacheType));
-    shmUnit->id = GetStringUuid();
+    shmUnit->id = ShmKey::Intern(GetStringUuid());
     return Status::OK();
 }
 
@@ -320,7 +321,7 @@ Status LoadSpilledObjectToMemory(ReadObjectKV &objectKV, std::shared_ptr<WorkerO
             entry->stateInfo.SetIncompleted(true);
             return Status(K_OUT_OF_MEMORY, "out of memory");
         });
-        newShmUnit->id = GetStringUuid();
+        newShmUnit->id = ShmKey::Intern(GetStringUuid());
         objShmUnit->SetShmUnit(newShmUnit);
     }
     bool isOffsetRead = objectKV.IsOffsetRead();
@@ -378,7 +379,7 @@ Status SaveBinaryObjectToMemory(ObjectKV &objectKV, const std::vector<RpcMessage
         auto shmUnit = std::make_shared<ShmUnit>();
         RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, payloadSz, metaSz, false, evictionManager, *shmUnit,
                                                  entry->modeInfo.GetCacheType()));
-        shmUnit->id = GetStringUuid();
+        shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }
     // There is no need to latch buffer because client can't access the buffer this moment.

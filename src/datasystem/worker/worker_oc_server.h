@@ -95,7 +95,7 @@ public:
      * @param[out] id The id of this shmUnit.
      * @return Status of the call.
      */
-    Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, std::string &id) override;
+    Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id) override;
 
     /**
      * @brief After restart crashed server, we need to do some recovery job according to the message from the client.

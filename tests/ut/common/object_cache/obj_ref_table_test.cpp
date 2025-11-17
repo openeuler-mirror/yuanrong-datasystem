@@ -21,6 +21,7 @@
 
 #include "common.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -51,6 +52,7 @@ void ParallelFor(size_t numOfOps, F f, size_t numOfThreads)
 
 class ObjRefTableTest : public CommonTest {
 public:
+    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo<std::string>;
     void SetUp() override
     {
         clientIds_.clear();
@@ -170,7 +172,7 @@ std::vector<std::string> ObjRefTableTest::GetGlobalRefIds(const std::vector<uint
 void ObjRefTableTest::VerifyMemRefTableMatches()
 {
     // Client to objects.
-    std::unordered_map<std::string, std::unordered_set<std::string>> objects;
+    std::unordered_map<std::string, std::unordered_set<ShmKey>> objects;
 
     // Verify Object Table and Ref Cnt.
     for (const auto &objKeyClients : refClientSets_) {
@@ -185,8 +187,8 @@ void ObjRefTableTest::VerifyMemRefTableMatches()
         ASSERT_EQ((*entry)->GetShmUnit()->GetRefCount(), static_cast<int>(clientSet.size()));
         entry->RUnlock();
         for (const auto &client : clientSet) {
-            ASSERT_TRUE(memRefTable_.Contains(client, objKey));
-            objects[client].emplace(objKey);
+            ASSERT_TRUE(memRefTable_.Contains(client, ShmKey::Intern(objKey)));
+            objects[client].emplace(ShmKey::Intern(objKey));
         }
     }
 
@@ -194,7 +196,7 @@ void ObjRefTableTest::VerifyMemRefTableMatches()
     for (const auto &clientObjects : objects) {
         const auto &clientId = clientObjects.first;
         const auto &objectSet = clientObjects.second;
-        std::vector<std::string> objKeys;
+        std::vector<ShmKey> objKeys;
         memRefTable_.GetClientRefIds(clientId, objKeys);
         ASSERT_EQ(objKeys.size(), objectSet.size());
         for (const auto &objKey : objKeys) {
@@ -217,7 +219,7 @@ void ObjRefTableTest::TestMemRefTableUniqAdd()
                 std::unique_ptr<datasystem::ObjectInterface> objPtr = nullptr;
                 // Set ShmUnit.
                 auto shmUnit = std::make_shared<ShmUnit>();
-                shmUnit->id = objKeys_[objIndex];
+                shmUnit->id = ShmKey::Intern(objKeys_[objIndex]);
                 auto objShmUnit = std::make_unique<datasystem::object_cache::ObjCacheShmUnit>();
                 objShmUnit->SetShmUnit(shmUnit);
                 entry->SetRealObject(std::move(objShmUnit));
@@ -254,7 +256,7 @@ void ObjRefTableTest::TestMemRefTableUniqRemove()
                 auto objShmUnit = std::make_unique<datasystem::object_cache::ObjCacheShmUnit>();
                 entry->SetRealObject(std::move(objShmUnit));
             }
-            memRefTable_.RemoveShmUnit(clientIds_[clientIndex], objKeys_[objIndex]);
+            memRefTable_.RemoveShmUnit(clientIds_[clientIndex], ShmKey::Intern(objKeys_[objIndex]));
             entry->WUnlock();
         },
         numOfThreads_);
@@ -394,7 +396,6 @@ void ObjRefTableTest::TestGlobalRefTableRemove()
 
 TEST_F(ObjRefTableTest, ObjRefInfoUniqBranchTest)
 {
-    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo;
     auto clientInfo = std::make_shared<ObjectRefInfo>();
     size_t dataSz = 32;
     auto id = randomData_.GetRandomString(dataSz);
@@ -436,7 +437,6 @@ TEST_F(ObjRefTableTest, ObjRefInfoUniqBranchTest)
 
 TEST_F(ObjRefTableTest, ObjRefInfoRefCntBranchTest)
 {
-    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo;
     auto clientInfo = std::make_shared<ObjectRefInfo>(false);
     size_t dataSz = 32;
     auto id = randomData_.GetRandomString(dataSz);
@@ -454,7 +454,6 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntBranchTest)
 
 TEST_F(ObjRefTableTest, ObjRefInfoRefCntMultiIdMultiThread)
 {
-    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo;
     auto clientInfo = std::make_shared<ObjectRefInfo>(false);
     int threadNum = 8;
     ThreadPool threadPool(threadNum);
@@ -491,7 +490,6 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntMultiIdMultiThread)
 
 TEST_F(ObjRefTableTest, ObjRefInfoRefCntOneIdMultiThread)
 {
-    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo;
     auto clientInfo = std::make_shared<ObjectRefInfo>(false);
     int threadNum = 8;
     ThreadPool threadPool(threadNum);
@@ -530,7 +528,6 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntOneIdMultiThread)
 
 TEST_F(ObjRefTableTest, ObjRefInfoRefCntMultiIdMultiThread2)
 {
-    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo;
     auto clientInfo = std::make_shared<ObjectRefInfo>(true);
     int threadNum = 8;
     ThreadPool threadPool(threadNum);
@@ -566,7 +563,6 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntMultiIdMultiThread2)
 
 TEST_F(ObjRefTableTest, ObjRefInfoRefCntOneIdMultiThread2)
 {
-    using ObjectRefInfo = datasystem::object_cache::ObjectRefInfo;
     auto clientInfo = std::make_shared<ObjectRefInfo>(true);
     int threadNum = 8;
     ThreadPool threadPool(threadNum);
@@ -640,7 +636,7 @@ TEST_F(ObjRefTableTest, GlobalRefTableAddRmTest)
 
 TEST_F(ObjRefTableTest, RemoveClientAndDecreaseShmUnit)
 {
-    std::vector<std::string> shmIds;
+    std::vector<ShmKey> shmIds;
     auto clientId = GetStringUuid();
     for (int i = 0; i < 3000; i++) { // id num is 3000
         std::shared_ptr<SafeObjType> entry;
@@ -651,11 +647,11 @@ TEST_F(ObjRefTableTest, RemoveClientAndDecreaseShmUnit)
             std::unique_ptr<datasystem::ObjectInterface> objPtr = nullptr;
             // Set ShmUnit.
             auto shmUnit = std::make_shared<ShmUnit>();
-            shmUnit->id = objId;
+            shmUnit->id = ShmKey::Intern(objId);
             auto objShmUnit = std::make_unique<datasystem::object_cache::ObjCacheShmUnit>();
             objShmUnit->SetShmUnit(shmUnit);
             entry->SetRealObject(std::move(objShmUnit));
-            shmIds.emplace_back(objId);
+            shmIds.emplace_back(ShmKey::Intern(objId));
         }
         auto shmUnit = (*entry)->GetShmUnit();
         memRefTable_.AddShmUnit(clientId, shmUnit);

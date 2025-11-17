@@ -63,7 +63,7 @@ Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDa
         auto shmUnit = std::make_shared<ShmUnit>();
         RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, completeDataSize, metaSz, false, evictionManager_, *shmUnit,
                                                  entry->modeInfo.GetCacheType()));
-        shmUnit->id = GetStringUuid();
+        shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }
     PerfPoint copyPoint(PerfKey::WORKER_MEMORY_COPY);

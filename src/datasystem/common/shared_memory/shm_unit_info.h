@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
@@ -101,7 +102,7 @@ public:
      * @param[in] pointer The pointer to allocated data for the ShmUnitInfo (This ShmUnitInfo will not free it during
      * it's destructor.
      */
-    ShmUnitInfo(ImmutableString id, ShmView shmView, void *pointer);
+    ShmUnitInfo(ShmKey id, ShmView shmView, void *pointer);
 
     /**
      * @brief Destructor. Client-side ShmUnitInfo's do not own memory and will not free memory.
@@ -112,7 +113,7 @@ public:
      * @brief Returns shm id.
      * @return id of shared memory.
      */
-    std::string GetId() const
+    ShmKey GetId() const
     {
         return id;
     }
@@ -237,7 +238,7 @@ public:
     std::atomic<int32_t> refCount = { 0 };
 
     // uuid
-    ImmutableString id;
+    ShmKey id;
 };
 }  // namespace datasystem
 

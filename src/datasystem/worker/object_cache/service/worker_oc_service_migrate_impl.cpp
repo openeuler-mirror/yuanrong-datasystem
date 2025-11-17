@@ -36,6 +36,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -586,7 +587,7 @@ Status WorkerOcServiceMigrateImpl::AllocateAndAssignData(
         shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
                                 static_cast<memory::CacheType>((*entry)->modeInfo.GetCacheType())),
         FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize));
-    shmUnit->id = GetStringUuid();
+    shmUnit->id = ShmKey::Intern(GetStringUuid());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         shmUnit->MemoryCopy(payloads, memcpyThreadPool_, metaSize),
         FormatString("[Migrate Data] Memory copy failed, offset: %ld, size: %ld", metaSize, needSize));

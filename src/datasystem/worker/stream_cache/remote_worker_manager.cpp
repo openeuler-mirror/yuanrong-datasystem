@@ -144,12 +144,12 @@ Status StreamElementView::IncRefCount()
     Raii raii([&bigElementLocked, this]() {
         // Unlock in case of error.
         if (!ref_ && bigElementLocked) {
-            std::string pageId = bigElementPage_->GetPageId();
+            auto pageId = bigElementPage_->GetPageId();
             (void)dataObj_->DecBigElementPageRefCount(pageId);
         }
     });
     if (bigElement_) {
-        std::string pageId = bigElementPage_->GetPageId();
+        auto pageId = bigElementPage_->GetPageId();
         RETURN_IF_NOT_OK(dataObj_->IncBigElementPageRefCount(pageId));
         bigElementLocked = true;
     }

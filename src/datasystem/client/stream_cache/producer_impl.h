@@ -217,7 +217,6 @@ private:
     std::unique_ptr<TimerQueue::TimerImpl> unfixTimer_;
     std::unique_ptr<WaitPost> unfixWaitPost_{ nullptr };
     std::shared_ptr<ShmUnitInfo> pageUnit_;
-    std::string pageId_;
     ShmView curView_;
     std::mutex flushMutex_;  // Guarantee FIFO, single on-the-fly flush.
     std::atomic<bool> pageDirty_{ false };

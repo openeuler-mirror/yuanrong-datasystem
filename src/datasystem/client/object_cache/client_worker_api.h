@@ -30,6 +30,7 @@
 #include "datasystem/client/mmap_table.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/queue/shm_circular_queue.h"
@@ -179,7 +180,7 @@ public:
      * @param[in] connectCheck the connect check with local server.
      * @return Status of the call.
      */
-    Status DecreaseWorkerRefByShm(const std::string &shmId, const std::function<Status()> &connectCheck);
+    Status DecreaseWorkerRefByShm(const ShmKey &shmId, const std::function<Status()> &connectCheck);
 
     /**
      * @brief Wakes up all waiting processes in the shared memory queue and clears the pointers to the queue.
@@ -192,7 +193,7 @@ public:
      * @param[in] objectKey The ID of the object to decrease ref.
      * @return Status of the call.
      */
-    Status DecreaseWorkerRef(const std::vector<std::string> &objectKeys);
+    Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys);
 
     /**
      * @brief Send getting object rpc request to worker.

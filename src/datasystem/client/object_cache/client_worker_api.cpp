@@ -28,6 +28,7 @@
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
@@ -148,7 +149,7 @@ Status ClientWorkerApi::Create(const std::string &objectKey, int64_t dataSize, u
     shmBuf->fd = rsp.store_fd();
     shmBuf->mmapSize = rsp.mmap_size();
     shmBuf->offset = static_cast<ptrdiff_t>(rsp.offset());
-    shmBuf->id = rsp.shm_id();
+    shmBuf->id = ShmKey::Intern(rsp.shm_id());
     metadataSize = rsp.metadata_size();
     version = workerVersion_.load(std::memory_order_relaxed);
     return Status::OK();
@@ -211,7 +212,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
         shmBuf->fd = subRsp.store_fd();
         shmBuf->mmapSize = subRsp.mmap_size();
         shmBuf->offset = static_cast<ptrdiff_t>(subRsp.offset());
-        shmBuf->id = subRsp.shm_id();
+        shmBuf->id = ShmKey::Intern(subRsp.shm_id());
         createParams[i].metadataSize = subRsp.metadata_size();
     }
     version = workerVersion_.load(std::memory_order_relaxed);
@@ -408,11 +409,11 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
     req.set_istx(param.isTx);
     req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     req.set_is_replica(param.isReplica);
-    req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.empty());
+    req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
     std::vector<MemView> payloads;
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
-        if (bufferInfo[i]->shmId.empty()) {
+        if (bufferInfo[i]->shmId.Empty()) {
             payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
         }
         MultiPublishReqPb::ObjectInfoPb objectInfoPb;
@@ -491,7 +492,7 @@ Status ClientWorkerApi::CheckShmFutexResult(uint32_t *waitFlag, uint32_t waitNum
     return ShmCircularQueue::CheckFutexErrno(result);
 }
 
-Status ClientWorkerApi::DecreaseWorkerRefByShm(const std::string &shmId, const std::function<Status()> &connectCheck)
+Status ClientWorkerApi::DecreaseWorkerRefByShm(const ShmKey &shmId, const std::function<Status()> &connectCheck)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(decreaseRPCQ_);
     std::string decElement;
@@ -547,7 +548,7 @@ Status ClientWorkerApi::DecreaseWorkerRefByShm(const std::string &shmId, const s
     return Status::OK();
 }
 
-Status ClientWorkerApi::DecreaseWorkerRef(const std::vector<std::string> &objectKeys)
+Status ClientWorkerApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
 {
     DecreaseReferenceRequest req;
     req.set_client_id(GetClientId());

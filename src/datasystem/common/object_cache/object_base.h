@@ -30,6 +30,7 @@
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/optional.h"
@@ -318,7 +319,7 @@ struct ObjectInterface {
 
 struct ObjectBufferInfo {
     std::string objectKey;
-    std::string shmId;
+    ShmKey shmId;
     uint8_t *pointer;
     uint64_t dataSize;
     uint64_t metadataSize;

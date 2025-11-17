@@ -260,7 +260,7 @@ public:
      * @param[out] id The id of this shmUnit.
      * @return Status of the call.
      */
-    Status GetQueueShmUnit(int &fd, uint64_t &mmapSize, ptrdiff_t &offset, std::string &id);
+    Status GetQueueShmUnit(int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id);
 
     /**
      * @brief Check futex result.

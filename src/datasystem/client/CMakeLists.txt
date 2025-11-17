@@ -43,6 +43,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_shm_unit_info
         common_util
         common_immutable_string
+        string_ref
         nlohmann_json::nlohmann_json
         posix_protos_client
         share_memory_protos_client

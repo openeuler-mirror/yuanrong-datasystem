@@ -23,6 +23,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -94,7 +95,7 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
 
     std::string shmUnitId;
     IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
-    shmUnit->id = shmUnitId;
+    shmUnit->id = ShmKey::Intern(std::move(shmUnitId));
     memoryRefTable_->AddShmUnit(clientId, shmUnit);
 
     // Construct CreateRespPb.
@@ -156,7 +157,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
 
         std::string shmUnitId;
         IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
-        shmUnit->id = shmUnitId;
+        shmUnit->id = ShmKey::Intern(std::move(shmUnitId));
         shmUnits[i] = shmUnit;
 
         // Construct CreateRespPb.
@@ -211,7 +212,7 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
         // Rollback all memory if failed.
         const auto &clientId = req.client_id();
         for (auto &subResp : resp.results()) {
-            memoryRefTable_->RemoveShmUnit(clientId, subResp.shm_id());
+            memoryRefTable_->RemoveShmUnit(clientId, ShmKey::Intern(subResp.shm_id()));
         }
         resp.Clear();
     }

@@ -487,7 +487,6 @@ Status ProducerImpl::CreatePagePostProcessing(const ShmView &lastPageView, std::
         writePage_ = std::move(page);
         RETURN_IF_NOT_OK(writePage_->RefPage(LogPrefix()));
         curView_ = writePage_->GetShmView();
-        pageId_ = writePage_->GetPageId();
         fixPageCount++;
         // We may (or may not) lock this page. But let's track it in the work area
         if (WorkAreaIsV2()) {
@@ -495,7 +494,8 @@ Status ProducerImpl::CreatePagePostProcessing(const ShmView &lastPageView, std::
         }
     }
     VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s] Acquire page id: %s, isSharedPage: %d, lastPageView: %s",
-                                                LogPrefix(), pageId_, writePage_->IsSharedPage(), lastPageView.ToStr());
+                                                LogPrefix(), writePage_->GetPageId(), writePage_->IsSharedPage(),
+                                                lastPageView.ToStr());
     return Status::OK();
 }
 

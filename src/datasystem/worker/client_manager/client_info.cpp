@@ -24,6 +24,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DEFINE_uint64(client_dead_timeout_s, 120,
@@ -149,13 +150,13 @@ bool ClientInfo::RemoveShmUnit(const std::shared_ptr<ShmUnit> &shmUnit)
             }
         } else {
             LOG(WARNING) << "RemoveShmUnit: The value of refCount is 0 and cannot be decreased. id:"
-                         << BytesUuidToString(shmUnit->id);
+                         << BytesUuidToString(shmUnit->id.ToString());
         }
         return true;
     }
     auto itr = shmUnitIds_.find(shmUnit->id);
     if (itr == shmUnitIds_.end()) {
-        LOG(WARNING) << "RemoveShmUnit: The ID does not exist. id:" << BytesUuidToString(shmUnit->id);
+        LOG(WARNING) << "RemoveShmUnit: The ID does not exist. id:" << BytesUuidToString(shmUnit->id.ToString());
         return false;
     }
     if (shmUnit->refCount > 0) {
@@ -166,7 +167,7 @@ bool ClientInfo::RemoveShmUnit(const std::shared_ptr<ShmUnit> &shmUnit)
         }
     } else {
         LOG(WARNING) << "RemoveShmUnit: The value of refCount is 0 and cannot be decreased. id:"
-                     << BytesUuidToString(shmUnit->id);
+                     << BytesUuidToString(shmUnit->id.ToString());
     }
     itr->second -= 1;
     if (itr->second == 0) {
@@ -178,15 +179,17 @@ bool ClientInfo::RemoveShmUnit(const std::shared_ptr<ShmUnit> &shmUnit)
     return true;
 }
 
-bool ClientInfo::Contains(const std::string &uuid) const
+bool ClientInfo::Contains(const ShmKey &shmId) const
 {
-    return shmUnitIds_.find(uuid) != shmUnitIds_.end();
+    return shmUnitIds_.find(shmId) != shmUnitIds_.end();
 }
 
-void ClientInfo::GetShmUnitIds(std::unordered_map<std::string, uint32_t> &shmUnitIds)
+#ifdef WITH_TESTS
+void ClientInfo::GetShmUnitIds(std::unordered_map<ShmKey, uint32_t> &shmUnitIds)
 {
     shmUnitIds = shmUnitIds_;
 }
+#endif
 
 void ClientInfo::GetReaderSessionIds(std::unordered_set<std::string> &sessionIds) const
 {

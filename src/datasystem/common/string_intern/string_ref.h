@@ -46,7 +46,7 @@ public:
     StringRef &operator=(const StringRef &other) noexcept
     {
         if (this != &other) {
-            handle_ = other.ptr_;
+            handle_ = other.handle_;
             handle_.IncRef();
         }
         return *this;
@@ -140,6 +140,11 @@ public:
     std::string::size_type Size() const
     {
         return ToString().size();
+    }
+
+    bool Empty() const
+    {
+        return Size() == 0;
     }
 
 private:

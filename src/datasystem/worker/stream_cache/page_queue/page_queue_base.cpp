@@ -20,6 +20,7 @@
 
 #include <thread>
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 
 #include "datasystem/common/constants.h"
@@ -189,7 +190,7 @@ Status PageQueueBase::AllocMemory(size_t pageSize, bool bigElement, std::shared_
     return Status::OK();
 }
 
-Status PageQueueBase::AddPageToPool(const std::string &pageId, std::unique_ptr<ShmUnit> &&pageUnit, bool bigElement)
+Status PageQueueBase::AddPageToPool(const ShmKey &pageId, std::unique_ptr<ShmUnit> &&pageUnit, bool bigElement)
 {
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
     pageUnit->refCount = 1;  // The ref count is used in the case of BigElement page only.
@@ -494,7 +495,7 @@ Status PageQueueBase::ReleaseBigElementsUpTo(uint64_t cursor, std::shared_ptr<St
     // Pop (from the back) all those BigElement pages that are in still in use
     while (!bigId.empty()) {
         int32_t bigRefCount;
-        auto pageInfo = std::make_shared<ShmUnitInfo>("", bigId.back().second, nullptr);
+        auto pageInfo = std::make_shared<ShmUnitInfo>(ShmKey::Intern(""), bigId.back().second, nullptr);
         auto pageId = StreamPageBase::CreatePageId(pageInfo);
         RETURN_IF_NOT_OK(GetBigElementPageRefCount(pageId, bigRefCount));
         if (bigRefCount > 1) {
@@ -518,7 +519,7 @@ Status PageQueueBase::ReleaseBigElementsUpTo(uint64_t cursor, std::shared_ptr<St
     return Status::OK();
 }
 
-Status PageQueueBase::GetBigElementPageRefCount(const std::string &pageId, int32_t &refCount)
+Status PageQueueBase::GetBigElementPageRefCount(const ShmKey &pageId, int32_t &refCount)
 {
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
     ShmPagesMap::const_accessor accessor;
@@ -576,7 +577,7 @@ void PageQueueBase::DumpPoolPages(int level) const
     poolSize = shmPool_.size();
     auto now = std::chrono::steady_clock::now();
     for (auto &ele : shmPool_) {
-        const std::string &pageId = ele.first;
+        const auto &pageId = ele.first;
         auto &shmEleInfo = ele.second;
         if (shmEleInfo->bigElement) {
             ++numBigElements;
@@ -727,7 +728,7 @@ Status PageQueueBase::ReleaseMemory(const ShmView &pageView)
     auto bigElementPage = std::make_shared<StreamLobPage>(pageInfo, true);
     RETURN_IF_NOT_OK(bigElementPage->Init());
     LOG(INFO) << FormatString("[%s] Release big element page<%s>", LogPrefix(), bigElementPage->GetPageId());
-    std::vector<std::string> list;
+    std::vector<ShmKey> list;
     list.push_back(bigElementPage->GetPageId());
     return FreePages(list, true);
 }
@@ -783,7 +784,7 @@ void PageQueueBase::ForceUnlockMemViemForPages(uint32_t lockId)
 Status PageQueueBase::ProcessBigElementPages(std::vector<ShmView> &bigElementId, StreamMetaShm *streamMetaShm)
 {
     RETURN_OK_IF_TRUE(bigElementId.empty());
-    std::vector<std::string> freeList;
+    std::vector<ShmKey> freeList;
     auto func = [this, &freeList](const ShmView &v) {
         std::shared_ptr<ShmUnitInfo> shmInfo;
         RETURN_IF_NOT_OK(LocatePage(v, shmInfo));
@@ -802,7 +803,7 @@ Status PageQueueBase::ProcessBigElementPages(std::vector<ShmView> &bigElementId,
 
 Status PageQueueBase::LocatePage(const ShmView &v, std::shared_ptr<ShmUnitInfo> &out)
 {
-    auto pageInfo = std::make_shared<ShmUnitInfo>("", v, nullptr);
+    auto pageInfo = std::make_shared<ShmUnitInfo>(ShmKey::Intern(""), v, nullptr);
     auto pageId = StreamPageBase::CreatePageId(pageInfo);
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
     ShmPagesMap::accessor accessor;
@@ -886,7 +887,7 @@ Status PageQueueBase::ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> 
     return AppendFreePages(freeList);
 }
 
-Status PageQueueBase::FreePages(std::vector<std::string> &pages, bool bigElementPage, StreamMetaShm *streamMetaShm)
+Status PageQueueBase::FreePages(std::vector<ShmKey> &pages, bool bigElementPage, StreamMetaShm *streamMetaShm)
 {
     PerfPoint point(PerfKey::PAGE_RELEASE);
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
@@ -958,7 +959,7 @@ Status PageQueueBase::FreePendingList()
         if (std::chrono::duration_cast<std::chrono::seconds>(now - start).count() >= interval) {
             auto ele = std::move(pendingFreePages_.front());
             pendingFreePages_.pop_front();
-            std::vector<std::string> freePages;
+            std::vector<ShmKey> freePages;
             auto &list = std::get<K_FREE_LIST>(ele);
             std::transform(list.begin(), list.end(), std::back_inserter(freePages),
                            [](const auto &kv) { return kv->GetPageId(); });
@@ -1165,7 +1166,7 @@ Status PageQueueBase::SendElements(const std::shared_ptr<StreamDataPage> &page, 
     return Status::OK();
 }
 
-Status PageQueueBase::IncBigElementPageRefCount(const std::string &pageId)
+Status PageQueueBase::IncBigElementPageRefCount(const ShmKey &pageId)
 {
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
     ShmPagesMap::accessor accessor;
@@ -1196,7 +1197,7 @@ Status PageQueueBase::ExtractBigElement(DataElement &ele, std::shared_ptr<Stream
     return Status::OK();
 }
 
-Status PageQueueBase::DecBigElementPageRefCount(const std::string &pageId)
+Status PageQueueBase::DecBigElementPageRefCount(const ShmKey &pageId)
 {
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
     ShmPagesMap::accessor accessor;
@@ -1215,7 +1216,7 @@ Status PageQueueBase::DecBigElementPageRefCount(const std::string &pageId)
 
 Status PageQueueBase::UpdatePageRefIfExist(const ShmView &v, const std::string &logPrefix, const bool toggle)
 {
-    auto pageInfo = std::make_shared<ShmUnitInfo>("", v, nullptr);
+    auto pageInfo = std::make_shared<ShmUnitInfo>(ShmKey::Intern(""), v, nullptr);
     auto pageId = StreamPageBase::CreatePageId(pageInfo);
     ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
     ShmPagesMap::accessor accessor;

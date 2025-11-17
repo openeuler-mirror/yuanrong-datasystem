@@ -19,6 +19,7 @@
  */
 
 #include "datasystem/common/util/queue/shm_circular_queue.h"
+#include "datasystem/common/string_intern/string_ref.h"
 
 namespace datasystem {
 
@@ -291,7 +292,7 @@ void ShmCircularQueue::WriteUnlock()
     return queueLock_->UnWLatch();
 }
 
-Status ShmCircularQueue::GetQueueShmUnit(int &fd, uint64_t &mmapSize, ptrdiff_t &offset, std::string &id)
+Status ShmCircularQueue::GetQueueShmUnit(int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(circularQueueUnit_);
     fd = circularQueueUnit_->GetFd();

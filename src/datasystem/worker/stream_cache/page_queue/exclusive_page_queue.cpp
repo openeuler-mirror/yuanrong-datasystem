@@ -23,6 +23,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -301,7 +302,7 @@ Status ExclusivePageQueue::ReserveAdditionalMemory()
     // Check again after we have the lock.
     RETURN_OK_IF_TRUE(reserveState_.freeListCreated);
     std::list<PageShmUnit> freeList;
-    std::vector<std::string> undoList;
+    std::vector<ShmKey> undoList;
     bool needRollback = true;
     Raii raii([this, &needRollback, &undoList]() {
         if (needRollback) {
@@ -360,7 +361,7 @@ Status ExclusivePageQueue::InsertBigElement(void *buf, size_t sz, std::pair<size
     bool needRollback = true;
     auto raii = std::make_unique<Raii>([this, &needRollback, &pageUnitInfo]() {
         if (needRollback) {
-            std::vector<std::string> v;
+            std::vector<ShmKey> v;
             auto pageId = StreamPageBase::CreatePageId(pageUnitInfo);
             v.push_back(pageId);
             (void)FreePages(v, true);

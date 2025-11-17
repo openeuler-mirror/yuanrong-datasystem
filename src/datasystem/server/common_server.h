@@ -30,6 +30,7 @@
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 
 #ifdef WITH_TESTS
@@ -113,8 +114,7 @@ public:
      * @param[out] id The id of this shmUnit.
      * @return Status of the call.
      */
-    virtual Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset,
-                                   std::string &id) = 0;
+    virtual Status GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id) = 0;
 
     virtual Status GetExclConnSockPath(std::string &sockPath) = 0;
 

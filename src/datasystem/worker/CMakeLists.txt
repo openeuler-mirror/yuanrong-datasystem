@@ -29,6 +29,7 @@ set(WORKER_DEPEND_LIBS
         common_util
         common_metrics
         common_signal
+        string_ref
         ds_master
         ds_server
         httpclient

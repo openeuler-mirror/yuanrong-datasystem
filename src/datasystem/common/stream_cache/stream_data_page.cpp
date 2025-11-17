@@ -22,6 +22,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include "datasystem/common/string_intern/string_ref.h"
 #include "securec.h"
 
 #include "datasystem/common/util/raii.h"
@@ -262,9 +263,10 @@ Status DataVerificationHeader::ExtractHeader(DataElement &element, ElementHeader
     return Status::OK();
 }
 
-std::string StreamPageBase::CreatePageId(const std::shared_ptr<ShmUnitInfo> &shmInfo)
+ShmKey StreamPageBase::CreatePageId(const std::shared_ptr<ShmUnitInfo> &shmInfo)
 {
-    return FormatString("F:%zu-M:%zu-O:%zu-S:%zu", shmInfo->fd, shmInfo->mmapSize, shmInfo->offset, shmInfo->size);
+    return ShmKey::Intern(
+        FormatString("F:%zu-M:%zu-O:%zu-S:%zu", shmInfo->fd, shmInfo->mmapSize, shmInfo->offset, shmInfo->size));
 }
 
 StreamPageBase::StreamPageBase(std::shared_ptr<ShmUnitInfo> shmInfo)

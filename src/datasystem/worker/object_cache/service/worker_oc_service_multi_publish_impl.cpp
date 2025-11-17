@@ -25,6 +25,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -82,10 +83,10 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_info_size()),
                                          StatusCode::K_INVALID, "invalid object info size");
-    std::vector<std::string> shmUnits;
+    std::vector<ShmKey> shmUnits;
     for (const auto &info : req.object_info()) {
         if (!info.shm_id().empty()) {
-            shmUnits.emplace_back(info.shm_id());
+            shmUnits.emplace_back(ShmKey::Intern(info.shm_id()));
         }
     }
     RETURN_IF_NOT_OK(
@@ -276,7 +277,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                               GetMetadataSize(), *entries[i]);
         }
 
-        lastRc = AttachShmUnitToObject(shmEnabled, objectKeys[i], req.object_info(i).shm_id(),
+        lastRc = AttachShmUnitToObject(shmEnabled, objectKeys[i], ShmKey::Intern(req.object_info(i).shm_id()),
                                        req.object_info(i).data_size(), *entries[i]);
         if (lastRc.IsError()) {
             LOG(ERROR) << "objKey: " << objectKeys[i] << " AttachShmUnitToObject failed, status: " << lastRc.ToString();
@@ -335,7 +336,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
                               static_cast<CacheType>(req.cache_type()), req.object_info(i).data_size(),
                               GetMetadataSize(), *entries[i]);
         }
-        RETURN_IF_NOT_OK(AttachShmUnitToObject(shmEnabled, objectKeys[i], req.object_info(i).shm_id(),
+        RETURN_IF_NOT_OK(AttachShmUnitToObject(shmEnabled, objectKeys[i],
+                                               ShmKey::Intern(req.object_info(i).shm_id()),
                                                req.object_info(i).data_size(), *entries[i]));
         // Small object use payload to transfer the value, the object and RpcMessage is one-to-one.
         if (req.object_info(i).shm_id().empty()) {

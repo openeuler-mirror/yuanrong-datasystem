@@ -24,6 +24,7 @@
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/stream_cache/cursor.h"
 #include "datasystem/common/stream_cache/stream_meta_shm.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/bitmask_enum.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/stream/element.h"
@@ -199,13 +200,13 @@ public:
         return pageUnit_->GetSize();
     }
 
-    static std::string CreatePageId(const std::shared_ptr<ShmUnitInfo> &pageUnit);
+    static ShmKey CreatePageId(const std::shared_ptr<ShmUnitInfo> &pageUnit);
 
     /**
      * @brief Return the page id
      * @return
      */
-    std::string GetPageId() const
+    ShmKey GetPageId() const
     {
         return pageUnit_->GetId();
     }

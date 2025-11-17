@@ -28,6 +28,7 @@
 #include <unordered_set>
 
 #include "datasystem/common/shared_memory/shm_unit.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
@@ -98,16 +99,18 @@ public:
 
     /**
      * @brief Check one object whether be referred by client.
-     * @param[in] uuid Shared memory unit id of object.
+     * @param[in] shmId Shared memory unit id of object.
      * @return True if contains uuid.
      */
-    bool Contains(const std::string &uuid) const;
+    bool Contains(const ShmKey &shmId) const;
 
+#ifdef WITH_TESTS
     /**
      * @brief Get all share memory unit ids referred by client.
      * @param[out] shmUnitIds Shared memory unit id of objects.
      */
-    void GetShmUnitIds(std::unordered_map<std::string, uint32_t> &shmUnitIds);
+    void GetShmUnitIds(std::unordered_map<ShmKey, uint32_t> &shmUnitIds);
+#endif
 
     /**
      * @brief Add the reader session id used by the client.
@@ -249,7 +252,7 @@ private:
     Timer lastHeartbeat_;                          // Time received the last heartbeat.
     std::atomic<HeartbeatType> heartbeatType_{ HeartbeatType::NO_HEARTBEAT };
     std::unordered_set<int> fds_;
-    std::unordered_map<std::string, uint32_t> shmUnitIds_;
+    std::unordered_map<ShmKey, uint32_t> shmUnitIds_;
     std::unordered_set<std::string> readerSessionTable_;  // session id of readers
     std::unordered_set<std::string> writerSessionTable_;  // session id of writers
     std::string tenantId_;

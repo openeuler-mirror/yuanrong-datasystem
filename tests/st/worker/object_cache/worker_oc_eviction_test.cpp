@@ -290,7 +290,7 @@ public:
         if (clientApi->IsV2Client()) {
             RETURN_IF_NOT_OK(clientApi->ReceivePayload(dest, size));
         } else {
-            shmUnit->id = GetStringUuid();
+            shmUnit->id = ShmKey::Intern(GetStringUuid());
 
             RETURN_IF_NOT_OK(clientApi->ReceivePayload(payloads));
             size_t payloadLen = 0;

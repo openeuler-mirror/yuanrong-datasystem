@@ -30,6 +30,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/urma_manager_wrapper.h"
@@ -766,7 +767,7 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadOb
             RETURN_IF_NOT_OK(
                 AllocateMemoryForObject(objectKey, dataSize, metaSz, populate, evictionManager_, *shmUnit));
         }
-        shmUnit->id = GetStringUuid();
+        shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
         shmUnitAllocated = true;
     }
@@ -965,7 +966,7 @@ Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
         auto shmUnit = std::make_shared<ShmUnit>();
         RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, completeDataSize, metaSz, false, evictionManager_, *shmUnit,
                                                  entry->modeInfo.GetCacheType()));
-        shmUnit->id = GetStringUuid();
+        shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }
 

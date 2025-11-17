@@ -23,6 +23,7 @@
 
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
@@ -59,7 +60,8 @@ Status WorkerDeviceOcManager::PublishDeviceObject(const std::string &devObjectKe
         devObj->stateInfo.SetDataFormat(DataFormat::HETERO);
         entry->SetRealObject(std::move(devObj));
         workerOcImpl_->publishProc_->AttachShmUnitToObject(WorkerOcServiceCreateImpl::ClientShmEnabled(req.client_id()),
-                                                           req.dev_object_key(), req.shm_id(), req.data_size(), *entry);
+                                                           req.dev_object_key(), ShmKey::Intern(req.shm_id()),
+                                                           req.data_size(), *entry);
     } else {
         CHECK_FAIL_RETURN_STATUS(!(*entry)->IsHetero(), K_INVALID,
                                  "The key you publish already exists, which is not published as a device object");

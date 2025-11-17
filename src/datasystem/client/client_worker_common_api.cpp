@@ -38,6 +38,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/format.h"
@@ -306,7 +307,7 @@ void ClientWorkerCommonApi::ConstructDecShmUnit(const RegisterClientRspPb &rsp)
         decShmUnit_->fd = rsp.store_fd();
         decShmUnit_->mmapSize = rsp.mmap_size();
         decShmUnit_->offset = static_cast<ptrdiff_t>(rsp.offset());
-        decShmUnit_->id = rsp.shm_id();
+        decShmUnit_->id = ShmKey::Intern(rsp.shm_id());
     }
 }
 

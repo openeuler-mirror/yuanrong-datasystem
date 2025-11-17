@@ -26,6 +26,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -90,7 +91,8 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, Ob
 
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
 
-    return AttachShmUnitToObject(ClientShmEnabled(req.client_id()), objectKey, req.shm_id(), req.data_size(), safeObj);
+    return AttachShmUnitToObject(ClientShmEnabled(req.client_id()), objectKey, ShmKey::Intern(req.shm_id()),
+                                 req.data_size(), safeObj);
 }
 
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
@@ -344,7 +346,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     LOG(INFO) << FormatString("[ObjectKey %s] is being publishing [Sz: %zu].", req.object_key(), req.data_size());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    std::vector<std::string> shmUnits = { req.shm_id() };
+    std::vector<ShmKey> shmUnits = { ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, req.client_id(), shmUnits, memoryRefTable_));
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key());
