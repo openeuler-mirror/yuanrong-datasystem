@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 
+#include "client/kv_cache/kv_client_common.h"
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/common/util/hash_algorithm.h"
@@ -45,33 +46,8 @@ namespace st {
 constexpr int SCALE_UP_ADD_TIME = 3;
 constexpr int SCALE_DOWN_ADD_TIME = 5;
 constexpr int WORKER_RECEIVE_DELAY = 1;
-class KVClientScaleCommon : virtual public OCClientCommon {
+class KVClientScaleCommon : virtual public OCClientCommon, public KVClientCommon {
 public:
-    void InitTestEtcdInstance(std::vector<std::string> otherAzNames = {})
-    {
-        if (db_ != nullptr) {
-            return;
-        }
-        std::string etcdAddress;
-        for (size_t i = 0; i < cluster_->GetEtcdNum(); ++i) {
-            std::pair<HostPort, HostPort> addrs;
-            cluster_->GetEtcdAddrs(i, addrs);
-            if (!etcdAddress.empty()) {
-                etcdAddress += ",";
-            }
-            etcdAddress += addrs.first.ToString();
-        }
-        FLAGS_etcd_address = etcdAddress;
-        db_ = std::make_unique<EtcdStore>(etcdAddress);
-        DS_ASSERT_OK(db_->Init());
-        (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
-        (void)db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE));
-        for (const auto &otherAzName : otherAzNames) {
-            auto otherAzRingStr = "/" + otherAzName + ETCD_RING_PREFIX;
-            (void)db_->CreateTable(otherAzRingStr, otherAzRingStr);
-        }
-    }
-
     void AssertAllNodesJoinIntoHashRing(int num)
     {
         if (!db_) {
@@ -190,7 +166,6 @@ public:
     }
 
 protected:
-    std::unique_ptr<EtcdStore> db_;
     const static uint64_t shutdownTimeoutMs = 60'000;  // 1min
 };
 

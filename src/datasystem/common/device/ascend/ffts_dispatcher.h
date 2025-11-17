@@ -127,7 +127,6 @@ private:
 
     HcclFftsContextsInfo *fftsCtxsPtr_;
     std::vector<HcclFftsContextsInfo *> fftsCtxs_;
-    std::vector<void *> argsHandleList_;
     int32_t devLogID_;
     int64_t chipId_;
     acl::AclDeviceManager *aclDeviceManager_;

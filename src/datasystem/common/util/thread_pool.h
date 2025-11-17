@@ -260,4 +260,109 @@ inline bool IsThreadFinished(std::shared_future<R> const &f, const int &timeout)
     return f.wait_for(std::chrono::seconds(timeout)) == std::future_status::ready;
 }
 }  // namespace datasystem
+
+class OrderedThreadPool {
+public:
+    explicit OrderedThreadPool(size_t threadCount)
+        : taskQueues_(threadCount), queueMutexes_(threadCount), conditionVars_(threadCount), threadCount_(threadCount)
+    {
+        for (size_t i = 0; i < threadCount_; ++i) {
+            workers_.emplace_back([this, i] { Run(i); });
+        }
+    }
+
+    void Run(size_t index)
+    {
+        while (true) {
+            std::shared_ptr<Task> task;
+            {
+                std::unique_lock<std::mutex> lock(queueMutexes_[index]);
+                conditionVars_[index].wait(lock, [this, index] { return stop_.load() || !taskQueues_[index].empty(); });
+
+                if (stop_.load() && taskQueues_[index].empty()) {
+                    return;
+                }
+
+                task = taskQueues_[index].front();
+                taskQueues_[index].pop();
+            }
+
+            try {
+                task->func();
+                task->promise.set_value();
+            } catch (...) {
+                task->promise.set_exception(std::current_exception());
+            }
+        }
+    }
+
+    ~OrderedThreadPool()
+    {
+        stop_.store(true);
+        for (auto &cv : conditionVars_) {
+            cv.notify_all();
+        }
+        for (auto &worker : workers_) {
+            worker.join();
+        }
+    }
+
+    std::future<void> Submit(const std::string &key, std::function<void()> func)
+    {
+        size_t index = GetQueueIndex(key);
+        auto task = std::make_shared<Task>(std::move(func), key);
+        auto future = task->promise.get_future();
+
+        {
+            std::lock_guard<std::mutex> lock(queueMutexes_[index]);
+            taskQueues_[index].push(task);
+        }
+        conditionVars_[index].notify_one();
+
+        return future;
+    }
+
+    /**
+     * @brief Check whether some async tasks in the list.
+     * @return True if all of async list is empty.
+     */
+    bool AreAllQueuesEmpty()
+    {
+        for (size_t i = 0; i < threadCount_; ++i) {
+            std::lock_guard<std::mutex> lock(queueMutexes_[i]);
+            if (!taskQueues_[i].empty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    struct Task {
+        std::function<void()> func;
+        std::promise<void> promise;
+        std::string key;
+
+        Task(std::function<void()> f, const std::string &k) : func(std::move(f)), key(k)
+        {
+        }
+    };
+
+    std::vector<std::queue<std::shared_ptr<Task>>> taskQueues_;
+    std::vector<std::mutex> queueMutexes_;
+    std::vector<std::condition_variable> conditionVars_;
+    std::vector<std::thread> workers_;
+    std::atomic<bool> stop_{ false };
+    size_t threadCount_;
+
+    /**
+     * @brief Calculate a index of list according to key.
+     * @param[in] key The Id of the object need to be calculated.
+     * @return Index of list.
+     */
+    size_t GetQueueIndex(const std::string &key)
+    {
+        return std::hash<std::string>{}(key) % threadCount_;
+    }
+};
 #endif  // DATASYSTEM_COMMON_UTIL_THREAD_POOL_H

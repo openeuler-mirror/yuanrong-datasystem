@@ -435,9 +435,13 @@ void HashRing::GenerateVoluntaryScaleDownChangingInfo()
                 allocator.RemoveNodeVoluntarily(workerId, standbyWorker, hashFunction_(worker.worker_uuid()),
                                                 allScaleDownWorkers, oldRing),
                 "RemoveNodeVoluntarily failed");
+            if (workerId == workerAddr_) {
+                // If the voluntary scale down node is not the current node, there is no need to clean up
+                // VoluntaryTaskId and re-execute the migration data task.
+                taskExecutor_->ClearVoluntaryTaskId();
+            }
         }
         newValue = std::make_unique<std::string>(oldRing.SerializeAsString());
-        taskExecutor_->ClearVoluntaryTaskId();
         return Status::OK();
     };
     HASH_RING_LOG_IF_ERROR(etcdStore_->CAS(ETCD_RING_PREFIX, "", funcHandler), " generate voluntary info failed");

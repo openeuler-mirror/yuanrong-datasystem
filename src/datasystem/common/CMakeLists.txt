@@ -12,11 +12,11 @@ add_subdirectory(httpclient)
 add_subdirectory(iam)
 add_subdirectory(encrypt)
 add_subdirectory(immutable_string)
+add_subdirectory(string_intern)
 add_subdirectory(object_cache)
 add_subdirectory(device)
+add_subdirectory(stream_cache)
 add_subdirectory(l2cache)
 add_subdirectory(flags)
 add_subdirectory(signal)
 add_subdirectory(rdma)
-
-

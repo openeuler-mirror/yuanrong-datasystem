@@ -24,3 +24,6 @@ include_directories(${URMA_INCLUDE_DIR}/common)
 
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-field-initializers -Wno-unused-parameter")
 add_definitions(-DUSE_URMA)
+if (URMA_OVER_UB)
+    add_definitions(-DURMA_OVER_UB)
+endif()

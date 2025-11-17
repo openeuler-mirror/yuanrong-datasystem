@@ -327,6 +327,7 @@ TEST_F(LogMessageTest, AllCheckMacrosPassWhenConditionTrue)
     const char *first_string = "apple";
     const char *second_string = "banana";
     CHECK_STRNE(first_string, second_string);
+    ASSERT_STREQ(SafeStringOutput(nullptr), "(null)");
 }
 
 using LogMessageDeathTest = LogMessageTest;

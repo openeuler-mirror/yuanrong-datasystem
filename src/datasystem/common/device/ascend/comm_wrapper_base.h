@@ -35,16 +35,6 @@ enum class HcclCommState { UNCREATE, CREATING, VALID, INVALID, DESTROY };
 enum class HcclCommDirection { SEND, RECV };
 constexpr int WARM_UP_DATA_COUNT = 1;
 
-/**
- * @brief Return the data info string.
- * @param[in] info The DataInfo object.
- * @return The format string of the data info.
- */
-inline std::string DataInfoToString(const DataInfo &info)
-{
-    return FormatString("Data info: dataType [%d], count [%llu]", static_cast<int>(info.dataType), info.count);
-}
-
 class CommWrapperBase : public AclPointerWrapper {
 public:
     explicit CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
@@ -63,6 +53,34 @@ public:
     }
 
     /**
+     * @brief Checks if the communicator is ready for collective operations.
+     * @return true if communicator is initialized and ready, false otherwise.
+     */
+    bool IsCommReady() const;
+
+    /**
+     * @brief Sets the communicator ready state and triggers ready callbacks when becoming ready.
+     * @param ready The new ready state to set.
+     * @note If transitioning from not-ready to ready state, all registered ready callbacks will be executed.
+     */
+    void SetCommReady(bool ready);
+
+    /**
+     * @brief Executes all registered ready callbacks in a thread-safe manner.
+     * @note Callbacks are moved to a local vector to minimize lock holding time.
+     *       This ensures callbacks execute without holding the mutex.
+     */
+    void ExecuteReadyCallbacks();
+
+    /**
+     * @brief Adds a callback to be executed when communicator becomes ready.
+     * @param callback The callback function to register.
+     * @note If communicator is already ready, the callback is executed immediately.
+     *       Otherwise, it's queued for execution when SetCommReady(true) is called.
+     */
+    void AddReadyCallback(std::function<void()> callback);
+
+    /**
      * @brief Get AclrtStream
      * @return The AclrtStream
      */
@@ -78,7 +96,7 @@ public:
      * @brief Get the status of hcclcomm.
      * @return The status of hcclcomm.
      */
-    HcclResult GetDetailStatus() const;
+    Status GetDetailStatus() const;
 
     /**
      * @brief Get the lifetime state of hcclcomm.
@@ -100,9 +118,9 @@ public:
 
     /**
      * @brief Sets the specific fault cause.
-     * @param[in] result Value of HcclResult
+     * @param[in] result The status of Hccl invocation
      */
-    void SetHcclDetailState(HcclResult result);
+    void SetHcclDetailState(Status result);
 
     /**
      * @brief Check HcclComm health.
@@ -124,30 +142,29 @@ public:
 
     /**
      * @brief P2P send the data to the receiving side.
-     * @param[in] dataInfos[in] The list of the data info.
+     * @param[in] blobs[in] The list of the blob info.
      * @param[in] comm[in] The hccl communicator.
      * @param[in] stream[in] The stream of acl context.
      * @return Status of the call
      */
-    virtual Status P2PSend(const std::vector<DataInfo> &dataInfos, const std::shared_ptr<AclRtEventWrapper> &event,
+    virtual Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
                            aclrtStream stream) = 0;
 
     /**
      * @brief P2P recv the data from the sending side.
-     * @param[in] dataInfos The list of the data info.
+     * @param[in] blobs The list of the blob info.
      * @param[in] comm The hccl communicator.
      * @param[in] stream The stream of acl context.
      * @return Status of the call
      */
-    virtual Status P2PRecv(const std::vector<DataInfo> &dataInfos, const std::shared_ptr<AclRtEventWrapper> &event,
+    virtual Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
                            aclrtStream stream) = 0;
 
     /**
      * @brief Queries whether an error occurs in the communication domain.
-     * @return If the result is 0, no error occurs in the communication domain. For details about other return values,
-     * see HcclResult Type.
+     * @return The status of Hccl invocation
      */
-    virtual HcclResult HcclGetCommAsyncError() = 0;
+    virtual Status HcclGetCommAsyncError() = 0;
 
     /**
      * @brief Init hccl communicator.
@@ -187,6 +204,17 @@ public:
     Status SubmitPipelineTask(acl::P2PRecvTask task);
 
 private:
+    /**
+     * @brief Check if the communication pointer is valid and return corresponding error status if null.
+     * @param[in] pointer The communication pointer to be checked (sender_ or receiver_).
+     * @param[in] pointerName The name of the pointer for error message identification.
+     * @return Status::OK() if pointer is valid, otherwise returns error status with detailed message.
+     * @note This function is used to validate HCCL communication pointers that should be initialized
+     *       during communication domain creation. A null pointer typically indicates HCCL communication
+     *       domain creation failure.
+     */
+    Status CheckTranPointer(const void *pointer, const std::string &pointerName);
+
     acl::AclDeviceManager *aclImpl_;
     AclResourceManager *aclResourceMgr_;
     std::shared_ptr<acl::TwoPhaseAclPipeLineResource> resource_;
@@ -198,11 +226,17 @@ private:
     std::shared_ptr<ThreadPool> pool_;
     std::chrono::steady_clock::time_point commConnectTimestamp_;
     std::atomic<HcclCommState> hcclCommState_;
-    HcclResult hcclDetailState_ = HcclResult::HCCL_E_RESERVED;
+    Status hcclDetailState_;
+    mutable std::mutex hcclDetailStateMutex_; // protect hcclDetailState_
     std::shared_ptr<HcclCommMagr> hcclThreadControl_;
     int bindThreadId_;
     std::mutex mutex_;
     bool hasShutDown_ = false;
+
+    std::atomic<bool> commReady_{false};                 // Atomic flag indicating communication domain readiness
+    std::mutex stateMutex_;                              // Mutex protecting callback queue and execution state
+    std::vector<std::function<void()>> readyCallbacks_;  // Queue of callbacks waiting for communication readiness
+    bool executingCallbacks_ = false;                    // Flag indicating if callbacks are currently being executed
 
     friend class HcclCommWrapper;
     friend class P2PHcclCommWrapper;

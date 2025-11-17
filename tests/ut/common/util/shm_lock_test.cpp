@@ -20,130 +20,13 @@
 #include "common.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/stream_cache/cursor.h"
 #include "datasystem/common/util/safe_shm_lock.h"
-#include "datasystem/common/util/timer.h"
 #include "datasystem/utils/status.h"
 #include "securec.h"
 
 namespace datasystem {
 namespace ut {
-
-class SharedMemViewLock {
-public:
-    explicit SharedMemViewLock(uint32_t *lockWord);
-    Status LockExclusiveAndExec(const std::function<void()> &writeFunc, uint64_t timeoutMs);
-    Status LockSharedAndExec(const std::function<void()> &readFunc, uint64_t timeoutMs);
-
-private:
-    uint32_t *lockWord_;
-    constexpr static const uint32_t WRITER = 1;
-    constexpr static const uint32_t READER = 2;
-    constexpr static const int TIMEOUT_WARNING_LIMIT_MS = 3000;
-};
-
-SharedMemViewLock::SharedMemViewLock(uint32_t *lockWord) : lockWord_(lockWord)
-{
-}
-
-Status SharedMemViewLock::LockExclusiveAndExec(const std::function<void()> &writeFunc, uint64_t timeoutMs)
-{
-    Timer timer;
-    bool isFirstTimeout = false;
-    Status rc;
-    do {
-        uint32_t val = __atomic_load_n(lockWord_, __ATOMIC_ACQUIRE);
-        uint32_t expected = val & ~WRITER;
-        if (!__atomic_compare_exchange_n(lockWord_, &expected, val | WRITER, true, __ATOMIC_ACQUIRE,
-                                         __ATOMIC_RELAXED)) {
-            if (timer.ElapsedMilliSecond() > TIMEOUT_WARNING_LIMIT_MS && !isFirstTimeout) {
-                isFirstTimeout = true;
-                LOG(WARNING) << "Fetching a write-lock on shared memory takes more than " << TIMEOUT_WARNING_LIMIT_MS
-                             << " ms, waiting for writer to release the lock.";
-            }
-            // If timeout send an error
-            CHECK_FAIL_RETURN_STATUS(timer.ElapsedMilliSecond() < timeoutMs, K_TRY_AGAIN,
-                                     FormatString("[%s:%s] Timeout after %zu ms", __FUNCTION__, __LINE__, timeoutMs));
-            continue;
-        }
-        // Write bit has been set, we must unset the writer bit before going out of scope.
-        while (val & ~WRITER) {
-            // Wait for all readers to go away
-            val = __atomic_load_n(lockWord_, __ATOMIC_ACQUIRE);
-            if (timer.ElapsedMilliSecond() > TIMEOUT_WARNING_LIMIT_MS && !isFirstTimeout) {
-                isFirstTimeout = true;
-                LOG(WARNING) << "Fetching a write-lock on shared memory takes more than " << TIMEOUT_WARNING_LIMIT_MS
-                             << " ms, waiting for readers to release the lock.";
-            }
-            // If timeout send an error
-            if (timer.ElapsedMilliSecond() >= timeoutMs) {
-                // Unset the writer bit before returning error.
-                __atomic_fetch_sub(lockWord_, WRITER, __ATOMIC_RELEASE);
-                RETURN_STATUS(K_TRY_AGAIN,
-                              FormatString("[%s:%s] Timeout after %zu ms", __FUNCTION__, __LINE__, timeoutMs));
-            }
-        }
-        // cache exception to avoid the lock not released.
-        try {
-            // Execute the user function after we get the lock in X
-            writeFunc();
-        } catch (const std::exception &e) {
-            auto msg = FormatString("Exception when execute writeFunc get: %s", e.what());
-            rc = Status(K_RUNTIME_ERROR, msg);
-        }
-        __atomic_fetch_sub(lockWord_, WRITER, __ATOMIC_RELEASE);
-        if (isFirstTimeout) {
-            LOG(WARNING) << "Fetching a write-lock on shared memory takes " << timer.ElapsedMilliSecond() << " ms";
-        }
-        if (rc.IsError()) {
-            LOG(ERROR) << rc.GetMsg();
-        }
-        return rc;
-    } while (true);
-}
-
-Status SharedMemViewLock::LockSharedAndExec(const std::function<void()> &readFunc, uint64_t timeoutMs)
-{
-    Timer timer;
-    bool isFirstTimeout = false;
-    Status rc;
-    do {
-        while (__atomic_load_n(lockWord_, __ATOMIC_ACQUIRE) & WRITER) {
-            // Block on writer
-            if (timer.ElapsedMilliSecond() > TIMEOUT_WARNING_LIMIT_MS && !isFirstTimeout) {
-                isFirstTimeout = true;
-                LOG(WARNING) << "Fetching a read-lock on shared memory takes more than " << TIMEOUT_WARNING_LIMIT_MS
-                             << " ms, waiting for writer to release the lock";
-            }
-
-            // If timeout send an error
-            CHECK_FAIL_RETURN_STATUS(timer.ElapsedMilliSecond() < timeoutMs, K_TRY_AGAIN,
-                                     FormatString("[%s:%s] Timeout after %zu ms", __FUNCTION__, __LINE__, timeoutMs));
-        }
-        if ((__atomic_add_fetch(lockWord_, READER, __ATOMIC_ACQUIRE) & WRITER) == 0) {
-            // cache exception to avoid the lock not released.
-            try {
-                // Execute user function after we get the lock in shared mode
-                readFunc();
-            } catch (const std::exception &e) {
-                auto msg = FormatString("Exception when execute readFunc get: %s", e.what());
-                rc = Status(K_RUNTIME_ERROR, msg);
-            }
-
-            __atomic_fetch_sub(lockWord_, READER, __ATOMIC_RELEASE);
-            if (isFirstTimeout) {
-                LOG(WARNING) << "Fetching a read-lock on shared memory takes " << timer.ElapsedMilliSecond() << " ms";
-            }
-            if (rc.IsError()) {
-                LOG(ERROR) << rc.GetMsg();
-            }
-            return rc;
-        }
-        __atomic_fetch_sub(lockWord_, READER, __ATOMIC_RELEASE);  // A writer beats us. retry again
-        // If timeout send an error
-        CHECK_FAIL_RETURN_STATUS(timer.ElapsedMilliSecond() < timeoutMs, K_TRY_AGAIN,
-                                 FormatString("[%s:%s] Timeout after %zu ms", __FUNCTION__, __LINE__, timeoutMs));
-    } while (true);
-}
 
 class ShmLockTest : public CommonTest {
 protected:

@@ -422,6 +422,7 @@ protected:
     std::shared_timed_mutex standbyWorkerMutex_;
     std::unordered_set<HostPort> standbyWorkerAddrs_;
     bool isUseStandbyWorker_ = false;
+    uint32_t pageSize_{ 0 };  // The page size used when reading files.
     HostPort masterAddress_;
     std::string clientId_;
     std::string workerStartId_;  // To judge whether the worker is restarted.

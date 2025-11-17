@@ -64,12 +64,16 @@ Status ObjectClient::Create(const std::string &objectKey, uint64_t size, const C
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_CREATE);
-    Status rc = impl_->Create(objectKey, size, param, buffer);
+    object_cache::FullParam innerParam;
+    innerParam.writeMode = WriteMode::NONE_L2_CACHE;
+    innerParam.consistencyType = param.consistencyType;
+    innerParam.cacheType = param.cacheType;
+    Status rc = impl_->Create(objectKey, size, innerParam, buffer);
     RequestParam reqParam;
     reqParam.objectKey = objectKey.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
-    reqParam.consistencyType = std::to_string(static_cast<int>(param.consistencyType));
-    reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
+    reqParam.writeMode = std::to_string(static_cast<int>(innerParam.writeMode));
+    reqParam.consistencyType = std::to_string(static_cast<int>(innerParam.consistencyType));
+    reqParam.cacheType = std::to_string(static_cast<int>(innerParam.cacheType));
     accessPoint.Record(rc.GetCode(), std::to_string(size), reqParam, rc.GetMsg());
     return rc;
 }
@@ -127,12 +131,16 @@ Status ObjectClient::Put(const std::string &objectKey, const uint8_t *data, uint
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_PUT);
-    Status rc = impl_->Put(objectKey, data, size, param, nestedObjectKeys);
+    object_cache::FullParam innerParam;
+    innerParam.writeMode = WriteMode::NONE_L2_CACHE;
+    innerParam.consistencyType = param.consistencyType;
+    innerParam.cacheType = param.cacheType;
+    Status rc = impl_->Put(objectKey, data, size, innerParam, nestedObjectKeys);
     RequestParam reqParam;
     reqParam.objectKey = objectKey.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
-    reqParam.consistencyType = std::to_string(static_cast<int>(param.consistencyType));
-    reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
+    reqParam.writeMode = std::to_string(static_cast<int>(innerParam.writeMode));
+    reqParam.consistencyType = std::to_string(static_cast<int>(innerParam.consistencyType));
+    reqParam.cacheType = std::to_string(static_cast<int>(innerParam.cacheType));
     accessPoint.Record(rc.GetCode(), std::to_string(size), reqParam, rc.GetMsg());
     return rc;
 }

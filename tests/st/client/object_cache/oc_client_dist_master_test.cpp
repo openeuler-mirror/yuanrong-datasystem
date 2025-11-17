@@ -775,7 +775,7 @@ TEST_F(OCClientDistMasterTest, LEVEL1_AsyncDeleteNestedInOtherMaster)
     std::string objectKey3 = GenRandomString();
 
     std::string value1 = GenRandomString();
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     uint64_t timeout = 4;
     // GIncr objectKey1/objectKey2/objectKey3, put
     DS_ASSERT_OK(client1->GIncreaseRef({ objectKey1 }, failObjects));

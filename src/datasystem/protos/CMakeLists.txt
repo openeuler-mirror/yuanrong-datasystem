@@ -106,20 +106,22 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
 
 # Compile the proto file at the first layer, for example, object_posix.proto.
 GENERATE_ZMQ_CPP(zmq_proto_lib_depend OBJECT_POSIX_SRCS OBJECT_POSIX_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/object_posix.proto)
+GENERATE_ZMQ_CPP(zmq_proto_lib_depend STREAM_POSIX_SRCS STREAM_POSIX_ZMQ_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/stream_posix.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME posix_protos
-        SOURCE ${OBJECT_POSIX_SRCS}
+        SOURCE ${OBJECT_POSIX_SRCS} ${STREAM_POSIX_SRCS}
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos utils_protos p2p_subscribe_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME posix_protos_client
-        SOURCE ${OBJECT_POSIX_SRCS}
+        SOURCE ${OBJECT_POSIX_SRCS} ${STREAM_POSIX_SRCS}
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client utils_protos_client p2p_subscribe_protos_client)
 
 # Compile the proto file at the second layer, for example, posix proto.
 GENERATE_ZMQ_CPP(zmq_proto_lib_depend WORKER_OBJECT_SRCS WORKER_OBJECT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/worker_object.proto)
+GENERATE_ZMQ_CPP(zmq_proto_lib_depend WORKER_STREAM_SRCS WORKER_STREAM_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/worker_stream.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_object_protos
@@ -132,8 +134,20 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client hash_ring_protos_client)
 
-# Compile the proto file at the third layer, for example, master_object.proto
+GEN_GLOBAL_PROTO_LIB_DEPEND(
+        NAME worker_stream_protos
+        SOURCE ${WORKER_STREAM_SRCS}
+        DEPEND zmq_proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos utils_protos posix_protos)
+GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+        NAME worker_stream_protos_client
+        SOURCE ${WORKER_STREAM_SRCS}
+        DEPEND zmq_proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client utils_protos_client posix_protos_client)
+
+# Compile the proto file at the third layer, for example, master_object.proto, master_stream.proto
 GENERATE_ZMQ_CPP(zmq_proto_lib_depend MASTER_OBJECT_SRCS MASTER_OBJECT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/master_object.proto)
+GENERATE_ZMQ_CPP(zmq_proto_lib_depend MASTER_STREAM_SRCS MASTER_STREAM_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/master_stream.proto)
 GENERATE_ZMQ_CPP(zmq_proto_lib_depend MASTER_HEARTBEAT_SRCS MASTER_HEARTBEAT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/master_heartbeat.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
@@ -146,6 +160,17 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         SOURCE ${MASTER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} posix_protos_client worker_object_protos_client)
+
+GEN_GLOBAL_PROTO_LIB_DEPEND(
+        NAME master_stream_protos
+        SOURCE ${MASTER_STREAM_SRCS}
+        DEPEND zmq_proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES} worker_stream_protos utils_protos posix_protos)
+GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+        NAME master_stream_protos_client
+        SOURCE ${MASTER_STREAM_SRCS}
+        DEPEND zmq_proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES} worker_stream_protos_client utils_protos_client posix_protos_client)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME master_heartbeat_protos
@@ -176,7 +201,6 @@ if (WITH_TESTS)
     set_target_properties(common_rpc_zmq_demo PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
     GENERATE_ZMQ_CPP(zmq_proto_lib_depend UNIT_TEST_SRCS UNIT_TEST_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/ut_object.proto)
     add_library(ut_object_protos STATIC ${UNIT_TEST_SRCS})
-    target_link_libraries(ut_object_protos common_rpc_zmq)
     add_dependencies(ut_object_protos zmq_proto_lib_depend)
     set_target_properties(ut_object_protos PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
 endif()

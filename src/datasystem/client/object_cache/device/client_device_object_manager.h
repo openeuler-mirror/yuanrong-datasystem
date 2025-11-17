@@ -31,6 +31,7 @@
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/hetero/device_common.h"
 #include "datasystem/object_client.h"
 #include "datasystem/utils/status.h"
 
@@ -83,20 +84,20 @@ struct DeviceBatchCopyHelper {
         return (address & alignmentMask) == 0;
     }
 
-    Status Prepare(const std::vector<std::vector<DataInfo>> &dataInfoList, std::vector<Buffer *> &bufferList,
+    Status Prepare(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
                    aclrtMemcpyKind copyKind)
     {
         std::vector<void *> hostPointerList;
         std::vector<void *> devPointerList;
         std::vector<BufferView> hostBuffers;
         std::vector<BufferView> deviceBuffers;
-        hostBuffers.reserve(dataInfoList.size());
-        deviceBuffers.reserve(dataInfoList.size());
-        CHECK_FAIL_RETURN_STATUS(!dataInfoList.empty(), K_INVALID, "The dataInfoList is empty.");
+        hostBuffers.reserve(devBlobList.size());
+        deviceBuffers.reserve(devBlobList.size());
+        CHECK_FAIL_RETURN_STATUS(!devBlobList.empty(), K_INVALID, "The devBlobList is empty.");
         CHECK_FAIL_RETURN_STATUS(!bufferList.empty(), K_INVALID, "The bufferList is empty.");
         size_t keyStartInBlobs = 0;
-        for (size_t i = 0; i < dataInfoList.size(); i++) {
-            auto &dataInfos = dataInfoList[i];
+        for (size_t i = 0; i < devBlobList.size(); i++) {
+            auto &blobs = devBlobList[i].blobs;
             if (bufferList[i] == nullptr) {
                 continue;
             }
@@ -106,18 +107,18 @@ struct DeviceBatchCopyHelper {
             auto sz = *offsetArrPtr;
             auto offsets = offsetArrPtr + 1;
             CHECK_FAIL_RETURN_STATUS(
-                sz == dataInfos.size() && sz > 0, K_INVALID,
+                sz == blobs.size() && sz > 0, K_INVALID,
                 FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
                              "receiver count is: %ld, mismatch devBlobList index: %s, mismatch key index: %s",
-                             sz, dataInfos.size(), i, i));
+                             sz, blobs.size(), i, i));
             size_t dataSize = buffer->GetSize() - offsets[0];
             bufferMetas.emplace_back(
-                BufferMetaInfo{ .blobCount = dataInfos.size(), .firstBlobOffset = keyStartInBlobs, .size = dataSize });
+                BufferMetaInfo{ .blobCount = blobs.size(), .firstBlobOffset = keyStartInBlobs, .size = dataSize });
             hostBuffers.emplace_back(BufferView{ .ptr = hostRawPointer + offsets[0], .size = dataSize });
-            for (size_t j = 0; j < dataInfos.size(); j++) {
+            for (size_t j = 0; j < blobs.size(); j++) {
                 auto hostDataSize = offsets[j + 1] - offsets[j];
-                auto devicePointer = dataInfos[j].devPtr;
-                auto deviceDataSize = dataInfos[j].Size();
+                auto devicePointer = blobs[j].pointer;
+                auto deviceDataSize = blobs[j].size;
                 auto hostPointer = hostRawPointer + offsets[j];
                 if (!is64BitAligned(hostPointer)) {
                     LOG(WARNING) << "host memory is not 64 aligned: " << hostRawPointer;
@@ -133,7 +134,7 @@ struct DeviceBatchCopyHelper {
                 dataSizeList.emplace_back(hostDataSize);
                 batchSize++;
             }
-            keyStartInBlobs += dataInfos.size();
+            keyStartInBlobs += blobs.size();
         }
         if (copyKind == aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE) {
             srcBuffers = std::move(hostBuffers);
@@ -168,20 +169,6 @@ public:
     ~ClientDeviceObjectManager() = default;
 
     Status Init();
-
-    /**
-     * @brief Invoke worker client to create a device object.
-     * @param[in] objectKey The Key of the device object to create. Key should not be empty and should only contains
-     * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should less than 256.
-     * @param[in] size The size in bytes of device object.
-     * @param[in] devPtr The device memory pointer. Pass the pointer if user want do malloc by self.
-     * Pass the nullptr then client will malloc device memory and free when DeviceBuffer is destructed.
-     * @param[in] deviceIdx The device index of the device memory.
-     * @param[out] deviceBuffer The device buffer for the object.
-     * @return Status K_OK on success; the error code otherwise.
-     */
-    Status CreateDevBuffer(const std::string &devObjKey, uint64_t size, void *devPtr, int32_t deviceIdx,
-                           std::shared_ptr<DeviceBuffer> &deviceBuffer);
 
     /**
      * @brief Publish device object to datasystem with host.
@@ -233,13 +220,12 @@ public:
      * @brief Invoke worker client to create a device object with p2p.
      * @param[in] objectKey The Key of the device object to create. Key should not be empty and should only contains
      * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should less than 256.
-     * @param[in] dataInfoList The list of data info.
-     * @param[in] deviceIdx The device index of the device memory.
+     * @param[in] devBlobList The list of blob info.
      * @param[in] param The create param of device object.
      * @param[out] deviceBuffer The device buffer for the object.
      * @return Status K_OK on success; the error code otherwise.
      */
-    Status CreateDevBuffer(const std::string &devObjKey, const std::vector<DataInfo> &dataInfoList, int32_t deviceIdx,
+    Status CreateDevBuffer(const std::string &devObjKey, const DeviceBlobList &devBlobList,
                            const CreateDeviceParam &param, std::shared_ptr<DeviceBuffer> &deviceBuffer);
 
     /**
@@ -264,11 +250,11 @@ public:
     /**
      * @brief The implement of create device buffer.
      * @param[in] bufferInfo The info of device buffer.
-     * @param[in] dataInfoList The list of data info.
+     * @param[in] devBlobList The list of blob info.
      * @param[out] deviceBuffer The device buffer for the object.
      * @return Status K_OK on success; the error code otherwise.
      */
-    Status CreateDevBufferImpl(std::shared_ptr<DeviceBufferInfo> bufferInfo, const std::vector<DataInfo> &dataInfoList,
+    Status CreateDevBufferImpl(std::shared_ptr<DeviceBufferInfo> bufferInfo, const DeviceBlobList &devBlobList,
                                std::shared_ptr<DeviceBuffer> &deviceBuffer);
 
     /**
@@ -279,15 +265,15 @@ public:
     Status GetSendStatus(const std::shared_ptr<DeviceBuffer> &buffer, std::vector<Future> &futureVec);
 
     /**
-     * @brief The memory copy between dataInfoList and bufferList
-     * @param[in] dataInfoList The 2D list of dataInfo.
+     * @brief The memory copy between devBlobList and bufferList
+     * @param[in] devBlobList The 2D list of blob info.
      * @param[in] bufferList The list of buffer.
      * @param[in] copyKind The memory copy kind in CANN.
      * @param[in] enableHugeTlb The memory is enable huge tlb.
      * @return Status K_OK on success; the error code otherwise.
      */
-    Status MemCopyBetweenDevAndHost(const std::vector<std::vector<DataInfo>> &dataInfoList,
-                                    std::vector<Buffer *> &bufferList, aclrtMemcpyKind copyKind, bool enableHugeTlb);
+    Status MemCopyBetweenDevAndHost(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
+                                    aclrtMemcpyKind copyKind, bool enableHugeTlb);
 
     /**
      * @brief Print MSetD2H detail info

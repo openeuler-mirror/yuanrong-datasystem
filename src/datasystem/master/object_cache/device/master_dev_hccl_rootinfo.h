@@ -35,6 +35,13 @@ class HcclRootInfoTable {
 public:
     Status PutRootInfo(const std::string &dstNpuId, const std::string &rootInfo);
 
+    /**
+     * @brief Check if the RootInfo exists in the table for the specified NPU ID.
+     * @param[in] dstNpuId The destination NPU ID to check for existence.
+     * @return true if the RootInfo exists, false otherwise.
+     */
+    bool IsExistRootInfo(const std::string &dstNpuId);
+
     void GetAndEraseRootInfo(const std::string &dstNpuId,
                              const std::function<void(const std::string &rootInfo)> &onGetCallback);
     /**
@@ -67,12 +74,15 @@ private:
 };
 
 struct RecvRootInfoEntryParams {
-    static std::shared_ptr<RecvRootInfoEntryParams> ConstructRecvRootInfoEntryParams(const std::string &rootInfo)
+    static std::shared_ptr<RecvRootInfoEntryParams> ConstructRecvRootInfoEntryParams(const std::string &rootInfo,
+                                                                                     const bool isDeadLock)
     {
-        return std::make_shared<RecvRootInfoEntryParams>(RecvRootInfoEntryParams{ .rootInfo = rootInfo });
+        return std::make_shared<RecvRootInfoEntryParams>(
+            RecvRootInfoEntryParams{ .rootInfo = rootInfo, .isDeadLock = isDeadLock });
     }
 
     const std::string rootInfo;
+    const bool isDeadLock;
 };
 
 using RecvRootInfoRequest = UnaryRequest<RecvRootInfoReqPb, RecvRootInfoRspPb, RecvRootInfoEntryParams>;
@@ -92,6 +102,13 @@ public:
     Status AddRecvRootInfoRequest(const std::string &objectKey, std::shared_ptr<RecvRootInfoRequest> &request);
 
     /**
+     * @brief Check if the received RootInfo request exists for the specified object key.
+     * @param[in] objectKey The object key to check for existence in the request table.
+     * @return true if the request exists, false otherwise.
+     */
+    bool IsExistRecvRootInfoReq(const std::string &objectKey);
+
+    /**
      * @brief Remove the RecvRootInfo request from the waiting requests table.
      * @param[in] request The request need to remove.
      */
@@ -103,7 +120,8 @@ public:
      * @param[in] rootInfo The rootInfo message.
      * @return Status of the call.
      */
-    Status UpdateRecvRootInfoRequestForSuccess(const std::string &objectKey, const std::string &rootInfo);
+    Status UpdateRecvRootInfoRequestForSuccess(const std::string &objectKey, const std::string &rootInfo,
+                                               const bool isDeadLock = false);
 
     /**
      * @brief Reply to client with the device RecvRootInfo request.
@@ -127,7 +145,7 @@ using TbbHcclRelationshipTable = tbb::concurrent_hash_map<std::string, tbb::conc
 class HcclRelationshipTable {
 public:
     // key: DataReceiver --> value: Set(DataSender)
-    
+
     HcclRelationshipTable() = default;
 
     ~HcclRelationshipTable() = default;
@@ -174,13 +192,13 @@ public:
     void SaveMigrateData(const MigrateMetadataReqPb &req);
 
     /**
-     * @brief Clear graph_ table.
+     * @brief Clear hcclRelationshipGraph_ table.
      */
     void Clear();
 
 private:
     std::shared_timed_mutex mutex_;
-    TbbHcclRelationshipTable graph_;
+    TbbHcclRelationshipTable hcclRelationshipGraph_;
 };
 
 }  // namespace master

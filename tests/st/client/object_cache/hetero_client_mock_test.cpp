@@ -95,36 +95,36 @@ TEST_F(HeteroClientMockTest, TestGetP2PMeta)
     auto lifetime = LifetimeType::REFERENCE;
     auto bufferInfo = std::make_shared<DeviceBufferInfo>(devObjKey, deviceIdx, lifetime, true, TransferType::P2P);
     size_t dataSize = 1024;
-    DataInfo info{ nullptr, DataType::DATA_TYPE_INT8, dataSize };
+    Blob info{ nullptr, dataSize };
     DS_ASSERT_OK(workerClient1->PutP2PMeta(bufferInfo, { info }));
 
     std::vector<std::shared_ptr<DeviceBufferInfo>> bufferInfoList;
     auto getBufferInfo = std::make_shared<DeviceBufferInfo>(devObjKey, deviceIdx, lifetime, true, TransferType::P2P);
-    std::vector<std::vector<DataInfo>> dataInfoStorageList;
-    DataInfo getInfo{ nullptr, DataType::DATA_TYPE_INT8, dataSize };
+    std::vector<DeviceBlobList> devBlobStorageList;
+    Blob getInfo{ nullptr, dataSize };
 
     bufferInfoList.emplace_back(getBufferInfo);
-    std::vector<DataInfo> listData;
+    std::vector<Blob> listData;
     listData.emplace_back(getInfo);
-    dataInfoStorageList.emplace_back(listData);
+    devBlobStorageList.emplace_back(DeviceBlobList{ listData, deviceIdx });
 
     GetP2PMetaRspPb resp;
     const int64_t timeoutMs = 1000;
-    DS_ASSERT_OK(workerClient2->GetP2PMeta(bufferInfoList, dataInfoStorageList, resp, timeoutMs));
+    DS_ASSERT_OK(workerClient2->GetP2PMeta(bufferInfoList, devBlobStorageList, resp, timeoutMs));
 
-    std::vector<DataInfo> dataInfos;
-    DS_ASSERT_OK(workerClient1->GetDataInfo(devObjKey, timeoutMs, dataInfos));
-    ASSERT_EQ(dataInfos.size(), 1);
-    dataInfos.clear();
-    DS_ASSERT_OK(workerClient2->GetDataInfo(devObjKey, timeoutMs, dataInfos));
-    ASSERT_EQ(dataInfos.size(), 1);
+    std::vector<Blob> blobs;
+    DS_ASSERT_OK(workerClient1->GetBlobsInfo(devObjKey, timeoutMs, blobs));
+    ASSERT_EQ(blobs.size(), 1);
+    blobs.clear();
+    DS_ASSERT_OK(workerClient2->GetBlobsInfo(devObjKey, timeoutMs, blobs));
+    ASSERT_EQ(blobs.size(), 1);
 
     auto notExitId = GetStringUuid();
     auto notExitBufferInfo =
         std::make_shared<DeviceBufferInfo>(notExitId, deviceIdx, lifetime, true, TransferType::P2P);
     bufferInfoList.clear();
     bufferInfoList.emplace_back(notExitBufferInfo);
-    DS_ASSERT_NOT_OK(workerClient2->GetP2PMeta(bufferInfoList, dataInfoStorageList, resp, timeoutMs));
+    DS_ASSERT_NOT_OK(workerClient2->GetP2PMeta(bufferInfoList, devBlobStorageList, resp, timeoutMs));
 }
 
 TEST_F(HeteroClientMockTest, TestRecvRootInfo)
@@ -144,7 +144,8 @@ TEST_F(HeteroClientMockTest, TestRecvRootInfo)
     req.set_dst_device_id(deviceId);
     req.set_src_client_id(localClientId2);
     req.set_src_device_id(deviceId);
-    DS_ASSERT_OK(workerClient1->SendRootInfo(req));
+    SendRootInfoRspPb resp;
+    DS_ASSERT_OK(workerClient1->SendRootInfo(req, resp));
 
     RecvRootInfoReqPb rootInfoReq;
     rootInfoReq.set_dst_client_id(localClientId1);

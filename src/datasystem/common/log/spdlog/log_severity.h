@@ -40,9 +40,9 @@ inline const char *GetLogSeverityName(const int &logLevel)
     return LogSeverityNames[logLevel];
 }
 
-inline static spdlog::level::level_enum ToSpdlogLevel(LogSeverity severity)
+inline static ds_spdlog::level::level_enum ToSpdlogLevel(LogSeverity severity)
 {
-    return static_cast<spdlog::level::level_enum>(
+    return static_cast<ds_spdlog::level::level_enum>(
         static_cast<int>(severity) + 2  // INFO(0) → info(2)
     );
 }

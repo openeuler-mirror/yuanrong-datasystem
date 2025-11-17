@@ -36,7 +36,7 @@ public:
 
     /**
      * @brief Get or Create a worker to Master api object according to an identifier.
-     * @param[in] id An identifier, can be an object key in OC scenario.
+     * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
      * @param[in] etcdCm The cluster manager pointer to assign.
      * @param[out] api The WorkerMasterApi instance.
      * @return The status of this call.
@@ -57,7 +57,7 @@ public:
 
     /**
      * @brief Get or Create a worker to Master api object according to an identifier.
-     * @param[in] id An identifier, can be an object key in OC scenario.
+     * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
      * @param[in] etcdCm The cluster manager pointer to assign.
      * @return The WorkerMasterApi
      */

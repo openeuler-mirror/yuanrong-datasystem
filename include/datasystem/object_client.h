@@ -21,11 +21,7 @@
 #ifndef DATASYSTEM_OBJECT_CLIENT_H
 #define DATASYSTEM_OBJECT_CLIENT_H
 
-#include <functional>
-#include <iostream>
 #include <memory>
-#include <mutex>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -45,7 +41,6 @@ class ObjectClientImpl;
 
 namespace datasystem {
 struct CreateParam {
-    WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     ConsistencyType consistencyType = ConsistencyType::PRAM;
     CacheType cacheType = CacheType::MEMORY;
 };

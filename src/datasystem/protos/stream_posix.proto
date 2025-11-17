@@ -1,0 +1,419 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the POSIX API of the worker component, including the meta of the stream cache.
+ * These APIs are used for communication between clients and workers,
+ */
+syntax = "proto3";
+package datasystem;
+
+import "rpc_option.proto";
+import "utils.proto";
+
+message ShmViewPb {
+  int32 fd = 1;
+  uint64 mmap_size = 2;
+  uint64 offset = 3;
+  uint64 size = 4;
+}
+
+message QueryGlobalNumReqPb {
+  string stream_name = 1;
+  string token = 2;
+  string client_id = 3;
+  string tenant_id = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message QueryGlobalNumRsqPb {
+  uint64 global_count = 1;
+}
+
+message NotifyStreamInvalidRspPb {
+}
+
+message CreateProducerReqPb {
+  string stream_name = 1;
+  int64 page_size = 2;
+  string client_id = 3;
+  string producer_id = 4;
+  uint64 max_stream_size = 5; // stream size in worker.
+  string token = 6;
+  bool auto_cleanup = 7;
+  string tenant_id = 8;
+  uint64 retain_num_consumer = 9;
+  bool encrypt_stream = 10;
+  uint64 reserve_size = 11;
+  int32 stream_mode = 12;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CreateProducerRspPb {
+  ShmViewPb page_view = 1;
+  uint64 sender_producer_no = 2;
+  bool enable_data_verification = 3;
+  uint64 stream_no = 4;
+  uint64 shared_page_size = 5;
+  bool enable_shared_page = 6;
+  ShmViewPb stream_meta_view = 7;
+}
+
+enum SubscriptionTypePb {
+  STREAM_PB = 0;
+  ROUND_ROBIN_PB = 1;
+  KEY_PARTITIONS_PB = 2;
+}
+
+message SubscriptionConfigPb {
+  string subscription_name = 1;
+  SubscriptionTypePb subscription_type = 2;
+  bool report_producer_fault = 3;
+}
+
+message SubscribeReqPb {
+  string stream_name = 1;
+  SubscriptionConfigPb subscription_config = 2;
+  string client_id = 3;
+  string consumer_id = 4;
+  string token = 5;
+  string tenant_id = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message SubscribeRspPb {
+  uint64 last_recv_cursor = 1;
+  int32 worker_fd = 2;
+  uint64 mmap_size = 3;
+  uint64 offset = 4;
+  uint64 size = 5;
+}
+
+message ElementsMetaPb {
+  repeated uint32 element_sizes = 1;
+  uint64 total_flush_count = 2;
+  repeated bool header_bits = 3;
+}
+
+message GetDataPageReqPb {
+  string stream_name = 1;
+  string subscription_name = 2;
+  bytes consumer_id = 3;
+  uint64 last_recv_cursor = 4;
+  int64 timeout_ms = 5;
+  string token = 6;
+  string client_id = 7;
+  string tenant_id = 8;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message GetDataPageRspPb {
+  ShmViewPb page_view = 1;
+}
+
+message CreateShmPageReqPb {
+  string stream_name = 1;
+  bytes producer_id = 2;
+  string token = 3;
+  int64 sub_timeout = 4;
+  string client_id = 5;
+  ShmViewPb cur_view =  6;
+  string tenant_id = 7;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CreateShmPageRspPb {
+  ShmViewPb last_page_view = 1;
+}
+
+message CloseProducerReqPb {
+  string stream_name = 1;
+  bytes producer_id = 2;
+  string client_id = 3;
+  string token = 4;
+  string tenant_id = 5;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CloseProducerRspPb {
+
+}
+
+message CloseConsumerReqPb {
+  string stream_name = 1;
+  string subscription_name = 2;
+  bytes consumer_id = 3;
+  string client_id = 4;
+  string token = 5;
+  string tenant_id = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CloseConsumerRspPb {
+
+}
+
+message DeleteStreamReqPb {
+  string stream_name = 1;
+  string token = 2;
+  string client_id = 3;
+  string tenant_id = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message DeleteStreamRspPb {
+}
+
+message PushReqPb {
+  string stream_name = 1;
+  string worker_addr = 2;
+  string producer_id = 5;
+  uint64 first_seq = 6;
+  repeated ElementsMetaPb element_meta = 3;
+  repeated uint64 seq = 4;
+  string trace_id = 7;
+  uint64 chunk_size = 8;
+  string worker_instance_id = 9;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message PushRspPb {
+  repeated ErrorInfoPb error = 1;
+}
+
+message StreamElementsMetaPb {
+  uint64 stream_index = 1;
+  uint64 seq = 2;
+  ElementsMetaPb element_meta = 3;
+}
+
+message SharedPagePushReqPb {
+  repeated string stream_names = 1;
+  string worker_addr = 2;
+  string producer_id = 3;
+  repeated StreamElementsMetaPb metas = 4;
+  string trace_id = 5;
+  string worker_instance_id = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message UnblockProducerReqPb {
+  string stream_name = 1;
+  string worker_addr = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message UnblockProducerRspPb {
+}
+
+message BlockProducerReqPb {
+  string stream_name = 1;
+  string worker_addr = 2;
+  int64 timeout = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message BlockProducerRspPb {
+}
+
+message TopologyElementsPb {
+  HostPortPb worker_address = 1;
+  repeated string element_names = 2;
+}
+
+message LastAppendCursorReqPb {
+  string stream_name = 1;
+  string client_id = 2;
+  string token = 3;
+  string tenant_id = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message LastAppendCursorRspPb {
+  uint64 last_append_cursor = 1;
+}
+
+message ResetOrResumeStreamsReqPb {
+  repeated string stream_names = 1;
+  string client_id = 2;
+  string token = 3;
+  string tenant_id = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ResetOrResumeStreamsRspPb {
+}
+
+message CreateLobPageReqPb {
+  string stream_name = 1;
+  string client_id = 2;
+  string token = 3;
+  string producer_id = 4;
+  uint64 page_size = 5;
+  string tenant_id = 6;
+  int64 sub_timeout = 7;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CreateLobPageRspPb {
+  ShmViewPb page_view = 1;
+}
+
+message ReleaseLobPageReqPb {
+  string stream_name = 1;
+  string client_id = 2;
+  string token = 3;
+  string producer_id = 4;
+  ShmViewPb page_view = 5;
+  string tenant_id = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ReleaseLobPageRspPb {
+}
+
+// Service block for clients and other workers
+service ClientWorkerSCService {
+  rpc CreateProducer (CreateProducerReqPb) returns (CreateProducerRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+
+  rpc CloseProducer(CloseProducerReqPb) returns (CloseProducerRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc Subscribe (SubscribeReqPb) returns (SubscribeRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc CloseConsumer(CloseConsumerReqPb) returns (CloseConsumerRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+
+  rpc GetDataPage(GetDataPageReqPb) returns (GetDataPageRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+
+  rpc CreateShmPage(CreateShmPageReqPb) returns (CreateShmPageRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+
+  rpc DeleteStream(DeleteStreamReqPb) returns (DeleteStreamRspPb) {}
+
+  // query node number part
+  rpc QueryGlobalProducersNum(QueryGlobalNumReqPb) returns (QueryGlobalNumRsqPb) {}
+  rpc QueryGlobalConsumersNum(QueryGlobalNumReqPb) returns (QueryGlobalNumRsqPb) {}
+
+  // Cross node worker flow control rpc.
+  rpc UnblockProducer (UnblockProducerReqPb) returns (UnblockProducerRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc BlockProducer(BlockProducerReqPb) returns (BlockProducerRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc GetLastAppendCursor(LastAppendCursorReqPb) returns (LastAppendCursorRspPb) {}
+
+  // some more client worker request rpcs.
+  rpc ResetStreams(ResetOrResumeStreamsReqPb) returns (ResetOrResumeStreamsRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc ResumeStreams(ResetOrResumeStreamsReqPb) returns (ResetOrResumeStreamsRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  // Extra rpc call for BigElement insert
+  rpc AllocBigShmMemory(CreateLobPageReqPb) returns (CreateLobPageRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc ReleaseBigShmMemory(ReleaseLobPageReqPb) returns (ReleaseLobPageRspPb) {
+    option (datasystem.unary_socket_option) = true;
+  }
+}
+
+service WorkerWorkerSCService {
+  option (datasystem.channel_number_option) = 2;
+  option (datasystem.multi_session_option) = true;
+  // Batch push data
+  rpc PushElementsCursors (PushReqPb) returns (PushRspPb) {
+    option (datasystem.send_payload_option) = true;
+    option (datasystem.unary_socket_option) = true;
+  }
+  rpc PushSharedPageCursors (SharedPagePushReqPb) returns (PushRspPb) {
+    option (datasystem.send_payload_option) = true;
+    option (datasystem.unary_socket_option) = true;
+  }
+}

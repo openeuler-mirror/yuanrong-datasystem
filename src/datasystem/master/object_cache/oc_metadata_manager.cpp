@@ -63,6 +63,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
+#include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
@@ -81,7 +82,8 @@ DS_DECLARE_int32(rpc_thread_num);
 DS_DECLARE_bool(enable_meta_replica);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
-DS_DECLARE_string(other_az_names);
+DS_DECLARE_string(other_cluster_names);
+DS_DECLARE_string(rocksdb_write_mode);
 
 namespace datasystem {
 namespace master {
@@ -444,7 +446,7 @@ void OCMetadataManager::SetMetaInfo(const ObjectMetaPb &newMeta, const std::stri
 Status OCMetadataManager::NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version,
                                                       const ObjectMetaPb &newMeta)
 {
-    if (!FLAGS_other_az_names.empty()) {
+    if (!FLAGS_other_cluster_names.empty()) {
         LOG(INFO) << "Notify nodes in other clusters to remove meta for object: " << objectKey;
     }
     std::unordered_map<std::string, MetaAddrInfo> metaAddrInfos;
@@ -934,7 +936,6 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
         "CreateCopyMeta: Cannot CreateCopyMeta with empty objectKey or server address.");
     FillRedirectResponseInfo(response, objectKey, redirect);
     RETURN_OK_IF_TRUE(redirect);
-    uint32_t writeMode;
     {
         // Check meta info in cache and rocksdb.
         Timer timer;
@@ -951,14 +952,13 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
 
         response.set_version(accessor->second.meta.version());
         response.set_life_state(accessor->second.meta.life_state());
-        writeMode = accessor->second.meta.config().write_mode();
         // If the address already exists, return success.
         if (!accessor->second.locations.insert(address).second) {
             return Status::OK();
         }
         accessor.release();
     }
-    return objectStore_->AddObjectLocation(objectKey, address, WriteMode2MetaType(writeMode));
+    return objectStore_->AddObjectLocation(objectKey, address);
 }
 
 std::string OCMetadataManager::SelectObjectLocation(const std::string &objectKey, const std::string &sourceWorker,
@@ -1053,8 +1053,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             bool updateLocation =
                 (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM;
             if (updateLocation && accessor->second.locations.insert(address).second) {
-                RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(
-                    objectKey, address, WriteMode2MetaType(accessor->second.meta.config().write_mode())));
+                RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
             }
             accessor.release();
             continue;
@@ -1252,7 +1251,7 @@ void OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, co
         (void)objectStore_->RemoveObjectLocation(objectKey, address);
     }
     for (const auto &objectKey : needRemoveIds) {
-        LOG_IF_ERROR(objectStore_->RemoveObjectLocation(objectKey, address, false), "Remove location failed");
+        LOG_IF_ERROR(objectStore_->RemoveObjectLocation(objectKey, address), "Remove location failed");
         LOG_IF_ERROR(objectStore_->RemoveMeta(objectKey, false), "Remove meta failed");
     }
     SendChangePrimaryCopy(workerForChangePrimaryIds, response);
@@ -1745,7 +1744,7 @@ void OCMetadataManager::NotifyDeleteAndClearMeta(DeleteObjectMediator &delMediat
     const auto &sendAllDelObjs = delMediator.GetIdsNeedToNotifyWorker();
     INJECT_POINT_NO_RETURN("NotifyDeleteAndClearMeta");
     Status lastErr = NotifyWorkerDelete(delMediator.GetSourceWorker(), sendAllDelObjs, false, failedNotifyObjects);
-    Raii removeIsDeletingObjs([&sendAllDelObjs, this] () {
+    Raii removeIsDeletingObjs([&sendAllDelObjs, this]() {
         for (const auto &info : sendAllDelObjs) {
             std::lock_guard<std::shared_mutex> l(isDeletingObjMutex_);
             isDeletingObjs_.erase(info.first);
@@ -1876,7 +1875,7 @@ Status OCMetadataManager::ClearOneMetaInfo(const TbbMetaTable::const_accessor &a
     const auto &objectKey = accessor->first;
     // remove object location.
     for (const auto &address : accessor->second.locations) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address, !isDataMigration),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
                                          FormatString("[ObjectKey %s] RemoveObjectLocation failed", objectKey));
     }
     // remote meta info
@@ -2139,8 +2138,7 @@ Status OCMetadataManager::RecoverObjectLocations(
     return Status::OK();
 }
 
-Status OCMetadataManager::LoadObjectLocations(bool isFromRocksdb, const std::vector<std::string> &workerUuids,
-                                              const worker::HashRange &extraRanges,
+Status OCMetadataManager::LoadObjectLocations(bool isFromRocksdb,
                                               std::unordered_map<std::string, std::vector<std::string>> &objLocMap)
 {
     INJECT_POINT("OCNotifyWorkerManager.NoNeedRecoveryMeta");
@@ -2148,10 +2146,6 @@ Status OCMetadataManager::LoadObjectLocations(bool isFromRocksdb, const std::vec
     if (isFromRocksdb) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(LOCATION_TABLE, objectLocations),
                                          "Load object location from rocksdb into memory failed.");
-    } else {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(ETCD_LOCATION_TABLE_PREFIX, LOCATION_TABLE,
-                                                                   workerUuids, extraRanges, objectLocations),
-                                         "Load object location from etcd into memory failed.");
     }
     for (auto &info : objectLocations) {
         // key format: WorkerAddr_ObjectKey
@@ -2257,10 +2251,10 @@ Status OCMetadataManager::LoadMeta(bool isFromRocksdb, const std::vector<std::st
     RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, workerUuids,
                                                       extraRanges, metas));
     std::unordered_map<std::string, std::vector<std::string>> objLocMap;
-    RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, workerUuids, extraRanges, objLocMap));
+    RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, objLocMap));
     RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, objLocMap, isFromRocksdb, workerUuids, extraRanges));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RecoverObjectLocations(objLocMap), "Recovery object locations into memory failed");
-    if (isFromRocksdb) {
+    if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(nestedRefManager_->RecoverRelationshipData(NESTED_TABLE, NESTED_COUNT_TABLE),
                                          "Load Nested relationship for rocksdb failed.");
     }
@@ -4155,7 +4149,7 @@ Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &ta
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(rocksTable, iter.first, iter.second));
         }
     } else {
-        if (isFromRocksdb) {
+        if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(rocksTable, outMetas),
                                              "Load meta from rocksdb into memory failed.");
             LOG(INFO) << "Load meta from rocksdb, count:" << outMetas.size();
@@ -4171,6 +4165,7 @@ Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &ta
 
 Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, ReplacePrimaryRspPb &rsp)
 {
+    INJECT_POINT("OCMetadataManager.ReplacePrimary");
     std::vector<std::string> notRedirectObjectKeys;
     std::transform(req.object_infos().begin(), req.object_infos().end(), std::back_inserter(notRedirectObjectKeys),
                    [](const ReplacePrimaryReqPb::ObjectInfoPb &info) { return info.object_key(); });

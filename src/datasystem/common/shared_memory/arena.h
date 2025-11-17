@@ -39,6 +39,7 @@
 #include "datasystem/common/util/wait_post.h"
 
 namespace datasystem {
+enum class ServiceType { OBJECT, STREAM };
 namespace memory {
 constexpr uint32_t TENANT_RESOURCE_RELEASE_DELAY_MS = 600'000;  // 10min
 class Arena;
@@ -59,13 +60,14 @@ public:
      * @param[out] fd File descriptor of the allocated shared memory segments.
      * @param[out] offset Offset from the base of the shared memory mmap.
      * @param[out] mmapSize Total size of shared memory segments.
+     * @param[in] type The type of datasystem service for this allocation request.
      * @return K_OK if success, the error otherwise.
      *         K_OUT_OF_MEMORY: no enough memory can be allocated.
      *         K_RUNTIME_ERROR: arena has not been initialized, pointer is null, or
      *                          memory info can not be found, it should not happen.
      */
     Status AllocateMemory(uint64_t size, bool populate, uint64_t &realSize, void *&pointer, int &fd, ptrdiff_t &offset,
-                          uint64_t &mmapSize);
+                          uint64_t &mmapSize, ServiceType type);
 
     /**
      * @brief Free memory from shared memory.

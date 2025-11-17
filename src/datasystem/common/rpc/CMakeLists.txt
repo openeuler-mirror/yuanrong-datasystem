@@ -102,6 +102,8 @@ set(RPC_STUB_CACHE_MGR_SRCS
 set(RPC_STUB_CACHE_MGR_DEPENDS_LIBS
         master_object_protos
         worker_object_protos
+        master_stream_protos
+        worker_stream_protos
 )
 
 add_library(rpc_stub_cache_mgr STATIC ${RPC_STUB_CACHE_MGR_SRCS})

@@ -33,6 +33,7 @@ namespace master {
 
 static constexpr int64_t MASTER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
 static constexpr float MASTER_TIMEOUT_DESCEND_FACTOR = 0.9;
+std::atomic<int64_t> MasterLocalWorkerOCApi::g_localTagGen_{1};
 inline int64_t MasterGetRequestTimeout(int32_t timeout)
 {
     return std::max(int64_t(timeout * MASTER_TIMEOUT_DESCEND_FACTOR), timeout - MASTER_TIMEOUT_MINUS_MILLISECOND);
@@ -307,30 +308,33 @@ Status MasterLocalWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObje
     // The logic is:
     // To simulate the rpc "send", it saves the request locally but does not execute it yet. This will be a quick
     // success call similar to an async send behaviour.
-    // To simulate the "wait for response from remote", this is where the operation will be executed directly via
-    // a pointer, and it will be a synchronous call.
-    // Generally, it is unlikely that there will be multiple threads of the same api doing delete operations
-    // concurrently. However, to protect against concurrent deletes using the same api, the Send and the Recv
-    // will be briefly serialized via locking. In other words the flow is:
-    // T1: DeleteNotificationSend()
-    // T1: DeleteNotficiationRecv()
-    // If another thread attempts a DeleteNotificationSend() in between the above, it will wait.
-    tag = 0;
-    RETURN_IF_NOT_OK(deleteReq_.WLock(true));
+    // 1. store the request in localReqMap_ (simulates the "send");
+    // 2. return immediately, giving the caller a tag;
+    // 3. execute the real delete later, inside DeleteNotificationReceive,
+    //    which pulls the request from the map and calls workerOC_->DeleteNotification.
+    // A shared_mutex keeps concurrent Send/Receive operations on the same API
+    // instance serialized.
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
-    deleteReq_.SetRealObject(std::move(req));
+    tag = g_localTagGen_.fetch_add(1);
+
+    std::unique_lock<std::shared_mutex> lock(localReqMutex_);
+    localReqMap_[tag] = std::move(req);
     return Status::OK();
 }
 
 Status MasterLocalWorkerOCApi::DeleteNotificationReceive(int64_t tag, DeleteObjectRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(tag == 0, K_RUNTIME_ERROR, "Invalid tag for local api");
-    CHECK_FAIL_RETURN_STATUS(deleteReq_.IsWLockedByCurrentThread(), K_RUNTIME_ERROR,
-                             "Async read does not have request locked.");
-    auto reqPtr = deleteReq_.Detach();
-    deleteReq_.WUnlock();
-    RETURN_IF_NOT_OK(workerOC_->DeleteNotification(*reqPtr, rsp));
-    return Status::OK();
+    std::unique_ptr<DeleteObjectReqPb> req;
+    {
+        std::unique_lock<std::shared_mutex> lock(localReqMutex_);
+        auto it = localReqMap_.find(tag);
+        if (it == localReqMap_.end() || !it->second) {
+            RETURN_STATUS(StatusCode::K_NOT_FOUND, FormatString("Local tag %ld not found", tag));
+        }
+        req = std::move(it->second);
+        localReqMap_.erase(it);
+    }
+    return workerOC_->DeleteNotification(*req, rsp);
 }
 
 Status MasterLocalWorkerOCApi::QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp)

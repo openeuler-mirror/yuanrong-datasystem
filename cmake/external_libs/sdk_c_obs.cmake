@@ -22,7 +22,9 @@ set(obs_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(obs_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(obs_LINK_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
-set(obs_PATCHES ${CMAKE_SOURCE_DIR}/third_party/patches/obs/3.24.3/obs-sdk-cmake-install.patch)
+set(obs_PATCHES 
+    ${CMAKE_SOURCE_DIR}/third_party/patches/obs/3.24.3/obs-sdk-cmake-install.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/obs/3.24.3/obs-sdk-change-spdlog.patch)
 
 add_thirdparty_lib(OBS 
   URL ${obs_URL}

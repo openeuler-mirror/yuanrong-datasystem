@@ -28,19 +28,26 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/connection.h"
+#include "datasystem/utils/status.h"
 
 DS_DEFINE_bool(rocksdb_sync_write, false, "Controls whether rocksdb sets sync to true when writing data.");
 DS_DEFINE_int32(rocksdb_max_open_file, 128, "Number of open files that can be used by the rocksdb");
 DS_DEFINE_int32(rocksdb_background_threads, 16,
                 "Number of background threads rocksdb can use for flushing and compacting.");
+DS_DEFINE_string(rocksdb_write_mode, "async",
+                 "Config the rocksdb support none, sync or async, async by default. Optional value: "
+                 "'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.");
+DS_DEFINE_validator(rocksdb_write_mode, &Validator::ValidateRocksdbModeType);
 
 namespace datasystem {
 std::mutex RocksStore::lck;
@@ -73,10 +80,16 @@ void InitRocksOptions(rocksdb::Options &options)
 }
 }  // namespace
 
+RocksStore::RocksStore()
+{
+    mode_ = ParseRocksdbWriteMode();
+    InitializeAsyncThreadPool();
+}
+
 std::shared_ptr<RocksStore> RocksStore::GetInstance(
     const std::string &dbPath, const std::unordered_map<std::string, rocksdb::ColumnFamilyOptions> &tableOptions)
 {
-    INJECT_POINT("master.disableRocksDb", [] () {
+    INJECT_POINT("master.disableRocksDb", []() {
         RocksStore::disableRocksDB = true;
         return nullptr;
     });
@@ -129,8 +142,7 @@ std::shared_ptr<RocksStore> RocksStore::GetInstance(
         LOG(ERROR) << "Cannot create/open database: " + std::string(rc.getState());
         return nullptr;
     }
-
-    LOG(INFO) << "Rocksdb get instance finished, dbPath:" << dbPath;
+    LOG(INFO) << "Rocksdb get instance finished, dbPath:" << dbPath << "write mode: " << FLAGS_rocksdb_write_mode;
     return instance;
 }
 
@@ -152,12 +164,47 @@ void RocksStore::Close()
     db_->Close();
     delete db_;
     db_ = nullptr;
+    if (asyncThreadPool_) {
+        asyncThreadPool_.reset();
+    }
+}
+
+RocksdbWriteMode RocksStore::ParseRocksdbWriteMode()
+{
+    if (FLAGS_rocksdb_write_mode == "async") {
+        return RocksdbWriteMode::ASYNC;
+    } else if (FLAGS_rocksdb_write_mode == "sync") {
+        return RocksdbWriteMode::SYNC;
+    } else if (FLAGS_rocksdb_write_mode == "none") {
+        return RocksdbWriteMode::NONE;
+    } else {
+        LOG(INFO) << FormatString("Rocksdb write mode is : % s, will use none mode instead.", FLAGS_rocksdb_write_mode);
+        return RocksdbWriteMode::NONE;
+    }
+}
+
+bool RocksStore::IsClusterInfoTable(const std::string &tableName)
+{
+    auto it = std::find(clusterInfoTable_.begin(), clusterInfoTable_.end(), tableName);
+    if (it != clusterInfoTable_.end()) {
+        return true;
+    }
+    return false;
+}
+
+void RocksStore::InitializeAsyncThreadPool(size_t threadCount)
+{
+    if (!asyncThreadPool_ && mode_ == RocksdbWriteMode::ASYNC) {
+        asyncThreadPool_ = std::make_unique<OrderedThreadPool>(threadCount);
+        LOG(INFO) << "Init rocksdb async thread pool.";
+    }
 }
 
 Status RocksStore::CreateTable(const std::string &tableName, const rocksdb::ColumnFamilyOptions &tableOptions,
                                rocksdb::ColumnFamilyHandle **tableHandle)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::ColumnFamilyHandle *cf = nullptr;
     rocksdb::Status rc;
     auto item = tables_.find(tableName);
@@ -183,6 +230,7 @@ Status RocksStore::CreateTable(const std::string &tableName, const rocksdb::Colu
 Status RocksStore::DropTable(const std::string &tableName)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
 
@@ -205,6 +253,7 @@ Status RocksStore::DropTable(const std::string &tableName)
 Status RocksStore::Put(const std::string &tableName, const std::string &key, const std::string &value)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
@@ -215,37 +264,72 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
     Timer timer;
-    rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
+        masterOperationTimeCost.Append("RocksDB Put", timer.ElapsedMilliSecond());
+        return CheckAndRemoveDbPath(rc);
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, value]() {
+            rocksdb::Status rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
+            if (!rc.ok()) {
+                LOG(ERROR) << FormatString("Async Put key %s failed: %s", key, rc.getState());
+            }
+        });
+        return Status::OK();
+    }
     masterOperationTimeCost.Append("RocksDB Put", timer.ElapsedMilliSecond());
-    return CheckAndRemoveDbPath(rc);
+    return Status::OK();
 }
 
 Status RocksStore::BatchPut(const std::string &tableName, std::unordered_map<std::string, std::string> &metaInfos)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_RUNTIME_ERROR, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+        return CheckAndRemoveDbPath(rc);
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos]() {
+            rocksdb::Status rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+            if (!rc.ok()) {
+                FormatString("Async BatchPut failed: %s", rc.getState());
+            }
+        });
 
-    rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
-    return CheckAndRemoveDbPath(rc);
+        return Status::OK();
+    }
+    return Status::OK();
 }
 
 Status RocksStore::BatchDelete(const std::string &tableName, std::unordered_map<std::string, std::string> &metaInfos)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
-    rocksdb::Status rc;
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
-
-    rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
-    return CheckAndRemoveDbPath(rc);
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rocksdb::Status rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+        return CheckAndRemoveDbPath(rc);
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos]() {
+            sleep(10);
+            rocksdb::Status rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+            if (!rc.ok()) {
+                LOG(ERROR) << FormatString("Async BatchDelete failed: %s", rc.getState());
+            }
+        });
+        return Status::OK();
+    }
+    return Status::OK();
 }
 
 Status RocksStore::CheckAndRemoveDbPath(rocksdb::Status rc)
@@ -275,7 +359,7 @@ Status RocksStore::ListTables(std::vector<std::string> &tables)
     if (!rc.ok()) {
         // Set the database handle to a null pointer.
         db_ = nullptr;
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_KVSTORE_ERROR, "Error when listing table names：" + rc.ToString());
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_KVSTORE_ERROR, "Error when listing table names: " + rc.ToString());
     }
     return Status::OK();
 }
@@ -283,7 +367,7 @@ Status RocksStore::ListTables(std::vector<std::string> &tables)
 Status RocksStore::Get(const std::string &tableName, const std::string &key, std::string &value)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
-    rocksdb::Status rc;
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_RUNTIME_ERROR, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
 
@@ -293,7 +377,18 @@ Status RocksStore::Get(const std::string &tableName, const std::string &key, std
     PerfPoint point(PerfKey::ROCKSDB_GET);
     tableHandle = iter->second;
     Timer timer;
-    rc = Get(tableHandle, key, value);
+    rocksdb::Status rc;
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rc = Get(tableHandle, key, value);
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(key, [this, key, tableHandle, &rc, &value]() {
+            rc = Get(tableHandle, key, value);
+            if (!rc.ok()) {
+                LOG(ERROR) << FormatString("Async Get key %s failed: %s", key, rc.getState());
+            }
+        });
+        future.wait();
+    }
     masterOperationTimeCost.Append("RocksDB Get", timer.ElapsedMilliSecond());
     if (!rc.ok()) {
         if (rc == rocksdb::Status::NotFound()) {
@@ -308,6 +403,7 @@ Status RocksStore::Get(const std::string &tableName, const std::string &key, std
 Status RocksStore::GetAll(const std::string &tableName, std::vector<std::pair<std::string, std::string>> &outKeyValues)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     outKeyValues.clear();
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
@@ -320,13 +416,28 @@ Status RocksStore::GetAll(const std::string &tableName, std::vector<std::pair<st
     tableHandle = iter->second;
     auto readOptions = rocksdb::ReadOptions();
     Timer timer;
-    std::unique_ptr<rocksdb::Iterator> iter2(db_->NewIterator(readOptions, tableHandle));
-    masterOperationTimeCost.Append("RocksDB GetAll", timer.ElapsedMilliSecond());
-    iter2->SeekToFirst();
-    while (iter2->Valid()) {
-        outKeyValues.emplace_back(std::make_pair(iter2->key().ToString(), iter2->value().ToString()));
-        iter2->Next();
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        std::unique_ptr<rocksdb::Iterator> iter2(db_->NewIterator(readOptions, tableHandle));
+        iter2->SeekToFirst();
+        while (iter2->Valid()) {
+            outKeyValues.emplace_back(std::make_pair(iter2->key().ToString(), iter2->value().ToString()));
+            iter2->Next();
+        }
+        masterOperationTimeCost.Append("RocksDB GetAll", timer.ElapsedMilliSecond());
+        return Status::OK();
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(tableName, [this, readOptions, tableHandle, &outKeyValues]() {
+            std::unique_ptr<rocksdb::Iterator> iter2(db_->NewIterator(readOptions, tableHandle));
+            iter2->SeekToFirst();
+            while (iter2->Valid()) {
+                outKeyValues.emplace_back(std::make_pair(iter2->key().ToString(), iter2->value().ToString()));
+                iter2->Next();
+            }
+        });
+        future.wait();
+        return Status::OK();
     }
+    masterOperationTimeCost.Append("RocksDB GetAll", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -334,6 +445,7 @@ Status RocksStore::PrefixSearch(const std::string &tableName, const std::string 
                                 std::vector<std::pair<std::string, std::string>> &outKeyValues)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
@@ -355,13 +467,23 @@ Status RocksStore::PrefixSearch(const std::string &tableName, const std::string 
     CHECK_FAIL_RETURN_STATUS(result, StatusCode::K_KVSTORE_ERROR,
                              "Table " + tableName + " was created with a prefix search pattern longer than "
                                  + "the input pattern \"" + prefixKey + "\"");
-    PrefixSearch(tableHandle, prefixKey, outKeyValues);
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        PrefixSearch(tableHandle, prefixKey, outKeyValues);
+        return Status::OK();
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(tableName, [this, prefixKey, tableHandle, &outKeyValues]() {
+            PrefixSearch(tableHandle, prefixKey, outKeyValues);
+        });
+        future.wait();
+        return Status::OK();
+    }
     return Status::OK();
 }
 
 Status RocksStore::Delete(const std::string &tableName, const std::string &key)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
@@ -372,15 +494,28 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
     tableHandle = iter->second;
     Timer timer;
     PerfPoint point(PerfKey::ROCKSDB_DELETE);
-    rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
+        masterOperationTimeCost.Append("RocksDB Delete", timer.ElapsedMilliSecond());
+        // Deleting a key that does not exist in the database will NOT yield an error.
+        return CheckAndRemoveDbPath(rc);
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key]() {
+            rocksdb::Status rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
+            if (!rc.ok()) {
+                LOG(ERROR) << FormatString("Async Delete key %s failed: %s", key, rc.getState());
+            }
+        });
+        return Status::OK();
+    }
     masterOperationTimeCost.Append("RocksDB Delete", timer.ElapsedMilliSecond());
-    // Deleting a key that does not exist in the database will NOT yield an error.
-    return CheckAndRemoveDbPath(rc);
+    return Status::OK();
 }
 
 Status RocksStore::PrefixDelete(const std::string &tableName, const std::string &prefixKey)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
@@ -394,12 +529,26 @@ Status RocksStore::PrefixDelete(const std::string &tableName, const std::string 
     rocksdb::WriteOptions options;
     options.sync = FLAGS_rocksdb_sync_write;
     Timer timer;
-    rc = db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));
-    masterOperationTimeCost.Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
-    if (rc != rocksdb::Status::OK()) {
-        RETURN_STATUS(StatusCode::K_KVSTORE_ERROR,
-                      "Cannot delete prefix key: " + prefixKey + " Error: " + rc.ToString());
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rc = db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));
+        masterOperationTimeCost.Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
+        if (rc != rocksdb::Status::OK()) {
+            RETURN_STATUS(StatusCode::K_KVSTORE_ERROR,
+                          "Cannot delete prefix key: " + prefixKey + " Error: " + rc.ToString());
+        }
+        return Status::OK();
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, options, prefixKey, endKey]() {
+            rocksdb::Status rc =
+                db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));
+            if (!rc.ok()) {
+                LOG(ERROR) << FormatString("Async PrefixDelete prefixKey %s to endKey %s failed: %s", prefixKey, endKey,
+                                           rc.getState());
+            }
+        });
+        return Status::OK();
     }
+    masterOperationTimeCost.Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 }  // namespace datasystem

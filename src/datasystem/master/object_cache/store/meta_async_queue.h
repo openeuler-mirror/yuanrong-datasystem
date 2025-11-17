@@ -31,7 +31,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
 #include "datasystem/common/util/format.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace master {
@@ -238,6 +240,19 @@ public:
         return os;
     }
 
+    void SetPostHandler(std::function<Status()> &&postHandler)
+    {
+        postHandler_ = std::move(postHandler);
+    }
+
+    Status ExcutePostHandler()
+    {
+        if (postHandler_ == nullptr) {
+            return Status::OK();
+        }
+        return postHandler_();
+    }
+
 private:
     const ReqType reqType_;
     const std::string objectKey_;
@@ -246,6 +261,7 @@ private:
     const std::string value_;
     const std::chrono::time_point<std::chrono::steady_clock> beginTimestamp_;
     const std::string traceID_;
+    std::function<Status()> postHandler_ = nullptr;
 };
 
 class MetaAsyncQueue {

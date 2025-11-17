@@ -149,7 +149,7 @@ public:
     ///     DevMSet and DevMGet must be used together. Heterogeneous objects are not automatically deleted after
     ///     DevMGet is executed. If an object is no longer used, invoke DevLocalDelete to delete it.
     /// \param[in] keys Keys corresponding to blob2dList
-    /// \param[in] devBlobList List describing the structure of Device memory
+    /// \param[in,out] devBlobList List describing the structure of Device memory
     /// \param[out] failedKeys Returns failed keys if retrieval fails
     /// \param[in] subTimeoutMs Provides a timeout time, defaulting to 0
     /// \return K_OK on when return sucesssfully; the error code otherwise.

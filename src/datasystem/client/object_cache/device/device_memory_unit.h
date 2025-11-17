@@ -28,11 +28,12 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/hetero/device_common.h"
 
 namespace datasystem {
 class DeviceMemoryUnit {
 public:
-    explicit DeviceMemoryUnit(const std::string &devMemId, std::vector<DataInfo> dataInfoStorage);
+    explicit DeviceMemoryUnit(const std::string &devMemId, std::vector<Blob> blobStorage);
 
     /**
      * @brief Malloc device memory if user not set the device pointer in data info list.
@@ -44,14 +45,14 @@ public:
      * @brief Get the data info list.
      * @return The list of data info.
      */
-    const std::vector<DataInfo> &GetDataInfoStorage() const;
+    const std::vector<Blob> &GetBlobsStorage() const;
 
     /**
      * @brief Check and get the single data info.
-     * @param[out] dataInfo The data info.
+     * @param[out] blob The data info.
      * @return Return ok only if memory unit have only one data info.
      */
-    Status CheckAndGetSingleDataInfo(DataInfo &dataInfo) const;
+    Status CheckAndGetSingleBlob(Blob &blob) const;
 
     /**
      * @brief Check if the device pointer is nullptr in data info list.
@@ -63,7 +64,7 @@ public:
 
 private:
     std::string devMemId_;
-    std::vector<DataInfo> dataInfoStorage_;
+    std::vector<Blob> blobStorage_;
     std::deque<bool> dsAllocatedStorage_;
 };
 }  // namespace datasystem

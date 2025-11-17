@@ -43,7 +43,7 @@ class Command(BaseCommand):
             metavar='OUTPUT_PATH',
             default=os.getcwd(),
             help='path to save the generated Helm chart, default path is the current directory. \
-                Example: dscli generate_helm_chart --output-path /home/user/helmCharts'
+                Example: dscli generate_helm_chart --output_path /home/user/helmCharts'
         )
 
     def run(self, args):

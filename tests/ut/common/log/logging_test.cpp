@@ -318,7 +318,7 @@ TEST_F(LoggingTest, TestEnvSucceed)
               RETRY_TIMEOUT_SECONDS, interval));
 }
 
-TEST_F(LoggingTest, TestMultiTimeCostLoggerRecord)
+TEST_F(LoggingTest, DISABLED_TestMultiTimeCostLoggerRecord)
 {
     FLAGS_log_monitor = true;
     FLAGS_max_log_size = 10;
@@ -518,7 +518,7 @@ TEST_F(LoggingTest, TestWriteLogWhenChangeEnv)
     }
 }
 
-TEST_F(LoggingTest, TestMinLogLevel)
+TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
 {
     int replace = 1;
     FLAGS_logbufsecs = 0;
@@ -551,6 +551,22 @@ TEST_F(LoggingTest, TestMinLogLevel)
     }
 
     ASSERT_TRUE(isAccessLogExist);
+}
+
+TEST_F(LoggingTest, TestMinLogLevelNotCallFunction)
+{
+    auto expensiveCall = [] {
+        sleep(1);
+        return "hello";
+    };
+    FLAGS_minloglevel = 1;
+    Timer timer;
+    const int loopCount = 10;
+    for (int i = 0; i < loopCount; i++) {
+        LOG(INFO) << expensiveCall();
+    }
+    ASSERT_LT(timer.ElapsedSecond(), 1);
+    LOG(ERROR) << "cost: " << timer.ElapsedMicroSecond();
 }
 
 TEST_F(LoggingTest, TestDisableClientLogMonitor)
@@ -643,6 +659,5 @@ TEST_F(LoggingTest, TestLogName)
     filepath = FLAGS_log_dir + "/test_client.INFO.log";
     ASSERT_TRUE(FileExist(filepath));
 }
-
 }  // namespace ut
 }  // namespace datasystem

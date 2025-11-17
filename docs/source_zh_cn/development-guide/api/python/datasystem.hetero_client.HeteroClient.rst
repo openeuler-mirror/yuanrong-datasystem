@@ -56,6 +56,8 @@ datasystem.hetero_client.HeteroClient
          - 生成一个带数据系统 Worker UUID 的 key。
        * - :doc:`get_meta_info <datasystem.hetero_client.HeteroClient.get_meta_info>`
          - 获取keys 对应的元数据信息。
+       * - :doc:`exist <datasystem.hetero_client.HeteroClient.exist>`
+         - 检查给定的键在数据系统中是否存在。
 
 .. toctree::
     :maxdepth: 1
@@ -76,3 +78,4 @@ datasystem.hetero_client.HeteroClient
     datasystem.hetero_client.HeteroClient.async_dev_delete
     datasystem.hetero_client.HeteroClient.generate_key
     datasystem.hetero_client.HeteroClient.get_meta_info
+    datasystem.hetero_client.HeteroClient.exist

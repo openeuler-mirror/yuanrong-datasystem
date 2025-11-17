@@ -27,6 +27,13 @@ ARG DATASYSTEM_ROOT=${HOME}/datasystem
 ARG TARGET_SYSTEM
 ARG ARCHITECTURE
 
+RUN sed -i 's|repo.openeuler.org|mirrors.huaweicloud.com/openeuler|g' /etc/yum.repos.d/*.repo
+
+RUN dnf clean all && \
+    dnf makecache && \
+    dnf install -y shadow-utils && \
+    dnf clean all
+
 RUN mkdir -p ${DATASYSTEM_ROOT} && \
     groupadd -g ${GROUP_ID} ${GROUP_NAME} && \
     useradd -u ${USER_UID} -g ${GROUP_ID} -s /sbin/nologin ${USER_NAME} && \
@@ -57,6 +64,11 @@ ADD --chown=sn:sn lib ${DATASYSTEM_ROOT}/lib
 RUN chmod -R 500 ${DATASYSTEM_ROOT}/bin && \
     chmod 500 ${DATASYSTEM_ROOT}/lib && \
     chmod 400 ${DATASYSTEM_ROOT}/lib/*
+
+RUN sh -c 'if [ -d "${DATASYSTEM_ROOT}/lib/urma" ]; then \
+        chmod 500 ${DATASYSTEM_ROOT}/lib/urma && \
+        chmod 400 ${DATASYSTEM_ROOT}/lib/urma/*; \
+    fi'
 
 RUN if [ -f /etc/sudoers ]; then \
         sed -i "s|%wheel|#%wheel|g" "/etc/sudoers"; \

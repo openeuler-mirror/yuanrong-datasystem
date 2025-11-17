@@ -28,6 +28,7 @@
 #include "datasystem/common/log/spdlog/log_param.h"
 
 DS_DECLARE_int32(v);
+DS_DECLARE_int32(minloglevel);
 
 namespace datasystem {
 #define DS_LOGS_LEVEL_INFO datasystem::LogSeverity::INFO
@@ -37,13 +38,16 @@ namespace datasystem {
 
 static constexpr int32_t HEARTBEAT_LEVEL = 3;  // Heartbeat log level
 
-// Basic Logging Macros
-#define LOG(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__).Stream()
+// Basic Logging Macros Impl
+#define LOG_IMPL(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__).Stream()
 
 // Conditional Logging Macros
 #define LOG_IF(severity, condition) \
     if (condition)                  \
-    LOG(severity)
+    LOG_IMPL(severity)
+
+// Basic Logging Macros
+#define LOG(severity) LOG_IF(severity, FLAGS_minloglevel <= DS_LOGS_LEVEL_##severity)
 
 // Frequency-Controlled Logging Macros
 #define LOG_EVERY_N(severity, n)                     \
@@ -57,7 +61,7 @@ static constexpr int32_t HEARTBEAT_LEVEL = 3;  // Heartbeat log level
     auto LOG_EVERY_T_ELAPSED_##__LINE__ = std::chrono::duration_cast<std::chrono::milliseconds>(             \
                                               LOG_EVERY_T_NOW_##__LINE__ - LOG_EVERY_T_LAST_TIME_##__LINE__) \
                                               .count();                                                      \
-    if (LOG_EVERY_T_ELAPSED_##__LINE__ >= (seconds) * 1000                                                   \
+    if (LOG_EVERY_T_ELAPSED_##__LINE__ >= (seconds)*1000                                                     \
         && (LOG_EVERY_T_LAST_TIME_##__LINE__ = LOG_EVERY_T_NOW_##__LINE__, true))                            \
     LOG(severity)
 

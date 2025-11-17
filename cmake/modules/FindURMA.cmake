@@ -23,23 +23,8 @@ find_library(URMA_LIBRARY urma
              NO_CMAKE_SYSTEM_PATH
              NO_SYSTEM_ENVIRONMENT_PATH)
 
-find_library(URMA_IP_LIBRARY urma_ip
-             PATHS ${URMA_IP_IB_LIB_LOCATION}
-             DOC   "URMA IP library"
-             NO_CMAKE_SYSTEM_PATH
-             NO_SYSTEM_ENVIRONMENT_PATH)
-
-find_library(URMA_IB_LIBRARY urma_ib
-             PATHS ${URMA_IP_IB_LIB_LOCATION}
-             DOC   "URMA IB library"
-             NO_CMAKE_SYSTEM_PATH
-             NO_SYSTEM_ENVIRONMENT_PATH)
-
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(URMA REQUIRED_VARS
-    URMA_LIBRARY URMA_IP_LIBRARY URMA_IB_LIBRARY URMA_INCLUDE_DIR)
+find_package_handle_standard_args(URMA REQUIRED_VARS URMA_LIBRARY URMA_INCLUDE_DIR)
 
 message(STATUS "URMA_LIBRARY=${URMA_LIBRARY}")
-message(STATUS "URMA_IP_LIBRARY=${URMA_IP_LIBRARY}")
-message(STATUS "URMA_IB_LIBRARY=${URMA_IB_LIBRARY}")
 message(STATUS "URMA_INCLUDE_DIR=${URMA_INCLUDE_DIR}")

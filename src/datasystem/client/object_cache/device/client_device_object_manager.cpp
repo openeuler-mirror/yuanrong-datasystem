@@ -57,39 +57,27 @@ Status ClientDeviceObjectManager::Init()
     return Status::OK();
 }
 
-Status ClientDeviceObjectManager::CreateDevBuffer(const std::string &devObjKey, uint64_t size, void *devPtr,
-                                                  int32_t deviceIdx, std::shared_ptr<DeviceBuffer> &deviceBuffer)
-{
-    std::vector<DataInfo> dataInfoList{ { devPtr, DataType::DATA_TYPE_INT8, size } };
-    auto bufferInfo =
-        std::make_shared<DeviceBufferInfo>(devObjKey, deviceIdx, LifetimeType::REFERENCE, true, TransferType::HOST);
-    return CreateDevBufferImpl(bufferInfo, dataInfoList, deviceBuffer);
-}
-
-Status ClientDeviceObjectManager::CreateDevBuffer(const std::string &devObjKey,
-                                                  const std::vector<DataInfo> &dataInfoList, int32_t deviceIdx,
+Status ClientDeviceObjectManager::CreateDevBuffer(const std::string &devObjKey, const DeviceBlobList &devBlobList,
                                                   const CreateDeviceParam &param,
                                                   std::shared_ptr<DeviceBuffer> &deviceBuffer)
 {
-    auto bufferInfo = std::make_shared<DeviceBufferInfo>(devObjKey, deviceIdx, param.lifetime, param.cacheLocation,
-                                                         TransferType::P2P);
-    return CreateDevBufferImpl(bufferInfo, dataInfoList, deviceBuffer);
+    auto bufferInfo = std::make_shared<DeviceBufferInfo>(devObjKey, devBlobList.deviceIdx, param.lifetime,
+                                                         param.cacheLocation, TransferType::P2P);
+    return CreateDevBufferImpl(bufferInfo, devBlobList, deviceBuffer);
 }
 
 Status ClientDeviceObjectManager::CreateDevBufferImpl(std::shared_ptr<DeviceBufferInfo> bufferInfo,
-                                                      const std::vector<DataInfo> &dataInfoList,
+                                                      const DeviceBlobList &devBlobList,
                                                       std::shared_ptr<DeviceBuffer> &deviceBuffer)
 {
     // check input parameter
     RETURN_IF_NOT_OK(objClientImpl_->IsClientReady());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo->devObjKey.empty(), K_INVALID, "The devObjKey is empty");
-    CHECK_FAIL_RETURN_STATUS(!dataInfoList.empty(), K_INVALID, "The dataInfoList is empty");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(bufferInfo->devObjKey), K_INVALID,
-                             "The devObjKey maybe contains illegal char(s) or the length of id is > 255.");
+    CHECK_FAIL_RETURN_STATUS(!devBlobList.blobs.empty(), K_INVALID, "The devBlobList is empty");
+    RETURN_IF_NOT_OK(ObjectClientImpl::CheckValidObjectKey(bufferInfo->devObjKey));
 
     int32_t deviceIdxNow = -1;
-    RETURN_IF_NOT_OK_APPEND_MSG(devInterImpl_->GetDeviceIdx(deviceIdxNow),
-                                "May not create context or set device in this thread.");
+    RETURN_IF_NOT_OK(devInterImpl_->GetDeviceIdx(deviceIdxNow));
     auto &deviceIdx = bufferInfo->deviceIdx;
     if (deviceIdx < 0) {
         deviceIdx = deviceIdxNow;
@@ -99,11 +87,11 @@ Status ClientDeviceObjectManager::CreateDevBufferImpl(std::shared_ptr<DeviceBuff
                                    deviceIdx, deviceIdxNow));
     }
     // avoid check fail return while some device memory have allocated and not release.
-    for (auto &dataInfo : dataInfoList) {
-        CHECK_FAIL_RETURN_STATUS(dataInfo.count > 0, K_INVALID, "The size value should be bigger than zero.");
+    for (auto &blob : devBlobList.blobs) {
+        CHECK_FAIL_RETURN_STATUS(blob.size > 0, K_INVALID, "The size value should be bigger than zero.");
     }
 
-    auto memUnit = std::make_shared<DeviceMemoryUnit>(bufferInfo->devObjKey, dataInfoList);
+    auto memUnit = std::make_shared<DeviceMemoryUnit>(bufferInfo->devObjKey, devBlobList.blobs);
     RETURN_IF_NOT_OK(memUnit->MallocDeviceMemoryIfUserNotSet());
 
     deviceBuffer = DeviceBuffer::CreateDeviceBuffer(bufferInfo, memUnit, objClientImpl_->shared_from_this());
@@ -123,17 +111,17 @@ Status ClientDeviceObjectManager::PublishDeviceObject(const std::shared_ptr<Devi
 Status ClientDeviceObjectManager::PublishDeviceObjectWithHost(const std::shared_ptr<DeviceBuffer> &buffer)
 {
     auto &bufferInfo = buffer->bufferInfo_;
-    DataInfo dataInfo;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->GetDeviceMemUnit()->CheckAndGetSingleDataInfo(dataInfo),
-                                     "The device object with host buffer just support single dataInfo for now");
-    auto dataSize = dataInfo.Size();
+    Blob blob;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->GetDeviceMemUnit()->CheckAndGetSingleBlob(blob),
+                                     "The device object with host buffer just support single blob for now");
+    auto dataSize = blob.size;
     auto &devObjKey = bufferInfo->devObjKey;
     std::shared_ptr<Buffer> hostBuffer;
     RETURN_IF_NOT_OK(objClientImpl_->Create(devObjKey, dataSize, {}, hostBuffer));
     auto hostBufferInfo = ObjectClientImpl::GetBufferInfo(hostBuffer);
     bufferInfo->shmId = hostBufferInfo->shmId;
     bufferInfo->version = hostBufferInfo->version;
-    RETURN_IF_NOT_OK(devInterImpl_->MemCopyD2H(hostBuffer->MutableData(), dataSize, dataInfo.devPtr, dataSize));
+    RETURN_IF_NOT_OK(devInterImpl_->MemCopyD2H(hostBuffer->MutableData(), dataSize, blob.pointer, dataSize));
     std::shared_ptr<ClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
     return workerApi->PublishDeviceObject(bufferInfo, dataSize, !bufferInfo->shmId.empty(), hostBuffer->MutableData());
@@ -152,7 +140,7 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
                                                        DeviceBuffer &dstDevBuffer)
 {
     RETURN_IF_NOT_OK(objClientImpl_->IsClientReady());
-    RETURN_IF_NOT_OK(objClientImpl_->CheckStringVector(devObjKeys));
+    RETURN_IF_NOT_OK(ObjectClientImpl::CheckValidObjectKeyVector(devObjKeys));
     if (devObjKeys.size() > 1 || !map.empty()) {
         RETURN_STATUS(K_INVALID,
                       "The resharding get is not supported now, please keep the devObjKeys only have one objectKey and "
@@ -285,13 +273,13 @@ Status ClientDeviceObjectManager::GetSendStatus(const std::shared_ptr<DeviceBuff
     return rc;
 }
 
-Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<std::vector<DataInfo>> &dataInfoList,
+Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<DeviceBlobList> &devBlobList,
                                                            std::vector<Buffer *> &bufferList, aclrtMemcpyKind copyKind,
                                                            bool enableHugeTlb)
 {
     DeviceBatchCopyHelper helper;
-    RETURN_IF_NOT_OK(helper.Prepare(dataInfoList, bufferList, copyKind));
-    auto deviceId = dataInfoList[0][0].deviceIdx;
+    RETURN_IF_NOT_OK(helper.Prepare(devBlobList, bufferList, copyKind));
+    auto deviceId = devBlobList[0].deviceIdx;
     aclResourceMgr_.SetD2HPolicyByHugeTlb(enableHugeTlb);
     INJECT_POINT("NO_USE_FFTS", [this]() {
         aclResourceMgr_.SetPolicyDirect();

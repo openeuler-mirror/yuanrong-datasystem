@@ -23,6 +23,7 @@ __all__ = [
     "ObjectClient",
     "KVClient",
     "Status",
+    "StreamClient",
     "SubconfigType",
     "WriteMode",
     "Context",
@@ -38,6 +39,7 @@ __all__ = [
 from datasystem.object_client import Buffer, ConsistencyType
 from datasystem.object_client import ObjectClient, WriteMode
 from datasystem.lib.libds_client_py import FutureTimeoutException
+from datasystem.stream_client import SubconfigType, StreamClient
 from datasystem.ds_client import DsClient
 from datasystem.kv_client import KVClient
 from datasystem.hetero_client import HeteroClient, Blob, DeviceBlobList, MetaInfo, Future

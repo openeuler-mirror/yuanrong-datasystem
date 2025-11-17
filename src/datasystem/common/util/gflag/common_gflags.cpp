@@ -57,11 +57,31 @@ bool ValidateEnableUrma(const char *flagName, bool value)
     return true;
 #endif
 }
+
+bool ValidateUrmaMode(const char *flagName, const std::string &value)
+{
+    (void)flagName;
+    (void)value;
+#ifdef USE_URMA
+    if (value == "IB") {
+        return true;
+    }
+#ifdef URMA_OVER_UB
+    if (value == "UB") {
+        return true;
+    }
+#endif
+    return false;
+#else
+    return true;
+#endif
+}
 }  // namespace
 
 DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to worker data transfer, default false.");
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
-
+DS_DEFINE_string(urma_mode, "IB", "Option to enable URMA over IB or UB, default IB to run with URMA over IB.");
+DS_DEFINE_validator(urma_mode, &ValidateUrmaMode);
 DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time, 16 is the max this device can poll");
 DS_DEFINE_uint32(urma_connection_size, 16, "Number of jfs and jfr pair");
 DS_DEFINE_bool(urma_register_whole_arena, true,

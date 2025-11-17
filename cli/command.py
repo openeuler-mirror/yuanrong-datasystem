@@ -38,23 +38,24 @@ class BaseCommand:
 
     def __init__(self):
         """Initialize of command"""
-
-        def valid_safe_path(path: str):
-            unsafe_dirs = ["/bin", "/sbin", "/lib", "/lib64", "/", "/boot", "/dev", "/etc", "/sys", "/proc"]
-            norm_path = os.path.normpath(os.path.abspath(path))
-            if norm_path in unsafe_dirs:
-                raise ValueError(f"Path {path} is outside allowed directory")
-            for parent in unsafe_dirs:
-                if parent == "/":
-                    continue
-                if norm_path.startswith(parent + os.sep):
-                    raise ValueError(f"Path {path} is outside allowed directory")
-            return norm_path
-
         if BaseCommand.logger is None:
             BaseCommand._configure_logging()
         self._base_dir = str(resources.files("datasystem"))
-        self._base_dir = valid_safe_path(self._base_dir)
+        self._base_dir = self.valid_safe_path(self._base_dir)
+
+    @staticmethod
+    def valid_safe_path(path: str):
+        """Validate the legality of the input path."""
+        unsafe_dirs = ["/bin", "/sbin", "/lib", "/lib64", "/", "/boot", "/dev", "/etc", "/sys", "/proc"]
+        norm_path = os.path.normpath(os.path.abspath(path))
+        if norm_path in unsafe_dirs:
+            raise ValueError(f"Path {path} is outside allowed directory")
+        for parent in unsafe_dirs:
+            if parent == "/":
+                continue
+            if norm_path.startswith(parent + os.sep):
+                raise ValueError(f"Path {path} is outside allowed directory")
+        return norm_path
 
     @staticmethod
     def add_arguments(parser):

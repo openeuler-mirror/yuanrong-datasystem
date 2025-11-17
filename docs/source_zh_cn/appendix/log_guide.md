@@ -27,11 +27,11 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 
 | 序号 | 日志 | 日志格式 |
 |-----|-----|------------------------|
-| 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| message |
-| 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| status_code \| action \| cost \| data size \| request param\| response param
-| 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| status_code \| action \| cost \| data size \| request param\| response param
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| shm_info \| spill_disk_info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWokrerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool |
-| 5 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| message |
+| 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
+| 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param
+| 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm_info \| spill_disk_info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWokrerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool |
+| 5 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 
 ### 日志字段
 
@@ -43,7 +43,7 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | pod_name | 128 | 输出当前worker所属的POD名称，超出长度则截断。示例：ds-worker-hs5qm |
 | pid:tid | 11 | 该日志所属的进程ID和线程ID。进程号最大值为32757，该字段最大长度11.示例：9:177 |
 | traceid | 36 | 请求的traceid。 |
-| az_name | 128 | 输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。 |
+| cluster_name | 128 | 输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。 |
 | Message | 1024 | 自定义消息内容 |
 | status_code | 5 | 该请求的状态，不同消息类型状态值不一样。SDK/datasystem_worker 访问日志，0表示成功，其他表示失败。 |
 | action | 64 | 表示该请求所访问的接口名称。约定前缀：SDK接口：DS_STATE_CLINET、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path} |

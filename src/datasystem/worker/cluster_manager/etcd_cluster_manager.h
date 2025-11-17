@@ -903,6 +903,26 @@ private:
     Status StartNodeUtilThread();
 
     /**
+     * @brief Starts a thread to monitor orphaned nodes.
+     * @return Status of the call.
+     */
+    Status StartOrphanNodeMonitorThread();
+
+    /**
+     * @brief Starts background thread.
+     * @return Status of the call.
+     */
+    Status StartBackgroundThread();
+
+    /**
+     * @brief Get the to be clean nodes.
+     * @param[in] orphanNodes The orphan nodes.
+     * @param[out] toBeCleanNodes The to be clean nodes.
+     */
+    void GetToBeCleanNodes(const std::unordered_map<std::string, std::string> &orphanNodes,
+                           std::set<std::pair<std::string, bool>> &toBeCleanNodes);
+
+    /**
      * @brief The function that executes the the check for a timed out node to see if it needs to be demoted to a
      * failed node. Any node that is timed out and meets the criteria for demotion shall have its state changed.
      */
@@ -1041,6 +1061,12 @@ private:
     TbbNodeTable clusterNodeTable_;       // Tracks node states of the cluster nodes
     TbbNodeTable otherClusterNodeTable_;  // Tracks node states of the other AZ's cluster nodes
     mutable std::shared_timed_mutex otherClusterNodeMutex_;
+
+    using TbbOrphanTable = tbb::concurrent_hash_map<std::string, std::string>;
+    TbbOrphanTable orphanNodeTable_;
+    mutable std::shared_timed_mutex orphanNodeMutex_;  // protect orphanNodeTable_
+    WaitPost orphanWaitPost_;                          // wait orphanNodeTable_ is not empty
+    std::unique_ptr<Thread> orphanNodeMonitorThread_{ nullptr };
 
     // The timers that generate fake node removal event, used only in StartNodeUtilThread thread.
     std::unordered_map<std::string, TimerQueue::TimerImpl> nodeTableCompletionTimer_;

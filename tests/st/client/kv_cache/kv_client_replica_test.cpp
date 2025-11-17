@@ -806,7 +806,7 @@ public:
         opts.enableDistributedMaster = "true";
         std::string gflag =
             " -v=1 -shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=true "
-            "-other_az_names=AZ1,AZ2,AZ3 -cross_az_get_meta_from_worker=true -enable_meta_replica=true "
+            "-other_cluster_names=AZ1,AZ2,AZ3 -cross_az_get_meta_from_worker=true -enable_meta_replica=true "
             "-oc_io_from_l2cache_need_metadata=true";
 
         opts.workerGflagParams = gflag;
@@ -814,7 +814,7 @@ public:
         for (size_t i = 0; i < WORKER_NUM; i++) {
             opts.workerConfigs.emplace_back("127.0.0.1", GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
-            std::string param = "-az_name=";
+            std::string param = "-cluster_name=";
             param.append(otherAzNames_[i % otherAzNames_.size()]);
             opts.workerSpecifyGflagParams[i] = param;
         }

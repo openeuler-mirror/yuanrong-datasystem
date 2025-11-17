@@ -21,10 +21,15 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
+#include "datasystem/protos/stream_posix.stub.rpc.pb.h"
+#include "datasystem/protos/master_stream.stub.rpc.pb.h"
+#include "datasystem/protos/worker_stream.stub.rpc.pb.h"
 
 DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
+DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 
 DS_DECLARE_int32(oc_worker_worker_direct_port);
+DS_DECLARE_int32(sc_worker_worker_direct_port);
 DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem {
@@ -54,8 +59,17 @@ Status RpcStubCacheMgr::CreateRpcStub(StubType type, const std::shared_ptr<RpcCh
         case StubType::WORKER_MASTER_OC_SVC:
             stub = std::make_shared<master::MasterOCService_Stub>(channel, FLAGS_node_timeout_s * TO_MILLISECOND);
             break;
+        case StubType::WORKER_WORKER_SC_SVC:
+            stub = std::make_shared<WorkerWorkerSCService_Stub>(channel);
+            break;
+        case StubType::WORKER_MASTER_SC_SVC:
+            stub = std::make_shared<master::MasterSCService_Stub>(channel);
+            break;
         case StubType::MASTER_WORKER_OC_SVC:
             stub = std::make_shared<MasterWorkerOCService_Stub>(channel);
+            break;
+        case StubType::MASTER_WORKER_SC_SVC:
+            stub = std::make_shared<MasterWorkerSCService_Stub>(channel);
             break;
         case StubType::MASTER_MASTER_OC_SVC:
             stub = std::make_shared<master::MasterOCService_Stub>(channel);
@@ -89,19 +103,20 @@ bool RpcStubCacheMgr::EnableOcWorkerWorkerDirectPort()
     return FLAGS_oc_worker_worker_direct_port > 0;
 }
 
+bool RpcStubCacheMgr::EnableScWorkerWorkerDirectPort()
+{
+    return FLAGS_sc_worker_worker_direct_port > 0;
+}
 
 void RpcStubCacheMgr::InitCreators()
 {
     creators_.emplace(
-        StubType::WORKER_WORKER_OC_SVC,
-        [&localAddress = localAddress_](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+        StubType::WORKER_WORKER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
             return CreatorTemplate(
-                [&hostPort, &localAddress](std::shared_ptr<RpcChannel> &channel) {
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) {
                     RETURN_IF_NOT_OK(CreateRpcChannel(
                         hostPort, EnableOcWorkerWorkerDirectPort() ? WorkerWorkerOCService_Stub::FullServiceName() : "",
                         channel, FLAGS_oc_worker_worker_pool_size));
-                    // Set local address info for URMA purposes.
-                    channel->SetLocalInfo(localAddress);
                     return Status::OK();
                 },
                 StubType::WORKER_WORKER_OC_SVC, rpcStub);
@@ -113,10 +128,32 @@ void RpcStubCacheMgr::InitCreators()
                 StubType::WORKER_MASTER_OC_SVC, rpcStub);
         });
     creators_.emplace(
+        StubType::WORKER_WORKER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) {
+                    return CreateRpcChannel(
+                        hostPort, EnableScWorkerWorkerDirectPort() ? WorkerWorkerSCService_Stub::FullServiceName() : "",
+                        channel, FLAGS_sc_worker_worker_pool_size);
+                },
+                StubType::WORKER_WORKER_SC_SVC, rpcStub);
+        });
+    creators_.emplace(
+        StubType::WORKER_MASTER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
+                StubType::WORKER_MASTER_SC_SVC, rpcStub);
+        });
+    creators_.emplace(
         StubType::MASTER_WORKER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
             return CreatorTemplate(
                 [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
                 StubType::MASTER_WORKER_OC_SVC, rpcStub);
+        });
+    creators_.emplace(
+        StubType::MASTER_WORKER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
+                StubType::MASTER_WORKER_SC_SVC, rpcStub);
         });
     creators_.emplace(
         StubType::MASTER_MASTER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
@@ -185,6 +222,9 @@ StubPriority GetStubPriority(StubType type)
             return StubPriority::LOW;
         case StubType::WORKER_WORKER_OC_SVC:
         case StubType::WORKER_MASTER_OC_SVC:
+        case StubType::WORKER_WORKER_SC_SVC:
+        case StubType::WORKER_MASTER_SC_SVC:
+        case StubType::MASTER_WORKER_SC_SVC:
         case StubType::MASTER_MASTER_OC_SVC:
             return StubPriority::HIGH;
 #ifdef WITH_TESTS

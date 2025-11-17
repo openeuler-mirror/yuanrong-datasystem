@@ -1,0 +1,39 @@
+// Stream Metrics
+// Topology
+SC_METRIC_KEY_DEF(NumLocalProducers, "Number of local producers on the stream")
+SC_METRIC_KEY_DEF(NumRemoteProducers, "Number of remote producers on the stream")
+SC_METRIC_KEY_DEF(NumLocalConsumers, "Number of local consumers on the stream")
+SC_METRIC_KEY_DEF(NumRemoteConsumers, "Number of remote producers on the stream")
+
+// Memory Metrics
+SC_METRIC_KEY_DEF(SharedMemoryUsed, "Amount of shared memory currently used by the stream")
+SC_METRIC_KEY_DEF(LocalMemoryUsed, "Amount of local memory currently used by the stream")
+
+// Data Metrics
+SC_METRIC_KEY_DEF(NumTotalElementsSent, "Number of elements sent by producers on the stream")
+SC_METRIC_KEY_DEF(NumTotalElementsReceived, "Number of elements received by all consumers on the stream")
+SC_METRIC_KEY_DEF(NumTotalElementsAcked, "Number of elements acked by all consumers on the stream")
+SC_METRIC_KEY_DEF(NumSendRequests, "Number of producer send requests called by the client on stream")
+SC_METRIC_KEY_DEF(NumReceiveRequests, "Number of consumer receive requests called by the client on stream")
+
+// Page Metrics
+SC_METRIC_KEY_DEF(NumPagesCreated, "Number of normal pages created in the stream")
+SC_METRIC_KEY_DEF(NumPagesReleased, "Number of normal pages released in the stream")
+SC_METRIC_KEY_DEF(NumPagesInUse, "Number of pages currently in use in the stream")
+SC_METRIC_KEY_DEF(NumPagesCached, "Number of pages currently cached in the stream")
+SC_METRIC_KEY_DEF(NumBigPagesCreated, "Number of big element pages created in the stream")
+SC_METRIC_KEY_DEF(NumBigPagesReleased, "Number of big element pages released in the stream")
+
+// Blocking Metrics
+SC_METRIC_KEY_DEF(NumLocalProducersBlocked, "Number of local producers blocked on the stream")
+SC_METRIC_KEY_DEF(NumRemoteProducersBlocked, "Number of remote producers blocked on the stream")
+SC_METRIC_KEY_DEF(NumRemoteConsumersBlocking, "Number of remote consumers that are blocking")
+
+// State Metrics
+SC_METRIC_KEY_DEF(RetainDataState, "Current retain data state of the stream (INIT, RETAIN, NOT_RETAIN)")
+SC_METRIC_KEY_DEF(StreamState,
+                  "Current state of the stream (ACTIVE, RESET_IN_PROGRESS, RESET_COMPLETE, DELETE_IN_PROGRESS)")
+
+// Master Stream Metrics
+SC_METRIC_KEY_DEF(NumProducersMaster, "Number of producers in the stream on the master")
+SC_METRIC_KEY_DEF(NumConsumersMaster, "Number of consumers in the stream on the master")

@@ -177,6 +177,7 @@ message SendRootInfoReqPb {
 }
 
 message SendRootInfoRspPb{
+  bool is_dead_lock = 1;
 }
 
 
@@ -195,6 +196,7 @@ message RecvRootInfoReqPb {
 
 message RecvRootInfoRspPb{
   bytes root_info = 1;
+  bool is_dead_lock = 2;
 }
 
 message RemoveP2PLocationReqPb {

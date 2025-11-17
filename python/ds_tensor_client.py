@@ -194,16 +194,31 @@ class DsTensorClient:
         self._device_id = device_id
 
     @staticmethod
+    def _get_tensor_device_type(tensor: Tensor) -> str:
+        """Safely get tensor device type with proper error handling"""
+        if hasattr(tensor, 'device') and isinstance(tensor.device, str):
+            error_msg = ("tensor.device is a string, 'str' object has no attribute 'type'. This usually indicates that "
+                        "MindSpore is being used without msadapter, or there's a version mismatch.\n "
+                        "Solutions:\n "
+                        "1. Install msadapter for proper tensor operations: \n"
+                        "   pip install msadapter\n "
+                        "2. Ensure MindSpore and msadapter version compatibility.\n")
+            raise AttributeError(error_msg)
+
+        return tensor.device.type
+
+    @staticmethod
     def _is_ms_tensor(tensor: Tensor) -> str:
         """check if the tensor is mindspore type"""
-        is_ms = (tensor.device.type == "Ascend")
+        is_ms = (DsTensorClient._get_tensor_device_type(tensor) == "Ascend")
         return is_ms
 
     @staticmethod
     def _check_tensor_device_type(tensor: Tensor) -> None:
         """check the tensor type"""
-        if tensor.device.type not in ["Ascend", "npu"]:
-            raise ValueError(f"{tensor.device.type} tensor, not a npu/Ascend tensor")
+        device_type = DsTensorClient._get_tensor_device_type(tensor)
+        if device_type not in ["Ascend", "npu"]:
+            raise ValueError(f"{device_type} tensor, not a npu/Ascend tensor")
 
     @staticmethod
     def _check_tensors_is_contiguous(tensors: List[Tensor]) -> None:

@@ -231,7 +231,7 @@ TEST_F(OCClientRefTest, TestClientDisconnectFailed)
     InitTestClient(1, client2);  // the worker index is 1
     int timeout = 10;
     std::string data = "111111111";
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    CreateParam param{};
     std::string testcasename = "trouble_ticket_";
     std::vector<std::string> failObjects;
     int objNum = 10;
@@ -515,7 +515,7 @@ TEST_F(OCClientRefTest, TestNoShmNested)
 {
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    CreateParam param{};
     std::string objectKey1 = NewObjectKey();
     std::string objectKey2 = NewObjectKey();
     std::string objectKey3 = NewObjectKey();
@@ -562,7 +562,7 @@ TEST_F(OCClientRefTest, TestPutNested)
 {
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    CreateParam param{};
     std::string objectKey1 = NewObjectKey();
     std::string objectKey2 = NewObjectKey();
     std::string objectKey3 = NewObjectKey();
@@ -656,7 +656,7 @@ TEST_F(OCClientRefTest, TestPutNested3)
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client);
     InitTestClient(1, client2);
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     std::string objectKey1 = "key_1";
     std::string objectKey2 = "key_2";
     std::string objectKey3 = "key_3";
@@ -905,8 +905,8 @@ TEST_F(OCClientRefTest, NestedChildTest)
     InitTestClient(1, client2);
     std::shared_ptr<ObjectClient> client3;
     InitTestClient(2, client3);
-    CreateParam param1{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    CreateParam param2{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    CreateParam param1{};
+    CreateParam param2{};
     std::string objectKey1 = NewObjectKey();
     std::string objectKey2 = NewObjectKey();
 

@@ -36,7 +36,7 @@ PybindDefinedFunctionRegister &PybindDefinedFunctionRegister::GetSingleton()
 // Import all functions with priority = 0 as *client_lib.
 PYBIND11_MODULE(libds_client_py, m)
 {
-    m.doc() = "pybind11 for object_cache client";
+    m.doc() = "pybind11 for object_cache and stream_cache client";
 
     auto all_fns = datasystem::PybindDefinedFunctionRegister::AllFunctions();
 

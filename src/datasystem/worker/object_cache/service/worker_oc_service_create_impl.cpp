@@ -29,6 +29,8 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
+DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
+
 namespace datasystem {
 namespace object_cache {
 
@@ -116,7 +118,30 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
                              FormatString("object key count %zu not match with data size count %zu",
                                           req.object_key_size(), req.data_size_size()));
     auto lastRc = Status::OK();
+    auto totalSize = 0u;
     for (int i = 0; i < req.object_key().size(); i++) {
+        auto objectKey = req.object_key(i);
+        auto dataSize = req.data_size(i);
+        // Check whether the object is in local.
+        {
+            auto key = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, objectKey);
+            std::shared_ptr<SafeObjType> entry;
+            if (!req.skip_check_existence() && objectTable_->Get(key, entry).IsOk() && entry->RLock(false).IsOk()) {
+                Raii unlock([&entry]() { entry->RUnlock(); });
+                if ((*entry)->IsBinary() && !(*entry)->IsInvalid()) {
+                    resp.add_exists(true);
+                    continue;
+                };
+            }
+        }
+        resp.add_exists(false);
+        totalSize += dataSize;
+    }
+    for (int i = 0; i < req.object_key().size(); i++) {
+        if (resp.exists(i) || totalSize < FLAGS_oc_shm_transfer_threshold_kb * KB) {
+            resp.add_results();
+            continue;
+        }
          const auto &objectKey = req.object_key(i);
         auto dataSize = req.data_size(i);
         // If some buffer create failed, need to rollback, remove shm-unit.

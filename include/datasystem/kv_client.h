@@ -21,7 +21,6 @@
 #define DATASYSTEM_KV_CLIENT_H
 
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 #include "datasystem/context/context.h"

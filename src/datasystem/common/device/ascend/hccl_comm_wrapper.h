@@ -57,29 +57,29 @@ public:
     Status InitCommunicator(HcclRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) override;
     /**
      * @brief P2P send the data to the receiving side.
-     * @param[in] dataInfos[in] The list of the data info.
+     * @param[in] blobs The list of the blob info.
      * @param[in] event The aclRtEvent wrapper.
      * @return Status of the call
      */
-    Status P2PSend(const std::vector<DataInfo> &dataInfos, const std::shared_ptr<AclRtEventWrapper> &event,
+
+    Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
                    aclrtStream stream) override;
 
     /**
      * @brief P2P recv the data from the sending side.
-     * @param[in] dataInfos The list of the data info.
+     * @param[in] blobs The list of the blob info.
      * @param[in] event The aclRtEvent wrapper.
      * @param[in] stream The stream of acl context.
      * @return Status of the call
      */
-    Status P2PRecv(const std::vector<DataInfo> &dataInfos, const std::shared_ptr<AclRtEventWrapper> &event,
+    Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
                    aclrtStream stream) override;
 
     /**
      * @brief Queries whether an error occurs in the communication domain.
-     * @return If the result is 0, no error occurs in the communication domain. For details about other return values,
-     * see HcclResult Type.
+     * @return The status of Hccl invocation.
      */
-    HcclResult HcclGetCommAsyncError() override;
+    Status HcclGetCommAsyncError() override;
 
     /**
      * @brief Warm up the hccl communicator wrapper in the send side.

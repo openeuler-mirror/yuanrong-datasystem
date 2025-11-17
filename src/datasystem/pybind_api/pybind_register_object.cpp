@@ -147,20 +147,20 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
              })
 
         .def("create",
-             [](ObjectClient &client, const std::string &objectKey, uint64_t size, WriteMode writeMode,
+             [](ObjectClient &client, const std::string &objectKey, uint64_t size,
                 ConsistencyType consistency) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  std::shared_ptr<Buffer> buffer;
-                 CreateParam param{ .writeMode = writeMode, .consistencyType = consistency };
+                 CreateParam param{ .consistencyType = consistency };
                  datasystem::Status status = client.Create(objectKey, size, param, buffer);
                  return std::make_pair(status, std::move(buffer));
              })
 
         .def("put",
-             [](ObjectClient &client, const std::string &objectKey, py::buffer value, WriteMode writeMode,
+             [](ObjectClient &client, const std::string &objectKey, py::buffer value,
                 ConsistencyType consistency, const std::vector<std::string> &refIds) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-                 CreateParam param{ .writeMode = writeMode, .consistencyType = consistency };
+                 CreateParam param{ .consistencyType = consistency };
                  py::buffer_info info(value.request());
                  std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
                  return client.Put(objectKey, reinterpret_cast<const uint8_t *>(info.ptr), info.size, param,

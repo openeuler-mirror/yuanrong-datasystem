@@ -66,6 +66,8 @@ struct BaseClusterOptions {
           numZmqServerCtx(DEFAULT_ZMQ_SERVER_IO_CTX_NUM),
           numOcThreadNum(DEFAULT_THREAD_NUM),
           numSpillThreadNum(DEFAULT_THREAD_NUM),
+          numScRegularSocket(DEFAULT_THREAD_NUM),
+          numScStreamSocket(DEFAULT_THREAD_NUM),
           numEtcd(0),
           numOBS(0)
     {
@@ -100,6 +102,14 @@ struct BaseClusterOptions {
     // Default: 4
     uint32_t numSpillThreadNum;
 
+    // The number of regular backend socket for stream cache.
+    // Default: 4
+    uint32_t numScRegularSocket;
+
+    // The number of stream backend socket for stream cache.
+    // Default: 4
+    uint32_t numScStreamSocket;
+
     // Master ip address.
     // Default: None. Must be specified by the user.
     std::vector<HostPort> masterIpAddrs;
@@ -109,9 +119,10 @@ struct BaseClusterOptions {
     std::vector<HostPort> workerConfigs;
 
     // Extra tcp/ip port for worker <-> worker direct connection.
-    // One for WorkerWorkerOCService
+    // One for WorkerWorkerOCService and one WorkerWorkerSCService
     // Default: None. It is optional but its size must match workerConfigs
     std::vector<int> workerOcDirectPorts;
+    std::vector<int> workerScDirectPorts;
 
     uint32_t numEtcd;
 

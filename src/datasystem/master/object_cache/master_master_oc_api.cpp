@@ -70,7 +70,7 @@ Status MasterMasterOCApi::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb &
 {
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
-                             FormatString("Request timeout (%ld ms).", -remainingTime));
+                             FormatString("Request timeout (%lld ms).", -remainingTime));
     if (remainingTime > INT_MAX) {
         remainingTime = INT_MAX;
     }

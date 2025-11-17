@@ -135,7 +135,7 @@ Status AclMemMgrBase::Allocate(const std::vector<BufferMetaInfo> &bMeta, std::ve
             }
 
             size_t allocSize = (type_ == AllocateType::DEV_DEVICE) ? maxAllocateSize : bMeta[i].size;
-            rc = memoryPool[i].AllocateMemory(DEFAULT_TENANTID, allocSize, false, type_);
+            rc = memoryPool[i].AllocateMemory(DEFAULT_TENANTID, allocSize, false, ServiceType::OBJECT, type_);
             if (retryNums <= 0) {
                 break;
             }

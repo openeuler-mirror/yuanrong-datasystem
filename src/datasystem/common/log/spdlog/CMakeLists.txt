@@ -8,7 +8,7 @@ set(SPDLOG_SRCS
 
 set(APPEND_LIB
         nlohmann_json::nlohmann_json
-        spdlog::spdlog
+        ds_spdlog::spdlog
         ds_flags
         common_perf
         )

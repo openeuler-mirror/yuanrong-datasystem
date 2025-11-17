@@ -100,18 +100,10 @@ Status ZmqFrontend::Init()
 Status ZmqFrontend::ExchangeJfr()
 {
     // Exchange jfr for this channel if needed
-    if (channel_->UrmaEnabled()) {
+    if (UrmaManager::IsUrmaEnabled()) {
         // Send our own jfr
-        RpcChannel::UrmaInfo localUrmaInfo;
-        channel_->GetLocalUrmaInfo(localUrmaInfo);
         UrmaHandshakeReqPb rq;
-        rq.set_eid(localUrmaInfo.eid);
-        rq.set_uasid(localUrmaInfo.uasid);
-        for (auto jfrId : localUrmaInfo.jfr_ids) {
-            rq.add_jfr_ids(jfrId);
-        }
-        rq.mutable_address()->set_host(localUrmaInfo.localAddress_.Host());
-        rq.mutable_address()->set_port(localUrmaInfo.localAddress_.Port());
+        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(rq);
         MetaPb meta = CreateMetaData("", ZMQ_EXCHANGE_JFR_METHOD, ZMQ_INVALID_PAYLOAD_INX, GetStringUuid());
         ZmqMsgFrames p;
         RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, p));
@@ -127,16 +119,8 @@ Status ZmqFrontend::ExchangeJfr()
         reply.pop_front();  // Status
         UrmaHandshakeRspPb rsp;
         RETURN_IF_NOT_OK(ParseFromZmqMessage(reply.front(), rsp));
-        // Import into UrmaManager
-        RpcChannel::UrmaInfo remoteUrmaInfo;
-        remoteUrmaInfo.eid = rsp.eid();
-        remoteUrmaInfo.uasid = rsp.uasid();
-        for (auto jfrId : rsp.jfr_ids()) {
-            remoteUrmaInfo.jfr_ids.emplace_back(jfrId);
-        }
-        remoteUrmaInfo.localAddress_ = channel_->GetHostPort();
-        LOG(INFO) << remoteUrmaInfo.ToString();
-        RETURN_IF_NOT_OK(UrmaManager::Instance().ImportRemoteJfr(remoteUrmaInfo));
+        // Response does not need to be processed,
+        // the stub side does not need to import the remote jfr in urma_write scenario.
     }
     return Status::OK();
 }

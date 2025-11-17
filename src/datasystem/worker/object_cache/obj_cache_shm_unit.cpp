@@ -149,6 +149,23 @@ Status CopyAndSplitBuffer(const std::string &tenantId, const void *data, size_t 
     return Status::OK();
 }
 
+static Status InitializeMetadataMemory(const std::string &objectKey, uint64_t metadataSize, bool populate,
+                                       ShmUnit &shmUnit)
+{
+    if (metadataSize > 0) {
+        auto ret = memset_s(shmUnit.GetPointer(), metadataSize, 0, metadataSize);
+        if (ret != EOK) {
+            if (!populate) {
+                shmUnit.SetHardFreeMemory();
+            }
+            shmUnit.FreeMemory();
+            RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
+                                    FormatString("[ObjectKey %s] Memset failed, errno: %d", objectKey, ret));
+        }
+    }
+    return Status::OK();
+}
+
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                                ShmUnit &shmUnit, CacheType cacheType)
@@ -159,11 +176,12 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
         FormatString("The size is overflow, size:%d + add:%d > UINT64_MAX:%d", dataSize, metadataSize, UINT64_MAX));
     uint64_t needSize = dataSize + metadataSize;
     PerfPoint point(PerfKey::WORKER_MEMORY_ALLOCATE);
-    (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, cacheType);
+    (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, ServiceType::OBJECT, cacheType);
     // Allocate some memory into this shmUnit
     auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
     static const std::vector<int> WAIT_MSECOND = { 1, 10, 50, 100, 200, 400, 800, 1600, 3200 };
-    Status rc = shmUnit.AllocateMemory(tenantId, needSize, populate, static_cast<memory::CacheType>(cacheType));
+    Status rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT,
+                                       static_cast<memory::CacheType>(cacheType));
     if (rc.GetCode() == K_OUT_OF_MEMORY) {
         INJECT_POINT("worker.AllocateMemory.afterOOM");
         for (int t : WAIT_MSECOND) {
@@ -179,29 +197,91 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
             VLOG(1) << FormatString("OOM, sleep time: %ld, objectKey: %s, needSize %ld", sleepTime, objectKey,
                                     needSize);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
-            rc = shmUnit.AllocateMemory(tenantId, needSize, populate, static_cast<memory::CacheType>(cacheType));
+            rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT,
+                                        static_cast<memory::CacheType>(cacheType));
             if (rc.GetCode() != K_OUT_OF_MEMORY) {
                 break;
             }
-            (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, cacheType);
+            (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, ServiceType::OBJECT, cacheType);
         }
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("[ObjectKey %s] Error while allocating memory.", objectKey));
 
-    if (metadataSize > 0) {
-        auto ret = memset_s(shmUnit.GetPointer(), metadataSize, 0, metadataSize);
-        if (ret != EOK) {
-            if (!populate) {
-                shmUnit.SetHardFreeMemory();
-            }
-            shmUnit.FreeMemory();
-            RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
-                                    FormatString("[ObjectKey %s] Memset failed, errno: %d", objectKey, ret));
-        }
-    }
+    RETURN_IF_NOT_OK(InitializeMetadataMemory(objectKey, metadataSize, populate, shmUnit));
 
     point.Record();
     workerOperationTimeCost.Append("AllocateMemory", timer.ElapsedMilliSecond());
+    return Status::OK();
+}
+
+Status DistributeMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
+                                 bool populate, std::shared_ptr<ShmOwner> shmOwner, ShmUnit &shmUnit)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        UINT64_MAX - metadataSize >= dataSize, K_RUNTIME_ERROR,
+        FormatString("The size is overflow, size:%d + add:%d > UINT64_MAX:%d", dataSize, metadataSize, UINT64_MAX));
+    uint64_t needSize = dataSize + metadataSize;
+    PerfPoint point(PerfKey::WORKER_MEMORY_ALLOCATE);
+    RETURN_IF_NOT_OK(shmOwner->DistributeMemory(needSize, shmUnit));
+    RETURN_IF_NOT_OK(InitializeMetadataMemory(objectKey, metadataSize, populate, shmUnit));
+    return Status::OK();
+}
+
+Status AggregateAllocate(
+    const std::string &firstObjectKey,
+    std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> &traversalHelper,
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+    std::vector<uint32_t> &shmIndexMapping)
+{
+    // Pre-allocate aggregated chunks of shared memory as ShmOwner, to reduce the number of allocation calls.
+    // 1. Only for URMA case, non-URMA case allocates the memory when response is handled.
+    // 2. Aggregate only if all the objects are small objects (< 1MB size), and batch up to 1024 keys and 2MB size.
+    // 3. Multi-tenancy not yet supported.
+    const uint64_t batchLimitKeys = 1024;
+    const uint64_t batchLimitSingleSize = 1024 * 1024;
+    const uint64_t batchLimitTotalSize = 2 * 1024 * 1024;
+
+    bool needAggregate = false;
+    std::vector<uint64_t> aggreatedSizes;
+    uint64_t currentBatchSize = 0;
+    uint64_t currentKeyCount = 0;
+
+    std::function<void(uint64_t, uint64_t, uint32_t)> aggregateCollector =
+        [&](uint64_t dataSz, uint64_t shmSize, uint32_t objectId) {
+            // Skip any object that has size beyond 1MB.
+            if (dataSz >= batchLimitSingleSize) {
+                return;
+            }
+
+            // Seal the last batch and start the new batch.
+            if (currentKeyCount >= batchLimitKeys || (currentBatchSize + shmSize) > batchLimitTotalSize) {
+                aggreatedSizes.emplace_back(currentBatchSize);
+                currentBatchSize = 0;
+                currentKeyCount = 0;
+            }
+            // Record the size and num, and also map from object key to ShmOwners index.
+            currentBatchSize += shmSize;
+            currentKeyCount++;
+            shmIndexMapping[objectId] = aggreatedSizes.size();
+        };
+
+    traversalHelper(aggregateCollector, needAggregate);
+
+    if (needAggregate && currentBatchSize > 0) {
+        // Deal with the last batch.
+        aggreatedSizes.emplace_back(currentBatchSize);
+        // Allocate memory for each batch.
+        for (const auto &aggregateSize : aggreatedSizes) {
+            std::shared_ptr<ShmOwner> shmOwner = std::make_shared<ShmOwner>();
+            // All keys in the batch request should belong to the same tenant.
+            RETURN_IF_NOT_OK(
+                AllocateMemoryForObject(firstObjectKey, aggregateSize, 0, false, evictionManager, *shmOwner));
+            shmOwners.push_back(shmOwner);
+        }
+    } else {
+        shmIndexMapping.clear();
+    }
+
     return Status::OK();
 }
 

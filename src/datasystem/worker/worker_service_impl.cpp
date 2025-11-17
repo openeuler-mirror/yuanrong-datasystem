@@ -56,13 +56,14 @@
 #include "datasystem/worker/client_manager/client_manager.h"
 
 DS_DECLARE_string(unix_domain_socket_dir);
+DS_DECLARE_uint32(page_size);
 DS_DEFINE_bool(authorization_enable, false, "Indicates whether to enable the tenant authentication, default is false.");
 DS_DECLARE_bool(ipc_through_shared_memory);
 DS_DEFINE_uint32(max_client_num, 200,
                  "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]");
 DS_DEFINE_validator(max_client_num, &Validator::ValidateClientNum);
 DS_DECLARE_uint32(node_timeout_s);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_uint64(client_dead_timeout_s);
 DS_DECLARE_bool(enable_huge_tlb);
 DS_DEFINE_uint64(oc_shm_transfer_threshold_kb, 500u,
@@ -256,6 +257,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     std::string id;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
                                      "worker process get ShmQ unit failed");
+    rsp.set_page_size(FLAGS_page_size);
     rsp.set_quorum_timeout_mult(timeoutMultiplier_);
     rsp.set_client_id(clientId);
     rsp.set_lock_id(lockId);

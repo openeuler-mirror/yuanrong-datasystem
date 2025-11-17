@@ -26,6 +26,7 @@
 
 #include "common.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -165,6 +166,17 @@ TEST_F(RocksReplicaTest, TestFullSync)
     primary.RegisterRpcChannel(&mockChannel);
     backup.RegisterRpcChannel(&mockChannel);
 
+    // write stream metadata
+    using master::stream_cache::RocksStreamMetaStore;
+    DS_ASSERT_OK(Replica::CreateScTable(primary.GetStreamRocksStore()));
+    RocksStreamMetaStore primaryMetaStore(primary.GetStreamRocksStore());
+    ProducerMetaPb producerMeta;
+    producerMeta.set_stream_name("stream1");
+    producerMeta.mutable_worker_address()->set_host("127.0.0.1");
+    int port = 8080;
+    producerMeta.mutable_worker_address()->set_port(port);
+    DS_ASSERT_OK(primaryMetaStore.AddPubNode(producerMeta));
+
     auto masterStore = primary.GetObjectRocksStore();
     DS_ASSERT_OK(masterStore->CreateTable("table"));
     int logNum = 100000;
@@ -184,6 +196,12 @@ TEST_F(RocksReplicaTest, TestFullSync)
     auto followerStore = backup.GetObjectRocksStore();
     DS_ASSERT_OK(followerStore->Get("table", "key_0", value));
     ASSERT_EQ(value, "value");
+
+    RocksStreamMetaStore backupMetaStore(backup.GetStreamRocksStore());
+    std::vector<ProducerMetaPb> producerMetaPbs;
+    DS_ASSERT_OK(backupMetaStore.GetOneStreamProducers("stream1", producerMetaPbs));
+    ASSERT_TRUE(!producerMetaPbs.empty());
+    LOG(INFO) << producerMetaPbs[0].ShortDebugString();
 }
 }  // namespace ut
 }  // namespace datasystem

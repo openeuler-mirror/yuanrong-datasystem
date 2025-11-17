@@ -91,7 +91,7 @@ void HttpRequest::ClearSensitiveInfo()
 
 void HttpRequest::SetAsyncElapseTime(int64_t asyncElapseTime)
 {
-    asyncElapse_ = static_cast<uint64_t>(asyncElapseTime);
+    asyncElapse_ = asyncElapseTime >= 0 ? static_cast<uint64_t>(asyncElapseTime) : 0;
 }
 
 uint64_t HttpRequest::GetAsyncElapseTime()

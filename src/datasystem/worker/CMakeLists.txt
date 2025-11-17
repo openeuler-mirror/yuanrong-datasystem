@@ -1,5 +1,6 @@
 
 add_subdirectory(object_cache)
+add_subdirectory(stream_cache)
 add_subdirectory(hash_ring)
 add_subdirectory(client_manager)
 add_subdirectory(cluster_manager)
@@ -35,6 +36,7 @@ set(WORKER_DEPEND_LIBS
         posix_protos
         share_memory_protos
         worker_object_cache
+        worker_stream_cache
         rpc_stub_cache_mgr
         worker_hash_ring
         worker_client_manager

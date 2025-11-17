@@ -1,0 +1,13 @@
+Checks: >
+  bugprone-*,
+  performance-*,
+  readability-*,
+  concurrency-mt-unsafe,
+  clang-analyzer-*,
+  -readability-identifier-length,
+  -readability-qualified-auto,
+  -readability-function-cognitive-complexity,
+  -readability-simplify-boolean-expr,
+  -bugprone-easily-swappable-parameters,
+  -readability-implicit-bool-conversion,
+  -readability-convert-member-functions-to-static,

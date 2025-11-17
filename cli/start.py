@@ -225,6 +225,7 @@ class Command(BaseCommand):
             if not ready_check_path:
                 raise RuntimeError("ready_check_path is empty")
             ready_check_path = os.path.abspath(ready_check_path)
+            ready_check_path = self.valid_safe_path(ready_check_path)
             if os.path.exists(ready_check_path) and os.path.isfile(ready_check_path):
                 os.remove(ready_check_path)
             process = subprocess.Popen(

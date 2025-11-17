@@ -26,12 +26,12 @@ bool IsUrmaEnabled()
 #endif
 }
 
-Status InitializeUrmaManager(const std::string &host)
+Status InitializeUrmaManager(const HostPort &hostport)
 {
-    (void)host;
+    (void)hostport;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        RETURN_IF_NOT_OK(UrmaManager::Instance().Init(host));
+        RETURN_IF_NOT_OK(UrmaManager::Instance().Init(hostport));
     }
 #endif
     return Status::OK();
@@ -110,25 +110,13 @@ Status FillUrmaInfo(std::shared_ptr<ShmUnit> shmUnit, const HostPort &localAddre
     (void)metaSz;
     (void)urmaInfo;
 #ifdef USE_URMA
-    uint64_t segAddress;
-    uint64_t segSize;
-    GetSegmentInfoFromShmUnit(shmUnit, reinterpret_cast<uint64_t>(shmUnit->GetPointer()), segAddress, segSize);
-    uint64_t segVA;
-    uint64_t segLen;
-    uint32_t segFlag;
-    uint32_t segTokenId;
-    RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(segAddress, segSize, segVA, segLen, segFlag, segTokenId));
-    urmaInfo.set_seg_va(segVA);
-    urmaInfo.set_seg_len(segLen);
-    urmaInfo.set_seg_flag(segFlag);
-    urmaInfo.set_seg_token_id(segTokenId);
-    if (UrmaManager::IsRegisterWholeArenaEnabled()) {
-        urmaInfo.set_seg_data_offset(shmUnit->GetOffset() + metaSz);
-    } else {
-        urmaInfo.set_seg_data_offset(metaSz);
+    if (UrmaManager::IsUrmaEnabled()) {
+        uint64_t segAddress;
+        uint64_t segSize;
+        GetSegmentInfoFromShmUnit(shmUnit, reinterpret_cast<uint64_t>(shmUnit->GetPointer()), segAddress, segSize);
+        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(segAddress, segSize, shmUnit->GetOffset(), metaSz,
+                                                                localAddress, urmaInfo));
     }
-    urmaInfo.mutable_request_address()->set_host(localAddress.Host());
-    urmaInfo.mutable_request_address()->set_port(localAddress.Port());
 #endif
     return Status::OK();
 }

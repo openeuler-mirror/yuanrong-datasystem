@@ -45,5 +45,13 @@ int GetDevNameFromLocalIp(const std::string &ipAddr, std::string &devName);
  * @return Status of the call.
  */
 Status EthToRdmaDevName(std::string ethDevName, std::string &rdmaDevName);
+
+enum class UrmaMode { IB = 0, UB = 1, UNKNOWN };
+/**
+ * @brief Check the URMA mode.
+ * @return The urma mode, valid options are IB or UB.
+ */
+UrmaMode GetUrmaMode();
+
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RDMA_RDMA_UTIL_H

@@ -56,6 +56,7 @@ message RegisterClientReqPb {
 }
 
 message RegisterClientRspPb {
+    int32 page_size = 1;
     bytes client_id = 2;
     double quorum_timeout_mult = 3;
     uint32 lock_id = 4;

@@ -429,57 +429,6 @@ public:
     }
 };
  
-TEST_F(ObjUpdateToReplicaTest, LEVEL1_TestUpdateToReplicaEnable)
-{
-    StartWorkerAndWaitReady({ 0, 1 }, FormatString(" -v=2"));
-    InitClients({ 0, 1 });
-    std::vector<std::string> ids, vals;
-    int num = 5;
-    for (int i = 0; i < num; i++) {
-        std::string objectKey = NewObjectKey();
-        ids.emplace_back(objectKey);
-        std::string data = GenRandomString(10);
-        vals.emplace_back(data);
-        for (size_t i = 0; i < clients_.size(); i++) {
-            std::string objectKey;
-            DS_ASSERT_OK(clients_[i]->GenerateObjectKey("", objectKey));
-            ids.emplace_back(objectKey);
-            std::string data = GenRandomString(10);
-            vals.emplace_back(data);
-        }
-    }
-    std::vector<std::string> failedObjectKeys;
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    DS_ASSERT_OK(clients_[idx0]->GIncreaseRef(ids, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), size_t(0));
-    for (size_t i = 0; i < ids.size(); i++) {
-        DS_ASSERT_OK(clients_[idx0]->Put(ids[i], (uint8_t *)(vals[i].c_str()), vals[i].size(), param));
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(clients_[idx0]->Get({ ids[i] }, 0, buffers));
-        ASSERT_TRUE(NotExistsNone(buffers));
-        AssertBufferEqual(*buffers[idx0], vals[i]);
-    }
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, "-enable_meta_replica=true"));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, "-enable_meta_replica=true"));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-    WaitReplicaLocationMatch({ 0, 1 });
-    for (size_t i = 0; i < ids.size(); i++) {
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(clients_[idx0]->Get({ ids[i] }, 0, buffers));
-        auto ref = clients_[idx0]->QueryGlobalRefNum(ids[i]);
-        ASSERT_EQ(ref, 1);
-        ASSERT_TRUE(NotExistsNone(buffers));
-        AssertBufferEqual(*buffers[idx0], vals[i]);
-    }
-    failedObjectKeys.clear();
-    DS_ASSERT_OK(clients_[idx0]->GDecreaseRef(ids, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), size_t(0));
-}
- 
 class ObjReplicaScaleUpTest : public ObjectClientReplicaTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

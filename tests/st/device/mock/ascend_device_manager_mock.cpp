@@ -348,10 +348,9 @@ public:
         return Status::OK();
     }
 
-    Status DSHcclGetCommAsyncError(HcclComm comm, HcclResult *asyncError) override
+    Status DSHcclGetCommAsyncError(HcclComm comm) override
     {
         (void)comm;
-        *asyncError = HcclResult::HCCL_SUCCESS;
         return Status::OK();
     }
 
@@ -425,15 +424,13 @@ public:
         return Status::OK();
     }
 
-    Status aclrtQueryDeviceStatus(uint32_t deviceId, int32_t *deviceStatus) override
+    Status aclrtQueryDeviceStatus(uint32_t deviceId) override
     {
         uint32_t count;
         aclrtGetDeviceCount(&count);
-        int32_t mockStatus = 0;
         if (deviceId >= count) {
             return Status(K_INVALID, "Illegal or abnormal device id.");
         }
-        *deviceStatus = mockStatus;
         return Status::OK();
     }
 

@@ -158,6 +158,7 @@ private:
      * @param[in] objectKey the object path in cloud storage, equal to objectKey
      * @param[in] objectVersion the object version
      * @param[in] maxVersionToDel indicate delete all the versions which <= maxVersionToDel
+     * @return Status of the call.
      */
     Status DelPersistenceObj(const std::string &objectKey, uint64_t objectVersion, uint64_t maxVersionToDel);
 

@@ -48,7 +48,6 @@
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "device/dev_test_helper.h"
 
-using datasystem::memory::Allocator;
 using datasystem::memory::DevMemFuncRegister;
 
 namespace datasystem {
@@ -209,7 +208,7 @@ void DevObjectHeteroTest::SwapInOutPerformanceTest()
 void DevObjectHeteroTest::Sub(const std::vector<std::string> &inObjectKeys, const std::vector<std::string> &strVec,
                               size_t batch, std::shared_ptr<HeteroClient> client)
 {
-    int32_t deviceId = 5;
+    int32_t deviceId = 1;
     std::shared_ptr<HeteroClient> localClient;
     if (client == nullptr) {
         InitAcl(deviceId);
@@ -241,7 +240,7 @@ void DevObjectHeteroTest::Sub(const std::vector<std::string> &inObjectKeys, cons
 void DevObjectHeteroTest::Pub(const std::vector<std::string> &inObjectKeys, const std::vector<std::string> &strVec,
                               size_t batch, std::shared_ptr<HeteroClient> client)
 {
-    int32_t deviceId = 4;
+    int32_t deviceId = 0;
     std::shared_ptr<HeteroClient> localClient;
     if (client == nullptr) {
         InitAcl(deviceId);
@@ -685,7 +684,7 @@ TEST_F(DevObjectHeteroTest, DISABLED_AllocateDeviceMemTest)
         return Status::OK();
     };
 
-    auto *allocator = Allocator::Instance();
+    auto *allocator = datasystem::memory::Allocator::Instance();
     struct DevMemFuncRegister regFunc;
     regFunc.devDeviceCreateFunc = allocateFunc;
     regFunc.devDeviceDestroyFunc = destroyFunc;
@@ -712,12 +711,275 @@ TEST_F(DevObjectHeteroTest, DISABLED_AllocateDeviceMemTest)
     int loopNums = 5;
     for (int i = 0; i < loopNums; i++) {
         std::string tenantId1 = "tenant1";
-        auto rc = shmUnit.AllocateMemory(tenantId1, maxSize2 - 1, false, datasystem::memory::CacheType::DEV_HOST);
+        auto rc = shmUnit.AllocateMemory(tenantId1, maxSize2 - 1, false, ServiceType::OBJECT,
+                                         datasystem::memory::CacheType::DEV_HOST);
         LOG(INFO) << "allocate info " << rc.ToString();
         auto freeRc = shmUnit.FreeMemory();
         LOG(INFO) << "Free result is : " << freeRc.ToString();
         clearFunc();
     }
+}
+
+TEST_F(DevObjectHeteroTest, DISABLED_TestRecvRootInfoDeadlock_ExchangeDataWithEachOther)
+{
+    /**
+        c1: DevMSet(key1) and DevMGet(key2)
+        c2: DevMSet(key2) and DevMGet(key1)
+        deadlock: c1 RecvRootInfo 、c2 RecvRootInfo
+    */
+    size_t blkSz = 10;
+    auto blksPerObj = 10;
+    size_t timeout = 40 * 1000;
+    std::vector<std::string> inObjectKeys = { "key1", "key2" };
+    std::vector<DeviceBlobList> swapOutBlobList;
+    std::vector<DeviceBlobList> swapInBlobList;
+    DS_ASSERT_OK(inject::Set("CreateHcclCommInSend.sleep", "2*sleep(10)"));
+    auto child1 = ForkForTest([&]() {
+        int deviceId = 0;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client1;
+        InitTestHeteroClient(0, client1);
+        std::vector<std::string> failedIdList;
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client1->DevMSet({ inObjectKeys[0] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client1->DevMGet({ inObjectKeys[1] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[1] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[0] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    auto child2 = ForkForTest([&]() {
+        int deviceId = 1;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client2;
+        InitTestHeteroClient(0, client2);
+        std::vector<std::string> failedIdList;
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client2->DevMSet({ inObjectKeys[1] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client2->DevMGet({ inObjectKeys[0] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[0] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[1] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    DS_ASSERT_TRUE(WaitForChildFork(child1), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(child2), 0);
+}
+
+TEST_F(DevObjectHeteroTest, DISABLED_TestSendRootInfoDeadlock_ExchangeDataWithEachOther)
+{
+    /**
+        c1: DevMSet(key1) and DevMGet(key2)
+        c2: DevMSet(key2) and DevMGet(key1)
+        deadlock: c1 SendRootInfo 、 c2 SendRootInfo
+    */
+    size_t blkSz = 10;
+    auto blksPerObj = 10;
+    size_t timeout = 40 * 1000;
+    std::vector<std::string> inObjectKeys = { "key1", "key2" };
+    std::vector<DeviceBlobList> swapOutBlobList;
+    std::vector<DeviceBlobList> swapInBlobList;
+    DS_ASSERT_OK(inject::Set("CreateHcclCommInRecv.sleep", "1*sleep(1000)"));
+    auto child1 = ForkForTest([&]() {
+        int deviceId = 0;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client1;
+        InitTestHeteroClient(0, client1);
+        std::vector<std::string> failedIdList;
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client1->DevMSet({ inObjectKeys[0] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client1->DevMGet({ inObjectKeys[1] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[1] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[0] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    auto child2 = ForkForTest([&]() {
+        int deviceId = 1;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client2;
+        InitTestHeteroClient(0, client2);
+        std::vector<std::string> failedIdList;
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client2->DevMSet({ inObjectKeys[1] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client2->DevMGet({ inObjectKeys[0] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[0] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[1] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    DS_ASSERT_TRUE(WaitForChildFork(child1), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(child2), 0);
+}
+
+TEST_F(DevObjectHeteroTest, DISABLED_TestDeadlock_Ring)
+{
+    /**
+        c1: DevMSet(key1) and DevMGet(key2)
+        c2: DevMSet(key2) and DevMGet(key3)
+        c3: DevMSet(key3) and DevMGet(key1)
+        deadlock: c1 SendRootInfo 、 c2 SendRootInfo、 c3 SendRootInfo
+    */
+    size_t blkSz = 10;
+    auto blksPerObj = 10;
+    size_t timeout = 40 * 1000;
+    std::vector<std::string> inObjectKeys = { "key1", "key2", "key3" };
+    std::vector<DeviceBlobList> swapOutBlobList;
+    std::vector<DeviceBlobList> swapInBlobList;
+    DS_ASSERT_OK(inject::Set("CreateHcclCommInSend.sleep", "2*sleep(1000)"));
+    auto child1 = ForkForTest([&]() {
+        LOG(ERROR) << "Start process1";
+        int deviceId = 0;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client1;
+        InitTestHeteroClient(0, client1);
+        std::vector<std::string> failedIdList;
+        LOG(ERROR) << "process1, Start to DevMSet";
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client1->DevMSet({ inObjectKeys[0] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client1->DevMGet({ inObjectKeys[1] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[1] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[0] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    auto child2 = ForkForTest([&]() {
+        LOG(ERROR) << "Start process2";
+        int deviceId = 1;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client2;
+        InitTestHeteroClient(0, client2);
+        std::vector<std::string> failedIdList;
+        LOG(ERROR) << "process2, Start to DevMSet";
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client2->DevMSet({ inObjectKeys[1] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client2->DevMGet({ inObjectKeys[2] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[2] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[1] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    auto child3 = ForkForTest([&]() {
+        LOG(ERROR) << "Start process3";
+        int deviceId = 2;
+        InitAcl(deviceId);
+
+        std::shared_ptr<HeteroClient> client3;
+        InitTestHeteroClient(0, client3);
+        std::vector<std::string> failedIdList;
+        LOG(ERROR) << "process3, Start to DevMSet";
+        PrePareDevData(1, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+        DS_ASSERT_OK(client3->DevMSet({ inObjectKeys[2] }, swapInBlobList, failedIdList));
+        DS_ASSERT_TRUE(failedIdList.empty(), true);
+
+        DS_ASSERT_OK(client3->DevMGet({ inObjectKeys[0] }, swapOutBlobList, failedIdList, timeout));
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : swapOutBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ inObjectKeys[0] + "_DevMGet_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+        DS_ASSERT_OK(objectClient->Get({ inObjectKeys[2] + "_DevMGet_finish" }, timeout, buffers));
+    });
+    DS_ASSERT_TRUE(WaitForChildFork(child1), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(child2), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(child3), 0);
 }
 
 TEST_F(DevObjectHeteroTest, DISABLED_TestPartOfMGet)

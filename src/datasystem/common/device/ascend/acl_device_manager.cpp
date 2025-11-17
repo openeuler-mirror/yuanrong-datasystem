@@ -27,6 +27,7 @@
 #include <libgen.h>
 
 #include "datasystem/common/ak_sk/hasher.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/dlutils.h"
 #include "datasystem/common/util/file_util.h"
@@ -68,10 +69,16 @@ AclDeviceManager *AclDeviceManager::Instance()
 void AclDeviceManager::Init()
 {
 #ifdef BUILD_HETERO
-    loadPluginThread_ = std::make_unique<Thread>([this]() { LOG_IF_ERROR(this->LoadPlugin(), "Load plugin failed."); });
+    auto traceId = Trace::Instance().GetTraceID();
+    loadPluginThread_ = std::make_unique<Thread>([this, traceId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        Status loadStatus = this->LoadPlugin();
+        waitPost_->SetWithStatus(loadStatus);
+    });
 #else
-    state_ = State::INIT_ERROR;
-    waitPost_->Set();
+    waitPost_->SetWithStatus(Status(K_RUNTIME_ERROR,
+        "Heterogeneous api is currently unavailable. Ensure that the compilation switch '-X on' is enabled when "
+        "building datasystem."));
 #endif
 }
 
@@ -79,15 +86,12 @@ Status AclDeviceManager::LoadPlugin()
 {
     Dl_info dlInfo;
     Status lastRc = Status::OK();
-    Raii raii([this]() {
+        Raii raii([this]() {
         waitPost_->Set();
     });
     if (dladdr(reinterpret_cast<void *>(AclDeviceManager::Instance), &dlInfo) == 0) {
-        lastRc =
-            Status(K_RUNTIME_ERROR, FormatString("Load Ascend plugin failed, get dladdr error: %s", GetDlErrorMsg()));
-        LOG(ERROR) << lastRc;
-        state_ = State::INIT_ERROR;
-        return lastRc;
+        RETURN_STATUS_LOG_ERROR(
+            K_RUNTIME_ERROR, FormatString("Load Ascend plugin failed, get dladdr error: %s", GetDlErrorMsg()));
     }
     std::string curSoPath = dlInfo.dli_fname;
     std::string aclPluginPath = std::string(dirname(const_cast<char *>(curSoPath.data()))) + "/" + AclPluginLibrary;
@@ -95,14 +99,11 @@ Status AclDeviceManager::LoadPlugin()
     RETURN_IF_NOT_OK(VerifyingSha256(aclPluginPath));
     pluginHandle_ = dlopen(aclPluginPath.c_str(), RTLD_LAZY | RTLD_LOCAL);
     if (pluginHandle_ == nullptr) {
-        lastRc = Status(K_INVALID, FormatString("Load Ascend plugin failed, dlopen error: %s", GetDlErrorMsg()));
-        LOG(ERROR) << lastRc;
-        state_ = State::INIT_ERROR;
-        return lastRc;
+        RETURN_STATUS_LOG_ERROR(
+            K_INVALID, FormatString("Load Ascend plugin failed, dlopen error: %s", GetDlErrorMsg()));
     } else {
         DlsymFuncObj();
     }
-    state_ = State::INIT_OK;
     return Status::OK();
 }
 
@@ -169,45 +170,18 @@ void AclDeviceManager::DlsymFuncObj()
 
 Status AclDeviceManager::CheckPluginOk()
 {
-    std::call_once(hasLoadPlugin_, [this]() {
-        state_ = State::PENDING_INIT;
-        instance_->Init();
-    });
-    waitPost_->Wait();
-    return CheckState();
-}
-
-Status AclDeviceManager::CheckState()
-{
-    switch (state_) {
-        case State::INIT_ERROR:
-            RETURN_STATUS(
-                K_RUNTIME_ERROR,
-                "The Ascend plugin is not load success, please check as follows: 1. Ensure that the compilation switch "
-                "'-X on' is enabled when building datasystem; 2. Ensure that the environment have ascendcl.so in "
-                "LD_LIBRARY_PATH and libacl_plugin.so in library path; 3. Please make sure that ascendcl.so and "
-                "libacl_plugin.so have been loaded correctly.");
-        case State::PENDING_INIT:
-            RETURN_STATUS(K_RUNTIME_ERROR, "AclDeviceManager is not init ready.");
-        case State::NOT_INIT:
-            RETURN_STATUS(K_INVALID, "AclDeviceManager is not init ready.");
-        case State::INIT_OK:
-            break;
+    std::call_once(hasLoadPlugin_, []() { instance_->Init(); });
+    Status loadStatus = waitPost_->WaitAndGetStatus();
+    if (!loadStatus.IsOk()) {
+        return loadStatus;
     }
     return Status::OK();
 }
 
 Status AclDeviceManager::VerifyDeviceId(std::vector<uint32_t> deviceIds)
 {
-    constexpr int normalCode = 0;  // ACL_RT_DEVICE_STATUS_NORMAL
-    for (int devId : deviceIds) {
-        int32_t status;
-        auto rc = aclrtQueryDeviceStatus(devId, &status);
-        if (rc.IsError() || status != normalCode) {
-            std::string errorMsg = FormatString("Got Error/ABNORMAL device, deviceId: %d, code: %s, msg: %s", devId,
-                                                status, rc.ToString());
-            return Status(K_INVALID, errorMsg);
-        }
+    for (const auto devId : deviceIds) {
+        RETURN_IF_NOT_OK(aclrtQueryDeviceStatus(devId));
     }
     return Status::OK();
 }
@@ -241,7 +215,10 @@ Status AclDeviceManager::VerifyingSha256(const std::string &aclPluginPath)
     // Step 4: Check whether the hash values are consistent.
     if (ss.str() != ACL_PLUGIN_SHA256) {
         RETURN_STATUS_LOG_ERROR(K_NOT_AUTHORIZED,
-                                "Load Ascend plugin failed, which fails to pass the integrity check.");
+            "Load Ascend plugin failed, which fails to pass the integrity check. "
+            "Possible causes and solutions: "
+            "1.This usually occurs when libacl_plugin.so and libdatasystem.so are from different versions. Ensure "
+            "both libraries are from the same version.");
     }
     return Status::OK();
 }
@@ -265,7 +242,15 @@ Status AclDeviceManager::GetDeviceIdx(int32_t &deviceIdx)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(GetDeviceIdxFunc_);
-    RETURN_ACL_RESULT(GetDeviceIdxFunc_(deviceIdx));
+    int aclRet = GetDeviceIdxFunc_(deviceIdx);
+    constexpr int normalCode = 0;  // ACL_RT_DEVICE_STATUS_NORMAL
+    if (aclRet != normalCode) {
+        RETURN_STATUS_LOG_ERROR(K_INVALID,
+            FormatString(
+                "May not create context or set device in this thread. Detail: acl api failed with error code %d",
+                aclRet));
+    }
+    return Status::OK();
 }
 
 Status AclDeviceManager::SetDeviceIdx(int32_t deviceId)
@@ -335,7 +320,15 @@ Status AclDeviceManager::DSHcclGetRootInfo(HcclRootInfo *rootInfo)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSHcclGetRootInfoFunc_);
-    RETURN_HCCL_RESULT(DSHcclGetRootInfoFunc_(rootInfo));
+    int hcclRet = DSHcclGetRootInfoFunc_(rootInfo);
+    if (hcclRet == 1) {  // HCCL_E_PARA = 1
+        RETURN_STATUS(K_HCCL_ERROR,
+            "HcclGetRootInfoapi failed with error code 1 (parameter error). Possible cause: HCCL failed to obtain IP "
+            "address (null). Please check Ascend logs for detailed error information. "
+            "Solution: If IP address acquisition failed, configure environment variable "
+            "HCCL_IF_IP with the current host IP address.");
+    }
+    RETURN_HCCL_RESULT(hcclRet);
 }
 
 Status AclDeviceManager::DSHcclCommInitRootInfo(uint32_t nRanks, const HcclRootInfo *rootInfo, uint32_t rank,
@@ -343,7 +336,7 @@ Status AclDeviceManager::DSHcclCommInitRootInfo(uint32_t nRanks, const HcclRootI
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSHcclCommInitRootInfoFunc_);
-    RETURN_HCCL_RESULT(DSHcclCommInitRootInfoFunc_(nRanks, rootInfo, rank, comm));
+    return HandleHcclResult(DSHcclCommInitRootInfoFunc_(nRanks, rootInfo, rank, comm));
 }
 
 Status AclDeviceManager::DSHcclSend(void *sendBuf, uint64_t count, HcclDataType dataType, uint32_t destRank,
@@ -352,7 +345,7 @@ Status AclDeviceManager::DSHcclSend(void *sendBuf, uint64_t count, HcclDataType 
     PerfPoint point(PerfKey::DS_HCCL_SEND);
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSHcclSendFunc_);
-    RETURN_HCCL_RESULT(DSHcclSendFunc_(sendBuf, count, dataType, destRank, comm, stream));
+    return HandleHcclResult(DSHcclSendFunc_(sendBuf, count, dataType, destRank, comm, stream));
 }
 
 Status AclDeviceManager::DSHcclRecv(void *recvBuf, uint64_t count, HcclDataType dataType, uint32_t srcRank,
@@ -361,7 +354,7 @@ Status AclDeviceManager::DSHcclRecv(void *recvBuf, uint64_t count, HcclDataType 
     PerfPoint point(PerfKey::DS_HCCl_RECEIVE);
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSHcclRecvFunc_);
-    RETURN_HCCL_RESULT(DSHcclRecvFunc_(recvBuf, count, dataType, srcRank, comm, stream));
+    return HandleHcclResult(DSHcclRecvFunc_(recvBuf, count, dataType, srcRank, comm, stream));
 }
 
 Status AclDeviceManager::DSHcclCommDestroy(HcclComm comm)
@@ -406,11 +399,13 @@ Status AclDeviceManager::DSAclrtDestroyEvent(aclrtEvent event)
     RETURN_ACL_RESULT(DSAclrtDestroyEventFunc_(event));
 }
 
-Status AclDeviceManager::DSHcclGetCommAsyncError(HcclComm comm, HcclResult *asyncError)
+Status AclDeviceManager::DSHcclGetCommAsyncError(HcclComm comm)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSHcclGetCommAsyncErrorFunc_);
-    RETURN_HCCL_RESULT(DSHcclGetCommAsyncErrorFunc_(comm, asyncError));
+    HcclResult asyncError;
+    HandleHcclResult(DSHcclGetCommAsyncErrorFunc_(comm, &asyncError));
+    return HandleHcclResult(asyncError);
 }
 
 Status AclDeviceManager::aclInit(const char *configPath)
@@ -483,11 +478,22 @@ Status AclDeviceManager::aclrtGetDeviceCount(uint32_t *count)
     RETURN_ACL_RESULT(DSAclrtGetDeviceCountFunc_(count));
 }
 
-Status AclDeviceManager::aclrtQueryDeviceStatus(uint32_t deviceId, int32_t *deviceStatus)
+Status AclDeviceManager::aclrtQueryDeviceStatus(uint32_t deviceId)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSAclrtQueryDeviceStatusFunc_);
-    RETURN_ACL_RESULT(DSAclrtQueryDeviceStatusFunc_(deviceId, deviceStatus));
+    int32_t deviceStatus;
+    int aclRet = DSAclrtQueryDeviceStatusFunc_(deviceId, &deviceStatus);
+    constexpr int normalCode = 0;  // ACL_RT_DEVICE_STATUS_NORMAL
+    if (aclRet != normalCode) {
+        RETURN_STATUS_LOG_ERROR(K_INVALID,
+            FormatString(
+                "Got Error/ABNORMAL device, deviceId: %d. Detail: acl api failed with error code %d, deviceStatus: %d",
+                deviceId,
+                aclRet,
+                deviceStatus));
+    }
+    return Status::OK();
 }
 
 AclDeviceManager::~AclDeviceManager()
@@ -497,14 +503,10 @@ AclDeviceManager::~AclDeviceManager()
 
 void AclDeviceManager::Shutdown()
 {
-    if (loadPluginThread_ == nullptr) {
-        return;
+    if (loadPluginThread_ != nullptr) {
+        loadPluginThread_->join();
+        loadPluginThread_.reset();
     }
-    if (state_ == State::PENDING_INIT) {
-        waitPost_->Wait();
-    }
-    loadPluginThread_->join();
-    loadPluginThread_.reset();
 }
 
 Status AclDeviceManager::DSAclrtQueryEventStatus(aclrtEvent event)
@@ -561,11 +563,13 @@ Status AclDeviceManager::DSP2PRecv(void *recvBuf, uint64_t count, HcclDataType d
     RETURN_HCCL_RESULT(DSP2PRecvFunc_(recvBuf, count, dataType, comm, stream));
 }
 
-Status AclDeviceManager::DSP2PGetCommAsyncError(P2PComm comm, HcclResult *asyncError)
+Status AclDeviceManager::DSP2PGetCommAsyncError(P2PComm comm)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSP2PGetCommAsyncErrorFunc_);
-    RETURN_HCCL_RESULT(DSP2PGetCommAsyncErrorFunc_(comm, asyncError));
+    HcclResult asyncError;
+    HandleHcclResult(DSP2PGetCommAsyncErrorFunc_(comm, &asyncError));
+    return HandleHcclResult(asyncError);
 }
 
 Status AclDeviceManager::RtNotifyCreate(int32_t deviceId, void **notify)
@@ -636,6 +640,36 @@ Status AclDeviceManager::AclrtUnSubscribeReport(uint64_t threadId, aclrtStream s
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSAclrtUnSubscribeReportFunc_);
     RETURN_ACL_RESULT(DSAclrtUnSubscribeReportFunc_(threadId, stream));
+}
+
+Status AclDeviceManager::HandleHcclResult(int hcclResult)
+{
+    constexpr int hcclEUnavail = 7;      // HCCL_E_UNAVAIL
+    constexpr int hcclERemote = 21;      // HCCL_E_REMOTE
+    constexpr int hcclESuspending = 22;  // HCCL_E_SUSPENDING
+    switch (hcclResult) {
+        case hcclEUnavail:
+            return Status(StatusCode::K_HCCL_ERROR, __LINE__, __FILE__,
+                "HCCL api operation failed with error code: 7 (resource unavailable). "
+                "Possible causes:"
+                "1. NPU are occupied or device unavailability.");
+
+        case hcclERemote:
+            return Status(StatusCode::K_HCCL_ERROR, __LINE__, __FILE__,
+                "HCCL api operation failed with error code: 21 (error cqe). Indicates that an 'RDMA ERROR "
+                "CQE' error has occurred within this communication domain.");
+
+        case hcclESuspending:
+            return Status(StatusCode::K_HCCL_ERROR, __LINE__, __FILE__,
+                "HCCL api operation failed with error code: 22 (error communicator suspending). "
+                "This usually occurs when the device state was reset unexpectedly, "
+                "causing the communication domain to be destroyed. "
+                "Possible causes:"
+                "1. Device reset operation after HCCL communicator initialization.");
+
+        default:
+            RETURN_HCCL_RESULT(hcclResult);
+    }
 }
 }  // namespace acl
 }  // namespace datasystem

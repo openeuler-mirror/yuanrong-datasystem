@@ -692,6 +692,35 @@ TEST_F(KVClientVoluntaryScaleDownTest, LEVEL1_UuidObjectSetGetDelAndVoluntarySca
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
 }
 
+TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryWorkersOneByOne)
+{
+    int objectCnt = 50;
+    int objectCnt1 = 10;
+    for (size_t i = 1; i < DEFAULT_WORKER_NUM; i++) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "InspectAndProcessPeriodically.skip", "return()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "OCMetadataManager.ReplacePrimary", "1*sleep(5000)"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "worker.migrate_service.return", "1*return(K_NOT_READY)"));
+    }
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServiceImpl.MigrateData.Delay", "call(3000)"));
+    std::vector<std::string> objectKey(objectCnt);
+    std::vector<std::string> objectKey1(objectCnt1);
+    std::vector<std::string> data(objectCnt);
+    std::vector<std::string> data1(objectCnt1);
+    SetNormalObject(client0_, 0, objectKey, data, WriteMode::NONE_L2_CACHE);
+    SetUuidObject(client0_, 0, objectKey1, data1, WriteMode::NONE_L2_CACHE);
+    VoluntaryScaleDownInject(0);
+    sleep(2); // wait 2s for voluntary worker 1
+    VoluntaryScaleDownInject(1);
+    sleep(10);            // Wait 10 seconds for voluntary scale down finished
+    AssertWorkerNum(2);  // The number of worker is 2
+    for (int i = 0; i < objectCnt; ++i) {
+        std::string getValue;
+        DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
+        ASSERT_EQ(data[i], getValue);
+        DS_ASSERT_OK(client2_->Del(objectKey[i]));
+    }
+}
+
 TEST_F(KVClientVoluntaryScaleDownTest, DISABLED_MasterAsyncTaskRecover)
 {
     int objectCnt = 15;

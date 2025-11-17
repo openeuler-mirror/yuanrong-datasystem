@@ -32,6 +32,7 @@ STATUS_CODE_DEF(K_SERVER_FD_CLOSED, "The server fd has been closed")
 STATUS_CODE_DEF(K_RETRY_IF_LEAVING, "Try again when worker is leaving")
 STATUS_CODE_DEF(K_SCALE_DOWN, "The worker is exiting")
 STATUS_CODE_DEF(K_SCALING, "The cluster is scaling")
+STATUS_CODE_DEF(K_CLIENT_DEADLOCK, "The client may deadlock")
 STATUS_CODE_DEF(K_LRU_HARD_LIMIT, "Lru hard limit")
 STATUS_CODE_DEF(K_LRU_SOFT_LIMIT, "Lru soft limit")
 
@@ -51,6 +52,19 @@ STATUS_CODE_DEF(K_WORKER_PULL_OBJECT_NOT_FOUND, "Worker pull object not found er
 STATUS_CODE_DEF(K_FUTURE_TIMEOUT, "The future is timeout")
 STATUS_CODE_DEF(K_ACL_ERROR, "Acl api error")
 STATUS_CODE_DEF(K_HCCL_ERROR, "Hccl api error")
+
+// stream
+STATUS_CODE_DEF(K_SC_STREAM_NOT_FOUND, "Stream name not found")
+STATUS_CODE_DEF(K_SC_PRODUCER_NOT_FOUND, "Producer not found")
+STATUS_CODE_DEF(K_SC_CONSUMER_NOT_FOUND, "Consumer not found")
+STATUS_CODE_DEF(K_SC_END_OF_PAGE, "End of page reached")
+STATUS_CODE_DEF(K_SC_STREAM_IN_RESET_STATE, "Stream is currently in reset state")
+STATUS_CODE_DEF(K_SC_WORKER_WAS_LOST, "Worker crashed or restarted")
+STATUS_CODE_DEF(K_SC_STREAM_IN_USE, "Stream is still in use")
+STATUS_CODE_DEF(K_SC_STREAM_DELETE_IN_PROGRESS, "Stream is getting deleted")
+STATUS_CODE_DEF(K_SC_STREAM_RESOURCE_ERROR, "Stream resource error")
+STATUS_CODE_DEF(K_SC_ALREADY_CLOSED, "Producer or consumer already closed")
+STATUS_CODE_DEF(K_SC_STREAM_NOTIFICATION_PENDING, "Notifications are pending")
 
 // rdma
 STATUS_CODE_DEF(K_OC_REMOTE_GET_NOT_ENOUGH, "Size on the remote node has changed")

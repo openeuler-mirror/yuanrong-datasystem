@@ -69,47 +69,43 @@ Status HcclCommWrapper::InitHcclComm(int numRanks, HcclRootInfo &rootInfo, int r
     return rc;
 }
 
-Status HcclCommWrapper::P2PSend(const std::vector<DataInfo> &dataInfos, const std::shared_ptr<AclRtEventWrapper> &event,
+Status HcclCommWrapper::P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
                                 aclrtStream stream)
 {
-    LOG(INFO) << "hccl start to send " << (!dataInfos.empty() ? DataInfoToString(dataInfos[0]) : "")
-              << ", info num: " << dataInfos.size();
+    LOG(INFO) << "hccl start to send " << (!blobs.empty() ? std::to_string(blobs[0].size) : "")
+              << ", info num: " << blobs.size();
     (void)event;
     auto &comm = GetRef();
     RETURN_IF_NOT_OK(CheckHcclCommPtr(comm));
-    for (size_t i = 0; i < dataInfos.size(); i++) {
-        RETURN_IF_NOT_OK(aclImpl_->DSHcclSend(dataInfos[i].devPtr, dataInfos[i].count,
-                                              static_cast<HcclDataType>(dataInfos[i].dataType), P2P_RECV_RANK, comm,
-                                              stream));
+    for (size_t i = 0; i < blobs.size(); i++) {
+        RETURN_IF_NOT_OK(aclImpl_->DSHcclSend(blobs[i].pointer, blobs[i].size, HcclDataType::HCCL_DATA_TYPE_INT8,
+                                              P2P_RECV_RANK, comm, stream));
     }
     VLOG(1) << "Send hccl ok";
     return Status::OK();
 }
 
-HcclResult HcclCommWrapper::HcclGetCommAsyncError()
+Status HcclCommWrapper::HcclGetCommAsyncError()
 {
-    auto &comm = GetRef();
     // Don't check if comm is creating.
     if (hcclCommState_ == HcclCommState::CREATING || hcclCommState_ == HcclCommState::UNCREATE) {
-        return HCCL_SUCCESS;
+          return Status::OK();
     }
-    HcclResult asyncError;
-    aclImpl_->DSHcclGetCommAsyncError(comm, &asyncError);
-    return asyncError;
+    auto &comm = GetRef();
+    return aclImpl_->DSHcclGetCommAsyncError(comm);
 }
 
-Status HcclCommWrapper::P2PRecv(const std::vector<DataInfo> &dataInfos, const std::shared_ptr<AclRtEventWrapper> &event,
+Status HcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
                                 aclrtStream stream)
 {
-    LOG(INFO) << "hccl receiving " << (!dataInfos.empty() ? DataInfoToString(dataInfos[0]) : "")
-              << ", info num: " << dataInfos.size();
+    LOG(INFO) << "hccl receiving " << (!blobs.empty() ?  std::to_string(blobs[0].size) : "")
+              << ", info num: " << blobs.size();
     (void)event;
     auto &comm = GetRef();
     RETURN_IF_NOT_OK(CheckHcclCommPtr(comm));
-    for (size_t i = 0; i < dataInfos.size(); i++) {
-        RETURN_IF_NOT_OK(aclImpl_->DSHcclRecv(dataInfos[i].devPtr, dataInfos[i].count,
-                                              static_cast<HcclDataType>(dataInfos[i].dataType), P2P_SEND_RANK, comm,
-                                              stream));
+    for (size_t i = 0; i < blobs.size(); i++) {
+        RETURN_IF_NOT_OK(aclImpl_->DSHcclRecv(blobs[i].pointer, blobs[i].size, HcclDataType::HCCL_DATA_TYPE_INT8,
+                                              P2P_SEND_RANK, comm, stream));
     }
 
     VLOG(1) << "Recv hccl ok";
@@ -153,7 +149,9 @@ Status HcclCommWrapper::CreateRootInfo(HcclRootInfo &rootInfo)
 Status HcclCommWrapper::CheckHcclCommPtr(const void *ptr)
 {
     if (ptr == nullptr) {
-        return { K_RUNTIME_ERROR, "HcclComm is nullptr, create HCCL communication domain failed." };
+        auto errorStatus = GetDetailStatus();
+        return {K_RUNTIME_ERROR,
+            FormatString("HcclComm is nullptr, create HCCL communication domain failed. Detail:%s", errorStatus)};
     }
     return Status::OK();
 }

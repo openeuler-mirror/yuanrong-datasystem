@@ -135,6 +135,7 @@ if (BUILD_GO_API)
 
     install(FILES ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/status_definition.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/state_cache_c_wrapper.h
+            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/stream_cache_c_wrapper.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/object_cache_c_wrapper.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/utilC.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/cipher.h

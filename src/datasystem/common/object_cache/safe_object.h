@@ -148,6 +148,16 @@ public:
     Status TryRLock(bool nullable = false);
 
     /**
+     * @brief Transfers the write lock from the current thread to the calling thread.
+     *
+     * This function is used to transfer the write lock ownership from the current thread to the thread that calls this
+     * function. It ensures that the write lock is held by the calling thread after the transfer.
+     *
+     * @return Status of the call.
+     */
+    Status TransferWLockToCurrentThread();
+
+    /**
      * @brief Releases a read lock on the SafeObject.
      */
     void RUnlock();
@@ -265,6 +275,17 @@ Status SafeObject<ObjType>::WLock(bool nullable)
     }
     lastWriteThread_ = syscall(__NR_gettid);
     wLocked_ = true;
+    return Status::OK();
+}
+
+template <typename ObjType>
+Status SafeObject<ObjType>::TransferWLockToCurrentThread()
+{
+    if (!wLocked_) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Write lock is not held by any thread.");
+    }
+    pid_t currentTid = syscall(__NR_gettid);
+    lastWriteThread_ = currentTid;
     return Status::OK();
 }
 

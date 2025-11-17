@@ -20,7 +20,18 @@
 
 namespace datasystem {
 namespace cli {
+/**
+ * @brief Save hash ring to the file.
+ * @param[in] filename The filename to save the hash ring information.
+ * @return Status of this call
+ */
 Status SaveHashRingToFile(const std::string &filename);
+
+/**
+ * @brief Updating the hash ring from the file.
+ * @param[in] filename Update the hash ring based on the information in the file.
+ * @return Status of this call
+ */
 Status UpdateHashRingFromFile(const std::string &filename);
 bool HandleCli();
 }  // namespace cli

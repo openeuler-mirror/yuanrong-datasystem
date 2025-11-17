@@ -65,10 +65,13 @@ public:
         (void)primaryNodeId;
         return Status::OK();
     }
-    Status CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore) override
+
+    Status CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore,
+                             RocksStore *streamRocksStore) override
     {
         (void)dbName;
         (void)objectRocksStore;
+        (void)streamRocksStore;
         return Status::OK();
     }
     Status DestroyMetaManager(const std::string &dbName) override
@@ -156,7 +159,9 @@ public:
         param.etcdCM = nullptr;
         param.masterWorkerService = nullptr;
         param.workerWorkerService = nullptr;
+        param.rpcSessionManager = nullptr;
         param.isOcEnabled = true;
+        param.isScEnabled = false;
         auto manager = std::make_unique<ReplicaManagerMock>();
         RETURN_IF_NOT_OK(manager->Init(param));
         std::lock_guard<std::mutex> locker(mutex_);

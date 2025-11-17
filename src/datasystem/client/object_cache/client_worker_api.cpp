@@ -144,10 +144,11 @@ Status ClientWorkerApi::Create(const std::string &objectKey, int64_t dataSize, u
     return Status::OK();
 }
 
-Status ClientWorkerApi::MultiCreate(std::vector<MultiCreateParam> &createParams, uint32_t &version)
+Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams,
+                                    uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
 {
     MultiCreateReqPb req;
-
+    req.set_skip_check_existence(skipCheckExistence);
     req.set_client_id(GetClientId());
     for (auto &param : createParams) {
         req.add_object_key(param.objectKey);
@@ -172,7 +173,26 @@ Status ClientWorkerApi::MultiCreate(std::vector<MultiCreateParam> &createParams,
         createParams.size() == static_cast<size_t>(rsp.results().size()), K_INVALID,
         FormatString("The length of objectKeyList (%zu) and dataSizeList (%zu) should be the same.",
                      createParams.size(), rsp.results().size()));
+    auto rspExists = rsp.exists();
+    CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rspExists.size()) == createParams.size(), K_INVALID,
+                             "The size of rspExists is not consistent with createParams");
+    exists.reserve(createParams.size());
+    for (auto val : rspExists) {
+        exists.emplace_back(val);
+    }
+    for (auto res : rsp.results()) {
+        if (!res.shm_id().empty()) {
+            useShmTransfer = true;
+            break;
+        }
+    }
+    if (!useShmTransfer) {
+        return Status::OK();
+    }
     for (auto i = 0ul; i < createParams.size(); i++) {
+        if (exists[i]) {
+            continue;
+        }
         auto &shmBuf = createParams[i].shmBuf;
         auto subRsp = rsp.results()[i];
         shmBuf->fd = subRsp.store_fd();
@@ -374,6 +394,7 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
     req.set_istx(param.isTx);
     req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     req.set_is_replica(param.isReplica);
+    req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.empty());
     std::vector<MemView> payloads;
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
         if (bufferInfo[i]->shmId.empty()) {
@@ -798,28 +819,28 @@ Status ClientWorkerApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeReceive
 }
 
 void ClientWorkerApi::FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                     const std::vector<DataInfo> &dataInfoList, DeviceObjectMetaPb *metaPb)
+                                     const std::vector<Blob> &blobs, DeviceObjectMetaPb *metaPb)
 {
     metaPb->set_object_key(bufferInfo->devObjKey);
     metaPb->set_lifetime(LifetimeParamPb(static_cast<int>(bufferInfo->lifetimeType)));
     auto loc = metaPb->add_locations();
     loc->set_client_id(GetClientId());
     loc->set_device_id(bufferInfo->deviceIdx);
-    for (const auto &dataInfo : dataInfoList) {
-        const auto &dataInfos = metaPb->add_data_infos();
-        dataInfos->set_data_type(static_cast<int32_t>(dataInfo.dataType));
-        dataInfos->set_count(dataInfo.count);
+    for (const auto &blob : blobs) {
+        const auto &blobInfos = metaPb->add_data_infos();
+        blobInfos->set_data_type(static_cast<int32_t>(DataType::DATA_TYPE_INT8));
+        blobInfos->set_count(blob.size);
     }
     metaPb->set_src_offset(bufferInfo->srcOffset);
 }
 
 Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                   const std::vector<DataInfo> &dataInfoList)
+                                   const std::vector<Blob> &blobs)
 {
     PutP2PMetaReqPb req;
     PutP2PMetaRspPb resp;
     auto subReq = req.add_dev_obj_meta();
-    FillDevObjMeta(bufferInfo, dataInfoList, subReq);
+    FillDevObjMeta(bufferInfo, blobs, subReq);
     RpcOptions opts;
     opts.SetTimeout(timeoutMs_);
     INJECT_POINT("ClientWorkerApi.PutP2PMeta.timeoutDuration", [](int time) {
@@ -835,7 +856,7 @@ Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &buff
 }
 
 Status ClientWorkerApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
-                                   std::vector<std::vector<DataInfo>> &dataInfoList, GetP2PMetaRspPb &resp,
+                                   std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp,
                                    int64_t subTimeoutMs)
 {
     INJECT_POINT("GETP2PMeta.subTimeoutMs", [&subTimeoutMs](int64_t t) {
@@ -847,13 +868,13 @@ Status ClientWorkerApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>
         Validator::IsInNonNegativeInt32(timeoutMs), K_INVALID,
         FormatString("timeoutMs %d is out of range., which should be between [%d, %d]", timeoutMs, 0, INT32_MAX));
     GetP2PMetaReqPb req;
-    if (bufferInfoList.size() != dataInfoList.size()) {
+    if (bufferInfoList.size() != devBlobList.size()) {
         LOG(ERROR) << "buffer info list size not matching data info list size";
         return Status(K_INVALID, "buffer info list size not matching data info list size");
     }
     for (size_t i = 0; i < bufferInfoList.size(); i++) {
         auto subReq = req.add_dev_obj_meta();
-        FillDevObjMeta(bufferInfoList[i], dataInfoList[i], subReq);
+        FillDevObjMeta(bufferInfoList[i], devBlobList[i].blobs, subReq);
     }
     req.set_sub_timeout(subTimeoutMs);
     RpcOptions opts;
@@ -867,9 +888,8 @@ Status ClientWorkerApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>
     return stub_->GetP2PMeta(opts, req, resp);
 }
 
-Status ClientWorkerApi::SendRootInfo(SendRootInfoReqPb &req)
+Status ClientWorkerApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
-    SendRootInfoRspPb resp;
     RpcOptions opts;
     opts.SetTimeout(timeoutMs_);
     reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
@@ -910,7 +930,7 @@ Status ClientWorkerApi::AckRecvFinish(AckRecvFinishReqPb &req)
     return stub_->AckRecvFinish(opts, req, resp);
 }
 
-Status ClientWorkerApi::GetDataInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<DataInfo> &dataInfos)
+Status ClientWorkerApi::GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs)
 {
     RpcOptions opts;
     auto rpcTimeout = std::max<int64_t>(timeoutMs, rpcTimeoutMs_);
@@ -928,11 +948,11 @@ Status ClientWorkerApi::GetDataInfo(const std::string &devObjKey, int32_t timeou
     GetDataInfoRspPb resp;
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_GET_DATA_INFO);
     RETURN_IF_NOT_OK(stub_->GetDataInfo(opts, req, resp));
-    // Obtains dataInfos from resp
+    // Obtains the blobs from resp
     std::vector<DataInfoPb> dataInfoPbs = { resp.data_infos().begin(), resp.data_infos().end() };
-    dataInfos.reserve(dataInfoPbs.size());
+    blobs.reserve(dataInfoPbs.size());
     for (const auto &dataInfoPb : dataInfoPbs) {
-        dataInfos.emplace_back(DataInfo{ nullptr, static_cast<DataType>(dataInfoPb.data_type()), dataInfoPb.count() });
+        blobs.emplace_back(Blob{ nullptr, dataInfoPb.count() });
     }
     return Status::OK();
 }

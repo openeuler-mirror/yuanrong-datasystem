@@ -146,20 +146,17 @@ public:
      * @brief Add object location to rocksdb.
      * @param[in] objectKey Object key to be added.
      * @param[in] workerAddr Location of the object.
-     * @param[in] type Kv write type.
      * @return Status of the call.
      */
-    Status AddObjectLocation(const std::string &objectKey, const std::string &workerAddr, WriteType type = ROCKS_ONLY);
+    Status AddObjectLocation(const std::string &objectKey, const std::string &workerAddr);
 
     /**
      * @brief Remove object location from rocksdb.
      * @param[in] objectKey Object key to be removed.
      * @param[in] workerAddr Location of the object.
-     * @param[in] needRemoveEtcdData Indicates whether to delete etcd data.
      * @return Status of the call.
      */
-    Status RemoveObjectLocation(const std::string &objectKey, const std::string &workerAddr,
-                                bool needRemoveEtcdData = true);
+    Status RemoveObjectLocation(const std::string &objectKey, const std::string &workerAddr);
 
     /**
      * @brief Get all pairs from KvStore table
@@ -354,6 +351,12 @@ public:
     }
 
     /**
+     * @brief Check whether to support metadata written to rocksdb.
+     * @return True if support metadata written to rocksdb.
+     */
+    bool IsRocksdbEnableWriteMeta();
+
+    /**
      * @brief Change rocksdb to running.
      */
     void ChangeRocksdbToRunning()
@@ -399,7 +402,7 @@ public:
      * @param[out] elements Async elements.
      */
     void PollAsyncElementsByObjectKey(const std::string &objectKey,
-                                     std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
+                                      std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
 
     /**
      * @brief Insert wait async elements to object meta store.
@@ -466,9 +469,12 @@ private:
      * @param[in] objectKey Object key.
      * @param[in] key Key need to store.
      * @param[in] tablePrefix ETCD table prefix.
+     * @param[in] postHandler To ensure consistency, some things can only be done after successfully deleting the key in
+     * etcd.
      * @return Status of the call.
      */
-    Status RemoveEtcdKey(const std::string &objectKey, const std::string &key, const std::string &tablePrefix);
+    Status RemoveEtcdKey(const std::string &objectKey, const std::string &key, const std::string &tablePrefix,
+                         std::function<Status()> &&postHandler = nullptr);
 
     /**
      * @brief Prefix search key and erase them from etcdKeyMap_
@@ -547,12 +553,14 @@ private:
      * @param[in] etcdKey Key need to remove.
      * @param[in] value Value need to store
      * @param[in] requestType The request's type, see the AsyncEtcdOpElement::RequestType for details.
+     * @param[in] postHandler To ensure consistency, some things can only be done after successfully deleting the key in
+     * etcd.
      * @return Status of the call
      */
     Status AddOneAsyncTaskToEtcdStore(const std::string &objectKey, const std::string &table,
                                       const std::string &etcdKey, const std::string &value,
                                       AsyncElement::ReqType requestType, uint64_t timestamp = 0,
-                                      const std::string &traceId = "");
+                                      const std::string &traceId = "", std::function<Status()> &&postHandler = nullptr);
 
     // The backend rocksdb storage.
     RocksStore *rocksStore_;

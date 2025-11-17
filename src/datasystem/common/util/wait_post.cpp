@@ -79,4 +79,19 @@ void Barrier::Wait()
 
     cv_.wait(lock, [this, gen] { return gen != generation_; });
 }
+
+void WaitPost::SetWithStatus(const Status &status)
+{
+    std::unique_lock<std::mutex> lock(mux_);
+    val_ = 1;
+    status_ = status;
+    cv_.notify_all();
+}
+
+Status WaitPost::WaitAndGetStatus()
+{
+    std::unique_lock<std::mutex> lock(mux_);
+    cv_.wait(lock, [this]() { return val_ != 0; });
+    return status_;
+}
 }  // namespace datasystem

@@ -111,8 +111,7 @@ protected:
     // Attention:  size_t shmSz = 20 * 1024ul * 1024ul; is not ok because of jemalloc.
     size_t shmSz = 20 * 1000ul * 1000ul;
     size_t nonShmSz = 100'000;
-    CreateParam createParam = { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE,
-                                .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
     int64_t timeOut = 1'000;
 };
 
@@ -407,7 +406,7 @@ protected:
     std::string objKey = "objKey";
     size_t sz = 10'000'000;
     size_t nonShmSz = 100;
-    CreateParam createParam = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
     int64_t timeOut = 1'000;
 };
 
@@ -889,8 +888,8 @@ TEST_F(OCClientPublishTest, CreateUpdatePubAfterSeal)
     int64_t dataSz = 100'000;
     std::shared_ptr<Buffer> bufferPtr1;
     std::shared_ptr<Buffer> bufferPtr2;
-    CreateParam createParam1 = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
-    CreateParam createParam2 = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam1 = { .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam2 = { .consistencyType = ConsistencyType::CAUSAL };
     ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam1, bufferPtr1));
     ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam2, bufferPtr2));
     ASSERT_EQ(Status::OK(), bufferPtr1->Seal());
@@ -903,7 +902,7 @@ TEST_F(OCClientPublishTest, ConcurrentSealAfterPub)
     InitTestClient(0, client1);
     int64_t dataSz1 = 100'000;
     int64_t dataSz2 = 200'000;
-    CreateParam createParam1 = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam1 = { .consistencyType = ConsistencyType::CAUSAL };
     std::shared_ptr<Buffer> bufferPtr1;
     std::shared_ptr<Buffer> bufferPtr2;
     ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz1, createParam1, bufferPtr1));
@@ -951,7 +950,7 @@ TEST_F(OCClientPublishTest, CreateUpdateSingleWorkerSealVarySzSeal)
     InitTestClient(2, client3);
     int64_t dataSz = 100'000;
     int64_t bigDataSz = 600'000;
-    CreateParam createParam = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
 
     std::shared_ptr<Buffer> bufferPtr1;
     std::shared_ptr<Buffer> bufferPtr2;

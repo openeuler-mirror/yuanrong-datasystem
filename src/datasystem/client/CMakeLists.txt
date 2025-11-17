@@ -18,7 +18,16 @@ list(APPEND CLIENT_SRCS
         object_cache/device/page_attn_utils.cpp
         kv_cache/read_only_buffer.cpp
         kv_cache/kv_client.cpp
-        hetero_cache/hetero_client.cpp)
+        hetero_cache/hetero_client.cpp
+        stream_cache/client_worker_api.cpp
+        stream_cache/client_base_impl.cpp
+        stream_cache/consumer.cpp
+        stream_cache/consumer_impl.cpp
+        stream_cache/producer.cpp
+        stream_cache/producer_impl.cpp
+        stream_cache/stream_client.cpp
+        stream_cache/stream_client_impl.cpp
+        stream_cache/producer_consumer_worker_api.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
@@ -30,6 +39,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_inject
         common_log
         common_perf
+        common_sc
         common_shm_unit_info
         common_util
         common_immutable_string
@@ -37,6 +47,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         posix_protos_client
         share_memory_protos_client
         worker_object_protos_client
+        worker_stream_protos_client
         common_acl_device
         common_shared_memory
         common_rdma)
@@ -65,10 +76,12 @@ add_dependencies(datasystem_static
         share_memory_protos_client
         posix_protos_client
         worker_object_protos_client
-        master_object_protos_client)
+        master_object_protos_client
+        worker_stream_protos_client)
 
 add_dependencies(datasystem
         share_memory_protos_client
         posix_protos_client
         worker_object_protos_client
-        master_object_protos_client)
+        master_object_protos_client
+        worker_stream_protos_client)

@@ -44,7 +44,7 @@ package_datas = {
     '': ['sdk_lib_list', 'datasystem_worker', '*.py',
          'worker_config.json', 'cluster_config.json', '*so', '*so*',
          'helm_chart/**/*', 'helm_chart/*', 'helm_chart/**/**/*',
-         'include/*', 'include/**/**/*', 'include/**/*', 'lib/**/**/*', 'lib/*',
+         'include/*', 'include/**/**/*', 'include/**/*', 'lib/**/**/*', 'lib/*', 'lib/urma/*',
          'cpp_template/**/*', 'cpp_template/*', 'cpp_template/**/**/*', 'cpp_template/**/**/**/*']
 }
 

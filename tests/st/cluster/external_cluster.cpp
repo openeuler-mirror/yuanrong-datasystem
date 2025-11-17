@@ -910,7 +910,7 @@ Status ExternalCluster::StartMaster(int index)
             }
             etcdUrl += addrs.first.ToString();
         }
-        masterCmd += " -backend_store=etcd -etcd_address=" + etcdUrl + " -az_name=" + opts_.etcdPrefix;
+        masterCmd += " -backend_store=etcd -etcd_address=" + etcdUrl + " -cluster_name=" + opts_.etcdPrefix;
     }
     LOG(INFO) << "Launch master [" << index << "] command: " << masterCmd;
     auto masterProcess = std::make_unique<MasterProcess>(masterCmd, opts_.masterIpAddrs[index]);
@@ -999,7 +999,15 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
         spillDir = rootDir + "/spill";
     }
     (void)DeleteFile(healthFile);
-
+    if (opts_.isStreamCacheCase) {
+        opts_.numRpcThreads = 1;
+        opts_.numOcThreadNum = 1;
+        opts_.workerGflagParams = " -sc_regular_socket_num=" + std::to_string(opts_.numScRegularSocket)
+                                  + " -sc_stream_socket_num=" + std::to_string(opts_.numScStreamSocket) + " "
+                                  + opts_.workerGflagParams;
+    } else {
+        opts_.workerGflagParams = " -sc_regular_socket_num=0 -sc_stream_socket_num=0 " + opts_.workerGflagParams;
+    }
     std::string injectActions = "test.start.notWait:call(0)"
                                 + (opts_.injectActions.empty() ? "" : ";" + opts_.injectActions)
                                 + (opts_.disableRocksDB ? ";master.disableRocksDb:1*call()" : "");
@@ -1175,6 +1183,7 @@ ExternalClusterOptions::ExternalClusterOptions()
       waitWorkerReady(true),
       enableLivenessProbe(false),
       skipWorkerPreShutdown(true),
+      isStreamCacheCase(false),
       disableRocksDB(true)
 {
     if (isObjectCache) {

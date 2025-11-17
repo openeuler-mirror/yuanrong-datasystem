@@ -24,8 +24,8 @@
 #include <memory>
 #include <vector>
 
+#include "datasystem/hetero/device_common.h"
 #include "datasystem/object/buffer.h"
-#include "datasystem/client/hetero_cache/device_util.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -62,26 +62,20 @@ struct BlobListInfo {
 /**
  * @brief Prepare the data sizes by user data list
  * @param[out] sizeList The list of all data sizes
- * @param[in] dataInfoList The user data list
+ * @param[in] devBlobList The user data list
  * @param[in] blobInfo The information of blob
  * @return K_OK on any object success; the error code otherwise.
  */
-Status PrepareDataSizeList(std::vector<size_t> &sizeList, const std::vector<std::vector<DataInfo>> &dataInfoList,
+Status PrepareDataSizeList(std::vector<size_t> &sizeList, const std::vector<DeviceBlobList> &devBlobList,
                            BlobListInfo &blobInfo);
 
 /**
  * @brief Compose buffer list by user data list
  * @param[out] bufferList Compose the user data to bufferList
- * @param[in] dataInfoList The user data list
+ * @param[in] devBlobList The user data list
  */
 void ComposeBufferData(std::vector<std::shared_ptr<Buffer>> &bufferList,
-                       const std::vector<std::vector<DataInfo>> &dataInfoList);
-/**
- * @brief Get the total data size of this buffer
- * @param[in] mutableData Pointer to the composed data
- * @return The size of composed size
- */
-size_t GetComposedBufferSize(void* mutableData);
+                       const std::vector<DeviceBlobList> &devBlobList);
 
 }  // namespace object_cache
 }  // namespace datasystem

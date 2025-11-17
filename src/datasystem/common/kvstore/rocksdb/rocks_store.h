@@ -20,10 +20,13 @@
 #ifndef DATASYSTEM_COMMON_KVSTORE_ROCKS_STORE_H
 #define DATASYSTEM_COMMON_KVSTORE_ROCKS_STORE_H
 
+#include <future>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <type_traits>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -31,10 +34,14 @@
 #include "rocksdb/options.h"
 #include "rocksdb/slice_transform.h"
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/kvstore/kv_store.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+
+enum class RocksdbWriteMode { ASYNC, SYNC, NONE };
 class RocksStore : public KvStore {
 public:
     /**
@@ -122,7 +129,7 @@ public:
      * @param[in] sync The sync mode to delete or not.
      * @return Status of the call.
      */
-    inline rocksdb::Status BatchPut(std::unordered_map<std::string, std::string> &metaInfos,
+    inline rocksdb::Status BatchPut(const std::unordered_map<std::string, std::string> &metaInfos,
                                     rocksdb::ColumnFamilyHandle *tableHandle, bool sync = false)
     {
         rocksdb::WriteOptions options;
@@ -141,7 +148,7 @@ public:
      * @param[in] sync The sync mode to delete or not.
      * @return Status of the call.
      */
-    inline rocksdb::Status BatchDelete(std::unordered_map<std::string, std::string> &metaInfos,
+    inline rocksdb::Status BatchDelete(const std::unordered_map<std::string, std::string> &metaInfos,
                                        rocksdb::ColumnFamilyHandle *tableHandle, bool sync = false)
     {
         rocksdb::WriteOptions options;
@@ -269,15 +276,45 @@ public:
     RocksStore(const RocksStore &&) = delete;
     RocksStore &operator=(const RocksStore &&) = delete;
 
+    bool IsAsyncQueueEmpty()
+    {
+        if (!asyncThreadPool_) {
+            return true;
+        }
+        return asyncThreadPool_->AreAllQueuesEmpty();
+    }
+
 private:
     // Make the constructor private to force the user to call GetInstance to open a read-only RocksDB database.
-    RocksStore() = default;
+    RocksStore();
+
+    /**
+     * @brief Check whether the table is a cluster table.
+     * @param[in] tableName The table need to check.
+     * @return True if the table is a cluster table.
+     */
+    bool IsClusterInfoTable(const std::string &tableName);
+
+    /**
+     * @brief Init async thread pool.
+     * @param[in] threadCount The thread numer of async thread pool.
+     */
+    void InitializeAsyncThreadPool(size_t threadCount = 16);
+
+    /**
+     * @brief Parse rocksdb write mode.
+     * @return RocksdbWriteMode enum.
+     */
+    RocksdbWriteMode ParseRocksdbWriteMode();
 
     rocksdb::DB *db_ = nullptr;
     std::string dbPath_;
     std::unordered_map<std::string, rocksdb::ColumnFamilyHandle *> tables_;
     static std::mutex lck;
     static bool disableRocksDB;
+    std::vector<std::string> clusterInfoTable_ = { CLUSTER_TABLE, HASHRING_TABLE, REPLICA_GROUP_TABLE, HEALTH_TABLE };
+    std::unique_ptr<OrderedThreadPool> asyncThreadPool_;
+    RocksdbWriteMode mode_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_KVSTORE_ROCKS_STORE_H

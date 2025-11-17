@@ -27,9 +27,10 @@
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/utils/status.h"
 
 using namespace datasystem;
-
+DS_DECLARE_string(rocksdb_write_mode);
 namespace datasystem {
 namespace st {
 class RocksStoreTest : public CommonTest {
@@ -64,6 +65,7 @@ RandomData RocksStoreTest::random_;
 
 void RocksStoreTest::SetUp()
 {
+    FLAGS_rocksdb_write_mode = "sync";
     db_ = RocksStore::GetInstance(dbName_);
     if (db_ != nullptr) {
         rocksdb::ColumnFamilyOptions options;

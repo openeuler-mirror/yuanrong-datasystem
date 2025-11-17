@@ -229,9 +229,9 @@ Status WorkerOcEvictionManager::EvictClearObject(ObjectKV &objectKV)
 uint64_t WorkerOcEvictionManager::GetLowWaterMark(CacheType cacheType)
 {
     memory::CacheType memCacheType = static_cast<memory::CacheType>(cacheType);
-    auto maxMemorySize = datasystem::memory::Allocator::Instance()->GetMaxMemorySize(memCacheType);
+    auto maxMemorySize = datasystem::memory::Allocator::Instance()->GetMaxMemorySize(ServiceType::OBJECT, memCacheType);
     auto usedMemorySize =
-        datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(memCacheType);
+        datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memCacheType);
     auto lowWater = static_cast<std::uint64_t>(
         std::min(datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + usedMemorySize,
                  maxMemorySize)
@@ -243,7 +243,7 @@ bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pend
 {
     uint64_t max = std::numeric_limits<uint64_t>::max();
     auto realMemoryUsage = datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(
-        static_cast<memory::CacheType>(cacheType));
+        ServiceType::OBJECT, static_cast<memory::CacheType>(cacheType));
     realMemoryUsage = (realMemoryUsage > max - needSize) ? max : realMemoryUsage + needSize;
     auto lowWater = GetLowWaterMark(cacheType);
     lowWater = (lowWater > max - pendingSpillSize) ? max : lowWater + pendingSpillSize;
@@ -726,14 +726,16 @@ std::string WorkerOcEvictionManager::GetActionName(Action action)
 }
 
 bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize,
-                                   const std::shared_ptr<WorkerOcEvictionManager> &evictionManager, CacheType cacheType)
+                                   const std::shared_ptr<WorkerOcEvictionManager> &evictionManager, ServiceType type,
+                                   CacheType cacheType)
 {
     uint64_t realMemoryUsed = 0;
     uint64_t memOccupied = 0;
     uint64_t maxAvailableMemorySize = 0;
     memory::CacheType memCacheType = static_cast<memory::CacheType>(cacheType);
     uint64_t memThreshold = 0;
-    auto realObjMemoryUsed = datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(memCacheType);
+    auto realObjMemoryUsed =
+        datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memCacheType);
     auto getMemThresInitVal = [](uint64_t maxAvailableMemorySize, uint64_t evictionThresholdMB) {
         return std::max(static_cast<uint64_t>(maxAvailableMemorySize * HIGH_WATER_FACTOR),
                         maxAvailableMemorySize > evictionThresholdMB * MB_TO_BYTES
@@ -745,16 +747,24 @@ bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize
         // it could never be success, so skip evict.
         return false;
     }
-
-    realMemoryUsed = realObjMemoryUsed;
-    memOccupied = realMemoryUsed + needSize;
-    maxAvailableMemorySize =
-        std::min(datasystem::memory::Allocator::Instance()->GetMaxMemorySize(memCacheType),
-                 (datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + realMemoryUsed));
-    static uint64_t memThresInitVal =
-        getMemThresInitVal(maxAvailableMemorySize, FLAGS_eviction_reserve_mem_threshold_mb);
-    memThreshold = memThresInitVal;
-
+    if (type == ServiceType::OBJECT) {
+        realMemoryUsed = realObjMemoryUsed;
+        memOccupied = realMemoryUsed + needSize;
+        maxAvailableMemorySize = std::min(
+            datasystem::memory::Allocator::Instance()->GetMaxMemorySize(type, memCacheType),
+            (datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + realMemoryUsed));
+        static uint64_t memThresInitVal =
+            getMemThresInitVal(maxAvailableMemorySize, FLAGS_eviction_reserve_mem_threshold_mb);
+        memThreshold = memThresInitVal;
+    } else if (type == ServiceType::STREAM) {
+        realMemoryUsed =
+            datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::STREAM) + realObjMemoryUsed;
+        memOccupied = realMemoryUsed + needSize;
+        maxAvailableMemorySize = datasystem::memory::Allocator::Instance()->GetMaxMemoryLimit();
+        static uint64_t memThresInitVal =
+            getMemThresInitVal(maxAvailableMemorySize, FLAGS_eviction_reserve_mem_threshold_mb);
+        memThreshold = memThresInitVal;
+    }
     VLOG(1) << FormatString("Allocate memory for %s, size = %lu, memOccupied = %lu, memThreshold = %lu", keyInfo,
                             needSize, memOccupied, memThreshold);
     if (memOccupied >= memThreshold && realObjMemoryUsed > 0) {

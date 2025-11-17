@@ -1,0 +1,12 @@
+diff --color -Npur curl-curl-8_8_0/CMake/curl-config.cmake.in curl-curl-8_8_0_new/CMake/curl-config.cmake.in
+--- curl-curl-8_8_0/CMake/curl-config.cmake.in	2024-05-22 13:54:25.000000000 +0800
++++ curl-curl-8_8_0_new/CMake/curl-config.cmake.in	2025-11-10 21:12:29.139731588 +0800
+@@ -36,5 +36,8 @@ check_required_components("@PROJECT_NAME
+ 
+ # Alias for either shared or static library
+ if(NOT TARGET @PROJECT_NAME@::libcurl)
++  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.11 AND CMAKE_VERSION VERSION_LESS 3.18)
++    set_target_properties(@PROJECT_NAME@::@LIB_SELECTED@ PROPERTIES IMPORTED_GLOBAL TRUE)
++  endif()
+   add_library(@PROJECT_NAME@::libcurl ALIAS @PROJECT_NAME@::@LIB_SELECTED@)
+ endif()

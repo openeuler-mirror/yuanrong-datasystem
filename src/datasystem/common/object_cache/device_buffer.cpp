@@ -111,10 +111,10 @@ DeviceBuffer::~DeviceBuffer()
 
 uint64_t DeviceBuffer::Size() const
 {
-    DataInfo dataInfo;
-    Status rc = deviceMemUnit_->CheckAndGetSingleDataInfo(dataInfo);
+    Blob blob;
+    Status rc = deviceMemUnit_->CheckAndGetSingleBlob(blob);
     if (rc.IsOk()) {
-        return dataInfo.Size();
+        return blob.size;
     }
     LOG(ERROR) << rc.ToString();
     return 0;
@@ -122,10 +122,10 @@ uint64_t DeviceBuffer::Size() const
 
 void *DeviceBuffer::Data() const
 {
-    DataInfo dataInfo;
-    Status rc = deviceMemUnit_->CheckAndGetSingleDataInfo(dataInfo);
+    Blob blob;
+    Status rc = deviceMemUnit_->CheckAndGetSingleBlob(blob);
     if (rc.IsOk()) {
-        return dataInfo.devPtr;
+        return blob.pointer;
     }
     LOG(ERROR) << rc.ToString();
     return nullptr;
@@ -140,8 +140,8 @@ Status DeviceBuffer::Publish()
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isPublished, K_OC_ALREADY_SEALED, "Device object is already published");
-    CHECK_FAIL_RETURN_STATUS(!deviceMemUnit_->GetDataInfoStorage().empty(), K_INVALID,
-                             "The dataInfo can't be empty in device buffer");
+    CHECK_FAIL_RETURN_STATUS(!deviceMemUnit_->GetBlobsStorage().empty(), K_INVALID,
+                             "The blobs can't be empty in device buffer");
     Status rc = clientImpl_->PublishDeviceObject(shared_from_this());
     if (rc.IsOk()) {
         bufferInfo_->isPublished = true;
@@ -149,9 +149,9 @@ Status DeviceBuffer::Publish()
     return rc;
 }
 
-std::vector<DataInfo> DeviceBuffer::GetDataInfoList() const
+std::vector<Blob> DeviceBuffer::GetDevBlobList() const
 {
-    return deviceMemUnit_->GetDataInfoStorage();
+    return deviceMemUnit_->GetBlobsStorage();
 }
 
 Status DeviceBuffer::GetSendStatus(std::vector<Future> &futureVec)

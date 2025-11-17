@@ -1711,7 +1711,7 @@ TEST_F(OCClientRemoteGetTest4, DISABLED_TestObjectPutAndGetConcurrency)
 
     std::string objKey = "2-6-shame";
     std::string val = RandomData().GetRandomString(1024ul * 1024ul);
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->GIncreaseRef({ objKey }, failedObjectKeys));
@@ -1768,7 +1768,7 @@ TEST_F(OCClientRemoteGetTest5, TestGetSameObjectConcurrency)
 
     std::string objKey = "2-6-shame";
     std::string val = RandomData().GetRandomString(1024ul * 1024ul);
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.after_query_meta", "1*sleep(5000)"));
@@ -1811,7 +1811,7 @@ TEST_F(OCClientRemoteGetTest5, TestRemoteGetAndRemoveLocationFailedThenPut)
     std::string objKey = "Ugly_iPhone15";
     std::string val = RandomData().GetRandomString(1024ul * 1024ul);
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
 
     std::vector<Optional<Buffer>> buffers;

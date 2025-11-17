@@ -34,8 +34,11 @@
 #include <fstream>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+
+DS_DECLARE_string(urma_mode);
 
 namespace datasystem {
 static constexpr int RDMA_LOG_LEVEL = 3;
@@ -218,4 +221,14 @@ Status EthToRdmaDevName(std::string ethDevName, std::string &rdmaDevName)
     VLOG(RDMA_LOG_LEVEL) << "Result RdmaDevName is " << rdmaDevName;
     return Status::OK();
 }
+
+UrmaMode GetUrmaMode()
+{
+    if (FLAGS_urma_mode == "IB") {
+        return UrmaMode::IB;
+    } else if (FLAGS_urma_mode == "UB") {
+        return UrmaMode::UB;
+    }
+    return UrmaMode::UNKNOWN;
+};
 }  // namespace datasystem

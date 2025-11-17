@@ -23,6 +23,8 @@
 #include <condition_variable>
 #include <mutex>
 
+#include "datasystem/utils/status.h"
+
 namespace datasystem {
 /**
  * A WaitPost is an implementation of <a
@@ -70,10 +72,37 @@ public:
      */
     void Clear();
 
+    /**
+     * @brief Set the event as happened and attach a status information.
+     *        This will wake up all threads waiting on this event and provide them with the status.
+     * @param[in] status The status information to be passed to waiting threads, typically contains
+     *                   success/failure information of an asynchronous operation.
+     * @note This function is thread-safe and can be called from any thread.
+     * @note After calling this function, all waiting threads will be unblocked and can retrieve
+     *       the status information through WaitAndGetStatus().
+     */
+    void SetWithStatus(const Status &status);
+
+    /**
+     * @brief Wait for the event to happen and retrieve the associated status information.
+     *        This function will block the calling thread until SetWithStatus() is called.
+     * @return Status The status information that was set by SetWithStatus() call.
+     *         Returns Status::OK() if no specific status was set.
+     * @note This function is thread-safe and can be called from multiple threads.
+     * @note If SetWithStatus() was already called before this wait, the function will return
+     *       immediately with the stored status.
+     * @warning The status information is only stored once per SetWithStatus() call. Subsequent
+     *          calls to WaitAndGetStatus() will return the same status until SetWithStatus() is
+     *          called again with a new status.
+     */
+    Status WaitAndGetStatus();
+
 private:
     int val_;
     std::mutex mux_;
     std::condition_variable cv_;
+
+    Status status_ = Status::OK();
 };
 
 class Barrier {

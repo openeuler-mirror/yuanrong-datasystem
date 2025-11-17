@@ -85,7 +85,7 @@ ArenaGroup::~ArenaGroup()
 }
 
 Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSize, void *&pointer, int &fd,
-                                  ptrdiff_t &offset, uint64_t &mmapSize)
+                                  ptrdiff_t &offset, uint64_t &mmapSize, ServiceType type)
 {
     CHECK_FAIL_RETURN_STATUS(!destroyed_.load(), StatusCode::K_RUNTIME_ERROR, "ArenaGroup destroyed");
     CHECK_FAIL_RETURN_STATUS(!arenas_.empty(), StatusCode::K_RUNTIME_ERROR, "arenas_ is empty");
@@ -110,13 +110,13 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     if (status.IsError()) {
         (void)memoryUsage_.fetch_sub(size, std::memory_order_relaxed);
         const int logFreq = 100;
-        LOG_EVERY_N(ERROR, logFreq) << "total size limit:" << Allocator::Instance()->GetMaxMemorySize(cacheType_)
+        LOG_EVERY_N(ERROR, logFreq) << "total size limit:" << Allocator::Instance()->GetMaxMemorySize(type, cacheType_)
                                     << ", total physical memory usage:"
                                     << Allocator::Instance()->GetTotalPhysicalMemoryUsage(cacheType_)
                                     << ", total real memory usage:"
-                                    << Allocator::Instance()->GetTotalRealMemoryUsage(cacheType_)
+                                    << Allocator::Instance()->GetTotalRealMemoryUsage(type, cacheType_)
                                     << ", total memory usage:"
-                                    << Allocator::Instance()->GetTotalMemoryUsage(cacheType_)
+                                    << Allocator::Instance()->GetTotalMemoryUsage(type, cacheType_)
                                     << ", try alloc size:" << size << ", cacheType:" << static_cast<int>(cacheType_);
         return status;
     }
@@ -306,6 +306,9 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
     arenas_.resize(ARENAS_INIT_SIZE);
     Jemalloc::Init(&ArenaManager::AllocHook, &ArenaManager::DestroyHook, &ArenaManager::CommitHook);
     handleExpiredTenantThread_ = std::make_unique<ThreadPool>(handleExpiredTenantThreadNum_, 0, "TenantExpired");
+    if (FLAGS_enable_huge_tlb) {
+        FLAGS_arena_per_tenant = 1;
+    }
     auto arenaNum = FLAGS_arena_per_tenant;
     if (!FLAGS_shared_disk_directory.empty()) {
         arenaNum += FLAGS_shared_disk_arena_per_tenant;
