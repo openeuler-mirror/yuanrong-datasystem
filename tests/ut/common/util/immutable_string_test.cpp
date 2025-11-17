@@ -24,18 +24,18 @@ namespace datasystem {
 namespace ut {
 class ImmutableStringTest : public CommonTest {
 public:
-    static void CheckImmutableStringEqual(const ImmutableString &im1, const ImmutableString &im2)
+    static void CheckImmutableStringEqual(const ImmutableStringImpl &im1, const ImmutableStringImpl &im2)
     {
         ASSERT_EQ(im1, im2);
         ASSERT_EQ(im1.ToString(), im2.ToString());
         ASSERT_EQ(&im1.ToString(), &im2.ToString());
     }
 
-    static void CheckSetErase(tbb::concurrent_unordered_set<ImmutableString, std::hash<ImmutableString>> &set1,
-                              tbb::concurrent_unordered_set<ImmutableString, std::hash<ImmutableString>> &set2)
+    static void CheckSetErase(tbb::concurrent_unordered_set<ImmutableStringImpl, std::hash<ImmutableStringImpl>> &set1,
+                              tbb::concurrent_unordered_set<ImmutableStringImpl, std::hash<ImmutableStringImpl>> &set2)
     {
         set1.unsafe_erase("123");
-        set2.unsafe_erase(ImmutableString("123"));
+        set2.unsafe_erase(ImmutableStringImpl("123"));
         EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1ul);
 
         set1.unsafe_erase("456");
@@ -47,7 +47,7 @@ public:
     static void CheckSetErase(T &set1, T &set2)
     {
         set1.erase("123");
-        set2.erase(ImmutableString("123"));
+        set2.erase(ImmutableStringImpl("123"));
         EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1ul);
 
         set1.erase("456");
@@ -65,8 +65,8 @@ public:
         T map1;
         T map2;
         {
-            auto im1 = ImmutableString(key1);
-            // insert by ImmutableString
+            auto im1 = ImmutableStringImpl(key1);
+            // insert by ImmutableStringImpl
             map1[im1] = value1;
             ASSERT_EQ(map1[key1], value1);
 
@@ -93,14 +93,14 @@ public:
 
         auto pair = set1.insert(test1);
         ASSERT_TRUE(pair.second);
-        pair = set1.insert(ImmutableString(test2));
+        pair = set1.insert(ImmutableStringImpl(test2));
         ASSERT_TRUE(pair.second);
-        pair = set1.insert(ImmutableString(test2));
+        pair = set1.insert(ImmutableStringImpl(test2));
         ASSERT_FALSE(pair.second);
         // After insert, 2 RefCountString in pool.
         EXPECT_EQ(ImmutableStringPool::Instance().Size(), 2ul);
-        // find by ImmutableString
-        auto iter = set1.find(ImmutableString(test1));
+        // find by ImmutableStringImpl
+        auto iter = set1.find(ImmutableStringImpl(test1));
         ASSERT_TRUE(iter != set1.end());
         ASSERT_EQ(*iter, test1);
         // find by std::string
@@ -117,9 +117,9 @@ public:
         iter = set1.find("789");
         ASSERT_TRUE(iter == set1.end());
 
-        pair = set2.insert(ImmutableString(test1));
+        pair = set2.insert(ImmutableStringImpl(test1));
         ASSERT_TRUE(pair.second);
-        pair = set2.insert(ImmutableString(test2));
+        pair = set2.insert(ImmutableStringImpl(test2));
         ASSERT_TRUE(pair.second);
         EXPECT_EQ(ImmutableStringPool::Instance().Size(), 2ul);
 
@@ -137,12 +137,12 @@ TEST_F(ImmutableStringTest, TestConstructor)
     std::string test2 = "456";
     char test3[] = "123";
     {
-        ImmutableString im1 = ImmutableString(test1);
-        ImmutableString im2 = ImmutableString(test1);
-        ImmutableString im3 = ImmutableString(test2);
-        ImmutableString im4 = ImmutableString("123");
-        ImmutableString im5 = ImmutableString("456");
-        ImmutableString im6 = ImmutableString(test3);
+        ImmutableStringImpl im1 = ImmutableStringImpl(test1);
+        ImmutableStringImpl im2 = ImmutableStringImpl(test1);
+        ImmutableStringImpl im3 = ImmutableStringImpl(test2);
+        ImmutableStringImpl im4 = ImmutableStringImpl("123");
+        ImmutableStringImpl im5 = ImmutableStringImpl("456");
+        ImmutableStringImpl im6 = ImmutableStringImpl(test3);
 
         LOG(INFO) << "check im1, im2";
         CheckImmutableStringEqual(im1, im2);
@@ -164,7 +164,7 @@ TEST_F(ImmutableStringTest, TestBigString)
     size_t strSize = 1024ul * 1024 * 1024;
     std::string str = RandomData().GetPartRandomString(strSize, 100);
     size_t imSize = 2;
-    std::vector<ImmutableString> imVec;
+    std::vector<ImmutableStringImpl> imVec;
     imVec.reserve(imSize);
     for (size_t i = 0; i < imSize; i++) {
         LOG(INFO) << "loop: " << i;
@@ -190,7 +190,7 @@ TEST_F(ImmutableStringTest, TestDestructorInParallel)
     for (size_t i = 0; i < threadNum; i++) {
         pool->Execute([&strVec, i, strNum]() {
             for (int j = 0; j < 10000; j++) {
-                ImmutableString im = ImmutableString(strVec[i % strNum]);
+                ImmutableStringImpl im = ImmutableStringImpl(strVec[i % strNum]);
             }
         });
     }
@@ -200,25 +200,25 @@ TEST_F(ImmutableStringTest, TestDestructorInParallel)
 }
 
 /**
-1. ImmutableString\const char*\std::string 都能insert、find
+1. ImmutableStringImpl\const char*\std::string 都能insert、find
 2. 重复insert，内存不增加
 3. 都erase后，内存能释放
-4. 并发场景下，表不加外部锁的情况下能安全的进行(insert\find\erase)，ImmutableString不被破坏
+4. 并发场景下，表不加外部锁的情况下能安全的进行(insert\find\erase)，ImmutableStringImpl不被破坏
 5. 支持 tbb 和 stl 的所有map/set 类型。
 */
 TEST_F(ImmutableStringTest, TestImInTbbUnorderedSet)
 {
-    ImSetCheckMemoryReduce<tbb::concurrent_unordered_set<ImmutableString, std::hash<ImmutableString>>>();
+    ImSetCheckMemoryReduce<tbb::concurrent_unordered_set<ImmutableStringImpl, std::hash<ImmutableStringImpl>>>();
 }
 
 TEST_F(ImmutableStringTest, TestImInSTLUnorderedSet)
 {
-    ImSetCheckMemoryReduce<std::unordered_set<ImmutableString>>();
+    ImSetCheckMemoryReduce<std::unordered_set<ImmutableStringImpl>>();
 }
 
 TEST_F(ImmutableStringTest, TestImInSTLSet)
 {
-    ImSetCheckMemoryReduce<std::set<ImmutableString>>();
+    ImSetCheckMemoryReduce<std::set<ImmutableStringImpl>>();
 }
 
 TEST_F(ImmutableStringTest, ImInTbbHashMap)
@@ -228,14 +228,14 @@ TEST_F(ImmutableStringTest, ImInTbbHashMap)
     auto value1 = RandomData().GetRandomUint32();
     auto value2 = RandomData().GetRandomUint32();
 
-    using MapType = tbb::concurrent_hash_map<ImmutableString, uint32_t>;
+    using MapType = tbb::concurrent_hash_map<ImmutableStringImpl, uint32_t>;
 
     MapType map1;
     MapType map2;
 
-    auto im1 = ImmutableString(key1);
+    auto im1 = ImmutableStringImpl(key1);
     MapType::accessor ac;
-    // insert by ImmutableString
+    // insert by ImmutableStringImpl
     map1.insert(ac, im1);
     ac->second = value1;
     ac.release();
@@ -257,7 +257,7 @@ TEST_F(ImmutableStringTest, ImInTbbHashMap)
 TEST_F(ImmutableStringTest, ImInUnorderedMapInParrel)
 {
     auto key1 = GetStringUuid();
-    using MapType = std::unordered_map<ImmutableString, int>;
+    using MapType = std::unordered_map<ImmutableStringImpl, int>;
     MapType map1;
     auto pool = std::make_unique<ThreadPool>(10);
     std::shared_timed_mutex mutex;
@@ -285,13 +285,13 @@ TEST_F(ImmutableStringTest, ImInUnorderedMapInParrel)
 
 TEST_F(ImmutableStringTest, ImInSTLHashMap)
 {
-    using MapType = std::map<ImmutableString, uint32_t>;
+    using MapType = std::map<ImmutableStringImpl, uint32_t>;
     ImMapCheckMemoryReduce<MapType>();
 }
 
 TEST_F(ImmutableStringTest, ImInSTLUnorderedMap)
 {
-    using MapType = std::unordered_map<ImmutableString, uint32_t>;
+    using MapType = std::unordered_map<ImmutableStringImpl, uint32_t>;
     ImMapCheckMemoryReduce<MapType>();
 }
 }  // namespace ut

@@ -273,7 +273,7 @@ void ObjectGlobalRefTable::GetRemoteClientIds(std::unordered_set<std::string> &r
     remoteClientIds.clear();
     for (TbbFirstRemoteClientTable::const_iterator it = remoteClientIdTable_.begin(); it != remoteClientIdTable_.end();
          ++it) {
-        (void)remoteClientIds.insert(it->first.ToString());
+        (void)remoteClientIds.insert(it->first);
     }
 }
 

@@ -96,9 +96,10 @@ void NpuEventsTable::PutNpuEvent(const std::string &srcNpuId, std::shared_ptr<Np
     TbbSrcNpuGetReqsTable::accessor npuPendingGetReqsAccess;
     LOG(INFO) << FormatString("[PutNpuEvent] Update subscribe event of object: %s for src npu (%s), event_type:(%d)",
                               npuEvent->objectKey, srcNpuId, static_cast<int>(npuEvent->eventType));
-    (void)npuPendingGetReqsTable_.insert(npuPendingGetReqsAccess,
-                                         std::make_pair<ImmutableString, QueuePtr>(
-                                             srcNpuId, std::make_shared<BlockingQueue<std::shared_ptr<NpuEvent>>>()));
+    std::string srcId = srcNpuId;
+    (void)npuPendingGetReqsTable_.insert(
+        npuPendingGetReqsAccess, std::make_pair<ImmutableString, QueuePtr>(
+                                     std::move(srcId), std::make_shared<BlockingQueue<std::shared_ptr<NpuEvent>>>()));
     npuPendingGetReqsAccess->second->Push(npuEvent);
 }
 

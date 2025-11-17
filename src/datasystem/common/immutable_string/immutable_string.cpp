@@ -22,61 +22,61 @@
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 
 namespace datasystem {
-ImmutableString::ImmutableString(const std::string &val) noexcept
+ImmutableStringImpl::ImmutableStringImpl(const std::string &val) noexcept
 {
     if (!val.empty()) {
         ImmutableStringPool::Instance().Intern(val, strHandle_);
     }
 }
 
-ImmutableString::ImmutableString(const char *cStr) : ImmutableString(std::string(cStr))
+ImmutableStringImpl::ImmutableStringImpl(const char *cStr) : ImmutableStringImpl(std::string(cStr))
 {
 }
 
-std::ostream &operator<<(std::ostream &os, const ImmutableString &obj)
+std::ostream &operator<<(std::ostream &os, const ImmutableStringImpl &obj)
 {
     os << obj.ToString();
     return os;
 }
 
-size_t ImmutableString::GetHash() const
+size_t ImmutableStringImpl::GetHash() const
 {
     return strHandle_.ToRefCountStr().GetHash();
 }
 
-const RefCountString &ImmutableString::ToRefCountStr() const
+const RefCountString &ImmutableStringImpl::ToRefCountStr() const
 {
     return strHandle_.ToRefCountStr();
 }
 
-const std::string &ImmutableString::ToString() const
+const std::string &ImmutableStringImpl::ToString() const
 {
     return strHandle_.ToStr();
 }
 
-bool ImmutableString::operator==(const ImmutableString &rhs) const
+bool ImmutableStringImpl::operator==(const ImmutableStringImpl &rhs) const
 {
     const auto &lhsRCString = strHandle_.ToRefCountStr();
     const auto &rhsRCString = rhs.strHandle_.ToRefCountStr();
     return &lhsRCString == &rhsRCString || lhsRCString == rhsRCString;
 }
 
-bool ImmutableString::operator!=(const ImmutableString &rhs) const
+bool ImmutableStringImpl::operator!=(const ImmutableStringImpl &rhs) const
 {
     return this != &rhs && ToString() != rhs.ToString();
 }
 
-bool ImmutableString::operator<(const ImmutableString &rhs) const
+bool ImmutableStringImpl::operator<(const ImmutableStringImpl &rhs) const
 {
     return ToString() < rhs.ToString();
 }
 
-const char* ImmutableString::Data() const
+const char *ImmutableStringImpl::Data() const
 {
     return ToString().data();
 }
 
-std::string::size_type ImmutableString::Size() const
+std::string::size_type ImmutableStringImpl::Size() const
 {
     return ToString().size();
 }
@@ -84,19 +84,19 @@ std::string::size_type ImmutableString::Size() const
 }  // namespace datasystem
 
 namespace std {
-size_t hash<datasystem::ImmutableString>::operator()(const datasystem::ImmutableString &str) const
+size_t hash<datasystem::ImmutableStringImpl>::operator()(const datasystem::ImmutableStringImpl &str) const
 {
     return str.GetHash();
 }
 
-bool equal_to<datasystem::ImmutableString>::operator()(const datasystem::ImmutableString &lhs,
-                                                       const datasystem::ImmutableString &rhs) const
+bool equal_to<datasystem::ImmutableStringImpl>::operator()(const datasystem::ImmutableStringImpl &lhs,
+                                                           const datasystem::ImmutableStringImpl &rhs) const
 {
     return lhs == rhs;
 }
 
-bool less<datasystem::ImmutableString>::operator()(const datasystem::ImmutableString &lhs,
-                                                   const datasystem::ImmutableString &rhs) const
+bool less<datasystem::ImmutableStringImpl>::operator()(const datasystem::ImmutableStringImpl &lhs,
+                                                       const datasystem::ImmutableStringImpl &rhs) const
 {
     return lhs < rhs;
 }

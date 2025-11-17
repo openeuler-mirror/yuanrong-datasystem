@@ -25,18 +25,19 @@
 #include "datasystem/common/immutable_string/ref_count_string.h"
 
 namespace datasystem {
-class ImmutableString {
+using ImmutableString = std::string;
+class ImmutableStringImpl {
 public:
-    ImmutableString() = default;
-    ImmutableString(const ImmutableString &val) = default;
-    ImmutableString &operator=(const ImmutableString &other) = default;
-    ~ImmutableString() = default;
+    ImmutableStringImpl() = default;
+    ImmutableStringImpl(const ImmutableStringImpl &val) = default;
+    ImmutableStringImpl &operator=(const ImmutableStringImpl &other) = default;
+    ~ImmutableStringImpl() = default;
 
-    ImmutableString(const std::string &val) noexcept;
-    ImmutableString(const char *cStr);
+    ImmutableStringImpl(const std::string &val) noexcept;
+    ImmutableStringImpl(const char *cStr);
     /**
-     * @brief Get the hash of ImmutableString.
-     * @return The hash of ImmutableString.
+     * @brief Get the hash of ImmutableStringImpl.
+     * @return The hash of ImmutableStringImpl.
      */
     size_t GetHash() const;
 
@@ -52,14 +53,14 @@ public:
      */
     const std::string &ToString() const;
 
-    bool operator==(const ImmutableString &rhs) const;
+    bool operator==(const ImmutableStringImpl &rhs) const;
 
-    bool operator!=(const ImmutableString &rhs) const;
+    bool operator!=(const ImmutableStringImpl &rhs) const;
 
-    bool operator<(const ImmutableString &rhs) const;
+    bool operator<(const ImmutableStringImpl &rhs) const;
 
     /**
-     * @brief The operator to convert a ImmutableString to std::string.
+     * @brief The operator to convert a ImmutableStringImpl to std::string.
      * @return The the const reference of std::string.
      */
     operator const std::string &() const
@@ -74,22 +75,22 @@ public:
 private:
     RefCountStringHandle strHandle_;
 };
-std::ostream &operator<<(std::ostream &os, const ImmutableString &obj);
+std::ostream &operator<<(std::ostream &os, const ImmutableStringImpl &obj);
 
 }  // namespace datasystem
 
 namespace tbb {
 template <>
 #if TBB_INTERFACE_VERSION >= 12050
-struct detail::d1::tbb_hash_compare<datasystem::ImmutableString> {
+struct detail::d1::tbb_hash_compare<datasystem::ImmutableStringImpl> {
 #else
-struct tbb_hash_compare<datasystem::ImmutableString> {
+struct tbb_hash_compare<datasystem::ImmutableStringImpl> {
 #endif
-    static size_t hash(const datasystem::ImmutableString &a)
+    static size_t hash(const datasystem::ImmutableStringImpl &a)
     {
         return a.GetHash();
     }
-    static size_t equal(const datasystem::ImmutableString &a, const datasystem::ImmutableString &b)
+    static size_t equal(const datasystem::ImmutableStringImpl &a, const datasystem::ImmutableStringImpl &b)
     {
         return a == b;
     }
@@ -98,18 +99,18 @@ struct tbb_hash_compare<datasystem::ImmutableString> {
 
 namespace std {
 template <>
-struct hash<datasystem::ImmutableString> {
-    size_t operator()(const datasystem::ImmutableString &str) const;
+struct hash<datasystem::ImmutableStringImpl> {
+    size_t operator()(const datasystem::ImmutableStringImpl &str) const;
 };
 
 template <>
-struct equal_to<datasystem::ImmutableString> {
-    bool operator()(const datasystem::ImmutableString &lhs, const datasystem::ImmutableString &rhs) const;
+struct equal_to<datasystem::ImmutableStringImpl> {
+    bool operator()(const datasystem::ImmutableStringImpl &lhs, const datasystem::ImmutableStringImpl &rhs) const;
 };
 
 template <>
-struct less<datasystem::ImmutableString> {
-    bool operator()(const datasystem::ImmutableString &lhs, const datasystem::ImmutableString &rhs) const;
+struct less<datasystem::ImmutableStringImpl> {
+    bool operator()(const datasystem::ImmutableStringImpl &lhs, const datasystem::ImmutableStringImpl &rhs) const;
 };
 }  // namespace std
 #endif
