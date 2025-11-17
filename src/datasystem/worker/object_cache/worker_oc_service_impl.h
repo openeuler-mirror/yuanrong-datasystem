@@ -208,7 +208,7 @@ public:
      * @return Status of the call
      */
     Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
-                     MigrateStrategy::MigrationStrategyStage stage = MigrateStrategy::MigrationStrategyStage::FIRST);
+                       MigrateStrategy::MigrationStrategyStage stage = MigrateStrategy::MigrationStrategyStage::FIRST);
 
     /**
      * @brief Handle migrate data future results.
@@ -220,9 +220,9 @@ public:
      * @return Status of the call.
      */
     Status HandleMigrateDataResult(const std::string &taskId, const std::shared_ptr<MigrateProgress> progress,
-                                 const std::unique_ptr<ThreadPool> &threadPool,
-                                 std::vector<std::future<MigrateDataHandler::MigrateResult>> &futures,
-                                 std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
+                                   const std::unique_ptr<ThreadPool> &threadPool,
+                                   std::vector<std::future<MigrateDataHandler::MigrateResult>> &futures,
+                                   std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
 
     /**
      * @brief Redirect the remote node to migrate data.
@@ -1025,8 +1025,8 @@ private:
      * @return Status
      */
     static void FindObjectKeyNotInRsp(std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                     std::vector<std::string> &currentIds,
-                                     std::vector<std::string> &objectKeysMayInOtherAz);
+                                      std::vector<std::string> &currentIds,
+                                      std::vector<std::string> &objectKeysMayInOtherAz);
 
     /**
      * @brief Check whether the size of the node table in EtcdClusterManager equals to the number of running workers.
@@ -1164,7 +1164,7 @@ private:
 
     std::shared_ptr<WorkerOcServiceMigrateImpl> gMigrateProc_{ nullptr };
 
-    std::shared_ptr<WorkerOcServiceExpireImpl> expireProc_{nullptr};
+    std::shared_ptr<WorkerOcServiceExpireImpl> expireProc_{ nullptr };
 };
 }  // namespace object_cache
 }  // namespace datasystem

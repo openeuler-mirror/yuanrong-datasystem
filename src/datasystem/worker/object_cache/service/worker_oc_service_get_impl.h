@@ -22,6 +22,7 @@
 
 #include <unordered_set>
 
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -30,6 +31,7 @@
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
+#include "datasystem/worker/object_cache/worker_request_manager.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -60,8 +62,8 @@ public:
      * @param[in] request Get request instance.
      * @return Status of the call.
      */
-    Status ProcessObjectsNotExistInLocal(const std::vector<ReadKey> &objectsNeedGetRemote, const int64_t subTimeout,
-                                         std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds,
+    Status ProcessObjectsNotExistInLocal(const std::set<ReadKey> &objectsNeedGetRemote, int64_t subTimeout,
+                                         std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds,
                                          const std::shared_ptr<GetRequest> &request = nullptr);
 
     /**
@@ -166,6 +168,11 @@ private:
         std::vector<RpcMessage> payloads;
     };
 
+    struct LockedEntity {
+        std::shared_ptr<SafeObjType> safeObj;
+        bool insert;
+    };
+
     /**
      * @brief Get map of objectKeys grouped by master.
      * @param[in] objectKeys The vector of objectkeys.
@@ -185,11 +192,7 @@ private:
      * @param[in] clientId The client making this request.
      * @return Status of the call.
      */
-    Status ProcessGetObjectRequest(const std::vector<std::string> &objectKeys,
-                                   const std::unordered_map<std::string, OffsetInfo> &offsetInfos,
-                                   std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi,
-                                   const int64_t subTimeout, const std::string &clientId,
-                                   std::shared_ptr<AccessRecorder> accessRecorderPoint, const GetReqPb &getReqPb);
+    Status ProcessGetObjectRequest(int64_t subTimeout, std::shared_ptr<GetRequest> &request);
 
     /**
      * @brief Get one object from local.
@@ -197,8 +200,7 @@ private:
      * @param[out] request The GetRequest.
      * @param[out] objectsNeedGetRemote These objects not exist in local.
      */
-    void TryGetObjectFromLocal(const std::unordered_map<std::string, OffsetInfo> &offsetInfos,
-                               std::shared_ptr<GetRequest> &request, std::vector<ReadKey> &objectsNeedGetRemote);
+    Status TryGetObjectFromLocal(std::shared_ptr<GetRequest> &request, std::set<ReadKey> &remoteObjectKeys);
 
     /**
      * @brief Get one object from remote.
@@ -208,7 +210,7 @@ private:
      * @return Status of the call
      */
     Status TryGetObjectFromRemote(int64_t subTimeout, std::shared_ptr<GetRequest> &request,
-                                  std::vector<ReadKey> &objectsNeedGetRemote);
+                                  std::set<ReadKey> remoteObjectKeys);
 
     /**
      * @brief Preprocess for get one object.
@@ -218,8 +220,7 @@ private:
      * @param[out] localExistKeys vector of keys which exists in local mem.
      * @return Status of the call
      */
-    Status PreProcessGetObject(const ReadKey &objectKey, std::shared_ptr<GetRequest> &request,
-                               std::vector<ReadKey> &objectsNeedGetRemote, std::vector<std::string> &localExistKeys);
+    Status PreProcessGetObject(const ReadKey &readKey, GetObjInfo &info, std::set<ReadKey> &remoteObjectKeys);
 
     /**
      * @brief Preprocess for get one object from memory, in this case, we only hold RLock instead of WLock, because the
@@ -232,9 +233,8 @@ private:
      * @param[out] localExistKeys vector of keys which exists in local mem.
      * @return Status of the call
      */
-    Status RLockGetObjectFromMem(const ReadKey &objectKey, std::shared_ptr<GetRequest> &request,
-                                 std::vector<ReadKey> &objectsNeedGetRemote, bool &objIsValidInMem,
-                                 std::vector<std::string> &localExistKeys);
+    Status RLockGetObjectFromMem(const ReadKey &readKey, GetObjInfo &info, std::set<ReadKey> &remoteObjectKeys,
+                                 bool &objIsValidInMem);
 
     /**
      * @brief Try to get object from primary copy worker.
@@ -245,7 +245,7 @@ private:
      * @return Status of the call
      */
     Status TryGetObjectsFromPrimaryWorker(const std::string &primaryAddress, uint64_t dataSize, ReadObjectKV &objectKV,
-                                          std::vector<ReadKey> &objectsNeedGetRemote);
+                                          std::set<ReadKey> &objectsNeedGetRemote);
 
     /**
      * @brief Get object data from remote worker based on object meta.
@@ -302,7 +302,7 @@ private:
      * @return Status of the call.
      */
     Status AggregateAllocateHelper(const std::list<ObjectMetaPb *> &metas,
-                                   std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+                                   std::map<ReadKey, LockedEntity> &lockedEntries,
                                    std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
                                    std::vector<uint32_t> &shmIndexMapping);
 
@@ -357,8 +357,8 @@ private:
      * @brief Attempt to get object from local before query meta.
      * @param[in out] lockedEntries Object lock entries.
      */
-    void AttemptGetObjectsLocally(const std::map<std::string, ReadKey> &readKeys,
-                                  std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries);
+    void AttemptGetObjectsLocally(const std::shared_ptr<GetRequest> &request,
+                                  std::map<ReadKey, LockedEntity> &lockedEntries);
 
     /**
      * @brief Query the metadata of the specified objects in the master.
@@ -431,10 +431,9 @@ private:
      * @return Status of the call.
      */
     Status GetObjectsFromAnywhere(std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                  const std::map<std::string, ReadKey> &readKeys,
                                   const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-                                  std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-                                  std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds);
+                                  std::map<ReadKey, LockedEntity> &lockedEntries,
+                                  std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds);
 
     /**
      * @brief Get objects from anywhere parallelly.
@@ -447,11 +446,12 @@ private:
      * @param[out] needRetryIds Need retry get id list.
      * @return Status of the call.
      */
-    Status GetObjectsFromAnywhereParallelly(
-        const std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-        const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-        std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-        std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds);
+    Status GetObjectsFromAnywhereParallelly(const std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                            const std::shared_ptr<GetRequest> &request,
+                                            std::vector<RpcMessage> &payloads,
+                                            std::map<ReadKey, LockedEntity> &lockedEntries,
+                                            std::unordered_set<std::string> &failedIds,
+                                            std::set<ReadKey> &needRetryIds);
 
     /**
      * @brief Get objects from anywhere serially.
@@ -464,11 +464,10 @@ private:
      * @param[out] needRetryIds Need retry get id list.
      * @return Status of the call.
      */
-    Status GetObjectsFromAnywhereSerially(
-        const std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-        const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-        std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-        std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds);
+    Status GetObjectsFromAnywhereSerially(const std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                          const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
+                                          std::map<ReadKey, LockedEntity> &lockedEntries,
+                                          std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds);
 
     /**
      * @brief Get objects from anywhere batched.
@@ -481,11 +480,10 @@ private:
      * @param[out] needRetryIds Need retry get id list.
      * @return Status of the call.
      */
-    Status GetObjectsFromAnywhereBatched(
-        std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-        const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-        std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-        std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds);
+    Status GetObjectsFromAnywhereBatched(std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                         const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
+                                         std::map<ReadKey, LockedEntity> &lockedEntries,
+                                         std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds);
 
     /**
      * @brief Get object data from remote cache (remote worker or redis) based on object meta.
@@ -508,8 +506,8 @@ private:
      * @param[out] failedIds Failed get object keys.
      * @return Status of the call.
      */
-    Status GetObjectsWithoutMeta(std::map<std::string, uint64_t> &objectKeys,
-                                 std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+    Status GetObjectsWithoutMeta(const std::map<std::string, uint64_t> &objectKeys,
+                                 std::map<ReadKey, LockedEntity> &lockedEntries,
                                  std::unordered_set<std::string> &failedIds);
 
     /**
@@ -545,12 +543,12 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
-    Status BatchGetObjectFromRemoteOnLock(
-        const std::string &address, std::list<ObjectMetaPb *> &metas, const std::map<std::string, ReadKey> &readKeys,
-        const std::shared_ptr<GetRequest> &request,
-        std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-        std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-        std::unordered_set<std::string> &failedIds, std::list<ObjectMetaPb *> &failedMetas);
+    Status BatchGetObjectFromRemoteOnLock(const std::string &address, std::list<ObjectMetaPb *> &metas,
+                                          const std::shared_ptr<GetRequest> &request,
+                                          std::map<ReadKey, LockedEntity> &lockedEntries,
+                                          std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
+                                          std::unordered_set<std::string> &failedIds,
+                                          std::list<ObjectMetaPb *> &failedMetas);
 
     /**
      * @brief Helper function to split query meta  based off address and threshold.
@@ -573,7 +571,7 @@ private:
      * @param[out] failedIds Failed get object keys.
      * @return Status of the call.
      */
-    void BatchGetObjectHandleIndividualStatus(Status &status, const std::string &objectKey, const ReadKey &readKey,
+    void BatchGetObjectHandleIndividualStatus(Status &status, const ReadKey &readKey,
                                               std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                               std::unordered_set<std::string> &failedIds);
 
@@ -590,12 +588,12 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
-    Status BatchGetObjectFromRemoteWorker(
-        const std::string &address, std::list<ObjectMetaPb *> &metas, const std::map<std::string, ReadKey> &readKeys,
-        const std::shared_ptr<GetRequest> &request,
-        std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-        std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-        std::unordered_set<std::string> &failedIds, std::list<ObjectMetaPb *> &failedMetas);
+    Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<ObjectMetaPb *> &metas,
+                                          const std::shared_ptr<GetRequest> &request,
+                                          std::map<ReadKey, LockedEntity> &lockedEntries,
+                                          std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
+                                          std::unordered_set<std::string> &failedIds,
+                                          std::list<ObjectMetaPb *> &failedMetas);
 
     /**
      * @brief Helper function to construct batch get request.
@@ -610,8 +608,7 @@ private:
      * @return Status of the call.
      */
     Status ConstructBatchGetRequest(const std::string &address, std::list<ObjectMetaPb *> &metas,
-                                    const std::map<std::string, ReadKey> &readKeys,
-                                    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+                                    std::map<ReadKey, LockedEntity> &lockedEntries,
                                     std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                     std::unordered_set<std::string> &failedIds, BatchGetObjectRemoteReqPb &reqPb);
 
@@ -661,13 +658,12 @@ private:
      * @return Status of the call.
      */
     Status ProcessBatchResponse(const std::string &address, Status &checkConnectStatus,
-                                std::list<ObjectMetaPb *> &metas, const std::map<std::string, ReadKey> &readKeys,
-                                const std::shared_ptr<GetRequest> &request,
-                                std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-                                const Status &status, BatchGetObjectRemoteRspPb &rspPb,
-                                std::vector<RpcMessage> &payloads, std::vector<std::string> &successIds,
-                                std::vector<ReadKey> &needRetryIds, std::unordered_set<std::string> &failedIds,
-                                std::list<ObjectMetaPb *> &failedMetas, bool &dataSizeChange);
+                                std::list<ObjectMetaPb *> &metas, const std::shared_ptr<GetRequest> &request,
+                                std::map<ReadKey, LockedEntity> &lockedEntries, const Status &status,
+                                BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads,
+                                std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
+                                std::unordered_set<std::string> &failedIds, std::list<ObjectMetaPb *> &failedMetas,
+                                bool &dataSizeChange);
 
     /**
      * @brief Try get object from other AZ.
@@ -713,7 +709,8 @@ private:
      * @param[out] objectKV The reserved and locked safe object and its corresponding objectKey.
      * @return Status of the call.
      */
-    Status GetObjectFromQueryMetaResultOnLock(const master::QueryMetaInfoPb &queryMeta,
+    Status GetObjectFromQueryMetaResultOnLock(const std::shared_ptr<GetRequest> &request,
+                                              const master::QueryMetaInfoPb &queryMeta,
                                               std::vector<RpcMessage> &payloads, ReadObjectKV &objectKV);
 
     /**
@@ -762,8 +759,7 @@ private:
      * @param[out] failObjects Locked failed object list.
      * @return Status of the call.
      */
-    Status BatchLockForGet(const std::vector<ReadKey> &objectKeys,
-                           std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+    Status BatchLockForGet(const std::set<ReadKey> &objectKeys, std::map<ReadKey, LockedEntity> &lockedEntries,
                            std::unordered_set<std::string> &failObjects);
 
     /**
@@ -772,27 +768,27 @@ private:
      * @param[in] lockedEntries Locked entry list.
      */
     void BatchUnlockForGet(const std::unordered_set<std::string> &failedObjectKeys,
-                           std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries);
+                           std::map<ReadKey, LockedEntity> &lockedEntries);
 
     /**
      * @brief Batch unlock and erase for remote get via failed object keys.
      * @param[in] failedObjectKeys Failed object key list that needs to be unlocked and erase.
      * @param[in] lockedEntries Locked entry list.
      */
-    void BatchUnlockForGet(const std::map<std::string, uint64_t> &failedObjectKeys,
-                           std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries);
+    void BatchUnlockForGet(const std::map<std::string, uint64_t> &objectKeys,
+                           std::map<ReadKey, LockedEntity> &lockedEntries);
 
     /**
      * @brief Add remote get object key list.
      * @param[in] objectKeys Object key list.
      */
-    void AddInRemoteGetObjects(const std::vector<ReadKey> &objectsNeedGetRemote);
+    void AddInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote);
 
     /**
      * @brief Remove remote get object key list.
      * @param[in] objectKeys Object key list.
      */
-    void RemoveInRemoteGetObjects(const std::vector<ReadKey> &objectsNeedGetRemote);
+    void RemoveInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote);
 
     /**
      * @brief Remove remote get object key.
@@ -906,13 +902,13 @@ private:
 
     HostPort localAddress_;
 
-    std::shared_timed_mutex inRemoteGetIdsMutex_; // the mutex for inRemoteGetIds_
+    std::shared_timed_mutex inRemoteGetIdsMutex_;  // the mutex for inRemoteGetIds_
 
-    std::unordered_set<std::string> inRemoteGetIds_; // the object keys that in remote get
+    std::unordered_set<std::string> inRemoteGetIds_;  // the object keys that in remote get
 
     std::vector<std::string> otherAZNames_;
 
-    std::shared_mutex objectsInGetProcessMutex_; // the mutex for objectsInGetProcess_
+    std::shared_mutex objectsInGetProcessMutex_;  // the mutex for objectsInGetProcess_
 
     std::unordered_map<std::string, int> objectsInGetProcess_;
 

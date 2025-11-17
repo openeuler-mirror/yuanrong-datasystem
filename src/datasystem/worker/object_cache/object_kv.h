@@ -45,8 +45,9 @@ public:
     /**
      * @brief Construct ObjectKV.
      */
-    ObjectKV(const std::string &objectKey, SafeObjType &entry)
-        : objectKey_(objectKey), entry_(entry) {}
+    ObjectKV(const std::string &objectKey, SafeObjType &entry) : objectKey_(objectKey), entry_(entry)
+    {
+    }
 
     ObjectKV(const std::string &objectKey, std::nullptr_t) = delete;
     // Disable all copy and move constructors.
@@ -84,8 +85,12 @@ private:
 };
 
 struct ReadKey : public OffsetInfo {
-    explicit ReadKey(std::string objectKey, uint64_t offset = 0, uint64_t size = 0)
-        : OffsetInfo(offset, size), objectKey(std::move(objectKey))
+    explicit ReadKey(const std::string &objectKey, uint64_t offset = 0, uint64_t size = 0)
+        : OffsetInfo(offset, size), objectKey(objectKey)
+    {
+    }
+
+    ReadKey(const std::string &objectKey, OffsetInfo offsetInfo) : OffsetInfo(offsetInfo), objectKey(objectKey)
     {
     }
 
@@ -97,7 +102,18 @@ struct ReadKey : public OffsetInfo {
         }
         return out;
     }
-    std::string objectKey;
+
+    bool operator<(const ReadKey &other) const
+    {
+        return objectKey < other.objectKey;
+    }
+
+    OffsetInfo GetOffsetInfo() const
+    {
+        return OffsetInfo(readOffset, readSize);
+    }
+
+    const std::string &objectKey;
 };
 
 class ReadObjectKV : public ObjectKV, protected OffsetInfo {

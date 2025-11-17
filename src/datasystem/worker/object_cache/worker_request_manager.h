@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/util/memory.h"
@@ -40,26 +41,38 @@
 
 namespace datasystem {
 namespace object_cache {
-struct GetObjEntryParams : public OffsetInfo {
-    static std::shared_ptr<GetObjEntryParams> Create(SafeObjType &safeObj, uint64_t offset, uint64_t size)
+struct GetObjEntryParams {
+    static std::unique_ptr<GetObjEntryParams> Create(const std::string &objectKey, SafeObjType &safeObj)
     {
         auto objShmUnit = SafeObjType::GetDerived<ObjCacheShmUnit>(safeObj);
-        GetObjEntryParams params;
-        params.dataSize = safeObj->GetDataSize();
-        params.metaSize = safeObj->GetMetadataSize();
-        params.createTime = safeObj->GetCreateTime();
-        params.objectMode = objShmUnit->modeInfo;
-        params.objectState = objShmUnit->stateInfo;
-        params.lifeState = objShmUnit->GetLifeState();
-        params.shmUnit = safeObj->GetShmUnit();
-        params.isSealed = safeObj->IsSealed();
-        params.version = safeObj->GetCreateTime();
-        params.readOffset = offset;
-        params.readSize = size;
-        params.AdjustReadSize(params.dataSize);
-        VLOG(1) << "dataSize: " << params.dataSize << ", metaSize: " << params.metaSize
-                << ", offset:" << params.readOffset << ", readSize:" << params.readSize;
-        return std::make_shared<GetObjEntryParams>(std::move(params));
+        auto params = std::make_unique<GetObjEntryParams>();
+        params->dataSize = safeObj->GetDataSize();
+        params->metaSize = safeObj->GetMetadataSize();
+        params->createTime = safeObj->GetCreateTime();
+        params->objectMode = objShmUnit->modeInfo;
+        params->objectState = objShmUnit->stateInfo;
+        params->lifeState = objShmUnit->GetLifeState();
+        params->shmUnit = safeObj->GetShmUnit();
+        params->isSealed = safeObj->IsSealed();
+        params->version = safeObj->GetCreateTime();
+        VLOG(1) << "Create GetObjEntryParams for objectKey " << objectKey << ", dataSize: " << params->dataSize
+                << ", metaSize: " << params->metaSize;
+        return params;
+    }
+
+    std::unique_ptr<GetObjEntryParams> Clone() const
+    {
+        auto params = std::make_unique<GetObjEntryParams>();
+        params->dataSize = dataSize;
+        params->metaSize = metaSize;
+        params->createTime = createTime;
+        params->objectMode = objectMode;
+        params->objectState = objectState;
+        params->lifeState = lifeState;
+        params->shmUnit = shmUnit;
+        params->isSealed = isSealed;
+        params->version = version;
+        return params;
     }
 
     uint64_t dataSize;
@@ -73,7 +86,136 @@ struct GetObjEntryParams : public OffsetInfo {
     uint64_t version;
 };
 
-using GetRequest = UnaryRequest<GetReqPb, GetRspPb, GetObjEntryParams>;
+struct GetObjInfo {
+    OffsetInfo offsetInfo;
+    std::unique_ptr<GetObjEntryParams> params;
+    Status rc;
+    bool NotFound() const
+    {
+        return params == nullptr && rc.IsOk();
+    }
+};
+
+using ObjectKey = std::string;
+class WorkerRequestManager;
+class GetRequest : public std::enable_shared_from_this<GetRequest> {
+public:
+    GetRequest(AccessRecorderKey key) noexcept : recorder_(key){};
+    /**
+     * @brief Init GetRequst
+     * @param[in] tenantId The tenantId.
+     * @param[in] req The GetReqPb instance.
+     * @param[in] shmRefTable The instance of SharedMemoryRefTable.
+     * @param[in] api The instance of server api.
+     * @return Status of this call.
+     */
+    Status Init(const std::string &tenantId, const GetReqPb &req, std::shared_ptr<SharedMemoryRefTable> shmRefTable,
+                std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api);
+
+    /**
+     * @brief Update GetRequst according to local get result, return to client if all data has been obtained
+     * @param[in] rc The status of local get.
+     * @param[in] remoteObjectCount The object count need get from remote.
+     * @return Status of this call.
+     */
+    Status UpdateAfterLocalGet(Status rc, size_t remoteObjectCount);
+
+    /**
+     * @brief Mark object get success, should be called in remote get logic.
+     * @param[in] objectKey The object key.
+     * @param[in] safeObj The instance reference of SafeObjType
+     * @return Status of this call.
+     */
+    Status MarkSuccess(const ObjectKey &objectKey, SafeObjType &safeObj);
+
+    /**
+     * @brief Mark object get failed, should be called in remote get logic.
+     * @param[in] objectKey The object key.
+     * @param[in] rc The failed reason.
+     * @return Status of this call.
+     */
+    Status MarkFailed(const ObjectKey &objectKey, const Status &rc);
+
+    /**
+     * @brief Mark object get success and try return to client if all data has been obtained, should be called when
+     * object publish after the get reqeust happend.
+     * @param[in] objectKey The object Key.
+     * @param[in] params The instance of GetObjEntryParams.
+     * @return Status of this call.
+     */
+    Status MarkSuccessForNotify(const ObjectKey &objectKey, std::unique_ptr<GetObjEntryParams> params);
+
+    /**
+     * @brief Response to client.
+     * @param[in] rc The final status return to client.
+     * @return Status of this call.
+     */
+    Status ReturnToClient(const Status &rc = Status::OK());
+
+    /**
+     * @brief Register Current GetRequest instance to WorkerRequestManager
+     * @param[in] workerRequestManager The point of WorkerRequestManager.
+     */
+    void Register(WorkerRequestManager *workerRequestManager);
+
+    /**
+     * @brief Unregister Current GetRequest instance from WorkerRequestManager.
+     */
+    void UnRegister();
+
+    /**
+     * @brief Set the timer instance
+     * @param[in] timer The instance of timer.
+     */
+    void SetTimer(std::unique_ptr<TimerQueue::TimerImpl> timer);
+
+    const std::vector<ObjectKey> &GetRawObjectKeys() const;
+    std::unordered_map<ObjectKey, GetObjInfo> &GetObjects();
+    void SetStatus(const Status &rc);
+    size_t GetReadyCount() const;
+    size_t GetNotReadyCount() const;
+    bool AlreadyReturn() const;
+    const std::string &GetClientId() const;
+    bool NoQueryL2Cache() const;
+
+    std::vector<ObjectKey> GetUniqueObjectkeys() const;
+    std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> GetServerApi() const;
+
+private:
+    Status MarkSuccessImpl(const ObjectKey &objectKey, std::unique_ptr<GetObjEntryParams> params);
+    Status ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::vector<RpcMessage> &payloads,
+                             std::map<std::string, uint64_t> &needDeleteObjects);
+
+    Status AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t index, bool shmEnable,
+                               GetRspPb &resp, std::vector<RpcMessage> &outPayloads);
+
+    static void SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
+                                   GetRspPb::ObjectInfoPb &info);
+
+    static void SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
+                                     GetRspPb::PayloadInfoPb &info);
+    static void SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info);
+    bool Registered() const;
+
+    // the mutex protect GetObjInfo and lastRc_
+    // Only after the GetRequest instance is registered with the WorkerRequestManager can other threads become aware of
+    // it; therefore, accessing data in objects_ before registration requires no lock protection
+    std::mutex mutex_;
+    std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi_;
+    std::shared_ptr<SharedMemoryRefTable> shmRefTable_;
+    std::string clientId_;
+    std::vector<ObjectKey> rawObjectKeys_;
+    std::unordered_map<ObjectKey, GetObjInfo> objects_;
+    std::atomic<size_t> readyCount_{ 0 };
+    AccessRecorder recorder_;
+    Status lastRc_;
+    std::atomic<bool> isReturn_{ false };
+
+    int64_t subTimeout_{ 0 };
+    WorkerRequestManager *workerRequestManager_{ nullptr };
+    std::unique_ptr<TimerQueue::TimerImpl> timer_;
+    bool noQueryL2Cache_ = false;
+};
 
 class WorkerRequestManager {
 public:
@@ -90,51 +232,17 @@ public:
     Status AddRequest(const std::string &objectKey, std::shared_ptr<GetRequest> &request);
 
     /**
+     * @brief Remove the request from the waiting requests table.
+     * @param[in] request The request need to remove.
+     */
+    void RemoveGetRequest(const std::shared_ptr<GetRequest> &request);
+
+    /**
      * @brief Update request info after object sealed.
      * @param[in] objectKV The safe object and its corresponding objectKey.
-     * @param[in,out] memoryRefApi The memory refCnt table.
      * @return Status of the call.
      */
-    Status UpdateRequestForSuccess(ReadObjectKV &objectKV, std::shared_ptr<SharedMemoryRefTable> &memoryRefApi,
-                                   bool isDelayToReturn, const std::shared_ptr<GetRequest> &request = nullptr);
-
-    /**
-     * @brief Update request info after object publish.
-     * @param[in] objectKV The safe object and its corresponding objectKey.
-     * @param[in,out] memoryRefApi The memory refCnt table.
-     * @return Status of the call.
-     */
-    Status UpdateRequestForPublish(ObjectKV &objectKV, std::shared_ptr<SharedMemoryRefTable> &memoryRefApi);
-
-    /**
-     * @brief Update request info after object process failed.
-     * @param[in] objectKey The object key.
-     * @param[in] lastRc The last error.
-     * @param[in,out] memRefApi The memory refCnt table.
-     * @return Status of the call.
-     */
-    Status UpdateRequestForFailed(const std::string &objectKey, Status lastRc,
-                                  std::shared_ptr<SharedMemoryRefTable> &memRefApi);
-
-    /**
-     * @brief Update request info after object process failed.
-     * @param[in] objectKey The object key.
-     * @param[in] lastRc The last error.
-     * @param[in,out] memRefApi The memory refCnt table.
-     * @return Status of the call.
-     */
-    Status UpdateSpecificRequestForFailed(const std::shared_ptr<GetRequest> &request, const std::string &objectKey,
-                                          Status lastRc, std::shared_ptr<SharedMemoryRefTable> &memRefApi);
-
-    /**
-     * @brief Reply to client with the get request.
-     * @param[in] req The request which to return.
-     * @param[in,out] memoryRefApi The memory refCnt table.
-     * @param[in] lastRc The last error.
-     * @return Status of the call.
-     */
-    Status ReturnFromGetRequest(std::shared_ptr<GetRequest> req, std::shared_ptr<SharedMemoryRefTable> &memoryRefApi,
-                                Status lastRc = Status::OK());
+    Status NotifyPendingGetRequest(ObjectKV &objectKV);
 
     /**
      * @brief Set DeleteObject function for deleting local cache when object is from other AZ.
@@ -143,111 +251,14 @@ public:
     static void SetDeleteObjectsFunc(std::function<Status(const std::string &, uint64_t)> deleteFunc);
 
     /**
-     * @brief Check and return to client when request finished or object finish
-     * @param[in] objectKey object key
-     * @param[in] memoryRefApi The memory refCnt table.
-     * @return Status of the call
-     */
-    void CheckAndReturnToClient(const std::string objectKey, std::shared_ptr<SharedMemoryRefTable> &memoryRefApi);
-
-    /**
-     * @brief Check if the object is in getting object.
-     * @param[in] objectKey Object key.
-     * @return True if object is in getting.
-     */
-    bool IsInGettingObject(const std::string &objectKey);
-
-private:
-    /**
-     * @brief Add entry information to get response and buffers.
-     * @param[in] request The request which to return.
-     * @param[in,out] retIdEntry The id and shared memory unit of the object.
-     * @param[out] resp The response which to return.
-     * @param[out] outPayloads The buffers for non-shm passing.
-     * @param[in,out] memoryRefApi The memory refCnt table.
-     * @return Status of the call.
-     */
-    static Status AddEntryToGetResponse(const std::shared_ptr<GetRequest> &request,
-                                        const std::pair<std::string *, std::shared_ptr<GetObjEntryParams>> &retIdEntry,
-                                        GetRspPb &resp, std::vector<RpcMessage> &outPayloads,
-                                        std::shared_ptr<SharedMemoryRefTable> &memoryRefApi,
-                                        std::map<std::string, uint64_t> &needDeleteObjects);
-
-    /**
-     * @brief Remove the request from the waiting requests table.
-     * @param[in] request The request need to remove.
-     */
-    void RemoveGetRequest(std::shared_ptr<GetRequest> &request);
-
-    /**
-     * @brief Initialize an ObjCacheShmUnit, give it default value.
-     * @param[in] objectKey The object key that responds to the request
-     * @param[out] info The objectInfoPb need to init
-     */
-    static void SetDefaultObjectInfoPb(const std::string &objectKey, GetRspPb::ObjectInfoPb &info);
-
-    /**
-     * @brief Set objectInfoPb response
-     * @param[in] objectKey The object key that responds to the request
-     * @param[in] safeEntry The safe object entry
-     * @param[out] info The objectInfoPb need to init
-     */
-    static void SetObjectInfoPb(const std::string &objectKey, GetObjEntryParams &safeEntry,
-                                GetRspPb::ObjectInfoPb &info);
-
-    /**
-     * @brief Set PayloadInfoPb response
-     * @param[in] objectKey The object key that responds to the request
-     * @param[in] safeEntry The safe object entry
-     * @param[out] info The PayloadInfoPb need to init
-     */
-    static void SetPayloadInfoPb(const std::string &objectKey, GetObjEntryParams &safeEntry,
-                                 GetRspPb::PayloadInfoPb &info);
-
-    /**
-     * @brief Update request info after object sealed.
-     * @param[in] objectKey The object key.
-     * @param[in] entry The object entry parameter.
-     * @param[in,out] memoryRefApi The memory refCnt table.
-     * @param[in] lastRc The last error.
-     * @param [in] isDelayToReturn if true, return After get request.
-     * @return Status of the call.
-     */
-    Status UpdateRequestImpl(const std::string &objectKey, std::shared_ptr<GetObjEntryParams> entry,
-                             std::shared_ptr<SharedMemoryRefTable> &memoryRefApi, Status lastRc = Status::OK(),
-                             const std::shared_ptr<GetRequest> &request = nullptr, bool isDelayToReturn = false);
-
-    /*
-     * @brief Add entry information to get response and pageloads.
-     * @param[in] retIdEntry The id and shared memory unit of the object.
-     * @param[out] resp The response which to return.
-     * @param[out] outPayloads The buffers for non-shm passing.
-     * @return Status of the call.
-     */
-    static Status CopyShmUnitToPayloads(const std::pair<std::string *, std::shared_ptr<GetObjEntryParams>> &retIdEntry,
-                                        GetRspPb &resp, std::vector<RpcMessage> &outPayloads);
-
-    /*
-     * @brief Construct GetRsp.
-     * @param[in] req The request which to return.
-     * @param[in] totalSize The size of objects.
-     * @param[in] lastRc The last error.
-     * @param[in] memoryRefApi The memory refCnt table.
-     * @param[in] resp GetRsp.
-     * @param[in] payloads The buffers for non-shm passing.
-     */
-    void ConstructGetRsp(std::shared_ptr<GetRequest> &req, uint64_t &totalSize, Status &lastRc,
-                         std::shared_ptr<SharedMemoryRefTable> &memoryRefApi, GetRspPb &resp,
-                         std::vector<RpcMessage> &payloads, std::map<std::string, uint64_t> &needDeleteObjects);
-
-    /**
      * @brief Delete objects according to object key and version.
      * @param[in] objects The object info.
      */
     static void DeleteObjects(std::map<std::string, uint64_t> &objects);
 
-    RequestTable<GetRequest> requestTable_;
+private:
     static std::function<Status(const std::string &, uint64_t)> deleteFunc_;
+    RequestTable<GetRequest> requestTable_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

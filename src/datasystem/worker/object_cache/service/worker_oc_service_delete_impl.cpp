@@ -52,7 +52,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, D
     uint64_t deletedSize = 0;
     Status rc = DeleteAllCopyImpl(req, resp, deletedSize);
     RequestParam reqParam;
-    reqParam.objectKey = objectKeysToAbbrStr(req.object_keys());
+    reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
     posixPoint.Record(rc.GetCode(), std::to_string(deletedSize), reqParam, rc.GetMsg());
     workerOperationTimeCost.Append("Total DeleteAllCopy", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of DeleteAllCopy %s", workerOperationTimeCost.GetInfo());

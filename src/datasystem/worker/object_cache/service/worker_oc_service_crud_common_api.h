@@ -185,28 +185,7 @@ public:
      * @param[in] objectKV The key-value of the object.
      * @return OK if update success.
      */
-    Status UpdateRequestForSuccess(ReadObjectKV &objectKV);
-
-    /**
-     * @brief only update request for success not return for client.
-     * @param objectKV The key-value of the object.
-     * @param request request from client
-     * @return Status
-     */
-    Status UpdateRequestForSuccessNotReturnForClient(ReadObjectKV &objectKV,
-                                                     const std::shared_ptr<GetRequest> &request = nullptr);
-
-    /**
-     * @brief Return request to client
-     * @param[in] request request from client
-     */
-    void ReturnToClientByRequest(const std::shared_ptr<GetRequest> &request);
-
-    /**
-     * @brief Return request to client
-     * @param[in] object object key to check return.
-     */
-    void ReturnToClientByObjectKey(const std::string &objectKey);
+    Status UpdateRequestForSuccess(ReadObjectKV &objectKV, const std::shared_ptr<GetRequest> &request = nullptr);
 
     /**
      * @brief CheckShmUnitByTenantId

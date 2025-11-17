@@ -135,48 +135,20 @@ Status WorkerOcServiceCrudCommonApi::SaveBinaryObjectToPersistence(ObjectKV &obj
     return Status::OK();
 }
 
-Status WorkerOcServiceCrudCommonApi::UpdateRequestForSuccess(ReadObjectKV &objectKV)
+Status WorkerOcServiceCrudCommonApi::UpdateRequestForSuccess(ReadObjectKV &objectKV,
+                                                             const std::shared_ptr<GetRequest> &request)
 {
     const auto dataFormat = objectKV.GetObjEntry()->stateInfo.GetDataFormat();
     if (dataFormat == DataFormat::BINARY) {
-        return workerRequestManager_.UpdateRequestForSuccess(objectKV, memoryRefTable_, false);
-    }
-    if (dataFormat == DataFormat::HETERO) {
-        return workerDevOcManager_->UpdateRequestForSuccess(objectKV);
-    }
-    RETURN_STATUS(K_INVALID, "The dataformat is neither BINARY nor HETERO");
-}
-
-Status WorkerOcServiceCrudCommonApi::UpdateRequestForSuccessNotReturnForClient(
-    ReadObjectKV &objectKV, const std::shared_ptr<GetRequest> &request)
-{
-    const auto dataFormat = objectKV.GetObjEntry()->stateInfo.GetDataFormat();
-    if (dataFormat == DataFormat::BINARY) {
-        if (objectKV.GetObjEntry()->stateInfo.IsIncomplete()) {
-            // for not complete obj, only return for this request.
-            return workerRequestManager_.UpdateRequestForSuccess(objectKV, memoryRefTable_, true, request);
-        } else {
-            return workerRequestManager_.UpdateRequestForSuccess(objectKV, memoryRefTable_, true);
+        if (request != nullptr) {
+            return request->MarkSuccess(objectKV.GetObjKey(), objectKV.GetObjEntry());
         }
+        return workerRequestManager_.NotifyPendingGetRequest(objectKV);
     }
     if (dataFormat == DataFormat::HETERO) {
         return workerDevOcManager_->UpdateRequestForSuccess(objectKV);
     }
     RETURN_STATUS(K_INVALID, "The dataformat is neither BINARY nor HETERO");
-}
-
-void WorkerOcServiceCrudCommonApi::ReturnToClientByRequest(const std::shared_ptr<GetRequest> &request)
-{
-    if (request != nullptr) {
-        LOG_IF_ERROR(workerRequestManager_.ReturnFromGetRequest(request, memoryRefTable_), "return to client failed");
-        // Avoid timeCostPoint destruct after traceGuard.
-        request->accessRecorderPoint_.reset();
-    }
-}
-
-void WorkerOcServiceCrudCommonApi::ReturnToClientByObjectKey(const std::string &objectKey)
-{
-    workerRequestManager_.CheckAndReturnToClient(objectKey, memoryRefTable_);
 }
 
 Status WorkerOcServiceCrudCommonApi::DeleteObjectFromDisk(ObjectKV &objectKV)

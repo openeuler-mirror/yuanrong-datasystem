@@ -67,7 +67,7 @@ public:
      */
     void RemoveRequest(const std::shared_ptr<Request> &request)
     {
-        for (auto &objectKey : request->deduplicatedObjectKeys_) {
+        for (const auto &objectKey : request->GetUniqueObjectkeys()) {
             typename TbbRequestTable::accessor acc;
             if (!requestTable_.find(acc, objectKey)) {
                 continue;
@@ -175,6 +175,33 @@ public:
         return {};
     }
 
+    template <typename EntryParam>
+    Status NotifyPendingGetRequest(const std::string &objectKey, std::unique_ptr<EntryParam> params)
+    {
+        std::vector<std::shared_ptr<Request>> requests;
+        {
+            typename TbbRequestTable::const_accessor accessor;
+            if (!requestTable_.find(accessor, objectKey)) {
+                return Status::OK();
+            }
+            requests = accessor->second;
+        }
+        LOG(INFO) << FormatString("Update request for objectKey: %s", objectKey);
+        size_t requestCount = requests.size();
+        // happy path
+        if (requestCount == 1) {
+            return requests[0]->MarkSuccessForNotify(objectKey, std::move(params));
+        }
+        Status lastRc;
+        for (auto &req : requests) {
+            Status rc = req->MarkSuccessForNotify(objectKey, params->Clone());
+            if (rc.IsError()) {
+                lastRc = rc;
+            }
+        }
+        return lastRc;
+    }
+
 private:
     // A hash table that maps object key to a vector of requests, which are waiting for objects to be ready.
     TbbRequestTable requestTable_;
@@ -264,6 +291,11 @@ public:
             tmpInfo.AdjustReadSize(dataSize);
             return tmpInfo == paramOffsetInfo;
         }
+    }
+
+    const std::unordered_set<std::string> &GetUniqueObjectkeys() const
+    {
+        return deduplicatedObjectKeys_;
     }
 
     // The rpc request info

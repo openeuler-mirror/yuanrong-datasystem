@@ -100,11 +100,12 @@ void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey
     }
 }
 
-Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
-    std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-    const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds)
+Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                                             const std::shared_ptr<GetRequest> &request,
+                                                             std::vector<RpcMessage> &payloads,
+                                                             std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                             std::unordered_set<std::string> &failedIds,
+                                                             std::set<ReadKey> &needRetryIds)
 {
     Status lastRc = Status::OK();
     std::vector<std::string> successIds;
@@ -115,6 +116,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
     std::vector<QueryMetaInfoPb> payloadIndexMetas;
     for (auto &queryMeta : queryMetas) {
         const auto &meta = queryMeta.meta();
+        const auto &objectKey = meta.object_key();
         const auto dataFormat = static_cast<DataFormat>(meta.config().data_format());
         if (dataFormat != DataFormat::BINARY && dataFormat != DataFormat::HETERO) {
             lastRc = Status(K_INVALID, "object data format not match.");
@@ -122,29 +124,25 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
             LOG(ERROR) << lastRc;
             continue;
         }
-        auto iter = lockedEntries.find(meta.object_key());
+        auto iter = lockedEntries.find(ReadKey(objectKey));
         if (iter == lockedEntries.end()) {
             LOG(ERROR) << FormatString("[ObjectKey %s] QueryMeta exist but lock entry absent, should not happen",
-                                       meta.object_key());
+                                       objectKey);
             lastRc = Status(K_UNKNOWN_ERROR, "QueryMeta exist but lock entry absent, should not happen");
             continue;
         }
-        if (readKeys.find(meta.object_key()) == readKeys.end()) {
-            LOG(ERROR) << FormatString("[ObjectKey %s] cant find offset and size to get", meta.object_key());
-            lastRc = Status(K_UNKNOWN_ERROR, "Can not find offset or size to get object");
-            continue;
-        }
+        auto &safeObj = iter->second.safeObj;
         if (queryMeta.payload_indexs_size() != 0) {
             payloadIndexMetas.emplace_back(queryMeta);
         } else {
             GroupQueryMeta(queryMeta, groupedQueryMetas);
-            SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *(lockedEntries.at(meta.object_key()).first));
+            SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *safeObj);
         }
     }
 
     // For the ones that already got their payload from queried meta, fallback to existing logic.
-    lastRc = GetObjectsFromAnywhereSerially(payloadIndexMetas, readKeys, request, payloads, lockedEntries, failedIds,
-                                            needRetryIds);
+    lastRc =
+        GetObjectsFromAnywhereSerially(payloadIndexMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
 
     // And then deal with the requests that can be batched.
     std::vector<std::future<Status>> futures;
@@ -160,15 +158,15 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &metaList = queryMeta->second;
-        futures.emplace_back(workerBatchThreadPool_->Submit([this, &lastRc, address, &metaList, readKeys, &request,
+        futures.emplace_back(workerBatchThreadPool_->Submit([this, &lastRc, address, &metaList, &request,
                                                              &lockedEntries, &tempSuccessIds, &tempNeedRetryIds,
                                                              &tempFailedIds, &tempFailedMetas, index, traceId] {
             for (auto &metaPair : metaList) {
                 auto &metas = metaPair.first;
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, readKeys, request, lockedEntries,
-                                                        tempSuccessIds[index], tempNeedRetryIds[index],
-                                                        tempFailedIds[index], tempFailedMetas[index]);
+                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, request, lockedEntries, tempSuccessIds[index],
+                                                        tempNeedRetryIds[index], tempFailedIds[index],
+                                                        tempFailedMetas[index]);
             }
             return lastRc;
         }));
@@ -185,7 +183,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
                               std::make_move_iterator(tempSuccessIds[i].end()));
         }
         if (!tempNeedRetryIds[i].empty()) {
-            needRetryIds.insert(needRetryIds.end(), std::make_move_iterator(tempNeedRetryIds[i].begin()),
+            needRetryIds.insert(std::make_move_iterator(tempNeedRetryIds[i].begin()),
                                 std::make_move_iterator(tempNeedRetryIds[i].end()));
         }
         if (!tempFailedIds[i].empty()) {
@@ -196,11 +194,11 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
         }
     }
     auto metaIter = failedMetas.begin();
-    for (int i = 0; metaIter != failedMetas.end(); i++) {
+    while (metaIter != failedMetas.end()) {
         auto &objectKey = (*metaIter)->object_key();
-        auto &pair = lockedEntries.at(objectKey);
-        auto &entry = pair.first;
-        bool isInsert = pair.second;
+        auto &pair = lockedEntries.at(ReadKey(objectKey));
+        auto &entry = pair.safeObj;
+        bool isInsert = pair.insert;
         HandleGetFailureHelper(objectKey, (*metaIter)->version(), entry, isInsert);
         metaIter++;
     }
@@ -235,26 +233,25 @@ void WorkerOcServiceGetImpl::GroupQueryMeta(
     splitList.back().second += meta.data_size();
 }
 
-void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status, const std::string &objectKey,
-                                                                  const ReadKey &readKey,
+void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status, const ReadKey &readKey,
                                                                   std::vector<std::string> &successIds,
                                                                   std::vector<ReadKey> &needRetryIds,
                                                                   std::unordered_set<std::string> &failedIds)
 {
     if (status.IsOk()) {
-        successIds.emplace_back(objectKey);
+        successIds.emplace_back(readKey.objectKey);
     } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-        LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
+        LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", readKey.objectKey);
         status = Status::OK();
         needRetryIds.emplace_back(readKey);
     } else if (status.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH) {
         // Note that it gets retried at BatchGetObjectFromRemoteWorker, so do not need to add to needRetryIds.
-        LOG(INFO) << FormatString("[ObjectKey %s] Object size changed, needs retry.", objectKey);
+        LOG(INFO) << FormatString("[ObjectKey %s] Object size changed, needs retry.", readKey.objectKey);
     } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-        LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", objectKey);
+        LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", readKey.objectKey);
     } else {
-        LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
-        failedIds.emplace(objectKey);
+        LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", readKey.objectKey, status.ToString());
+        failedIds.emplace(readKey.objectKey);
     }
 }
 
@@ -322,8 +319,7 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
 
 Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     const std::string &address, Status &checkConnectStatus, std::list<ObjectMetaPb *> &metas,
-    const std::map<std::string, ReadKey> &readKeys, const std::shared_ptr<GetRequest> &request,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries, const Status &status,
+    const std::shared_ptr<GetRequest> &request, std::map<ReadKey, LockedEntity> &lockedEntries, const Status &status,
     BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads, std::vector<std::string> &successIds,
     std::vector<ReadKey> &needRetryIds, std::unordered_set<std::string> &failedIds,
     std::list<ObjectMetaPb *> &failedMetas, bool &dataSizeChange)
@@ -333,9 +329,12 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     auto metaIter = metas.begin();
     for (int i = 0; metaIter != metas.end(); i++) {
         auto &objectKey = (*metaIter)->object_key();
-        auto &pair = lockedEntries.at(objectKey);
-        auto &entry = pair.first;
-        auto &readKey = readKeys.at(objectKey);
+        auto iter = lockedEntries.find(ReadKey(objectKey));
+        if (iter == lockedEntries.cend()) {
+            continue;
+        }
+        auto &entry = iter->second.safeObj;
+        const auto &readKey = iter->first;
         ReadObjectKV objectKV(readKey, *entry);
         Status subRc = status;
         bool tryGetFromElsewhere = true;
@@ -372,7 +371,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
                                                      objectKey));
         }
         if (subRc.IsOk()) {
-            subRc = UpdateRequestForSuccessNotReturnForClient(objectKV, request);
+            subRc = UpdateRequestForSuccess(objectKV, request);
         }
         if (!dataSizeChanged) {
             if (subRc.IsError()) {
@@ -383,18 +382,17 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             dataSizeChange = true;
             metaIter++;
         }
-        BatchGetObjectHandleIndividualStatus(subRc, objectKey, readKey, successIds, needRetryIds, failedIds);
+        BatchGetObjectHandleIndividualStatus(subRc, readKey, successIds, needRetryIds, failedIds);
         lastRc = subRc;
     }
     return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
-    const std::string &address, std::list<ObjectMetaPb *> &metas, const std::map<std::string, ReadKey> &readKeys,
-    const std::shared_ptr<GetRequest> &request,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, std::list<ObjectMetaPb *> &failedMetas)
+    const std::string &address, std::list<ObjectMetaPb *> &metas, const std::shared_ptr<GetRequest> &request,
+    std::map<ReadKey, LockedEntity> &lockedEntries, std::vector<std::string> &successIds,
+    std::vector<ReadKey> &needRetryIds, std::unordered_set<std::string> &failedIds,
+    std::list<ObjectMetaPb *> &failedMetas)
 {
     bool dataSizeChange;
     Status lastRc;
@@ -419,8 +417,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
                                      FormatString("Fail to get objects from remote worker, no object copy exists."));
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
-            RETURN_IF_NOT_OK(ConstructBatchGetRequest(address, metas, readKeys, lockedEntries, successIds, needRetryIds,
-                                                      failedIds, reqPb));
+            RETURN_IF_NOT_OK(
+                ConstructBatchGetRequest(address, metas, lockedEntries, successIds, needRetryIds, failedIds, reqPb));
             INJECT_POINT("worker.remote_get_failed");
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, akSkManager_, workerStub),
@@ -449,18 +447,17 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
         PerfPoint point(PerfKey::WORKER_CONSTRUCT_AND_SEND);
         Status rc = constructAndSend();
         point.Record();
-        lastRc = ProcessBatchResponse(address, checkConnectStatus, metas, readKeys, request, lockedEntries, rc, rspPb,
-                                      payloads, successIds, needRetryIds, failedIds, failedMetas, dataSizeChange);
+        lastRc = ProcessBatchResponse(address, checkConnectStatus, metas, request, lockedEntries, rc, rspPb, payloads,
+                                      successIds, needRetryIds, failedIds, failedMetas, dataSizeChange);
     } while (dataSizeChange);
     return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
-    const std::string &address, std::list<ObjectMetaPb *> &metas, const std::map<std::string, ReadKey> &readKeys,
-    const std::shared_ptr<GetRequest> &request,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, std::list<ObjectMetaPb *> &failedMetas)
+    const std::string &address, std::list<ObjectMetaPb *> &metas, const std::shared_ptr<GetRequest> &request,
+    std::map<ReadKey, LockedEntity> &lockedEntries, std::vector<std::string> &successIds,
+    std::vector<ReadKey> &needRetryIds, std::unordered_set<std::string> &failedIds,
+    std::list<ObjectMetaPb *> &failedMetas)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
     // Unlock entries at exit.
@@ -468,25 +465,24 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
         for (auto &meta : metas) {
             const auto &objectKey = meta->object_key();
             RemoveInRemoteGetObject(objectKey);
-            lockedEntries.at(objectKey).first->WUnlock();
+            lockedEntries.at(ReadKey(objectKey)).safeObj->WUnlock();
         }
     });
     // Construct and send request for batch remote get.
     Timer endToEndTimer;
-    Status rc = BatchGetObjectFromRemoteWorker(address, metas, readKeys, request, lockedEntries, successIds,
-                                               needRetryIds, failedIds, failedMetas);
+    Status rc = BatchGetObjectFromRemoteWorker(address, metas, request, lockedEntries, successIds, needRetryIds,
+                                               failedIds, failedMetas);
     LOG(INFO) << FormatString("object get from remote finish, use %f millisecond.", endToEndTimer.ElapsedMilliSecond());
     return rc;
 }
 
-Status WorkerOcServiceGetImpl::AggregateAllocateHelper(
-    const std::list<ObjectMetaPb *> &metas,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::vector<std::shared_ptr<ShmOwner>> &shmOwners, std::vector<uint32_t> &shmIndexMapping)
+Status WorkerOcServiceGetImpl::AggregateAllocateHelper(const std::list<ObjectMetaPb *> &metas,
+                                                       std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                       std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                                       std::vector<uint32_t> &shmIndexMapping)
 {
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> traversalHelper =
-        [&metas, &lockedEntries](std::function<void(uint64_t, uint64_t, uint32_t)> collector,
-                                 bool &needAggregate) {
+        [&metas, &lockedEntries](std::function<void(uint64_t, uint64_t, uint32_t)> collector, bool &needAggregate) {
             needAggregate = metas.size() > 1;
             uint32_t objectIndex = 0;
             for (auto metaIter = metas.begin(); metaIter != metas.end() && needAggregate; metaIter++, objectIndex++) {
@@ -494,8 +490,8 @@ Status WorkerOcServiceGetImpl::AggregateAllocateHelper(
                 auto dataSz = meta->data_size();
 
                 const auto &objectKey = meta->object_key();
-                auto &pair = lockedEntries.at(objectKey);
-                auto &entry = *(pair.first);
+                auto &lockedEntity = lockedEntries.at(ReadKey(objectKey));
+                auto &entry = *(lockedEntity.safeObj);
                 auto metaSz = entry->GetMetadataSize();
                 uint64_t shmSize = dataSz + metaSz;
 
@@ -509,8 +505,7 @@ Status WorkerOcServiceGetImpl::AggregateAllocateHelper(
             }
         };
     auto firstObjectKey = metas.front()->object_key();
-    RETURN_IF_NOT_OK(
-        AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping));
+    RETURN_IF_NOT_OK(AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping));
     return Status::OK();
 }
 }  // namespace object_cache

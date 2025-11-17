@@ -49,6 +49,7 @@
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/common/util/id_tool.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
 DS_DECLARE_string(other_cluster_names);
@@ -91,7 +92,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
 {
     workerOperationTimeCost.Clear();
     Timer timer;
-    std::shared_ptr<AccessRecorder> posixPoint = std::make_shared<AccessRecorder>(AccessRecorderKey::DS_POSIX_GET);
+    auto request = std::make_shared<GetRequest>(AccessRecorderKey::DS_POSIX_GET);
     INJECT_POINT("WorkerOCServiceImpl.Get.Retry",
                  [&serverApi]() { return serverApi->SendStatus(Status(K_TRY_AGAIN, "test get retry")); });
     PerfPoint point(PerfKey::WORKER_GET_OBJECT);
@@ -101,10 +102,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     LOG(INFO) << "Get start from client:" << clientId << " server api read elapsed ms: " << timer.ElapsedMilliSecond();
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
-                                         StatusCode::K_INVALID, "invalid object size");
 
-    auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     int64_t subTimeout = req.sub_timeout();
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT("WorkerOCServiceImpl.Get.Timeout", [&timeout](int changedTimeout) {
@@ -113,19 +111,9 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     });
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
-    // Get offset and size.
-    uint64_t objectsCount = objectKeys.size();
-    uint64_t readOffsetCount = static_cast<uint64_t>(req.read_offset_list_size());
-    uint64_t readSizeCount = static_cast<uint64_t>(req.read_size_list_size());
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectsCount == readOffsetCount || readOffsetCount == 0, K_INVALID,
-                                         "invalid read offset");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectsCount == readSizeCount || readSizeCount == 0, K_INVALID,
-                                         "invalid read size");
-    std::unordered_map<std::string, OffsetInfo> offsetInfos;
-    for (size_t i = 0; i < readOffsetCount; i++) {
-        std::string objectKey = objectKeys[i];
-        offsetInfos.emplace(std::move(objectKey), OffsetInfo(req.read_offset_list(i), req.read_size_list(i)));
-    }
+
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(request->Init(tenantId, req, memoryRefTable_, serverApi),
+                                     "GetRequest Init failed");
 
     timer.Reset();
     std::string traceID = Trace::Instance().GetTraceID();
@@ -134,8 +122,9 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         threadPool_->Execute([=]() mutable {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             workerOperationTimeCost = cost;
-            int64_t elapsed = timer.ElapsedMilliSecond();
-            LOG(INFO) << "Process Get from client: " << clientId << ", objects: " << VectorToString(objectKeys)
+            auto elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+            LOG(INFO) << "Process Get from client: " << clientId
+                      << ", objects: " << VectorToString(request->GetRawObjectKeys())
                       << ", get threads Statistics: " << threadPool_->GetStatistics() << ", elapsed ms: " << elapsed
                       << ", remainingTime: " << timeout;
             if (elapsed >= timeout) {
@@ -145,28 +134,24 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             } else {
                 reqTimeoutDuration.Init(timeout - elapsed);
                 auto newSubTimeout = std::max<int64_t>(subTimeout - elapsed, 0);
-                LOG_IF_ERROR(ProcessGetObjectRequest(objectKeys, offsetInfos, serverApi, newSubTimeout, clientId,
-                                                     posixPoint, req),
-                             "Process Get failed");
-                workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
+                LOG_IF_ERROR(ProcessGetObjectRequest(newSubTimeout, request), "Process Get failed");
+                workerOperationTimeCost.Append("ProcessGetObjectRequest",
+                                               static_cast<int64_t>(timer.ElapsedMilliSecond()));
                 LOG(INFO) << FormatString(
                     "Process Get done, clientId: %s, objectKeys: %s, get threads Statistics: %s."
                     "The operations of worker Get %s",
-                    clientId, VectorToString(objectKeys), threadPool_->GetStatistics(),
+                    clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
                     workerOperationTimeCost.GetInfo());
             }
-            posixPoint.reset();
         });
     } else {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         workerOperationTimeCost = cost;
         reqTimeoutDuration.Init(timeout);
-        LOG_IF_ERROR(
-            ProcessGetObjectRequest(objectKeys, offsetInfos, serverApi, subTimeout, clientId, posixPoint, req),
-            "Process Get failed");
+        LOG_IF_ERROR(ProcessGetObjectRequest(subTimeout, request), "Process Get failed");
         workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
-        posixPoint.reset();
     }
+
     return Status::OK();
 }
 
@@ -196,9 +181,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhere(const ReadKey &readKey, con
         } else {
             evictionManager_->Add(objectKey);
         }
-        RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV));
-        ReturnToClientByObjectKey(objectKey);
-        return Status::OK();
+        return UpdateRequestForSuccess(objectKV, nullptr);
     }
 
     SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
@@ -206,7 +189,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhere(const ReadKey &readKey, con
     ReadObjectKV objectKV(readKeyAfterSet, *entry);
     Status status = queryMeta.payload_indexs_size() == 0
                         ? GetObjectFromRemoteOnLock(meta, nullptr, address, queryMeta.single_copy(), objectKV)
-                        : GetObjectFromQueryMetaResultOnLock(queryMeta, payloads, objectKV);
+                        : GetObjectFromQueryMetaResultOnLock(nullptr, queryMeta, payloads, objectKV);
     if (status.IsError()) {
         (void)RemoveLocation(objectKey, meta.version());
         if (entry->Get() != nullptr && entry->Get()->GetShmUnit() != nullptr) {
@@ -219,8 +202,6 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhere(const ReadKey &readKey, con
             entry->Get()->SetLifeState(ObjectLifeState::OBJECT_INVALID);
             entry->Get()->stateInfo.SetCacheInvalid(true);
         }
-    } else {
-        ReturnToClientByObjectKey(objectKey);
     }
     return status;
 }
@@ -259,74 +240,67 @@ Status WorkerOcServiceGetImpl::GetDataFromL2CacheForPrimaryCopy(const std::strin
     return Status(StatusCode::K_NOT_FOUND, "Object not found");
 }
 
-Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(
-    const std::vector<std::string> &objectKeys, const std::unordered_map<std::string, OffsetInfo> &offsetInfos,
-    std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi, const int64_t subTimeout,
-    const std::string &clientId, std::shared_ptr<AccessRecorder> accessRecorderPoint, const GetReqPb &getReqPb)
+Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::shared_ptr<GetRequest> &request)
 {
+    (void)subTimeout;
     INJECT_POINT("worker.Get.asyncGetStart", [](int timeout) {
         reqTimeoutDuration.Init(timeout);
         return Status::OK();
     });
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_OBJECT);
-    std::vector<ReadKey> objectsNeedGetRemote;
-    auto request =
-        std::make_shared<GetRequest>(objectKeys, serverApi, clientId, -1, getReqPb, accessRecorderPoint);
-    if (!offsetInfos.empty()) {
-        request->SetOffset(offsetInfos);
-    }
 
-    MarkObjectsInGetProcess(objectKeys);
+    MarkObjectsInGetProcess(request->GetRawObjectKeys());
 
-    Raii getProcessGuard([this, &objectKeys]() { UnmarkObjectsInGetProcess(objectKeys); });
+    Raii getProcessGuard([this, &request]() { UnmarkObjectsInGetProcess(request->GetRawObjectKeys()); });
 
     // Try get from local.
-    TryGetObjectFromLocal(offsetInfos, request, objectsNeedGetRemote);
+    std::set<ReadKey> remoteObjectKeys;
+    RETURN_IF_NOT_OK(TryGetObjectFromLocal(request, remoteObjectKeys));
+    RETURN_OK_IF_TRUE(request->AlreadyReturn());
 
-    // Try get from remote worker or L2 cache.
-    RETURN_IF_NOT_OK(TryGetObjectFromRemote(subTimeout, request, objectsNeedGetRemote));
-
-    // Return if already call ReturnFromGetRequest to avoid circular references between Timer and GetRequest.
-    RETURN_OK_IF_TRUE(request->isReturn_);
-    if (request->isFinished_) {
-        ReturnToClientByRequest(request);
+    // Register request for subscribe
+    if (subTimeout > 0) {
+        request->Register(&workerRequestManager_);
     }
 
-    INJECT_POINT("worker.Get.beforeReturn");
+    // Try get from remote worker or L2 cache.
+    RETURN_IF_NOT_OK(TryGetObjectFromRemote(subTimeout, request, std::move(remoteObjectKeys)));
+    RETURN_OK_IF_TRUE(request->AlreadyReturn());
+
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
-    if (request->numSatisfiedObjects_ == request->numWaitingObjects_ || subTimeout == 0 || remainingTimeMs <= 0) {
-        LOG(INFO) << "The satisfied objects num: " << request->numSatisfiedObjects_
-                  << ", the waiting objects num: " << request->numWaitingObjects_
+    if (request->GetNotReadyCount() == 0 || subTimeout == 0 || remainingTimeMs <= 0) {
+        LOG(INFO) << "The satisfied objects num: " << request->GetReadyCount()
+                  << ", the waiting objects num: " << request->GetNotReadyCount()
                   << ", the sub timeout: " << subTimeout;
-        Status rc = workerRequestManager_.ReturnFromGetRequest(request, memoryRefTable_);
+        Status rc = request->ReturnToClient();
         point.Record();
         return rc;
     }
 
-    TimerQueue::TimerImpl timer;
+    auto timer = std::make_unique<TimerQueue::TimerImpl>();
     auto traceID = Trace::Instance().GetTraceID();
     auto weakThis = weak_from_this();
-    serverApi->SetRequestInProgress();  // For exclusive connections: inform parent that an async child is deployed
+    // For exclusive connections: inform parent that an async child is deployed
+    request->GetServerApi()->SetRequestInProgress();
     RETURN_IF_NOT_OK(TimerQueue::GetInstance()->AddTimer(
         std::min<int64_t>(subTimeout, remainingTimeMs),
-        [weakThis, subTimeout, request, traceID, remainingTimeMs, serverApi]() {
+        [weakThis, subTimeout, request, traceID, remainingTimeMs]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             LOG(ERROR) << "The get request times out, the sub timeout: " << subTimeout
-                       << ", remainingTimeMs: " << remainingTimeMs << ", clientId: " << request->clientId_
-                       << ", satisfied num: " << request->numSatisfiedObjects_
-                       << ", waiting num: " << request->numWaitingObjects_;
-            auto workerOcServiceGetImpl = weakThis.lock();
-            if (workerOcServiceGetImpl == nullptr) {
+                       << ", remainingTimeMs: " << remainingTimeMs << ", clientId: " << request->GetClientId()
+                       << ", satisfied num: " << request->GetReadyCount()
+                       << ", waiting num: " << request->GetNotReadyCount();
+            auto impl = weakThis.lock();
+            if (impl == nullptr) {
                 return;
             }
-            workerOcServiceGetImpl->workerRequestManager_.ReturnFromGetRequest(request,
-                                                                               workerOcServiceGetImpl->memoryRefTable_);
-            // Avoid timeCostPoint destruct after traceGuard.
-            request->accessRecorderPoint_.reset();
-            serverApi->SetRequestComplete();  // For exclusive connections: inform parent that async child has finished
+            LOG_IF_ERROR(request->ReturnToClient(), "ReturnToClient failed");
+            // For exclusive connections: inform parent that async child has finished
+            request->GetServerApi()->SetRequestComplete();
         },
-        timer));
-    request->timer_ = std::make_unique<TimerQueue::TimerImpl>(timer);
+        *timer));
+
+    request->SetTimer(std::move(timer));
     point.Record();
     return Status::OK();
 }
@@ -366,52 +340,42 @@ static Status CheckAndResetStatus(const Status &status, std::set<StatusCode> &by
                : Status(K_RUNTIME_ERROR, status.GetMsg());
 }
 
-void WorkerOcServiceGetImpl::TryGetObjectFromLocal(const std::unordered_map<std::string, OffsetInfo> &offsetInfos,
-                                                   std::shared_ptr<GetRequest> &request,
-                                                   std::vector<ReadKey> &objectsNeedGetRemote)
+Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest> &request,
+                                                     std::set<ReadKey> &remoteObjectKeys)
 {
-    std::vector<std::string> localExistKeys;
-    localExistKeys.reserve(request->deduplicatedObjectKeys_.size());
-    for (const auto &objectKey : request->deduplicatedObjectKeys_) {
+    Status lastRc;
+    auto &uniqueObjectMap = request->GetObjects();
+    for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
         if (asyncRollbackManager_->IsObjectsInRollBack({ objectKey })) {
-            if (request->objects_.emplace(objectKey, nullptr)) {
-                (void)request->numSatisfiedObjects_.fetch_add(1);
-            }
+            objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
         } else {
-            ReadKey readKey(objectKey);
-            auto iter = offsetInfos.find(objectKey);
-            if (iter != offsetInfos.end()) {
-                readKey.readOffset = iter->second.readOffset;
-                readKey.readSize = iter->second.readSize;
-            }
-            Status status = PreProcessGetObject(readKey, request, objectsNeedGetRemote, localExistKeys);
+            ReadKey readKey(objectKey, objectInfo.offsetInfo);
+            Status status = PreProcessGetObject(readKey, objectInfo, remoteObjectKeys);
             if (status.IsError()) {
+                objectInfo.rc = status;
+                lastRc = status;
                 LOG(ERROR) << "PreProcessGetObject failed:" << status.GetMsg();
-                static std::set<StatusCode> bypassCode{ K_OUT_OF_MEMORY, K_OUT_OF_RANGE };
-                Status finalStatus = CheckAndResetStatus(status, bypassCode);
-                request->SetStatus(finalStatus);
-                if (request->objects_.emplace(objectKey, nullptr)) {
-                    (void)request->numSatisfiedObjects_.fetch_add(1);
-                }
             }
         }
-        // Add request even if failed.
-        (void)workerRequestManager_.AddRequest(objectKey, request);
     }
-    LOG(INFO) << "Local exist keys: " << VectorToString(localExistKeys);
+    if (lastRc.IsError()) {
+        static std::set<StatusCode> bypassCode{ K_OUT_OF_MEMORY, K_OUT_OF_RANGE };
+        lastRc = CheckAndResetStatus(lastRc, bypassCode);
+    }
+    return request->UpdateAfterLocalGet(std::move(lastRc), remoteObjectKeys.size());
 }
 
 Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::shared_ptr<GetRequest> &request,
-                                                      std::vector<ReadKey> &objectsNeedGetRemote)
+                                                      std::set<ReadKey> remoteObjectKeys)
 {
-    RETURN_OK_IF_TRUE(objectsNeedGetRemote.empty());
-    auto needRemoteGetIds = objectsNeedGetRemote;
+    RETURN_OK_IF_TRUE(remoteObjectKeys.empty());
+    auto needRemoteGetIds = std::move(remoteObjectKeys);
     PerfPoint pointRemote(PerfKey::WORKER_PROCESS_GET_OBJECT_REMOTE);
     std::unordered_set<std::string> failedIds;
     Status status;
 
     do {
-        std::vector<ReadKey> needRetryIds;
+        std::set<ReadKey> needRetryIds;
         status = ProcessObjectsNotExistInLocal(needRemoteGetIds, subTimeout, failedIds, needRetryIds, request);
         int64_t remainTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
         const int64_t timeoutThresholdMs = 100;
@@ -419,7 +383,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
         // If we meets OOM, never try get again because there is no space for us to save the objects.
         if (status.GetCode() == K_OUT_OF_MEMORY || remainTimeMs <= timeoutThresholdMs) {
             std::for_each(needRetryIds.begin(), needRetryIds.end(),
-                          [&](ReadKey &key) { failedIds.emplace(key.objectKey); });
+                          [&](const ReadKey &key) { failedIds.emplace(key.objectKey); });
             break;
         }
         needRemoteGetIds.swap(needRetryIds);
@@ -429,7 +393,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
     pointRemote.Record();
     if (status.GetCode() == K_OUT_OF_MEMORY) {
         LOG(INFO) << "TryGetObjectFromRemote failed, detail: " << status.ToString();
-        return workerRequestManager_.ReturnFromGetRequest(request, memoryRefTable_, status);
+        return request->ReturnToClient(status);
     }
 
     Status lastRc;
@@ -438,28 +402,26 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
         // K_OUT_OF_RANGE: offset > szie.
         static std::set<StatusCode> bypassCodeRemoteGet{ K_OUT_OF_RANGE };
         if (status.GetCode() == K_NOT_FOUND_IN_L2CACHE) {
-            LOG(ERROR) << status.ToString();
+            LOG(ERROR) << "ProcessObjectsNotExistInLocal failed with status: " << status.ToString();
             auto msg = "Cannot get object from worker and l2 cache";
             lastRc = Status(K_NOT_FOUND, msg);
         } else {
             lastRc = CheckAndResetStatus(status, bypassCodeRemoteGet);
         }
         for (const auto &id : failedIds) {
-            LOG_IF_ERROR(workerRequestManager_.UpdateRequestForFailed(id, lastRc, memoryRefTable_),
-                         "UpdateRequestForFailed failed");
+            LOG_IF_ERROR(request->MarkFailed(id, lastRc), "MarkFailed failed");
         }
     }
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, std::shared_ptr<GetRequest> &request,
-                                                   std::vector<ReadKey> &objectsNeedGetRemote,
-                                                   std::vector<std::string> &localExistKeys)
+Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetObjInfo &info,
+                                                   std::set<ReadKey> &remoteObjectKeys)
 {
     INJECT_POINT("worker.PreProcessGetObject.begin");
     // use RLock instead of WLock try get from memory.
     bool objIsValidInMem = true;
-    Status memGetRes = RLockGetObjectFromMem(readKey, request, objectsNeedGetRemote, objIsValidInMem, localExistKeys);
+    Status memGetRes = RLockGetObjectFromMem(readKey, info, remoteObjectKeys, objIsValidInMem);
     INJECT_POINT("set.objectIsInvalidInmem", [&objIsValidInMem]() {
         objIsValidInMem = false;
         return Status::OK();
@@ -473,7 +435,7 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, std::
     Status rc = objectTable_->Get(readKey.objectKey, entry);
     RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
     if (rc.GetCode() == K_NOT_FOUND) {
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
     ReadObjectKV objectKV(readKey, *entry);
@@ -483,12 +445,12 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, std::
     rc = entry->WLock(true);
     RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
     if (rc.GetCode() == K_NOT_FOUND) {
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
     Raii unlock([&entry]() { entry->WUnlock(); });
     if ((*entry).Get() == nullptr) {
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
     INJECT_POINT("set.objectIsInComplete", [&entry]() {
@@ -503,32 +465,28 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, std::
             auto res = KeepObjectDataInMemory(objectKV);
             if (res.IsError()) {
                 // object not found from disk or l2 cache, try get from remote.
-                objectsNeedGetRemote.emplace_back(readKey);
+                (void)remoteObjectKeys.emplace(readKey);
                 return Status::OK();
             }
             LOG(INFO) << FormatString("[ObjectKey %s] already load to memory", readKey);
         } else {
             // case 2: object exist in local node, but it is the expired version.
             Status status = TryGetObjectsFromPrimaryWorker((*entry)->GetAddress(), (*entry)->GetDataSize(), objectKV,
-                                                           objectsNeedGetRemote);
+                                                           remoteObjectKeys);
             if (status.IsError()) {
                 return Status::OK();
             }
         }
-        if (request->objects_.emplace(readKey.objectKey,
-                                      GetObjEntryParams::Create(*entry, readKey.readOffset, readKey.readSize))) {
-            request->numSatisfiedObjects_.fetch_add(1);
-        }
+        info.params = GetObjEntryParams::Create(readKey.objectKey, *entry);
     } else {
         // case 3: object didn't exist in local node, is not published or sealed yet.
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
     }
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, std::shared_ptr<GetRequest> &request,
-                                                     std::vector<ReadKey> &objectsNeedGetRemote, bool &objIsValidInMem,
-                                                     std::vector<std::string> &localExistKeys)
+Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, GetObjInfo &info,
+                                                     std::set<ReadKey> &remoteObjectKeys, bool &objIsValidInMem)
 {
     std::shared_ptr<SafeObjType> entry;
     // Fetch the object and lock it.
@@ -536,7 +494,7 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, std
     Status rc = objectTable_->Get(readKey.objectKey, entry);
     RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
     if (rc.GetCode() == K_NOT_FOUND) {
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
     // If entry RLock is not found, it means the object is deleting locally.
@@ -544,12 +502,12 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, std
     rc = entry->RLock(true);
     RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
     if (rc.GetCode() == K_NOT_FOUND) {
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
     Raii unlock([&entry]() { entry->RUnlock(); });
     if ((*entry).Get() == nullptr) {
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS((*entry)->IsBinary(), K_INVALID, "Not a Shm Unit");
@@ -562,12 +520,8 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, std
                 objIsValidInMem = false;
                 RETURN_STATUS(K_NOT_FOUND, FormatString("[ObjectKey %s] not exist in memory.", readKey));
             }
-            if (request->objects_.emplace(readKey.objectKey,
-                                          GetObjEntryParams::Create(*entry, readKey.readOffset, readKey.readSize))) {
-                request->numSatisfiedObjects_.fetch_add(1);
-            }
+            info.params = GetObjEntryParams::Create(readKey.objectKey, *entry);
             evictionManager_->Add(readKey.objectKey);
-            localExistKeys.emplace_back(readKey.objectKey);
             return Status::OK();
         }
         // case 2: object exist in local node,and it is the expired version.
@@ -575,21 +529,17 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, std
         RETURN_STATUS(K_NOT_FOUND, FormatString("[ObjectKey %s] exists locally but expired.", readKey));
     } else {
         // object didn't exist in local node, is not published or sealed yet.
-        objectsNeedGetRemote.push_back(readKey);
+        (void)remoteObjectKeys.emplace(readKey);
     }
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::vector<ReadKey> &objectsNeedGetRemote,
-                                                             const int64_t subTimeout,
+Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<ReadKey> &objectsNeedGetRemote,
+                                                             int64_t subTimeout,
                                                              std::unordered_set<std::string> &failedIds,
-                                                             std::vector<ReadKey> &needRetryIds,
+                                                             std::set<ReadKey> &needRetryIds,
                                                              const std::shared_ptr<GetRequest> &request)
 {
-    std::map<std::string, ReadKey> readKeys;
-    for (const auto &id : objectsNeedGetRemote) {
-        readKeys.insert(std::make_pair(id.objectKey, id));
-    }
     LOG(INFO) << "Begin to process " << objectsNeedGetRemote.size() << " objects that doesn't exist in local: ["
               << VectorToString(objectsNeedGetRemote) << "]";
     AddInRemoteGetObjects(objectsNeedGetRemote);
@@ -601,28 +551,28 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::vector<R
     // request, to ensure the concurrent timing of the location (e.g. remove location when object was deleted by spill
     // manager), we need to lock here.
     Status lastRc;
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> lockedEntries;
+    std::map<ReadKey, LockedEntity> lockedEntries;
     lastRc = BatchLockForGet(objectsNeedGetRemote, lockedEntries, failedIds);
     Raii unlockRaii([this, &failedIds, &lockedEntries]() { BatchUnlockForGet(failedIds, lockedEntries); });
 
     // If a local publish or remote get finished before we lock the object, we will get a valid object here.
-    AttemptGetObjectsLocally(readKeys, lockedEntries);
+    AttemptGetObjectsLocally(request, lockedEntries);
     std::vector<std::string> needRemoteGetObjects;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::back_inserter(needRemoteGetObjects),
-                   [](const auto &kv) { return kv.first; });
+                   [](const auto &kv) { return kv.first.objectKey; });
 
     QueryMetadataFromMasterResult queryMetaResult;
     std::vector<master::QueryMetaInfoPb> &queryMetas = queryMetaResult.queryMetas;
     std::vector<RpcMessage> &payloads = queryMetaResult.payloads;
-    std::map<std::string, uint64_t> &absentObjectKeys = queryMetaResult.absentObjectKeysWithVersion;
-    Status result = QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult,
-                                            !request->requestInfo_.no_query_l2cache());
+    const auto &absentObjectKeys = queryMetaResult.absentObjectKeysWithVersion;
+    Status result =
+        QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult, !request->NoQueryL2Cache());
     if (result.IsError()) {
         // If we query meta from master meets RPC error, do not add these objects to failedIds,
         // otherwise other concurrent get operations would failed, so we just notify ourselves.
         if (IsRpcTimeoutOrTryAgain(result)) {
             for (const auto &objectKey : needRemoteGetObjects) {
-                workerRequestManager_.UpdateSpecificRequestForFailed(request, objectKey, result, memoryRefTable_);
+                LOG_IF_ERROR(request->MarkFailed(objectKey, result), "MarkFailed failed");
             }
         } else {
             failedIds.insert(needRemoteGetObjects.begin(), needRemoteGetObjects.end());
@@ -643,7 +593,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::vector<R
 
     LOG(INFO) << FormatString("Query meta success: target num %d, success num %d", objectsNeedGetRemote.size(),
                               queryMetas.size());
-    lastRc = GetObjectsFromAnywhere(queryMetas, readKeys, request, payloads, lockedEntries, failedIds, needRetryIds);
+    lastRc = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
 
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
     // a fair change to complete within the given timeout.
@@ -654,20 +604,19 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::vector<R
         }
     }
 
-    VLOG(1) << "Get object data from remote node finish.";
+    VLOG(1) << "Get object data from remote node finish, lastRc:" << lastRc.ToString();
     return lastRc;
 }
 
-Status WorkerOcServiceGetImpl::GetObjectsWithoutMeta(
-    std::map<std::string, uint64_t> &objectInfos,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::unordered_set<std::string> &failedIds)
+Status WorkerOcServiceGetImpl::GetObjectsWithoutMeta(const std::map<std::string, uint64_t> &objectKeys,
+                                                     std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                     std::unordered_set<std::string> &failedIds)
 {
     Status lastRc = Status::OK();
     std::vector<std::string> successIds;
-    for (const auto &kv : objectInfos) {
-        const auto objectKey = kv.first;
-        auto it = lockedEntries.find(objectKey);
+    for (const auto &kv : objectKeys) {
+        const auto &objectKey = kv.first;
+        auto it = lockedEntries.find(ReadKey(objectKey));
         if (it == lockedEntries.end()) {
             lastRc = Status(
                 K_RUNTIME_ERROR,
@@ -677,7 +626,7 @@ Status WorkerOcServiceGetImpl::GetObjectsWithoutMeta(
         }
         // full read.
         ReadKey readKey(objectKey);
-        ReadObjectKV objectKV(readKey, *it->second.first);
+        ReadObjectKV objectKV(readKey, *it->second.safeObj);
         objectKV.GetObjEntry()->SetMetadataSize(metadataSize_);
         Status rc = GetObjectsWithoutMetaFromL2Cache(objectKV, kv.second);
         if (rc.IsOk()) {
@@ -702,7 +651,7 @@ Status WorkerOcServiceGetImpl::GetObjectsWithoutMetaFromL2Cache(ObjectKV &object
 
 Status WorkerOcServiceGetImpl::TryGetObjectsFromPrimaryWorker(const std::string &primaryAddress, uint64_t dataSize,
                                                               ReadObjectKV &objectKV,
-                                                              std::vector<ReadKey> &objectsNeedGetRemote)
+                                                              std::set<ReadKey> &objectsNeedGetRemote)
 {
     const auto &objectKey = objectKV.GetObjKey();
     LOG(INFO) << FormatString("[ObjectKey %s] exist in local node but expired, remote worker: %s, local worker: %s",
@@ -714,12 +663,12 @@ Status WorkerOcServiceGetImpl::TryGetObjectsFromPrimaryWorker(const std::string 
             LOG(INFO) << "Try to Pull from primary worker failed. The system will obtain from other worker or "
                          "l2 cache again. Detail: "
                       << status.ToString();
-            objectsNeedGetRemote.push_back(objectKV.ConstructReadKey());
+            objectsNeedGetRemote.emplace(objectKV.ConstructReadKey());
             return status;
         }
         RETURN_OK_IF_TRUE(status.IsOk());
     }
-    objectsNeedGetRemote.push_back(objectKV.ConstructReadKey());
+    objectsNeedGetRemote.emplace(objectKV.ConstructReadKey());
     return status;
 }
 
@@ -843,11 +792,12 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadOb
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
-    const std::string &address, std::list<ObjectMetaPb *> &metas, const std::map<std::string, ReadKey> &readKeys,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, BatchGetObjectRemoteReqPb &reqPb)
+Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &address, std::list<ObjectMetaPb *> &metas,
+                                                        std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                        std::vector<std::string> &successIds,
+                                                        std::vector<ReadKey> &needRetryIds,
+                                                        std::unordered_set<std::string> &failedIds,
+                                                        BatchGetObjectRemoteReqPb &reqPb)
 {
     PerfPoint point(PerfKey::WORKER_CONSTRUCT_BATCH_GET_REQ);
     // The function is placed together with PrepareGetRequestHelper,
@@ -863,16 +813,20 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
     for (auto metaIter = metas.begin(); metaIter != metas.end(); objectIndex++) {
         auto &meta = *metaIter;
         const auto &objectKey = meta->object_key();
+        auto iter = lockedEntries.find(ReadKey(objectKey));
+        if (iter == lockedEntries.cend()) {
+            LOG(WARNING) << "ObjectKey " << objectKey << " not exsits in lockedEntries";
+            continue;
+        }
         // Checked availability when metas are grouped, so it should be safe to just access the entry here.
-        auto &pair = lockedEntries.at(objectKey);
-        auto &entry = pair.first;
+        auto &entry = iter->second.safeObj;
         // Re-set object entry in the case of looped for data size change.
         SetObjectEntryAccordingToMeta(*meta, GetMetadataSize(), *entry);
-        auto &readKey = readKeys.at(objectKey);
+        const auto &readKey = iter->first;
         ReadObjectKV objectKV(readKey, *entry);
         Status status = objectKV.CheckReadOffset();
         if (status.IsError()) {
-            BatchGetObjectHandleIndividualStatus(status, objectKey, readKey, successIds, needRetryIds, failedIds);
+            BatchGetObjectHandleIndividualStatus(status, readKey, successIds, needRetryIds, failedIds);
             metaIter = metas.erase(metaIter);
             lastRc = status;
             continue;
@@ -892,7 +846,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
         }
         status = PrepareGetRequestHelper(meta->data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
         if (status.IsError()) {
-            BatchGetObjectHandleIndividualStatus(status, objectKey, readKey, successIds, needRetryIds, failedIds);
+            BatchGetObjectHandleIndividualStatus(status, readKey, successIds, needRetryIds, failedIds);
             metaIter = metas.erase(metaIter);
             lastRc = status;
             continue;
@@ -1055,22 +1009,16 @@ Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
     return Status::OK();
 }
 
-void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(
-    const std::map<std::string, ReadKey> &readKeys,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries)
+void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetRequest> &request,
+                                                      std::map<ReadKey, LockedEntity> &lockedEntries)
 {
-    auto localGet = [this, readKeys](const std::string &objectKey, std::shared_ptr<SafeObjType> &entry) {
+    auto localGet = [this, request](const ReadKey &readKey, std::shared_ptr<SafeObjType> &entry) {
         if ((entry->Get() != nullptr) && entry->Get()->IsBinary() && !entry->Get()->stateInfo.IsCacheInvalid()
             && entry->Get()->IsGetDataEnablelFromLocal()) {
-            auto it = readKeys.find(objectKey);
-            if (it == readKeys.end()) {
-                return Status(K_NOT_FOUND, "");
-            }
-            ReadKey readKey = it->second;
             ReadObjectKV objectKV(readKey, *entry);
             RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
-            RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV));
-            RemoveInRemoteGetObject(objectKey);
+            RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
+            RemoveInRemoteGetObject(readKey.objectKey);
             entry->WUnlock();
             return Status::OK();
         }
@@ -1079,9 +1027,9 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(
 
     auto it = lockedEntries.begin();
     while (it != lockedEntries.end()) {
-        const auto &objectKey = it->first;
-        auto &entry = it->second.first;
-        if (localGet(objectKey, entry).IsOk()) {
+        auto &entry = it->second.safeObj;
+        const auto &readKey = it->first;
+        if (localGet(readKey, entry).IsOk()) {
             lockedEntries.erase(it++);
         } else {
             it++;
@@ -1505,30 +1453,29 @@ Status WorkerOcServiceGetImpl::CorrectQueryMetaResponse(std::vector<RpcMessage> 
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::GetObjectsFromAnywhere(
-    std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-    const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds)
+Status WorkerOcServiceGetImpl::GetObjectsFromAnywhere(std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                                      const std::shared_ptr<GetRequest> &request,
+                                                      std::vector<RpcMessage> &payloads,
+                                                      std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                      std::unordered_set<std::string> &failedIds,
+                                                      std::set<ReadKey> &needRetryIds)
 {
     if (FLAGS_enable_worker_worker_batch_get) {
-        return GetObjectsFromAnywhereBatched(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
-                                             needRetryIds);
+        return GetObjectsFromAnywhereBatched(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
-    return GetObjectsFromAnywhereParallelly(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
-                                            needRetryIds);
+    return GetObjectsFromAnywhereParallelly(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
 }
 
-Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(
-    const std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-    const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds)
+Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                                                const std::shared_ptr<GetRequest> &request,
+                                                                std::vector<RpcMessage> &payloads,
+                                                                std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                                std::unordered_set<std::string> &failedIds,
+                                                                std::set<ReadKey> &needRetryIds)
 {
     const size_t kMinParallelRequests = 2;
     if (queryMetas.size() < kMinParallelRequests) {
-        return GetObjectsFromAnywhereSerially(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
-                                              needRetryIds);
+        return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
     Status lastRc = Status::OK();
     std::vector<std::string> successIds;
@@ -1553,19 +1500,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(
             LOG(ERROR) << lastRc;
             continue;
         }
-        auto iter = lockedEntries.find(meta.object_key());
-        if (iter == lockedEntries.end()) {
-            LOG(ERROR) << FormatString("[ObjectKey %s] QueryMeta exist but lock entry absent, should not happen",
-                                       meta.object_key());
-            lastRc = Status(K_UNKNOWN_ERROR, "QueryMeta exist but lock entry absent, should not happen");
-            continue;
-        }
-        if (readKeys.find(meta.object_key()) == readKeys.end()) {
-            LOG(ERROR) << FormatString("[ObjectKey %s] cant find offset and size to get", meta.object_key());
-            lastRc = Status(K_UNKNOWN_ERROR, "Can not find offset or size to get object");
-            continue;
-        }
-        ReadKey readKey = readKeys.at(meta.object_key());
 
         Timer timer;
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
@@ -1581,16 +1515,18 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(
             }
             const auto &queryMeta = queryMetas[i];
             const auto &meta = queryMeta.meta();
-            auto subIter = lockedEntries.find(meta.object_key());
+            const auto &objectKey = meta.object_key();
+            auto subIter = lockedEntries.find(ReadKey(objectKey));
             if (subIter == lockedEntries.end()) {
                 std::lock_guard<std::mutex> lock(commonMutex);
-                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in locked entries", meta.object_key());
-                lastRc = Status(K_NOT_FOUND,
-                                FormatString("[ObjectKey %s] Object not found in locked entries", meta.object_key()));
+                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in locked entries", objectKey);
+                lastRc =
+                    Status(K_NOT_FOUND, FormatString("[ObjectKey %s] Object not found in locked entries", objectKey));
                 return lastRc;
             }
-            std::shared_ptr<SafeObjType> &subEntry = subIter->second.first;
-            bool isInsert = subIter->second.second;
+            const auto &readKey = subIter->first;
+            std::shared_ptr<SafeObjType> &subEntry = subIter->second.safeObj;
+            bool isInsert = subIter->second.insert;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(subEntry->TransferWLockToCurrentThread(), "Lock failed");
             Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, isInsert, queryMeta, payloads);
 
@@ -1598,19 +1534,18 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(
             std::lock_guard<std::mutex> lock(commonMutex);
 
             if (status.IsOk()) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", meta.object_key());
-                successIds.push_back(meta.object_key());
+                LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", objectKey);
+                successIds.push_back(objectKey);
             } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", meta.object_key());
-                needRetryIds.emplace_back(readKey);
+                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
+                (void)needRetryIds.emplace(readKey);
             } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", meta.object_key());
+                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", objectKey);
                 lastRc = status;
                 abortAllTasks.store(true);
             } else {
-                LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", meta.object_key(),
-                                           status.ToString());
-                failedIds.emplace(meta.object_key());
+                LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
+                failedIds.emplace(objectKey);
                 lastRc = status;
             }
 
@@ -1630,11 +1565,12 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(
     return lastRc;
 }
 
-Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(
-    const std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
-    const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds)
+Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                                              const std::shared_ptr<GetRequest> &request,
+                                                              std::vector<RpcMessage> &payloads,
+                                                              std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                              std::unordered_set<std::string> &failedIds,
+                                                              std::set<ReadKey> &needRetryIds)
 {
     Status lastRc;
     std::vector<std::string> successIds;
@@ -1643,43 +1579,38 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(
         const auto &queryMeta = *queryIt;
         const auto &meta = queryMeta.meta();
         const auto dataFormat = static_cast<DataFormat>(queryMeta.meta().config().data_format());
+        const auto &objectKey = meta.object_key();
         if (dataFormat != DataFormat::BINARY && dataFormat != DataFormat::HETERO) {
             lastRc = Status(K_INVALID, "object data format not match.");
-            failedIds.emplace(meta.object_key());
+            failedIds.emplace(objectKey);
             LOG(ERROR) << lastRc;
             continue;
         }
-        auto iter = lockedEntries.find(meta.object_key());
+        auto iter = lockedEntries.find(ReadKey(objectKey));
         if (iter == lockedEntries.end()) {
             LOG(ERROR) << FormatString("[ObjectKey %s] QueryMeta exist but lock entry absent, should not happen",
-                                       meta.object_key());
+                                       objectKey);
             lastRc = Status(K_UNKNOWN_ERROR, "QueryMeta exist but lock entry absent, should not happen");
             continue;
         }
-        if (readKeys.find(meta.object_key()) == readKeys.end()) {
-            LOG(ERROR) << FormatString("[ObjectKey %s] cant find offset and size to get", meta.object_key());
-            lastRc = Status(K_UNKNOWN_ERROR, "Can not find offset or size to get object");
-            continue;
-        }
-        ReadKey readKey = readKeys.at(meta.object_key());
-        auto status = GetObjectFromAnywhereWithLock(readKey, request, iter->second.first, iter->second.second,
+        const auto &readKey = iter->first;
+        auto status = GetObjectFromAnywhereWithLock(readKey, request, iter->second.safeObj, iter->second.insert,
                                                     queryMeta, payloads);
         if (status.IsOk()) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", meta.object_key());
-            successIds.push_back(meta.object_key());
+            LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", objectKey);
+            successIds.push_back(objectKey);
         } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", meta.object_key());
+            LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
             lastRc = Status::OK();
-            needRetryIds.emplace_back(readKey);
+            (void)needRetryIds.emplace(readKey);
         } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", meta.object_key());
+            LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", objectKey);
             lastRc = status;
             break;
         } else {
-            LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", meta.object_key(),
-                                       status.ToString());
+            LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
             lastRc = status;
-            failedIds.emplace(meta.object_key());
+            failedIds.emplace(objectKey);
         }
     }
 
@@ -1717,14 +1648,14 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
         // we will get a valid object here.
         ReadObjectKV objectKV(readKey, *entry);
         RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
-        RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV));
+        RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
         return Status::OK();
     }
     SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
     ReadObjectKV objectKV(readKey, *entry);
     Status status = queryMeta.payload_indexs_size() == 0
                         ? GetObjectFromRemoteOnLock(meta, request, address, queryMeta.single_copy(), objectKV)
-                        : GetObjectFromQueryMetaResultOnLock(queryMeta, payloads, objectKV);
+                        : GetObjectFromQueryMetaResultOnLock(request, queryMeta, payloads, objectKV);
     if (status.IsError()) {
         HandleGetFailureHelper(objectKey, meta.version(), entry, isInsert);
     }
@@ -1813,7 +1744,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
     LOG(INFO) << FormatString("object(%s) get from remote finish, size:%zu, use %f millisecond.", objKey,
                               entry->GetDataSize(), endToEndTimer.ElapsedMilliSecond());
     point.Record();
-    return UpdateRequestForSuccessNotReturnForClient(objectKV, request);
+    return UpdateRequestForSuccess(objectKV, request);
 }
 
 void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr,
@@ -1904,7 +1835,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromPersistenceAndDump(ObjectKV &objectK
     return GetObjectFromPersistenceAndDumpWithoutCopyMeta(objectKV);
 }
 
-Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const master::QueryMetaInfoPb &queryMeta,
+Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::shared_ptr<GetRequest> &request,
+                                                                  const master::QueryMetaInfoPb &queryMeta,
                                                                   std::vector<RpcMessage> &payloads,
                                                                   ReadObjectKV &objectKV)
 {
@@ -1937,7 +1869,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const master::
         evictionManager_->Add(objectKey);
     }
     point.Record();
-    return UpdateRequestForSuccess(objectKV);
+    return UpdateRequestForSuccess(objectKV, request);
 }
 
 Status WorkerOcServiceGetImpl::CreateCopyMetaToMaster(ObjectKV &objectKV)
@@ -2046,18 +1978,14 @@ bool WorkerOcServiceGetImpl::HaveOtherAZ()
     return !FLAGS_other_cluster_names.empty();
 }
 
-Status WorkerOcServiceGetImpl::BatchLockForGet(
-    const std::vector<ReadKey> &objectKeys,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
-    std::unordered_set<std::string> &failObjects)
+Status WorkerOcServiceGetImpl::BatchLockForGet(const std::set<ReadKey> &readKeys,
+                                               std::map<ReadKey, LockedEntity> &lockedEntries,
+                                               std::unordered_set<std::string> &failObjects)
 {
     Status lastRc;
     lockedEntries.clear();
-    std::set<std::string> toLockIds;
-    for (const auto &readKey : objectKeys) {
-        toLockIds.insert(readKey.objectKey);
-    }
-    for (const auto &objectKey : toLockIds) {
+    for (const auto &readKey : readKeys) {
+        const auto &objectKey = readKey.objectKey;
         std::shared_ptr<SafeObjType> entry;
         bool isInsert;
         Status rc = objectTable_->ReserveGetAndLock(objectKey, entry, isInsert);
@@ -2065,7 +1993,7 @@ Status WorkerOcServiceGetImpl::BatchLockForGet(
             if (isInsert) {
                 SetEmptyObjectEntry(objectKey, *entry);
             }
-            (void)lockedEntries.emplace(objectKey, std::make_pair(std::move(entry), isInsert));
+            (void)lockedEntries.emplace(readKey, LockedEntity{ .safeObj = std::move(entry), .insert = isInsert });
         } else {
             LOG(ERROR) << FormatString("[ObjectKey %s] GetObjectFromRemote failed: %s.", objectKey, rc.ToString());
             failObjects.emplace(objectKey);
@@ -2075,38 +2003,39 @@ Status WorkerOcServiceGetImpl::BatchLockForGet(
     return lastRc;
 }
 
-void WorkerOcServiceGetImpl::BatchUnlockForGet(
-    const std::unordered_set<std::string> &failedObjectKeys,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries)
+void WorkerOcServiceGetImpl::BatchUnlockForGet(const std::unordered_set<std::string> &failedObjectKeys,
+                                               std::map<ReadKey, LockedEntity> &lockedEntries)
 {
     for (auto &entry : lockedEntries) {
-        if (!entry.second.first->IsWLockedByCurrentThread()) {
+        const auto &objectKey = entry.first.objectKey;
+        auto &safeObj = entry.second.safeObj;
+        if (!safeObj->IsWLockedByCurrentThread()) {
             continue;
         }
-        if (failedObjectKeys.find(entry.first) != failedObjectKeys.end() && entry.second.second) {
-            (void)objectTable_->Erase(entry.first);
+        if (failedObjectKeys.find(objectKey) != failedObjectKeys.end() && entry.second.insert) {
+            (void)objectTable_->Erase(objectKey);
         }
-        entry.second.first->WUnlock();
+        safeObj->WUnlock();
     }
 }
 
-void WorkerOcServiceGetImpl::BatchUnlockForGet(
-    const std::map<std::string, uint64_t> &failedObjectKeys,
-    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries)
+void WorkerOcServiceGetImpl::BatchUnlockForGet(const std::map<std::string, uint64_t> &objectKeys,
+                                               std::map<ReadKey, LockedEntity> &lockedEntries)
 {
-    for (const auto &kv : failedObjectKeys) {
-        auto iter = lockedEntries.find(kv.first);
+    for (const auto &kv : objectKeys) {
+        auto iter = lockedEntries.find(ReadKey(kv.first));
         if (iter == lockedEntries.end()) {
             continue;
         }
+        auto &safeObj = iter->second.safeObj;
         // Not held by the current thread means that the previous process has been cleaned up.
-        if (!iter->second.first->IsWLockedByCurrentThread()) {
+        if (!safeObj->IsWLockedByCurrentThread()) {
             continue;
         }
-        if (iter->second.second) {
-            (void)objectTable_->Erase(iter->first);
+        if (iter->second.insert) {
+            (void)objectTable_->Erase(kv.first);
         }
-        iter->second.first->WUnlock();
+        safeObj->WUnlock();
         (void)lockedEntries.erase(iter);
     }
 }
@@ -2117,7 +2046,7 @@ bool WorkerOcServiceGetImpl::IsInRemoteGetObject(const std::string &objectKey)
     return inRemoteGetIds_.find(objectKey) != inRemoteGetIds_.end();
 }
 
-void WorkerOcServiceGetImpl::AddInRemoteGetObjects(const std::vector<ReadKey> &objectsNeedGetRemote)
+void WorkerOcServiceGetImpl::AddInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote)
 {
     std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
     for (const auto &id : objectsNeedGetRemote) {
@@ -2125,7 +2054,7 @@ void WorkerOcServiceGetImpl::AddInRemoteGetObjects(const std::vector<ReadKey> &o
     }
 }
 
-void WorkerOcServiceGetImpl::RemoveInRemoteGetObjects(const std::vector<ReadKey> &objectsNeedGetRemote)
+void WorkerOcServiceGetImpl::RemoveInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote)
 {
     std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
     for (const auto &id : objectsNeedGetRemote) {
@@ -2302,7 +2231,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     }
 
     RequestParam reqParam;
-    reqParam.objectKey = objectKeysToAbbrStr(req.object_keys());
+    reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
     posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
     workerOperationTimeCost.Append("Total Exist", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of Exist %s", workerOperationTimeCost.GetInfo());

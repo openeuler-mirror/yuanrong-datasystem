@@ -939,14 +939,12 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(std::vector<
         }
         objectKeysSucc.emplace_back(objectKeys[i]);
     }
-    threadPool_->Execute([this, objectKeys = std::move(objectKeysSucc)] () {
+    threadPool_->Execute([this, objectKeys = std::move(objectKeysSucc)]() {
         Status rc;
         for (const auto &key : objectKeys) {
             evictionManager_->Add(key);
             std::shared_ptr<SafeObjType> entry;
-            Raii raii([key, &rc]() {
-                LOG_IF_ERROR(rc, FormatString("Fails to update object %s get request.", key));
-            });
+            Raii raii([key, &rc]() { LOG_IF_ERROR(rc, FormatString("Fails to update object %s get request.", key)); });
             rc = objectTable_->Get(key, entry);
             if (rc.IsError()) {
                 continue;
@@ -956,7 +954,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(std::vector<
                 continue;
             }
             ObjectKV objectKV(key, *entry);
-            rc = workerRequestManager_.UpdateRequestForPublish(objectKV, memoryRefTable_);
+            rc = workerRequestManager_.NotifyPendingGetRequest(objectKV);
             entry->RUnlock();
         }
     });

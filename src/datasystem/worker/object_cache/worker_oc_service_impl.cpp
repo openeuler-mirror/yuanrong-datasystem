@@ -196,18 +196,19 @@ Status WorkerOCServiceImpl::InitL2Cache()
 
 void WorkerOCServiceImpl::InitServiceImpl()
 {
-    WorkerOcServiceCrudParam param{ .workerMasterApiManager = workerMasterApiManager_,
-                                    .workerRequestManager = workerRequestManager_,
-                                    .memoryRefTable = memoryRefTable_,
-                                    .objectTable = objectTable_,
-                                    .evictionManager = evictionManager_,
-                                    .workerDevOcManager = workerDevOcManager_,
-                                    .asyncPersistenceDelManager = asyncPersistenceDelManager_,
-                                    .asyncSendManager = asyncSendManager_,
-                                    .asyncRollbackManager = asyncRollbackManager_,
-                                    .metadataSize = metadataSize_,
-                                    .persistenceApi = persistenceApi_,
-                                    .etcdCM = etcdCM_,
+    WorkerOcServiceCrudParam param{
+        .workerMasterApiManager = workerMasterApiManager_,
+        .workerRequestManager = workerRequestManager_,
+        .memoryRefTable = memoryRefTable_,
+        .objectTable = objectTable_,
+        .evictionManager = evictionManager_,
+        .workerDevOcManager = workerDevOcManager_,
+        .asyncPersistenceDelManager = asyncPersistenceDelManager_,
+        .asyncSendManager = asyncSendManager_,
+        .asyncRollbackManager = asyncRollbackManager_,
+        .metadataSize = metadataSize_,
+        .persistenceApi = persistenceApi_,
+        .etcdCM = etcdCM_,
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, etcdCM_, akSkManager_);
 
@@ -1149,7 +1150,7 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     Raii raii([&returnStatus, &accessPoint, &req]() {
         auto &key = req.object_key().empty() ? "" : req.object_key(0);
         accessPoint.Record(returnStatus.GetCode(), std::to_string(key.size()),
-                           RequestParam{ .objectKey = objectKeysToAbbrStr(req.object_key()) }, returnStatus.GetMsg());
+                           RequestParam{ .objectKey = ObjectKeysToAbbrStr(req.object_key()) }, returnStatus.GetMsg());
     });
     ReadLock noRecon;
     returnStatus = ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime());
@@ -2158,9 +2159,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
             first = false;
         }
         LOG(INFO) << FormatString("Worker processes GetP2PMeta from client: %s, allKeys: [%s], threads Statistics: %s",
-            clientId,
-            allKeys.str(),
-            devThreadPool_->GetStatistics());
+                                  clientId, allKeys.str(), devThreadPool_->GetStatistics());
         int64_t elapsed = timer.ElapsedMilliSecond();
         if (elapsed >= timeout) {
             LOG(ERROR) << "GetP2PMeta RPC timeout. time elapsed " << elapsed << ", subTimeout:" << timeout

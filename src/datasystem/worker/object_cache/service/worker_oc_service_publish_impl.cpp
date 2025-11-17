@@ -265,7 +265,7 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
 
     // Step 3: Notify GetRequest for subscription purpose.
     safeObj->stateInfo.SetNeedToDelete(false);
-    RETURN_IF_NOT_OK(workerRequestManager_.UpdateRequestForPublish(objectKV, memoryRefTable_));
+    RETURN_IF_NOT_OK(workerRequestManager_.NotifyPendingGetRequest(objectKV));
     safeObj->SetLifeState(params.lifeState);
     safeObj->stateInfo.SetPrimaryCopy(true);
     safeObj->stateInfo.SetCacheInvalid(false);

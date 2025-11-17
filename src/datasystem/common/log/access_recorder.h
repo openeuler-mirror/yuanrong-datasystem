@@ -133,7 +133,6 @@ public:
     void Record(StatusCode code, const StreamRequestParam &reqParam, const StreamResponseParam &respParam);
 
 private:
-
     using clock = std::chrono::steady_clock;
     std::chrono::time_point<clock> beg_;
     std::string handleName_;
@@ -229,7 +228,7 @@ std::string objectKeysToString(const std::vector<std::string> &keys);
 std::string objectKeysToString(const char **cKey, size_t keyLen);
 
 template <typename T>
-std::string objectKeysToAbbrStr(T &&keys)
+std::string ObjectKeysToAbbrStr(T &&keys)
 {
     if (keys.empty()) {
         return "+count:0";

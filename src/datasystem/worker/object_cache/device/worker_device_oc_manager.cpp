@@ -220,14 +220,14 @@ Status WorkerDeviceOcManager::TryGetDeviceObjectFromRemote(const int64_t subTime
                                                            std::shared_ptr<GetDeviceObjectRequest> &request,
                                                            std::vector<std::string> &objectsNeedGetRemote)
 {
-    std::vector<ReadKey> needGetIds;
+    std::set<ReadKey> needGetIds;
     for (const auto &id : objectsNeedGetRemote) {
-        needGetIds.emplace_back(ReadKey(id));
+        (void)needGetIds.emplace(ReadKey(id));
     }
     if (!objectsNeedGetRemote.empty()) {
         PerfPoint pointRemote(PerfKey::WORKER_PROCESS_GET_OBJECT_REMOTE);
         std::unordered_set<std::string> failedIds;
-        std::vector<ReadKey> needRetryIds;
+        std::set<ReadKey> needRetryIds;
         Status status;
         do {
             needRetryIds.clear();
@@ -235,18 +235,19 @@ Status WorkerDeviceOcManager::TryGetDeviceObjectFromRemote(const int64_t subTime
                 workerOcImpl_->getProc_->ProcessObjectsNotExistInLocal(needGetIds, subTimeout, failedIds, needRetryIds);
             if (status.IsOk()) {
                 break;
-            } else if (status.GetCode() == K_OUT_OF_MEMORY || reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
-                std::for_each(needRetryIds.begin(), needRetryIds.end(),
-                              [&](ReadKey &key) { failedIds.emplace(key.objectKey); });
-                break;
-            } else {
-                needGetIds.swap(needRetryIds);
             }
+            if (status.GetCode() == K_OUT_OF_MEMORY || reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+                std::for_each(needRetryIds.begin(), needRetryIds.end(),
+                              [&failedIds](const ReadKey &key) { failedIds.emplace(key.objectKey); });
+                break;
+            }
+            needGetIds.swap(needRetryIds);
         } while (!needGetIds.empty());
         pointRemote.Record();
         if (status.GetCode() == K_OUT_OF_MEMORY) {
             return deviceReqManager_.ReturnFromGetDeviceObjectRequest(request, status);
-        } else if (status.IsError()) {
+        }
+        if (status.IsError()) {
             // If the error is RPC error, return them directly, other error would be covered up as RUNTIME_ERROR.
             Status lastRc = IsRpcTimeoutOrTryAgain(status) ? status : Status(K_RUNTIME_ERROR, status.GetMsg());
             for (const auto &id : failedIds) {
