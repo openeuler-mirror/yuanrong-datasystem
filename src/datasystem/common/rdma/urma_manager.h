@@ -24,6 +24,7 @@
 #include <memory>
 #include <thread>
 #include <unordered_map>
+#include <tbb/concurrent_hash_map.h>
 
 #include <urma_api.h>
 #ifdef URMA_OVER_UB
@@ -198,6 +199,7 @@ private:
 };
 
 using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
+using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<Event>>;
 
 class UrmaManager {
 public:
@@ -581,8 +583,7 @@ private:
     std::unique_ptr<SegmentMap> localSegmentMap_;
     // Eid to segment maps mapping for remote jfr and segment.
     std::unique_ptr<RemoteDeviceMap> remoteDeviceMap_;
-    mutable std::shared_timed_mutex eventMapMutex_;
-    std::unique_ptr<EventMap> eventMap_;
+    TbbEventMap tbbEventMap_;
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };

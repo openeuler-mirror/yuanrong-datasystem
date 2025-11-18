@@ -11,12 +11,14 @@ set(URMA_DEPEND_LIBS
 if (BUILD_WITH_URMA)
     list(APPEND URMA_SRCS urma_manager.cpp urma_info.cpp)
     list(APPEND URMA_DEPEND_LIBS ${URMA_LIBRARY})
+    list(APPEND URMA_DEPEND_LIBS ${TBB_LIBRARY})
 
     set(URMA_STUB_SRCS
         urma_stub.cpp
         urma_info.cpp)
 
     add_library(common_stub_rdma STATIC ${URMA_STUB_SRCS})
+    target_link_libraries(common_stub_rdma PRIVATE ${TBB_LIBRARY})
 endif()
 
 if (BUILD_WITH_RDMA)

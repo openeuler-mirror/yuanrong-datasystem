@@ -101,6 +101,24 @@ public:
             serverApi) override;
 
 private:
+    struct AggregateInfo {
+        bool canBatchHandler = false;
+        std::vector<int64_t> batchReqSize;
+        std::vector<int64_t> batchSizes;
+        std::vector<int64_t> batchStartIndex;
+    };
+
+    struct AggregateMemory {
+        std::shared_ptr<ShmUnit> batchShmUnit = nullptr;
+        int64_t batchCursor = 0;
+    };
+
+    struct ParallelRes {
+        std::vector<GetObjectRemoteRspPb> respPbs;
+        std::vector<RpcMessage> pays;
+        std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> kps;
+    };
+
     /**
      * @brief Load object data in remote get provider mode.
      * @param[in] req Pb Request for RemoteGet rpc.
@@ -108,20 +126,59 @@ private:
      * @param[out] outPayload Payload buffers.
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The new request id to wait for if not blocking.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @return Status of the call.
      */
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                               std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &keys);
+                               std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &keys,
+                               std::shared_ptr<AggregateMemory> batchPtr = nullptr);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.
-     * @param[in] req Remote get request.
+     * @param[in] subIndex Sub slot index of the parallel list.
+     * @param[in] req Remote get sub request.
      * @param[out] rsp Remote get response.
      * @param[out] payload Out payloads.
      * @param[out] keys The request id to wait for if not blocking.
+     * @param[out] parallelRes Parallel result.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
      * @return Status of the call.
      */
-    Status GetObjectRemoteBatchWrite(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                     std::vector<RpcMessage> &payload, std::vector<uint64_t> &keys);
+    void GetObjectRemoteBatchWrite(uint32_t subIndex, const GetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
+                                   std::vector<RpcMessage> &payload,
+                                   std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys,
+                                   std::vector<ParallelRes> &parallelRes,
+                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr);
+
+    /**
+     * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.
+     * @param[in] req Remote get request.
+     * @param[out] info Aggregated info.
+     * @return Status of the call.
+     */
+    Status PrepareAggreagteMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info);
+
+    /**
+     * @brief Helper function to BatchGetObjectRemote to allocate the aggregate memory.
+     * @param[in] parallelIndex Parallel index of the parallel list.
+     * @param[in] info Aggregated info.
+     * @param[out] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @return Status of the call.
+     */
+    Status AllocateAggreagteMemory(uint64_t parallelIndex, AggregateInfo &info,
+                                   std::shared_ptr<AggregateMemory> &batchPtr);
+
+    /**
+     * @brief Helper function to BatchGetObjectRemote to send the aggregate memory.
+     * @param[in] subIndex Sub slot index of the parallel list.
+     * @param[in] info Aggregated info.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @param[out] parallelRes Parallel result.
+     * @param[in] req Remote get request.
+     * @return Status of the call.
+     */
+    Status AggreaedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
+                              std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
 
     /**
      * @brief Helper function pre-process and then trigger GetObjectRemoteImpl.
@@ -130,10 +187,12 @@ private:
      * @param[out] payload Out payloads.
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The request id to wait for if not blocking.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
      * @return Status of the call.
      */
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                  std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &keys);
+                                  std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &keys,
+                                  std::shared_ptr<AggregateMemory> batchPtr = nullptr);
 
     /**
      * @brief Get the safe object entry.

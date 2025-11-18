@@ -159,6 +159,15 @@ DS_DEFINE_bool(shared_memory_populate, false,
                "startup times (depending on shared_memory_size_mb).");
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_bool(enable_fallocate);
+
+DS_DEFINE_int32(oc_worker_worker_parallel_nums, 0, "worker worker batch rsp control nums, default 0 means unlimited");
+DS_DEFINE_int32(oc_worker_worker_parallel_min, 100,
+                "Min data count for parallel worker worker batch rsp, default is 100");
+DS_DEFINE_uint64(oc_worker_aggregate_single_max, 65536,
+                 "Max single item size for batching worker worker batch rsp, default is 64KB");
+DS_DEFINE_uint64(oc_worker_aggregate_merge_size, 2097152,
+                 " Target batch size for worker worker responses, default is 2MB");
+
 static bool ValidatePopulate(const char *flagName, bool value)
 {
     if (!value) {

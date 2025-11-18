@@ -39,6 +39,8 @@
         LOG(INFO) << "try get shm for payload " << currCnt_ << " times";        \
     } while (0)
 
+DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
+
 namespace datasystem {
 namespace object_cache {
 
@@ -238,7 +240,7 @@ Status AggregateAllocate(
     // Aggregate only for small objects (< 1MB size), and batch up to 1024 keys and 2MB size.
     const uint64_t batchLimitKeys = 1024;
     const uint64_t batchLimitSingleSize = 1024 * 1024;
-    const uint64_t batchLimitTotalSize = 2 * 1024 * 1024;
+    const uint64_t batchLimitTotalSize = FLAGS_oc_worker_aggregate_merge_size;
 
     bool needAggregate = false;
     std::vector<uint64_t> aggreatedSizes;

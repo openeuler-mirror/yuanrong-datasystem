@@ -70,7 +70,6 @@ UrmaManager::UrmaManager()
 #endif
     localSegmentMap_ = std::make_unique<SegmentMap>();
     remoteDeviceMap_ = std::make_unique<RemoteDeviceMap>();
-    eventMap_ = std::make_unique<EventMap>();
 }
 
 UrmaManager::~UrmaManager()
@@ -79,7 +78,7 @@ UrmaManager::~UrmaManager()
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager()";
     remoteDeviceMap_.reset();
     localSegmentMap_.reset();
-    eventMap_.reset();
+    tbbEventMap_.clear();
     urmaJfrVec_.clear();
     urmaJfsVec_.clear();
     urmaJfc_.reset();
@@ -587,19 +586,14 @@ Status UrmaManager::CheckAndNotify()
 
 void UrmaManager::DeleteEvent(uint64_t requestId)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    EventMap::Accessor accessor;
-    if (eventMap_->Find(accessor, requestId)) {
-        eventMap_->BlockingErase(accessor);
-    }
+    tbbEventMap_.erase(requestId);
 }
 
 Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    EventMap::Accessor accessor;
-    if (eventMap_->Find(accessor, requestId)) {
-        event = accessor.entry->data;
+    TbbEventMap::accessor mapAccessor;
+    if (tbbEventMap_.find(mapAccessor, requestId)) {
+        event = mapAccessor->second;
         return Status::OK();
     }
     // Can happen if event is not yet inserted by sender thread.
@@ -608,15 +602,13 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 
 Status UrmaManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    EventMap::Accessor accessor;
-    auto res = eventMap_->Insert(accessor, requestId);
+    TbbEventMap::accessor mapAccessor;
+    auto res = tbbEventMap_.insert(mapAccessor, requestId);
     if (!res) {
         // If this happens that means requestId is duplicated.
         RETURN_STATUS_LOG_ERROR(K_DUPLICATED, FormatString("Request id %d already exists in event map", requestId));
     } else {
-        event = std::make_shared<Event>(requestId);
-        accessor.entry->data = event;
+        mapAccessor->second = std::make_shared<Event>(requestId);
     }
     return Status::OK();
 }
@@ -824,8 +816,8 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
 
 Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                     const uint64_t &readOffset, const uint64_t &readSize,
-                                     const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys)
+                                     const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                                     bool blocking, std::vector<uint64_t> &keys)
 {
     // Note that the returned keys only contain the new key(s).
     keys.clear();

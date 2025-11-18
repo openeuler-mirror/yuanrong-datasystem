@@ -780,7 +780,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_WriteBackDelayTest)
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
     DS_EXPECT_OK(evictionManager->Init(globalRefTable, akSkManager_));
 
-    std::shared_ptr<PersistenceApi> api;
+    std::shared_ptr<PersistenceApi> api = std::make_shared<PersistenceApi>();
     DS_ASSERT_OK(api->Init());
     AsyncSendManager asyncMgr(api, evictionManager);
     // Stop async send thread.

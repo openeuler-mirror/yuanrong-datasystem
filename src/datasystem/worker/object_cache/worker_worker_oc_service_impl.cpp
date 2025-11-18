@@ -21,6 +21,10 @@
 
 #include <thread>
 
+#include "datasystem/utils/status.h"
+#include "tbb/blocked_range.h"
+#include "tbb/parallel_for.h"
+
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/shm_guard.h"
@@ -33,6 +37,10 @@
 #include "datasystem/common/perf/perf_manager.h"
 
 DS_DECLARE_int32(oc_worker_worker_direct_port);
+DS_DECLARE_int32(oc_worker_worker_parallel_nums);
+DS_DECLARE_int32(oc_worker_worker_parallel_min);
+DS_DECLARE_uint64(oc_worker_aggregate_single_max);
+DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace object_cache {
@@ -102,17 +110,144 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                                            std::vector<RpcMessage> &payload,
-                                                            std::vector<uint64_t> &keys)
+void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
+    uint32_t paraIndex, const GetObjectRemoteReqPb &subReq, BatchGetObjectRemoteRspPb &rsp,
+    std::vector<RpcMessage> &payload,
+    std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys,
+    std::vector<ParallelRes> &parallelRes, std::shared_ptr<AggregateMemory> batchPtr)
 {
-    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, false, keys));
+    bool disabledParrallel = parallelRes.empty();
+
+    GetObjectRemoteRspPb &subRsp =
+        disabledParrallel ? *(rsp.add_responses()) : parallelRes[paraIndex].respPbs.emplace_back();
+
+    std::vector<RpcMessage> subPayload;
+    std::vector<uint64_t> subKeys;
+
+    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, subKeys, batchPtr);
+    if (status.IsError()) {
+        subRsp.mutable_error()->set_error_code(status.GetCode());
+        subRsp.mutable_error()->set_error_msg(status.GetMsg());
+        return;
+    }
+
+    // If keys are empty, we 1) get payload from spill or 2) urma is not enabled.
+    // In both cases we send payload as part of the response.
+    // Otherwise we extend the lifecycle of payload only until urma_write is done.
+    if (subKeys.empty()) {
+        auto &localPayload = disabledParrallel ? payload : parallelRes[paraIndex].pays;
+        localPayload.insert(localPayload.end(), std::make_move_iterator(subPayload.begin()),
+                            std::make_move_iterator(subPayload.end()));
+    } else {
+        auto &localKps = disabledParrallel ? keys : parallelRes[paraIndex].kps;
+        localKps.emplace(paraIndex, std::make_pair(std::move(subKeys), std::move(subPayload)));
+    }
+}
+
+Status WorkerWorkerOCServiceImpl::AllocateAggreagteMemory(uint64_t parallelIndex, AggregateInfo &info,
+                                                          std::shared_ptr<AggregateMemory> &batchPtr)
+{
+    if (!info.canBatchHandler) {
+        return Status::OK();
+    }
+    batchPtr = std::make_shared<AggregateMemory>();
+    batchPtr->batchShmUnit = std::make_shared<ShmUnit>();
+    Status rc = batchPtr->batchShmUnit->AllocateMemory("", info.batchSizes[parallelIndex], false, ServiceType::OBJECT,
+                                                       static_cast<memory::CacheType>(0));
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("Failed to allocate memory for batch get, size: %d", info.batchSizes[parallelIndex]);
+    }
+    auto ret = memset_s(batchPtr->batchShmUnit->GetPointer(), info.batchSizes[parallelIndex], 0,
+                        info.batchSizes[parallelIndex]);
+    if (ret != EOK) {
+        batchPtr->batchShmUnit->SetHardFreeMemory();
+        batchPtr->batchShmUnit->FreeMemory();
+        LOG(ERROR) << FormatString("[Aggregated memory] Memset failed, errno: %d", ret);
+    }
+    return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::PrepareAggreagteMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info)
+{
+    uint64_t reqSize = req.requests_size();
+
+    info.canBatchHandler = true;
+    // ceil data;
+    info.batchReqSize.clear();
+    info.batchStartIndex.clear();
+    info.batchSizes.clear();
+
+    uint64_t batchReqSize = 0;
+    uint64_t batchCap = 0;
+    uint64_t batchStartIndex = 0;
+    const uint64_t batchLimitKeys = 1024;  // must same as obj_cache_shm_unit in req side.
+    uint64_t metadataSize = ocClientWorkerSvc_->GetMetadataSize();
+
+    for (uint64_t i = 0; i < reqSize; i++) {
+        uint64_t dataSize = req.requests(i).data_size();
+        if (dataSize > FLAGS_oc_worker_aggregate_single_max) {
+            info.canBatchHandler = false;
+            return Status::OK();
+        }
+        uint64_t needSize = dataSize + metadataSize;
+        if (batchCap + needSize > FLAGS_oc_worker_aggregate_merge_size || batchReqSize >= batchLimitKeys) {
+            info.batchStartIndex.emplace_back(batchStartIndex);
+            info.batchSizes.emplace_back(batchCap);
+            info.batchReqSize.emplace_back(batchReqSize);
+
+            batchCap = 0;
+            batchReqSize = 0;
+            batchStartIndex = i;
+        }
+
+        batchReqSize++;
+        batchCap += needSize;
+    }
+
+    if (batchReqSize > 0) {
+        info.batchStartIndex.emplace_back(batchStartIndex);
+        info.batchSizes.emplace_back(batchCap);
+        info.batchReqSize.emplace_back(batchReqSize);
+    }
+
+    return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::AggreaedMemorySend(uint64_t subIndex, AggregateInfo &info,
+                                                     std::shared_ptr<AggregateMemory> aggregatedMem,
+                                                     std::vector<ParallelRes> &parallelRes,
+                                                     BatchGetObjectRemoteReqPb &req)
+{
+    if (!info.canBatchHandler) {
+        return Status::OK();
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(aggregatedMem);
+
+    std::vector<uint64_t> subKeys;
+    std::vector<RpcMessage> subPayload;
+    auto startPos = info.batchStartIndex[subIndex];
+    auto *subReq = req.mutable_requests(startPos);
+
+    const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(aggregatedMem->batchShmUnit->GetPointer());
+    uint64_t localSegAddress = 0;
+    uint64_t localSegSize;
+    GetSegmentInfoFromShmUnit(aggregatedMem->batchShmUnit, localObjectAddress, localSegAddress, localSegSize);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        UrmaWritePayload(subReq->urma_info(), localSegAddress, localSegSize, localObjectAddress, 0,
+                         info.batchSizes[subIndex], ocClientWorkerSvc_->GetMetadataSize(), false, subKeys),
+        "Failed in aggreaed memory urma write");
+
+    ShmGuard shmGuard(aggregatedMem->batchShmUnit, info.batchSizes[subIndex], 0);
+    RETURN_IF_NOT_OK(shmGuard.TransferTo(subPayload, 0, info.batchSizes[subIndex]));
+    ParallelRes &loc = parallelRes[subIndex];
+    loc.kps.emplace(startPos, std::make_pair(std::move(subKeys), std::move(subPayload)));
     return Status::OK();
 }
 
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
-                                                         std::vector<uint64_t> &keys)
+                                                         std::vector<uint64_t> &keys,
+                                                         std::shared_ptr<AggregateMemory> batchPtr)
 {
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
@@ -121,7 +256,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, keys);
+    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, keys, batchPtr);
     INJECT_POINT("worker.batch_get_failure_for_keys", [&objectKey]() {
         if (objectKey == "key2") {
             return Status(K_RUNTIME_ERROR, "Injected K_RUNTIME_ERROR");
@@ -179,7 +314,8 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
 
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
-                                                      std::vector<uint64_t> &keys)
+                                                      std::vector<uint64_t> &keys,
+                                                      std::shared_ptr<AggregateMemory> batchPtr)
 {
     (void)keys;
     (void)blocking;
@@ -246,16 +382,30 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         PerfPoint p(PerfKey::WORKER_REMOTE_GET_PAYLOAD);
         // Support send payload exceed 2GB
         if (IsUrmaEnabled() && req.has_urma_info()) {
-            // later add a check on data size and read size.
-            auto shmUnit = entry->GetShmUnit();
-            const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
-            uint64_t localSegAddress;
-            uint64_t localSegSize;
-            GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset, size,
-                                 entry->GetMetadataSize(), blocking, keys),
-                "");
+            if (batchPtr) {
+                batchPtr->batchCursor += entry->GetMetadataSize();
+                CHECK_FAIL_RETURN_STATUS(entry->GetMetadataSize() == ocClientWorkerSvc_->GetMetadataSize(),
+                                         K_RUNTIME_ERROR,
+                                         FormatString("Metadata size mismatch, actual = %zu, expected = %zu",
+                                                      entry->GetMetadataSize(), ocClientWorkerSvc_->GetMetadataSize()));
+                uint8_t *destPtr = static_cast<uint8_t *>(batchPtr->batchShmUnit->GetPointer()) + batchPtr->batchCursor;
+                uint8_t *srcPtr = static_cast<uint8_t *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize();
+                auto ret = memcpy_s(destPtr, entry->GetDataSize(), srcPtr, entry->GetDataSize());
+                CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
+                                         FormatString("Copy root info failed, the memcpy_s return: %d", ret));
+                batchPtr->batchCursor += entry->GetDataSize();
+            } else {
+                // later add a check on data size and read size.
+                auto shmUnit = entry->GetShmUnit();
+                const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+                uint64_t localSegAddress;
+                uint64_t localSegSize;
+                GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                    UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset, size,
+                                     entry->GetMetadataSize(), blocking, keys),
+                    "Failed in sigle data urma write");
+            }
             rsp.set_data_in_payload(true);
         }
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write.
@@ -310,25 +460,56 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
     std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    for (int i = 0; i < req.requests_size(); i++) {
-        const auto &subReq = req.requests(i);
-        auto &subRsp = *(rsp.add_responses());
-        std::vector<RpcMessage> subPayload;
-        std::vector<uint64_t> subKeys;
-        auto status = GetObjectRemoteBatchWrite(subReq, subRsp, subPayload, subKeys);
-        if (status.IsOk()) {
-            // If keys are empty, we 1) get payload from spill or 2) urma is not enabled.
-            // In both cases we send payload as part of the response.
-            // Otherwise we extend the lifecycle of payload only until urma_write is done.
-            if (subKeys.empty()) {
-                payload.insert(payload.end(), std::make_move_iterator(subPayload.begin()),
-                               std::make_move_iterator(subPayload.end()));
-            } else {
-                keys.emplace(i, std::make_pair(std::move(subKeys), std::move(subPayload)));
-            }
-        } else {
-            subRsp.mutable_error()->set_error_code(status.GetCode());
-            subRsp.mutable_error()->set_error_msg(status.GetMsg());
+    if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsUrmaEnabled()) {
+        tbb::task_arena limited;
+        if (FLAGS_oc_worker_worker_parallel_nums > 0) {
+            limited.initialize(FLAGS_oc_worker_worker_parallel_nums);
+        }
+        std::vector<ParallelRes> parallelRes;
+
+        AggregateInfo info;
+        CHECK_FAIL_RETURN_STATUS(PrepareAggreagteMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");
+        uint64_t parallelSize = info.canBatchHandler ? info.batchReqSize.size() : req.requests_size();
+
+        parallelRes.resize(parallelSize);
+        limited.execute([&] {
+            tbb::parallel_for(
+                tbb::blocked_range<uint64_t>(0, parallelSize), [&](const tbb::blocked_range<uint64_t> &r) {
+                    for (uint64_t i = r.begin(); i != r.end(); ++i) {
+                        uint64_t startPos = info.canBatchHandler ? info.batchStartIndex[i] : i;
+                        uint64_t endPos = info.canBatchHandler ? startPos + info.batchReqSize[i] : startPos + 1;
+                        std::shared_ptr<AggregateMemory> batchPtr = nullptr;
+                        auto rc = AllocateAggreagteMemory(i, info, batchPtr);
+                        if (rc.IsError()) {
+                            LOG(ERROR) << FormatString("[parallel %d] Failed to allocate mem size: %d", i,
+                                                       info.batchSizes[i]);
+                            break;
+                        }
+                        for (uint64_t j = startPos; j < endPos; ++j) {
+                            auto *subReq = req.mutable_requests(j);
+                            GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, parallelRes, batchPtr);
+                        }
+                        LOG_IF_ERROR(AggreaedMemorySend(i, info, batchPtr, parallelRes, req),
+                                     "Send aggregated mem failed");
+                    }
+                });
+        });
+
+        for (ParallelRes &loc : parallelRes) {
+            for (auto &resp : loc.respPbs)
+                rsp.add_responses()->Swap(&resp);
+
+            payload.insert(payload.end(), std::make_move_iterator(loc.pays.begin()),
+                           std::make_move_iterator(loc.pays.end()));
+
+            for (auto &[idx, kp] : loc.kps)
+                keys.emplace(idx, std::move(kp));
+        }
+    } else {
+        for (int i = 0; i < req.requests_size(); i++) {
+            std::vector<ParallelRes> emptyRes = {};
+            auto *subReq = req.mutable_requests(i);
+            GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, emptyRes);
         }
     }
     pointImpl.Record();
