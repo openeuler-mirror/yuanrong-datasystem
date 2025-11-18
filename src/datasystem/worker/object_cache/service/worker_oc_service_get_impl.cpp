@@ -1191,7 +1191,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // 1. Get map of objectKeys grouped by master
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
-    RETURN_IF_NOT_OK(etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster));
+    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
     // 2. Send requests for each master
     std::vector<std::future<void>> futures;
     std::string traceID = Trace::Instance().GetTraceID();
@@ -1503,11 +1503,11 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
 
         Timer timer;
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-
+        auto traceId = Trace::Instance().GetTraceID();
         futures.emplace_back(remoteGetThreadPool_->Submit([=, &lockedEntries, &commonMutex, &abortAllTasks, &request,
                                                            &payloads, &lastRc, &successIds, &needRetryIds,
-                                                           &failedIds]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                                                           &failedIds, &traceId]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
             if (abortAllTasks.load()) {
@@ -2104,7 +2104,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
 {
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysNotInHashRing;
-    RETURN_IF_NOT_OK(etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysNotInHashRing));
+    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysNotInHashRing);
     for (auto &[master, objs] : objKeysGrpByMaster) {
         HostPort workerAddr = master.GetAddressAndSaveDbName();
         master::GetObjectLocationsReqPb masterReq;

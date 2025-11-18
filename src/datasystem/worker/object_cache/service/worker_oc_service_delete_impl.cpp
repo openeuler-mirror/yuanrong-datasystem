@@ -280,14 +280,15 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
     Status lastRc;
     // Group ObjectKeys by masterId
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMasterId;
-    std::unordered_map<std::string, Status> errInfos;
+    std::optional<std::unordered_map<std::string, Status>> errInfos;
+    errInfos.emplace();
     etcdCM_->GroupObjKeysByMasterHostPortWithStatus(needDeleteObjectKey, objKeysGrpByMasterId, errInfos);
 
     std::unordered_map<std::string, std::vector<std::string>> crossAzOfflineWorkerIdKeys;  // map<objectKey, azName>
-    ExtractCrossAzOfflineWorkerIdKeyWithEmptyAddress(objKeysGrpByMasterId, errInfos, crossAzOfflineWorkerIdKeys);
+    ExtractCrossAzOfflineWorkerIdKeyWithEmptyAddress(objKeysGrpByMasterId, *errInfos, crossAzOfflineWorkerIdKeys);
     DeleteCrossAzKeyWhenMasterFailed(crossAzOfflineWorkerIdKeys);
 
-    for (const auto &kv : errInfos) {
+    for (const auto &kv : *errInfos) {
         // If objectKey don't belong to any master, just ignore it.
         if (kv.second.GetCode() != K_NOT_FOUND) {
             failedObjectKeys.emplace(kv.first);

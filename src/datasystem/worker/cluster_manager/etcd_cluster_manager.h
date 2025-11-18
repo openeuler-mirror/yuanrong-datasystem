@@ -22,6 +22,7 @@
 #define DATASYSTEM_WORKER_OBJECT_CACHE_CLUSTER_MANGER_H
 
 #include <condition_variable>
+#include <iterator>
 #include <mutex>
 #include <sstream>
 #include <functional>
@@ -289,33 +290,23 @@ public:
      * @param[in] objectKeys Container(Vector or list) of objectkeys
      * @param[out] objKeysGrpByMaster map with master as key and objectkeys belong to the master as value
      * @param[out] objKeysUndecidedMaster IDs without known master in hashring
-     * @return Status
      */
     template <class container>
-    Status GroupObjKeysByMasterHostPort(
+    void GroupObjKeysByMasterHostPort(
         const container &objectKeys, std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
         std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster)
     {
-        MetaAddrInfo emptyInfo;
         objKeysGrpByMaster = GroupObjKeysByMasterHostPort(objectKeys);
-        auto it = objKeysGrpByMaster.find(emptyInfo);
-        if (it != objKeysGrpByMaster.end()) {
-            LOG(INFO) << "Some objectKeys can't find address.";
-            auto objKeys = std::move(it->second);
-            it = objKeysGrpByMaster.erase(it);
-            for (const auto &objKey : objKeys) {
-                std::string workerId;
-                (void)TrySplitWorkerIdFromObjecId(objKey, workerId);
-                auto iter = objKeysUndecidedMaster.find(workerId);
-                if (iter == std::end(objKeysUndecidedMaster)) {
-                    std::unordered_set<std::string> objectKeyList({ objKey });
-                    objKeysUndecidedMaster.insert(std::make_pair(workerId, std::move(objectKeyList)));
-                } else {
-                    iter->second.emplace(objKey);
-                }
-            }
+        auto emptyIt = objKeysGrpByMaster.find(MetaAddrInfo());
+        if (emptyIt == objKeysGrpByMaster.end()) {
+            return;
         }
-        return Status::OK();
+        for (auto &objKey : emptyIt->second) {
+            auto workerId = SplitWorkerIdFromObjecId(objKey);
+            auto &con = objKeysUndecidedMaster.try_emplace(std::move(workerId)).first->second;
+            (void)con.emplace(std::move(objKey));
+        }
+        (void)objKeysGrpByMaster.erase(emptyIt);
     }
 
     /**
@@ -328,9 +319,9 @@ public:
     {
         // go through objectKeys and group them by master and db name.
         std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
-        std::unordered_map<std::string, Status> errInfos;
         Timer timer;
-        GroupObjKeysByMasterHostPortWithStatus(objectKeys, objKeysGrpByMaster, errInfos);
+        std::optional<std::unordered_map<std::string, Status>> emptyOption;
+        GroupObjKeysByMasterHostPortWithStatus(objectKeys, objKeysGrpByMaster, emptyOption);
         auto elapsedMs = static_cast<uint64_t>(std::round(timer.ElapsedMilliSecond()));
         workerOperationTimeCost.Append("GroupObjKeys", elapsedMs);
         return objKeysGrpByMaster;
@@ -345,23 +336,59 @@ public:
     template <class container>
     void GroupObjKeysByMasterHostPortWithStatus(
         const container &objectKeys, std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
-        std::unordered_map<std::string, Status> &errInfos)
+        std::optional<std::unordered_map<std::string, Status>> &errInfos)
     {
         // go through objectKeys and group them by master and db name.
-        for (const std::string &objectKey : objectKeys) {
+        for (auto &objectKey : objectKeys) {
             MetaAddrInfo metaAddrInfo;
-            auto rc = GetMetaAddress(objectKey, metaAddrInfo);
-            if (rc.IsError()) {
-                (void)errInfos.emplace(objectKey, rc);
-                VLOG(1) << FormatString("objKey[%s] can not find master, status: %s", objectKey, rc.ToString());
+            auto rc = GetMetaAddressNotCheckConnection(objectKey, metaAddrInfo);
+            auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
+            con.emplace_back(std::move(objectKey));
+            if (rc.IsOk()) {
+                continue;
             }
-            auto iter = objKeysGrpByMaster.find(metaAddrInfo);
-            if (iter == std::end(objKeysGrpByMaster)) {
-                std::vector<std::string> objectKeyList({ objectKey });
-                objKeysGrpByMaster.insert(std::make_pair(metaAddrInfo, std::move(objectKeyList)));
+            if (errInfos) {
+                (void)errInfos->emplace(objectKey, rc);
+            }
+            VLOG(1) << FormatString("objKey[%s] can not find master, status: %s", objectKey, rc.ToString());
+        }
+        static const auto checkConnectionFunc = [](EtcdClusterManager *ptr,
+                                                   const MetaAddrInfo &metaAddrInfo) -> Status {
+            const auto &masterAddr = metaAddrInfo.GetAddress();
+            if (metaAddrInfo.IsFromOtherAz()) {
+                CHECK_FAIL_RETURN_STATUS(ptr->CheckIfOtherAzNodeConnected(masterAddr), K_RPC_UNAVAILABLE,
+                                         FormatString("The other az node %s disconnected.", masterAddr.ToString()));
             } else {
-                iter->second.push_back(objectKey);
+                return ptr->CheckConnection(masterAddr);
             }
+            return Status::OK();
+        };
+        auto emptyIt = objKeysGrpByMaster.end();  // Iterator for the key of the target node not found.
+        for (auto it = objKeysGrpByMaster.begin(); it != objKeysGrpByMaster.end();) {
+            const auto &metaAddrInfo = it->first;
+            const auto &objectKeys = it->second;
+            if (metaAddrInfo.Empty()) {
+                emptyIt = it;
+                ++it;
+                continue;
+            }
+            Status rc = checkConnectionFunc(this, metaAddrInfo);
+            if (rc.IsOk()) {
+                ++it;
+                continue;
+            }
+            if (errInfos) {
+                for (const auto &objectKey : objectKeys) {
+                    (void)errInfos->emplace(objectKey, rc);
+                }
+            }
+            if (emptyIt == objKeysGrpByMaster.end()) {
+                emptyIt = objKeysGrpByMaster.try_emplace(MetaAddrInfo()).first;
+            }
+            auto &con = emptyIt->second;
+            con.insert(con.end(), std::make_move_iterator(it->second.begin()),
+                       std::make_move_iterator(it->second.end()));
+            it = objKeysGrpByMaster.erase(it);
         }
     }
 

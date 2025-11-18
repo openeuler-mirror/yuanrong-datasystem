@@ -100,6 +100,11 @@ public:
         isFromOtherAz_ = false;
     }
 
+    bool Empty() const
+    {
+        return addr_.Empty();
+    }
+
 private:
     HostPort addr_;
     std::string dbName_;

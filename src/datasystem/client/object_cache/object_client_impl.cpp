@@ -910,6 +910,8 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     if (dataSizeSum >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
         RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
                                                                exists, useShmTransfer));
+    } else {
+        exists.resize(objectKeyList.size(), false);
     }
 
     if (!useShmTransfer) {
