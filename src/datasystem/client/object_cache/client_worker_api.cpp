@@ -160,6 +160,9 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
     MultiCreateReqPb req;
     req.set_skip_check_existence(skipCheckExistence);
     req.set_client_id(GetClientId());
+    int sz = static_cast<int>(createParams.size());
+    req.mutable_object_key()->Reserve(sz);
+    req.mutable_data_size()->Reserve(sz);
     for (auto &param : createParams) {
         req.add_object_key(param.objectKey);
         req.add_data_size(param.dataSize);
@@ -406,6 +409,7 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.empty());
     std::vector<MemView> payloads;
+    req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
         if (bufferInfo[i]->shmId.empty()) {
             payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);

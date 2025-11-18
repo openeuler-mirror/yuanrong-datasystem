@@ -75,6 +75,7 @@ static constexpr size_t QUERY_SIZE_OBJECT_LIMIT = 10000;
 const std::string K_SEPARATOR = "$";
 const std::string CLIENT_PARALLEL_THREAD_MIN_NUM_ENV = "CLIENT_PARALLEL_THREAD_MIN_NUM";
 const std::string CLIENT_PARALLEL_THREAD_MAX_NUM_ENV = "CLIENT_PARALLEL_THREAD_MAX_NUM";
+const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM";
 
 namespace datasystem {
 inline void ReadFromEnv(std::string &param, std::string env)
@@ -187,6 +188,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
                 }
             }
         }
+        asyncReleasePool_.reset();
     }
 
     // The destructor of devOcImpl_ should occur after the client disconnect request so that the device asynchronous
@@ -225,6 +227,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
+    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
     std::shared_ptr<ShmUnitInfo> decShmUnit;
     if (workerApi_[LOCAL_WORKER]->GetShmQueueUnit(decShmUnit)) {
         RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", decShmUnit));
@@ -256,7 +259,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
 void ObjectClientImpl::InitParallelFor()
 {
     static const int defaultThreadNum = 4;
-    auto getEnvInt = [](const std::string& envName, int defaultValue) -> int {
+    auto getEnvInt = [](const std::string &envName, int defaultValue) -> int {
         const char* val = std::getenv(envName.c_str());
         int result = defaultValue;
         if (val && !Uri::StrToInt(val, result)) {
@@ -264,14 +267,16 @@ void ObjectClientImpl::InitParallelFor()
         }
         return result;
     };
-    parallismNum_ = getEnvInt(CLIENT_PARALLEL_THREAD_MIN_NUM_ENV, defaultThreadNum);
-    int maxThreadNum = getEnvInt(CLIENT_PARALLEL_THREAD_MAX_NUM_ENV, 0);
-    LOG(INFO) << "Init parallel for with parallismNum: " << parallismNum_
-              << ", maxThreadNum: " << std::max(maxThreadNum, parallismNum_);
-    if (parallismNum_ == 0) {
+    parallismNum_ = getEnvInt(CLIENT_MEMORY_COPY_THREAD_NUM_ENV, defaultThreadNum);
+    int minThreadNum = getEnvInt(CLIENT_PARALLEL_THREAD_MIN_NUM_ENV, defaultThreadNum);
+    minThreadNum = minThreadNum < parallismNum_ ? parallismNum_ : minThreadNum;
+    int maxThreadNum = getEnvInt(CLIENT_PARALLEL_THREAD_MAX_NUM_ENV, minThreadNum);
+    LOG(INFO) << FormatString("Init parallel for with parallismNum: %d, minThreadNum: %d, maxThreadNum: %d",
+                              parallismNum_, minThreadNum, maxThreadNum);
+    if (minThreadNum == 0) {
         return;
     }
-    datasystem::Parallel::InitParallelThreadPool(parallismNum_, maxThreadNum);
+    datasystem::Parallel::InitParallelThreadPool(minThreadNum, maxThreadNum);
 }
 
 void ObjectClientImpl::MGetAsyncRpcThread(const std::shared_ptr<MGetAsyncRPCSource> &resourcePtr)
@@ -869,24 +874,18 @@ Status ObjectClientImpl::ConstructMultiCreateParam(const std::vector<std::string
                                                    std::vector<MultiCreateParam> &multiCreateParamList,
                                                    uint64_t &dataSizeSum)
 {
-    CHECK_FAIL_RETURN_STATUS(objectKeyList.size() == dataSizeList.size(), K_INVALID,
+    auto sz = objectKeyList.size();
+    CHECK_FAIL_RETURN_STATUS(sz == dataSizeList.size(), K_INVALID,
                              "The length of objectKeyList and dataSizeList should be the same.");
-    for (size_t i = 0; i < objectKeyList.size(); i++) {
+    multiCreateParamList.reserve(sz);
+    for (size_t i = 0; i < sz; i++) {
         auto &objectKey = objectKeyList[i];
         auto dataSize = dataSizeList[i];
-        CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
-        RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
         CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
         dataSizeSum += dataSize;
+        multiCreateParamList.emplace_back(i, objectKey, dataSize);
     }
-    bufferList.resize(objectKeyList.size());
-    // if total size >=500k , transfer by shm
-    size_t index = 0;
-    std::for_each(objectKeyList.begin(), objectKeyList.end(),
-                  [&index, &multiCreateParamList, &dataSizeList](const std::string &objectKey) {
-                      multiCreateParamList.emplace_back(index, objectKey, dataSizeList[index]);
-                      index++;
-                  });
+    bufferList.resize(sz);
     return Status::OK();
 }
 
@@ -2039,7 +2038,6 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &param, std::vector<std::string> &outFailedKeys)
 {
-    RETURN_IF_NOT_OK(IsClientReady());
     std::map<std::string, StringView> kv;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, kv));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2086,6 +2084,15 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
         .isTx = false, .isReplica = false, .existence = param.existence, .ttlSecond = param.ttlSecond
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
+    asyncReleasePool_->Execute([this, buffers = std::move(bufferList)]() mutable {
+        std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
+        if (!IsClientReady()) {
+            return;
+        }
+        for (const auto &buf : buffers) {
+            buf->Release();
+        }
+    });
     for (const auto &objKey : rsp.failed_object_keys()) {
         outFailedKeys.emplace_back(objKey);
     }

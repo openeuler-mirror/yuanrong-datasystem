@@ -217,9 +217,10 @@ Status WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(const std::string &t
                                                             std::vector<std::string> &shmUnitIds,
                                                             std::shared_ptr<SharedMemoryRefTable> memoryRefTable)
 {
+    RETURN_OK_IF_TRUE(!ClientShmEnabled(clientId));
     for (const auto &shmUnitId : shmUnitIds) {
         std::shared_ptr<ShmUnit> shmUnit;
-        if (ClientShmEnabled(clientId) && !shmUnitId.empty()) {
+        if (!shmUnitId.empty()) {
             RETURN_IF_NOT_OK(memoryRefTable->GetShmUnit(shmUnitId, shmUnit));
             if (tenantId != shmUnit->GetTenantId()) {
                 LOG(ERROR) << FormatString("req tenantId: %s is not equal shmUnit tenantId: %s", tenantId,

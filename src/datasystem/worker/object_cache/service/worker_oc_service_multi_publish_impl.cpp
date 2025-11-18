@@ -104,6 +104,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
 
     std::vector<std::string> namespaceUri;
     size_t objectSize = static_cast<size_t>(req.object_info_size());
+    namespaceUri.reserve(objectSize);
     for (size_t i = 0; i < objectSize; ++i) {
         namespaceUri.emplace_back(
             TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_info(i).object_key()));

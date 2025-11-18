@@ -1121,6 +1121,7 @@ private:
     std::shared_ptr<ThreadPool> asyncGetCopyPool_;
     std::shared_ptr<ThreadPool> asyncSwitchWorkerPool_;
     std::shared_ptr<ThreadPool> asyncDevDeletePool_;
+    std::shared_ptr<ThreadPool> asyncReleasePool_;
 
     // Listenworker needs to be placed at the bottom to ensure that it is destructed first.
     std::vector<std::shared_ptr<client::ListenWorker>> listenWorker_;

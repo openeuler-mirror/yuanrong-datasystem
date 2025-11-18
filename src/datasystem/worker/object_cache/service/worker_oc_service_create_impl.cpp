@@ -203,7 +203,6 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
     CHECK_FAIL_RETURN_STATUS(req.object_key_size() == req.data_size_size(), K_INVALID,
                              FormatString("object key count %zu not match with data size count %zu",
                                           req.object_key_size(), req.data_size_size()));
-    auto lastRc = Status::OK();
     if (!req.skip_check_existence()) {
         CheckExistence(req, tenantId, resp);
     }
