@@ -272,6 +272,7 @@ Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspP
     req.set_no_query_l2cache(!getParam.queryL2Cache);
     req.set_sub_timeout(ClientGetRequestTimeout(subTimeoutMs));
     req.set_client_id(GetClientId());
+    req.set_return_object_index(true);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
 
     int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);

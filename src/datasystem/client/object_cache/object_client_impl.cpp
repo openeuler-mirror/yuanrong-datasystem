@@ -1486,7 +1486,17 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
         const std::string &objectKey = objectsNeedToGet[index];
         Status status;
         std::shared_ptr<Buffer> &bufferPtr = buffers[i + j];
-        if (i < shmCount && objectKey == rsp.objects(i).object_key()) {
+        bool isShm = false;
+        bool isNoShm = false;
+        if (i < shmCount) {
+            isShm = rsp.objects(i).object_key().empty() ? index == rsp.objects(i).object_index()
+                                                        : objectKey == rsp.objects(i).object_key();
+        }
+        if (j < noShmCount) {
+            isNoShm = rsp.payload_info(j).object_key().empty() ? index == rsp.payload_info(j).object_index()
+                                                               : objectKey == rsp.payload_info(j).object_key();
+        }
+        if (isShm) {
             const GetRspPb::ObjectInfoPb &info = rsp.objects(i);
             i++;
             if (info.store_fd() == -1) {
@@ -1499,7 +1509,7 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
                 status = SetOffsetReadObjectBuffer(objectKey, info, version, readParams[index].offset,
                                                    readParams[index].size, bufferPtr);
             }
-        } else if (j < noShmCount && objectKey == rsp.payload_info(j).object_key()) {
+        } else if (isNoShm) {
             const GetRspPb::PayloadInfoPb &payloadInfo = rsp.payload_info(j);
             status = SetNonShmObjectBuffer(objectKey, payloadInfo, version, payloads, bufferPtr);
             j++;

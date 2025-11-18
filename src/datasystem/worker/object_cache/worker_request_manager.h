@@ -189,12 +189,12 @@ private:
     Status AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t index, bool shmEnable,
                                GetRspPb &resp, std::vector<RpcMessage> &outPayloads);
 
-    static void SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
+    void SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
                                    GetRspPb::ObjectInfoPb &info);
 
-    static void SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
+    void SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
                                      GetRspPb::PayloadInfoPb &info);
-    static void SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info);
+    void SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info);
     bool Registered() const;
 
     // the mutex protect GetObjInfo and lastRc_
@@ -215,6 +215,7 @@ private:
     WorkerRequestManager *workerRequestManager_{ nullptr };
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
     bool noQueryL2Cache_ = false;
+    bool enableReturnObjectIndex_ = false;
 };
 
 class WorkerRequestManager {

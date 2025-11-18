@@ -73,6 +73,7 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
     shmRefTable_ = std::move(shmRefTable);
     serverApi_ = std::move(api);
     noQueryL2Cache_ = req.no_query_l2cache();
+    enableReturnObjectIndex_ = req.return_object_index();
     for (size_t i = 0; i < objectsCount; i++) {
         const auto &objectKey = rawObjectKeys_[i];
         OffsetInfo offsetInfo;
@@ -388,11 +389,14 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
 void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
                                     GetRspPb::ObjectInfoPb &info)
 {
-    (void)objectIndex;
     auto &shmUnit = safeEntry.shmUnit;
-    ObjectKey objectKey;
-    TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
-    info.set_object_key(objectKey);
+    if (enableReturnObjectIndex_) {
+        info.set_object_index(objectIndex);
+    } else {
+        ObjectKey objectKey;
+        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
+        info.set_object_key(objectKey);
+    }
     info.set_store_fd(shmUnit->GetFd());
     info.set_offset(static_cast<int64_t>(shmUnit->GetOffset()));
     info.set_data_size(static_cast<int64_t>(safeEntry.dataSize));
@@ -408,11 +412,14 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t object
 void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
                                       GetRspPb::PayloadInfoPb &info)
 {
-    (void)objectIndex;
-    ObjectKey objectKey;
-    TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
+    if (enableReturnObjectIndex_) {
+        info.set_object_index(objectIndex);
+    } else {
+        ObjectKey objectKey;
+        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
+        info.set_object_key(objectKey);
+    }
     const auto &safeEntry = *objectInfo.params;
-    info.set_object_key(objectKey);
     info.set_data_size(static_cast<int64_t>(objectInfo.offsetInfo.readSize));
     info.set_version(static_cast<int64_t>(safeEntry.createTime));
     info.set_is_seal(safeEntry.isSealed);
@@ -422,10 +429,13 @@ void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t obje
 
 void GetRequest::SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info)
 {
-    (void)objectIndex;
-    ObjectKey objectKey;
-    TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
-    info.set_object_key(objectKey);
+    if (enableReturnObjectIndex_) {
+        info.set_object_index(objectIndex);
+    } else {
+        ObjectKey objectKey;
+        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
+        info.set_object_key(objectKey);
+    }
     info.set_store_fd(-1);
     info.set_offset(-1);
     info.set_data_size(-1);
