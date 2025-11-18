@@ -655,6 +655,7 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     BlobListInfo blobInfo;
     RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo));
     LOG(INFO) << blobInfo.ToString(true);
+    exists.resize(objectKeys.size(), false);
     RETURN_IF_NOT_OK(MultiCreate(objectKeys, dataSizeList, param, false, bufferList, exists));
     std::vector<std::shared_ptr<Buffer>> filterBufferList;
     std::vector<DeviceBlobList> filterDevBlobList;

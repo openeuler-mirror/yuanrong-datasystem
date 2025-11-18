@@ -184,12 +184,10 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
         FormatString("The length of objectKeyList (%zu) and dataSizeList (%zu) should be the same.",
                      createParams.size(), rsp.results().size()));
     if (!skipCheckExistence) {
-        auto rspExists = rsp.exists();
-        CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rspExists.size()) == createParams.size(), K_INVALID,
+        CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rsp.exists_size()) == createParams.size(), K_INVALID,
                                 "The size of rspExists is not consistent with createParams");
-        exists.reserve(createParams.size());
-        for (auto val : rspExists) {
-            exists.emplace_back(val);
+        for (int i = 0; i < rsp.exists_size(); i++) {
+            exists[i] = rsp.exists(i);
         }
     }
     for (const auto& res : rsp.results()) {
