@@ -48,6 +48,7 @@ public:
         uint8_t curCounter;
         uint8_t maxCounter;
     };
+    using TBBIndexMap = tbb::concurrent_hash_map<ImmutableString, std::list<Node>::iterator>;
 
     /**
      * @brief Construct EvictionList.
@@ -114,14 +115,10 @@ public:
     bool Exist(const std::string &objectKey);
 
 private:
-    std::shared_timed_mutex listMutex_;
-
+    mutable tbb::spin_rw_mutex listMutex_;
     std::list<Node> list_;
-
-    // unordered_map
-    std::unordered_map<ImmutableString, std::list<Node>::iterator> indexTable_;
-
     std::list<Node>::iterator oldest_;
+    TBBIndexMap indexTable_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

@@ -15,6 +15,7 @@
  */
 
 #include "datasystem/worker/object_cache/eviction_list.h"
+
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/status_helper.h"
@@ -28,20 +29,17 @@ EvictionList::EvictionList() : oldest_(list_.end())
 void EvictionList::Add(const std::string &objectKey, uint8_t counter)
 {
     PerfPoint point(PerfKey::WORKER_EVICT_LIST_ADD);
-    std::lock_guard<std::shared_timed_mutex> lck(listMutex_);
-    auto iter = indexTable_.find(objectKey);
-    if (iter == indexTable_.end()) {
-        Node node(objectKey, counter);
-        auto newest = list_.insert(oldest_, node);
+    TBBIndexMap::accessor accessor;
+    if (indexTable_.insert(accessor, objectKey)) {
+        tbb::spin_rw_mutex::scoped_lock wlock(listMutex_, true);
+        auto newest = list_.emplace(oldest_, objectKey, counter);
         if (list_.size() == 1) {
             oldest_ = newest;
         }
-        (void)indexTable_.emplace(objectKey, newest);
-        point.Record();
-        return;
+        accessor->second = newest;
     }
-    // Object exist, refresh it
-    auto &nodePtr = iter->second;
+
+    auto &nodePtr = accessor->second;
     if (nodePtr->curCounter < nodePtr->maxCounter) {
         nodePtr->curCounter++;
     }
@@ -51,12 +49,13 @@ void EvictionList::Add(const std::string &objectKey, uint8_t counter)
 Status EvictionList::Erase(const std::string &objectKey)
 {
     PerfPoint point(PerfKey::WORKER_EVICT_LIST_ERASE);
-    std::lock_guard<std::shared_timed_mutex> lck(listMutex_);
-    auto iter = indexTable_.find(objectKey);
-    if (iter == indexTable_.end()) {
+    TBBIndexMap::accessor accessor;
+    if (!indexTable_.find(accessor, objectKey)) {
         VLOG(1) << "Object " + objectKey + " does not exist in EvictionList";
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object " + objectKey + " does not exist in EvictionList.");
     }
+
+    tbb::spin_rw_mutex::scoped_lock wlock(listMutex_, true);
     bool reassign = false;
     if (oldest_->objectKey == objectKey) {
         ++oldest_;
@@ -64,8 +63,8 @@ Status EvictionList::Erase(const std::string &objectKey)
             reassign = true;
         }
     }
-    list_.erase(iter->second);
-    indexTable_.erase(objectKey);
+    list_.erase(accessor->second);
+    indexTable_.erase(accessor);
     if (reassign) {
         oldest_ = list_.begin();
     }
@@ -75,22 +74,21 @@ Status EvictionList::Erase(const std::string &objectKey)
 
 size_t EvictionList::Size()
 {
-    std::shared_lock<std::shared_timed_mutex> lck(listMutex_);
+    tbb::spin_rw_mutex::scoped_lock rlock(listMutex_, false);
     return list_.size();
 }
 
 Status EvictionList::FindEvictCandidate(std::string &candidateObjKey)
 {
     PerfPoint point(PerfKey::WORKER_EVICT_LIST_FIND);
-    std::lock_guard<std::shared_timed_mutex> lck(listMutex_);
+    tbb::spin_rw_mutex::scoped_lock wlock(listMutex_, true);
     CHECK_FAIL_RETURN_STATUS(!list_.empty(), StatusCode::K_RUNTIME_ERROR, "EvictionList is empty.");
     while (true) {
         if (oldest_->curCounter == 0) {
             candidateObjKey = oldest_->objectKey;
             break;
-        } else {
-            oldest_->curCounter--;
         }
+        oldest_->curCounter--;
         if (++oldest_ == list_.end()) {
             oldest_ = list_.begin();
         }
@@ -101,17 +99,18 @@ Status EvictionList::FindEvictCandidate(std::string &candidateObjKey)
 
 Status EvictionList::GetObjectInfo(const std::string &objectKey, Node &node)
 {
-    std::lock_guard<std::shared_timed_mutex> lck(listMutex_);
-    if (indexTable_.find(objectKey) == indexTable_.end()) {
+    TBBIndexMap::const_accessor readAccessor;
+    if (!indexTable_.find(readAccessor, objectKey)) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "Object " + objectKey + " does not exist");
     }
-    node = *(indexTable_[objectKey]);
+    tbb::spin_rw_mutex::scoped_lock rlock(listMutex_, false);
+    node = *(readAccessor->second);
     return Status::OK();
 }
 
 Status EvictionList::GetOldestObjectInfo(Node &node)
 {
-    std::lock_guard<std::shared_timed_mutex> lck(listMutex_);
+    tbb::spin_rw_mutex::scoped_lock rlock(listMutex_, false);
     CHECK_FAIL_RETURN_STATUS(!list_.empty(), StatusCode::K_RUNTIME_ERROR, "EvictionList is empty.");
     node.objectKey = oldest_->objectKey;
     node.curCounter = oldest_->curCounter;
@@ -121,7 +120,7 @@ Status EvictionList::GetOldestObjectInfo(Node &node)
 
 Status EvictionList::GetAllObjectsInfo(std::vector<EvictionList::Node> &res, EvictionList::Node &oldest)
 {
-    std::lock_guard<std::shared_timed_mutex> lck(listMutex_);
+    tbb::spin_rw_mutex::scoped_lock rlock(listMutex_, false);
     if (list_.empty()) {
         return Status::OK();
     }
@@ -145,7 +144,6 @@ Status EvictionList::GetAllObjectsInfo(std::vector<EvictionList::Node> &res, Evi
 
 bool EvictionList::Exist(const std::string &objectKey)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(listMutex_);
     return indexTable_.count(objectKey) > 0;
 }
 }  // namespace object_cache

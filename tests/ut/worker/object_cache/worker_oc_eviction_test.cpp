@@ -22,6 +22,7 @@
 
 #include "securec.h"
 
+#include "bench_helper.h"
 #include "common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
@@ -54,7 +55,6 @@ DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
 namespace ut {
-
 
 class EvictionManagerTest : public CommonTest, public EvictionManagerCommon {
 public:
@@ -244,8 +244,8 @@ public:
         allocator->Init(maxSize_, 0, false, true, 5000, ocPercent_, scPercent_);  // decay is 5000 ms.
         std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
         evictionManager_ = std::make_shared<object_cache::WorkerOcEvictionManager>(
-            objectTable, HostPort("127.0.0.1", 32131), // worker port is 32131,
-            HostPort("127.0.0.1", 52319));  // master port is 52319;
+            objectTable, HostPort("127.0.0.1", 32131),  // worker port is 32131,
+            HostPort("127.0.0.1", 52319));              // master port is 52319;
         auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
         DS_ASSERT_OK(evictionManager_->Init(globalRefTable, akSkManager_));
         scAllocateManager_ = std::make_shared<worker::stream_cache::WorkerSCAllocateMemory>(evictionManager_);
@@ -336,6 +336,41 @@ TEST_F(ScEvictionObjectTest, TestEvictObject)
                                   DataFormat::BINARY, true, evictionManager_));
         evictionManager_->Add(prefix + std::to_string(i));
     }
+}
+
+class EvictionManagerBenchTest : public CommonTest, public BenchHelper {};
+
+TEST_F(EvictionManagerBenchTest, BenchThread1)
+{
+    const int logLevel = 2;
+    FLAGS_minloglevel = logLevel;
+    EvictionList list;
+    const int threadCnt = 1;
+    PerfTwoAction(
+        threadCnt, GenUniqueString, [&list](const std::string &key) { list.Add(key, Q1); },
+        [&list](const std::string &key) { list.Erase(key); });
+}
+
+TEST_F(EvictionManagerBenchTest, BenchThread4)
+{
+    const int logLevel = 2;
+    FLAGS_minloglevel = logLevel;
+    EvictionList list;
+    const int threadCnt = 4;
+    PerfTwoAction(
+        threadCnt, GenUniqueString, [&list](const std::string &key) { list.Add(key, Q1); },
+        [&list](const std::string &key) { list.Erase(key); });
+}
+
+TEST_F(EvictionManagerBenchTest, BenchThread8)
+{
+    const int logLevel = 2;
+    FLAGS_minloglevel = logLevel;
+    EvictionList list;
+    const int threadCnt = 8;
+    PerfTwoAction(
+        threadCnt, GenUniqueString, [&list](const std::string &key) { list.Add(key, Q1); },
+        [&list](const std::string &key) { list.Erase(key); });
 }
 }  // namespace ut
 }  // namespace datasystem

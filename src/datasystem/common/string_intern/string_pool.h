@@ -95,7 +95,7 @@ public:
      * @brief Return the size ofStringPool
      * @return The size ofStringPool
      */
-    size_t Size()
+    size_t Size() const
     {
         return pool_.size();
     }

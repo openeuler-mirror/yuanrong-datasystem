@@ -66,7 +66,7 @@ int32_t StringEntity::IncRef() const
 
 bool StringEntity::DecRef() const
 {
-    return (--countRef_ == 0);
+    return --countRef_ == 0;
 }
 
 void StringEntity::IncDelRef() const

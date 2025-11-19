@@ -313,6 +313,10 @@ TEST_F(StringRefTest, BaseTest)
     std::unordered_map<ObjectKey, int> map;
     map.emplace(s1, 1);
     ASSERT_EQ(map[s2], 1);
+
+    auto s4 = ObjectKey::Intern("abcde");
+    s4 = s3;
+    ASSERT_EQ(s3, s4);
 }
 
 TEST_F(StringRefTest, TestMove)
