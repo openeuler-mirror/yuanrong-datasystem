@@ -51,8 +51,8 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
-DS_DECLARE_string(other_az_names);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(other_cluster_names);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
@@ -77,9 +77,10 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
       akSkManager_(std::move(akSkManager)),
       localAddress_(std::move(localAddress))
 {
+    remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "RemoteGetThreadPool");
     if (HaveOtherAZ()) {
-        for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-            if (azName != FLAGS_az_name) {
+        for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
+            if (azName != FLAGS_cluster_name) {
                 otherAZNames_.emplace_back(azName);
             }
         }
@@ -265,9 +266,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(
 
     MarkObjectsInGetProcess(objectKeys);
 
-    Raii getProcessGuard([this, &objectKeys]() {
-        UnmarkObjectsInGetProcess(objectKeys);
-    });
+    Raii getProcessGuard([this, &objectKeys]() { UnmarkObjectsInGetProcess(objectKeys); });
 
     // Try get from local.
     TryGetObjectFromLocal(offsetInfos, request, objectsNeedGetRemote);
@@ -775,9 +774,9 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 
 template <typename Req>
 Status WorkerOcServiceGetImpl::PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb,
-                                               bool &shmUnitAllocated)
+                                               bool &shmUnitAllocated, std::shared_ptr<ShmOwner> shmOwner)
 {
-    if (!IsUrmaEnabled()) {
+    if (!IsUrmaEnabled() && shmOwner == nullptr) {
         return Status::OK();
     }
     reqPb.set_data_size(dataSize);
@@ -786,6 +785,7 @@ Status WorkerOcServiceGetImpl::PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &
         return Status::OK();
     });
     // Allocate the memory for the remote worker to urma_write.
+    // Or early distribute memory for general code path.
     const auto &objectKey = objectKV.GetObjKey();
     auto &entry = objectKV.GetObjEntry();
     auto metaSz = entry->GetMetadataSize();
@@ -795,7 +795,13 @@ Status WorkerOcServiceGetImpl::PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &
     // Only create new shm if size changed or not exist.
     if (szChanged) {
         shmUnit = std::make_shared<ShmUnit>();
-        RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, dataSize, metaSz, false, evictionManager_, *shmUnit));
+        bool populate = false;
+        if (shmOwner) {
+            RETURN_IF_NOT_OK(DistributeMemoryForObject(objectKey, dataSize, metaSz, populate, shmOwner, *shmUnit));
+        } else {
+            RETURN_IF_NOT_OK(
+                AllocateMemoryForObject(objectKey, dataSize, metaSz, populate, evictionManager_, *shmUnit));
+        }
         shmUnit->id = GetStringUuid();
         entry->SetShmUnit(shmUnit);
         shmUnitAllocated = true;
@@ -813,8 +819,14 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
     PerfPoint point(PerfKey::WORKER_CONSTRUCT_BATCH_GET_REQ);
     // The function is placed together with PrepareUrmaInfo, as the template definition does not suit in header file.
     Status lastRc = Status::OK();
+    // Pre-allocate an aggregated chunk of shared memory as ShmOwner, to reduce the number of allocation calls.
+    std::vector<std::shared_ptr<ShmOwner>> shmOwners;
+    std::vector<uint32_t> shmIndexMapping(metas.size(), std::numeric_limits<uint32_t>::max());
+    RETURN_IF_NOT_OK(AggregateAllocateHelper(metas, lockedEntries, shmOwners, shmIndexMapping));
+
     bool requestReady = false;
-    for (auto metaIter = metas.begin(); metaIter != metas.end();) {
+    uint32_t objectId = 0;
+    for (auto metaIter = metas.begin(); metaIter != metas.end(); objectId++) {
         auto &meta = *metaIter;
         const auto &objectKey = meta->object_key();
         // Checked availability when metas are grouped, so it should be safe to just access the entry here.
@@ -839,7 +851,11 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(
         // Prepare the protobuf with urma info for data transfer if applicable.
         // BatchGetObjectHandleIndividualStatus will free ShmUnit upon error, so no need to actually record it here.
         bool shmUnitAllocated = false;
-        status = PrepareUrmaInfo(meta->data_size(), objectKV, subReq, shmUnitAllocated);
+        std::shared_ptr<ShmOwner> shmOwner = nullptr;
+        if (shmIndexMapping.size() > objectId && shmOwners.size() > shmIndexMapping[objectId]) {
+            shmOwner = shmOwners[shmIndexMapping[objectId]];
+        }
+        status = PrepareUrmaInfo(meta->data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
         if (status.IsError()) {
             BatchGetObjectHandleIndividualStatus(status, objectKey, readKey, successIds, needRetryIds, failedIds);
             metaIter = metas.erase(metaIter);
@@ -1346,7 +1362,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
     Status rc;
     for (const std::string &objKey : objectKeys) {
         if (getLocalAz) {
-            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_az_name, objKey, workerId, queryMetas);
+            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_cluster_name, objKey, workerId, queryMetas);
             if (rc.IsOk()) {
                 continue;
             }
@@ -1387,7 +1403,7 @@ Status WorkerOcServiceGetImpl::ConstructKeyAndQueryMetaFromEtcd(const std::strin
         hashValue = Hash2Str(MurmurHash3_32(workerId));
     }
     std::string tablePrefix;
-    if (!FLAGS_az_name.empty()) {
+    if (!FLAGS_cluster_name.empty()) {
         tablePrefix = FormatString("/%s", azName);
     }
     std::string etcdKey = tablePrefix + FormatString("%s/%zu/%s", etcdTableName, hashValue, objKey);
@@ -1464,8 +1480,119 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhere(
         return GetObjectsFromAnywhereBatched(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
                                              needRetryIds);
     }
-    return GetObjectsFromAnywhereSerially(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
-                                          needRetryIds);
+    return GetObjectsFromAnywhereParallelly(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
+                                            needRetryIds);
+}
+
+Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(
+    const std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
+    const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
+    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+    std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds)
+{
+    const size_t kMinParallelRequests = 2;
+    if (queryMetas.size() < kMinParallelRequests) {
+        return GetObjectsFromAnywhereSerially(queryMetas, readKeys, request, payloads, lockedEntries, failedIds,
+                                              needRetryIds);
+    }
+    Status lastRc = Status::OK();
+    std::vector<std::string> successIds;
+    successIds.reserve(queryMetas.size());
+
+    std::vector<std::future<Status>> futures;
+    std::atomic<bool> abortAllTasks{ false };
+    std::mutex commonMutex;
+
+    for (size_t i = 0; i < queryMetas.size(); ++i) {
+        if (abortAllTasks.load()) {
+            break;
+        }
+
+        const auto &queryMeta = queryMetas[i];
+        const auto &meta = queryMeta.meta();
+
+        const auto dataFormat = static_cast<DataFormat>(queryMeta.meta().config().data_format());
+        if (dataFormat != DataFormat::BINARY && dataFormat != DataFormat::HETERO) {
+            lastRc = Status(K_INVALID, "object data format not match.");
+            failedIds.emplace(meta.object_key());
+            LOG(ERROR) << lastRc;
+            continue;
+        }
+        auto iter = lockedEntries.find(meta.object_key());
+        if (iter == lockedEntries.end()) {
+            LOG(ERROR) << FormatString("[ObjectKey %s] QueryMeta exist but lock entry absent, should not happen",
+                                       meta.object_key());
+            lastRc = Status(K_UNKNOWN_ERROR, "QueryMeta exist but lock entry absent, should not happen");
+            continue;
+        }
+        if (readKeys.find(meta.object_key()) == readKeys.end()) {
+            LOG(ERROR) << FormatString("[ObjectKey %s] cant find offset and size to get", meta.object_key());
+            lastRc = Status(K_UNKNOWN_ERROR, "Can not find offset or size to get object");
+            continue;
+        }
+        ReadKey readKey = readKeys.at(meta.object_key());
+
+        Timer timer;
+        int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
+
+        futures.emplace_back(remoteGetThreadPool_->Submit([=, &lockedEntries, &commonMutex, &abortAllTasks, &request,
+                                                           &payloads, &lastRc, &successIds, &needRetryIds,
+                                                           &failedIds]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            int64_t elapsed = timer.ElapsedMilliSecond();
+            reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+            if (abortAllTasks.load()) {
+                return Status::OK();
+            }
+            const auto &queryMeta = queryMetas[i];
+            const auto &meta = queryMeta.meta();
+            auto subIter = lockedEntries.find(meta.object_key());
+            if (subIter == lockedEntries.end()) {
+                std::lock_guard<std::mutex> lock(commonMutex);
+                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in locked entries", meta.object_key());
+                lastRc = Status(K_NOT_FOUND,
+                                FormatString("[ObjectKey %s] Object not found in locked entries", meta.object_key()));
+                return lastRc;
+            }
+            std::shared_ptr<SafeObjType> &subEntry = subIter->second.first;
+            bool isInsert = subIter->second.second;
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(subEntry->TransferWLockToCurrentThread(), "Lock failed");
+            Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, isInsert, queryMeta, payloads);
+
+            // Protects access to successIds, needRetryIds, failedIds, and lastRc
+            std::lock_guard<std::mutex> lock(commonMutex);
+
+            if (status.IsOk()) {
+                LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", meta.object_key());
+                successIds.push_back(meta.object_key());
+            } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", meta.object_key());
+                needRetryIds.emplace_back(readKey);
+            } else if (status.GetCode() == K_OUT_OF_MEMORY) {
+                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", meta.object_key());
+                lastRc = status;
+                abortAllTasks.store(true);
+            } else {
+                LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", meta.object_key(),
+                                           status.ToString());
+                failedIds.emplace(meta.object_key());
+                lastRc = status;
+            }
+
+            return status;
+        }));
+    }
+
+    for (auto &f : futures) {
+        f.wait();
+    }
+
+    if (successIds.size() != queryMetas.size()) {
+        LOG(ERROR) << "Failed to get object data from remote. " << successIds.size() << " objects pulled success: ["
+                   << VectorToString(successIds) << "], meta data num: " << queryMetas.size()
+                   << " lastRc: " << lastRc.ToString();
+    }
+    return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(
@@ -1527,23 +1654,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(
                    << " lastRc: " << lastRc.ToString();
     }
     return lastRc;
-}
-
-void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey, uint64_t version,
-                                                    std::shared_ptr<SafeObjType> &entry, bool isInsert)
-{
-    LOG(WARNING) << "Get object from remote failed, start to remove location from master";
-    (void)RemoveLocation(objectKey, version);
-    if (entry->Get() != nullptr && entry->Get()->GetShmUnit() != nullptr) {
-        entry->Get()->GetShmUnit()->SetHardFreeMemory();
-    }
-    if (isInsert) {
-        (void)objectTable_->Erase(objectKey, *entry);
-    } else if (entry->Get() != nullptr) {
-        entry->Get()->FreeResources();
-        entry->Get()->SetLifeState(ObjectLifeState::OBJECT_INVALID);
-        entry->Get()->stateInfo.SetCacheInvalid(true);
-    }
 }
 
 Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &readKey,
@@ -1898,7 +2008,7 @@ bool WorkerOcServiceGetImpl::IsGetFromL2Storage(bool canNotFindInWorker, bool wr
 
 bool WorkerOcServiceGetImpl::HaveOtherAZ()
 {
-    return !FLAGS_other_az_names.empty();
+    return !FLAGS_other_cluster_names.empty();
 }
 
 Status WorkerOcServiceGetImpl::BatchLockForGet(

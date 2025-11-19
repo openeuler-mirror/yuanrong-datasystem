@@ -1232,14 +1232,10 @@ private:
     /**
      * @brief Load object locations
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[in] workerUuids Recover location of specified worker uuids. If the value is empty, recover the data of the
-     * current worker.
-     * @param[in] extraRanges Recover location of specified hash ranges if not empty.
      * @param[out] objLocMap The map record object and locations.
      * @return Status of the call
      */
-    Status LoadObjectLocations(bool isFromRocksdb, const std::vector<std::string> &workerUuids,
-                               const worker::HashRange &extraRanges,
+    Status LoadObjectLocations(bool isFromRocksdb,
                                std::unordered_map<std::string, std::vector<std::string>> &objLocMap);
 
     /**

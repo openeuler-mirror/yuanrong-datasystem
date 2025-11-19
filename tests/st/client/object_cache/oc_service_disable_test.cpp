@@ -21,6 +21,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/object_client.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/stream_client.h"
 
 #include <cstdint>
 #include <memory>
@@ -47,6 +48,17 @@ void OcOp(const std::shared_ptr<ObjectClient> &client, bool success)
     }
 }
 
+void ScOp(const std::shared_ptr<StreamClient> &client, bool success)
+{
+    std::shared_ptr<Consumer> consumer;
+    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
+    if (success) {
+        DS_ASSERT_OK(client->Subscribe("test1", config, consumer));
+    } else {
+        ASSERT_EQ(client->Subscribe("test1", config, consumer).GetCode(), StatusCode::K_RUNTIME_ERROR);
+    }
+}
+
 void KvOp(const std::shared_ptr<KVClient> &client, bool success)
 {
     std::string key = "ikun_again";
@@ -65,6 +77,7 @@ public:
         opts.numWorkers = 1;
         opts.numRpcThreads = 0;
         opts.numEtcd = 1;
+        opts.workerGflagParams = "-sc_stream_socket_num=1 -sc_regular_socket_num=1";
     }
 };
 
@@ -79,6 +92,9 @@ TEST_F(OcServiceDisableTest, TestInit)
     auto kVClient = std::make_shared<KVClient>(opts);
     DS_ASSERT_OK(kVClient->Init());
     KvOp(kVClient, false);
+    auto scClient = std::make_shared<StreamClient>(opts);
+    DS_ASSERT_OK(scClient->Init());
+    ScOp(scClient, true);
 }
 
 class ScServiceDisableTest : public OCClientCommon {
@@ -101,6 +117,9 @@ TEST_F(ScServiceDisableTest, TestInit)
     auto kVClient = std::make_shared<KVClient>(opts);
     DS_ASSERT_OK(kVClient->Init());
     KvOp(kVClient, true);
+    auto scClient = std::make_shared<StreamClient>(opts);
+    DS_ASSERT_OK(scClient->Init());
+    ScOp(scClient, false);
 }
 
 class CommonServiceTest : public OCClientCommon {
@@ -109,6 +128,7 @@ public:
     {
         opts.numWorkers = 1;
         opts.numEtcd = 1;
+        opts.workerGflagParams = "-sc_stream_socket_num=1 -sc_regular_socket_num=1";
     }
 };
 
@@ -123,6 +143,9 @@ TEST_F(CommonServiceTest, TestInit)
     auto kVClient = std::make_shared<KVClient>(opts);
     DS_ASSERT_OK(kVClient->Init());
     KvOp(kVClient, true);
+    auto scClient = std::make_shared<StreamClient>(opts);
+    DS_ASSERT_OK(scClient->Init());
+    ScOp(scClient, true);
 }
 
 class CommonServiceDisableTest : public OCClientCommon {
@@ -147,6 +170,9 @@ TEST_F(CommonServiceDisableTest, TestInit)
     auto kVClient = std::make_shared<KVClient>(opts);
     DS_ASSERT_OK(kVClient->Init());
     KvOp(kVClient, false);
+    auto scClient = std::make_shared<StreamClient>(opts);
+    DS_ASSERT_OK(scClient->Init());
+    ScOp(scClient, false);
 }
 }  // namespace st
 }  // namespace datasystem

@@ -1,0 +1,181 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the RPC API of the worker component, including the meta of the stream cache.
+ * These APIs are used for communication between workers and workers or master to worker.
+ */
+syntax = "proto3";
+package datasystem;
+import "stream_posix.proto";
+import "utils.proto";
+
+message DelStreamContextReqPb {
+  string stream_name = 1;
+  bool force_delete = 2;
+  int64 timeout = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message DelStreamContextRspPb {
+
+}
+
+message ProducerMetaPb {
+  string stream_name = 1;
+  HostPortPb worker_address = 2;
+  uint64 producer_count = 3;
+}
+
+message ConsumerMetaPb {
+  string stream_name = 1;
+  HostPortPb worker_address = 2;
+  string consumer_id = 3;
+  SubscriptionConfigPb sub_config = 4;
+  uint64 last_ack_cursor = 5;
+  string client_id = 6;
+}
+
+message GetStreamMetadataRspPb {
+  string stream_name = 1;
+  uint64 max_stream_size = 2;
+  int64 page_size = 3;
+  bool auto_cleanup = 4;
+  ErrorInfoPb error = 5;
+  repeated ProducerMetaPb producers = 6;
+  repeated ConsumerMetaPb consumers = 7;
+  uint64 retain_num_consumer = 8;
+  bool is_remote_pub_empty = 9;
+  bool encrypt_stream = 10;
+  uint64 reserve_size = 11;
+  int32 stream_mode = 12;
+}
+
+message GetMetadataAllStreamReqPb {
+  string master_address = 1;
+  message RangePb {
+    uint32 from = 1;
+    uint32 end = 2;
+  }
+  repeated RangePb hash_ranges = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message GetMetadataAllStreamRspPb {
+  repeated GetStreamMetadataRspPb stream_meta = 1;
+}
+
+message SyncPubNodeReqPb {
+  string stream_name = 1;
+  bool is_reconciliation = 2;
+  repeated HostPortPb worker_address_vector = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message SyncPubNodeRspPb {
+
+}
+
+// Clear all remote sub when last producer close. Clear all remote pub when last consumer close
+message ClearRemoteInfoReqPb {
+  string stream_name = 1;
+  bool force_close = 2;
+  bool rollback = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ClearRemoteInfoRspPb {
+
+}
+
+// Sync meta data part is as follows
+message SyncConsumerNodeReqPb {
+  string stream_name = 1;
+  repeated ConsumerMetaPb consumer_meta_vector = 2;
+  uint32 retain_data = 3;
+  bool is_reconciliation = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message SyncConsumerNodeRspPb {
+
+}
+
+message NotifyConsumerPb {
+  ConsumerMetaPb consumer = 1;
+  bool is_close = 2;
+}
+
+message NotifyPubPb {
+  string stream_name = 1;
+  string worker_addr = 2;
+  bool is_close = 3;
+  uint64 max_stream_size = 4;
+  int64 page_size = 5;
+  bool force_close = 6;
+  bool auto_cleanup = 7;
+  uint64 retain_num_consumer = 8;
+  bool encrypt_stream = 9;
+  uint64 reserve_size = 10;
+  int32 stream_mode = 11;
+}
+
+message UpdateTopoNotificationReq {
+  string stream_name = 1;
+  repeated NotifyPubPb pubs = 2;
+  repeated NotifyConsumerPb subs = 3;
+  uint32 retain_data = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message UpdateTopoNotificationRsp {
+
+}
+
+service MasterWorkerSCService {
+  // master --> worker topological change feedback
+  rpc UpdateTopoNotification(UpdateTopoNotificationReq) returns (UpdateTopoNotificationRsp) {}
+  rpc DelStreamContext(DelStreamContextReqPb) returns (DelStreamContextRspPb) {}
+  rpc SyncPubNode(SyncPubNodeReqPb) returns (SyncPubNodeRspPb) {}
+  rpc SyncConsumerNode(SyncConsumerNodeReqPb) returns (SyncConsumerNodeRspPb) {}
+  rpc ClearAllRemotePub(ClearRemoteInfoReqPb) returns (ClearRemoteInfoRspPb) {}
+  rpc ClearAllRemoteConsumer(ClearRemoteInfoReqPb) returns (ClearRemoteInfoRspPb) {}
+  rpc QueryMetadata(stream GetMetadataAllStreamReqPb) returns (stream GetStreamMetadataRspPb) {}
+}

@@ -235,7 +235,11 @@ public:
 
 private:
     object_cache::MasterWorkerOCServiceImpl *workerOC_{ nullptr };
-    SafeObject<DeleteObjectReqPb> deleteReq_;
+    mutable std::shared_mutex localReqMutex_; // protects localReqMap_
+    // Map from local tag to pending DeleteObject request.
+    std::unordered_map<int64_t, std::unique_ptr<DeleteObjectReqPb>> localReqMap_;
+    // Atomic tag generator for unique local DeleteObject request identification.
+    static std::atomic<int64_t> g_localTagGen_;
 };
 
 }  // namespace master

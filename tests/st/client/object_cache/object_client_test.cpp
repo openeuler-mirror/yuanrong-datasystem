@@ -260,14 +260,14 @@ TEST_F(ObjectClientTest, DISABLED_LEVEL1_TestAsynPublishAndShutdown)
 TEST_F(ObjectClientTest, CreateShmBufferSuccess)
 {
     // Shared memory, non-Keep scenario
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     CreateBufferSuccess(SHM_SIZE, param);
 }
 
 TEST_F(ObjectClientTest, CreateNonShmBufferSuccess)
 {
     // Non-shared memory, Keep scenario
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     CreateBufferSuccess(NON_SHM_SIZE, param);
 }
 
@@ -421,7 +421,7 @@ TEST_F(ObjectClientTest, LEVEL1_InvalidateBufferAndRePublishSuccess)
     const int32_t timeoutMs = 1'000;
     InitTestClient(0, client, timeoutMs);
     int dataSize = SHM_SIZE;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     DS_ASSERT_OK(client->Create(objectKey, dataSize, param, buffer));
     ASSERT_NE(buffer, nullptr);
     ASSERT_EQ(dataSize, buffer->GetSize());
@@ -443,7 +443,7 @@ TEST_F(ObjectClientTest, LEVEL2_InvalidateBufferAndRemoteGetFailed)
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
     int dataSize = SHM_SIZE;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     DS_ASSERT_OK(client->Create(objectKey, dataSize, param, buffer));
     ASSERT_NE(buffer, nullptr);
     ASSERT_EQ(dataSize, buffer->GetSize());
@@ -466,7 +466,7 @@ TEST_F(ObjectClientTest, InvalidateBufferAfterRemoteGet)
     InitTestClient(1, client2);
 
     std::string objectKey = NewObjectKey();
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
 
     int size = 10;
     std::shared_ptr<Buffer> buffer;
@@ -652,7 +652,7 @@ TEST_F(ObjectClientTest, LatestObjectGetTest)
     std::shared_ptr<Buffer> workerOBuffer;
     int bufferSize = SHM_SIZE;
     // Causal consistency triggers synchronous invalidation.
-    CreateParam createParam = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client1->Create(objectKey, bufferSize, createParam, workerOBuffer));
     std::string worker0_data = GenRandomString(bufferSize);
     DS_ASSERT_OK(workerOBuffer->MemoryCopy(const_cast<char *>(worker0_data.data()), worker0_data.length()));
@@ -727,7 +727,7 @@ TEST_F(ObjectClientTest, ExpireObjectUpdate)
     int bufferSize = SHM_SIZE;
 
     // Causal consistency triggers synchronous invalidation.
-    CreateParam createParam = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client1->Create(objectKey, bufferSize, createParam, workerOBuffer));
     std::string worker0_data = GenRandomString(SHM_SIZE);
     DS_ASSERT_OK(workerOBuffer->MemoryCopy(const_cast<char *>(worker0_data.data()), worker0_data.length()));
@@ -924,7 +924,7 @@ TEST_F(ObjectClientTest, TestConsistencyPRAM)
     InitTestClient(0, client);
 
     // create obj
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::PRAM };
+    CreateParam param{ .consistencyType = ConsistencyType::PRAM };
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
     std::shared_ptr<Buffer> buffer;
@@ -988,7 +988,7 @@ TEST_F(ObjectClientTest, TestConsistencyCAUSAL)
     InitTestClient(0, client);
 
     // client create obj and  publish
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
     std::shared_ptr<Buffer> buffer;
@@ -1039,7 +1039,7 @@ TEST_F(ObjectClientTest, TestObjectsPRAM)
     InitTestClient(0, client);
 
     // create obj
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::PRAM };
+    CreateParam param{ .consistencyType = ConsistencyType::PRAM };
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
     std::shared_ptr<Buffer> buffer;
@@ -1102,7 +1102,7 @@ TEST_F(ObjectClientTest, TestTwoObjectsRRAM)
     InitTestClient(0, client);
 
     // client create obj1
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::PRAM };
+    CreateParam param{ .consistencyType = ConsistencyType::PRAM };
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
     std::shared_ptr<Buffer> buffer;
@@ -1331,7 +1331,7 @@ TEST_F(ObjectClientTest, AsyncGetAndDelete)
     const int loopTimes = 50;
     for (int i = 0; i < loopTimes; i++) {
         std::string objectKey = NewObjectKey();
-        CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+        CreateParam param{};
         char data[] = { '1', '2', '3' };
         std::shared_ptr<Buffer> buffer;
         DS_ASSERT_OK(client1->Create(objectKey, sizeof(data), param, buffer));
@@ -1367,7 +1367,7 @@ TEST_F(ObjectClientTest, TestDeleteAfterCreate)
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string objectKey = NewObjectKey();
     std::string data = "123";
     std::shared_ptr<Buffer> buffer;
@@ -1388,7 +1388,7 @@ TEST_F(ObjectClientTest, GRefAsyncPublishAndDelete)
     const int loopTimes = 100;
     for (int i = 0; i < loopTimes; i++) {
         std::string objectKey = NewObjectKey();
-        CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+        CreateParam param{};
         char data[] = { '1', '2', '3' };
         std::shared_ptr<Buffer> buffer;
         DS_ASSERT_OK(client->Create(objectKey, sizeof(data), param, buffer));
@@ -1516,7 +1516,7 @@ TEST_F(ObjectClientTest, TestPramMultiClientPublishGet)
     }
 
     // client1 create obj
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     std::string objectKey = NewObjectKey();
     std::string data1 = GenRandomString(SHM_SIZE);
     std::shared_ptr<Buffer> buffer1;
@@ -1791,7 +1791,7 @@ TEST_F(ObjectClientTest, PutDifferentMetaSize)
     std::string data1 = GenRandomString(size1);
     std::string data2 = GenRandomString(size2);
     std::string objectKey = GetStringUuid();
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(
         client1->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data1.data())), data1.size(), param));
 

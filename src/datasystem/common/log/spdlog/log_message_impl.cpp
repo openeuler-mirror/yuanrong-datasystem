@@ -35,9 +35,10 @@
 #include "datasystem/common/log/trace.h"
 
 DS_DEFINE_int32(v, 0, "Show all VLOG(m) messages for m <= this.");
-DS_DEFINE_string(az_name, "",
-                 "az_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, "
-                 "allowing different clusters to be distinguished by the az_name.");
+DS_DEFINE_string(
+    cluster_name, "",
+    "cluster_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, "
+    "allowing different clusters to be distinguished by the cluster_name.");
 
 namespace datasystem {
 // thread_local for store log info
@@ -72,7 +73,7 @@ static void AppendLogMessageImplPrefix(const std::string &podName, std::ostream 
     static thread_local pid_t tid = syscall(__NR_gettid);
 
     logStream << podName << " | " << pid << ":" << tid << " | " << Trace::Instance().GetTraceID() << " | "
-              << FLAGS_az_name << " |  ";
+              << FLAGS_cluster_name << " |  ";
 }
 
 static DsLogger GetMessageLogger()
@@ -123,7 +124,7 @@ void LogMessageImpl::Init()
 
 void LogMessageImpl::ToSpdlog()
 {
-    logger_->log(sourceLoc_, level_, spdlog::string_view_t{g_ThreadLogData, msgSize_});
+    logger_->log(sourceLoc_, level_, ds_spdlog::string_view_t{g_ThreadLogData, msgSize_});
 
     if (level_ == SPDLOG_LEVEL_CRITICAL) {
         logger_->flush();
@@ -142,7 +143,7 @@ void LogMessageImpl::ToStderr()
     }
 
     ConstructLogPrefix(std::cerr, logTime.getTm(), logTime.getUsec(), baseFilename, sourceLoc_.line, podName_.c_str(),
-                       LogSeverityName[0], FLAGS_az_name);
+                       LogSeverityName[0], FLAGS_cluster_name);
 
     std::cerr.write(g_ThreadLogData, static_cast<std::streamsize>(msgSize_));
     std::cerr << '\n';

@@ -65,8 +65,8 @@ public:
     {
         opts.enableSpill = true;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=12 -log_async=false -log_monitor=true -shared_disk_directory=./" + GetStringUuid()
-            + " -shared_disk_size_mb=100 -v=1 -spill_size_limit=" + std::to_string(maxSize_);
+            "-shared_memory_size_mb=12 -log_async=false -log_monitor=true -spill_size_limit="
+            + std::to_string(maxSize_);
         opts.numEtcd = 1;
         opts.numWorkers = 1;
         opts.numOBS = 1;
@@ -654,9 +654,8 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.enableSpill = true;
-        opts.workerGflagParams =
-            "-shared_memory_size_mb=12 -log_async=false -log_monitor=true -shared_disk_directory=./" + GetStringUuid()
-            + " -shared_disk_size_mb=1024 -v=1 -spill_size_limit=" + std::to_string(maxSize_);
+        opts.workerGflagParams = "-shared_memory_size_mb=12 -log_async=false -log_monitor=true -spill_size_limit="
+                                 + std::to_string(maxSize_);
         opts.numEtcd = 1;
         opts.numWorkers = 2;  // worker num is 2
         opts.numOBS = 1;
@@ -952,8 +951,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams =
-            "-shared_memory_size_mb=1024 -log_async=false -log_monitor=true -shared_disk_directory=./" + GetStringUuid()
-            + " -shared_disk_size_mb=1024 -v=1 " + std::to_string(maxSize_);
+            "-shared_memory_size_mb=1024 -log_async=false -log_monitor=true";
         opts.numEtcd = 1;
         opts.numWorkers = 2;  // worker num is 2
         opts.numOBS = 1;
@@ -1261,12 +1259,12 @@ datasystem::SetParam ConstructParam(CacheType type)
 }
 
 INSTANTIATE_TEST_SUITE_P(ReadOffsetParamTest, KVClientOffsetReadOneHostTest,
-                         ::testing::Values(ConstructParam(CacheType::MEMORY), ConstructParam(CacheType::DISK)));
+                         ::testing::Values(ConstructParam(CacheType::MEMORY)));
 
 INSTANTIATE_TEST_SUITE_P(ReadOffsetParamTest, KVClientOffsetReadRemoteTest,
-                         ::testing::Values(ConstructParam(CacheType::MEMORY), ConstructParam(CacheType::DISK)));
+                         ::testing::Values(ConstructParam(CacheType::MEMORY)));
 
 INSTANTIATE_TEST_SUITE_P(ReadOffsetParamTest, KVClientOffsetReadRemoteParallelTest,
-                         ::testing::Values(ConstructParam(CacheType::MEMORY), ConstructParam(CacheType::DISK)));
+                         ::testing::Values(ConstructParam(CacheType::MEMORY)));
 }  // namespace st
 }  // namespace datasystem

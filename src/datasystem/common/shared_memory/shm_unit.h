@@ -27,6 +27,7 @@
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 
 namespace datasystem {
+class ShmOwner;
 
 class ShmUnit : public ShmUnitInfo {
 public:
@@ -72,10 +73,12 @@ public:
      * @param[in] tenantId The Id of the tenant owns the shm unit.
      * @param[in] needSize The requested size in bytes to allocate.
      * @param[in] populate Indicate need populate or not.
+     * @param[in] serviceType The type of datasystem service for this allocation request.
      * @param[in] cacheType The cache type.
      * @return Status of the call.
      */
     Status AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate,
+                          ServiceType serviceType = ServiceType::OBJECT,
                           memory::CacheType cacheType = memory::CacheType::MEMORY);
 
     /**
@@ -97,11 +100,38 @@ public:
     void SetHardFreeMemory();
 
 private:
+    friend class ShmOwner;
+
+    ServiceType serviceType_ = ServiceType::OBJECT;
+
     memory::CacheType cacheType_ = memory::CacheType::MEMORY;
 
     std::string tenantId_;
 
     bool needHardFree_ = false;
+
+    std::shared_ptr<ShmOwner> shmOwner_{ nullptr };
+};
+
+class ShmOwner : public ShmUnit, public std::enable_shared_from_this<ShmOwner> {
+public:
+    /**
+     * @brief Distribute allocated shared memory into the ShmUnit.
+     * @param[in] shmSize The required shared memory size.
+     * @param[out] shmUnit The shared memory unit.
+     * @return Status of the call.
+     */
+    Status DistributeMemory(uint64_t shmSize, ShmUnit &shmUnit);
+
+private:
+    /**
+     * @brief Move up the cursor in ShmOwner to indicate some memory is distributed.
+     * @param[in] shmSize The required shared memory size.
+     * @return cursor position before the increment.
+     */
+    uint64_t AllocatePosition(uint64_t shmSize);
+
+    std::atomic<uint64_t> cursor_{ 0 };
 };
 }  // namespace datasystem
 

@@ -80,14 +80,11 @@ TEST_F(EvictMemTest, EvictThresHoldTest)
     auto put = [&client0](uint64_t mb) {
         uint64_t dataSize =  mb*MB_TO_BYTES;
         // Put, spill will be triggered
-        CreateParam param;
+        SetParam param;
         param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
         std::string objectKey = FormatString("key_%lu", mb);
         std::string data(dataSize, 'x');
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client0->Object()->Create(objectKey, dataSize, param, buffer));
-        DS_ASSERT_OK(buffer->MemoryCopy(data.data(), dataSize));
-        DS_ASSERT_OK(buffer->Publish());
+        DS_ASSERT_OK(client0->KV()->Set(objectKey, data, param));
     };
     inject::Set("Exist.QueryLocalMem", "call()");
     auto exist = [&client0](std::string objectKey) -> bool {

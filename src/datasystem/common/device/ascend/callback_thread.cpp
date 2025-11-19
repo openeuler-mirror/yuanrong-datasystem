@@ -20,12 +20,16 @@
 
 #include "datasystem/common/device/ascend/callback_thread.h"
 
+#include "datasystem/common/log/trace.h"
+
 namespace datasystem {
 namespace acl {
 CallbackThread::CallbackThread()
 {
     aclDeviceManager_ = acl::AclDeviceManager::Instance();
-    thread_ = std::make_unique<std::thread>([this] {
+    auto traceId = Trace::Instance().GetTraceID();
+    thread_ = std::make_unique<std::thread>([this, traceId] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         constexpr uint32_t CALLBACK_TIMEOUT_MS = 100;
         wp_.Wait();
         while (!exitFlag_) {

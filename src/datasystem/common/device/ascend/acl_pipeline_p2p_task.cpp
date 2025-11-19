@@ -30,7 +30,7 @@
 namespace datasystem {
 namespace acl {
 namespace {
-bool EnableMerge(const std::vector<DataInfo> blobs)
+bool EnableMerge(const std::vector<Blob> blobs)
 {
     if (blobs.size() <= 1) {
         return false;
@@ -42,7 +42,7 @@ bool EnableMerge(const std::vector<DataInfo> blobs)
         return true;
     });
     auto totalSize = std::accumulate(blobs.cbegin(), blobs.cend(), 0ul,
-                                     [](size_t total, const DataInfo &info) { return total + info.size; });
+                                     [](size_t total, const Blob &info) { return total + info.size; });
     return totalSize / blobs.size() <= mergeLimit;
 }
 }  // namespace
@@ -58,7 +58,7 @@ PipeLineP2PBase::~PipeLineP2PBase()
     }
 }
 
-Status PipeLineP2PBase::AllocTransferBuffer(size_t objectSize, DataInfo &transBuffer, uint64_t &seq)
+Status PipeLineP2PBase::AllocTransferBuffer(size_t objectSize, Blob &transBuffer, uint64_t &seq)
 {
     auto tryReuse = [this](size_t objectSize, uint64_t ackSeq, std::vector<ShmUnit> &transferVec) {
         const uint64_t cacheSize = 2;
@@ -111,11 +111,8 @@ Status PipeLineP2PBase::AllocTransferBuffer(size_t objectSize, DataInfo &transBu
     CHECK_FAIL_RETURN_STATUS(transferVec.begin()->GetSize() >= objectSize, K_RUNTIME_ERROR,
                              FormatString("The transfer memory chunk size %zu too small, expect size %zu.",
                                           transferVec.begin()->GetSize(), objectSize));
-    transBuffer.devPtr = transferVec.begin()->GetPointer();
-    transBuffer.dataType = DataType::DATA_TYPE_INT8;
-    transBuffer.count = objectSize;
+    transBuffer.pointer = transferVec.begin()->GetPointer();
     transBuffer.size = objectSize;
-    transBuffer.deviceIdx = 0;
     std::lock_guard<std::mutex> locker(mutex_);
     seq = seq_.fetch_add(1);
     (void)transferUnitPools_.emplace(seq, std::move(transferVec));
@@ -139,7 +136,7 @@ Status PipeLineP2PSend::Submit(P2PSendTask &&task)
     if (!EnableMerge(task.srcBuffers)) {
         VLOG(1) << "Direct P2PSend.";
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(task.comm->P2PSend(task.srcBuffers, task.event, PrimaryStream()),
-                                         "P2PRecv failed");
+                                         "P2PSend failed");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(task.event->RecordEvent(PrimaryStream()), "Record send event failed");
         return Status::OK();
     }
@@ -165,11 +162,11 @@ Status PipeLineP2PSend::RunTaskPhaseOneImpl(size_t pipelineIndex, const P2PSendT
     auto &fftsDispatcher = GetResource()->fftsDispatcher;
     std::vector<int32_t> lastTaskId(MAX_FFTS_TASKS_COUNT, -1);
     size_t offset = 0;
-    auto transferPtr = task.transBuffer.devPtr;
+    auto transferPtr = task.transBuffer.pointer;
     auto transferSize = task.transBuffer.size;
     size_t srcCount = task.srcBuffers.size();
     for (size_t n = 0; n < srcCount; n++) {
-        auto srcPtr = task.srcBuffers[n].devPtr;
+        auto srcPtr = task.srcBuffers[n].pointer;
         size_t srcSize = task.srcBuffers[n].size;
         void *destPtr = static_cast<void *>(static_cast<uint8_t *>(transferPtr) + offset);
         offset += srcSize;
@@ -252,11 +249,11 @@ Status PipeLineP2PRecv::RunTaskPhaseTwoImpl(size_t pipelineIndex, const P2PRecvT
     auto &fftsDispatcher = GetResource()->fftsDispatcher;
     std::vector<int32_t> lastTaskId(MAX_FFTS_TASKS_COUNT, -1);
     size_t offset = 0;
-    auto transferPtr = task.transBuffer.devPtr;
+    auto transferPtr = task.transBuffer.pointer;
     auto transferSize = task.transBuffer.size;
     size_t srcCount = task.destBuffers.size();
     for (size_t n = 0; n < srcCount; n++) {
-        auto destPtr = task.destBuffers[n].devPtr;
+        auto destPtr = task.destBuffers[n].pointer;
         size_t destSize = task.destBuffers[n].size;
         void *srcPtr = static_cast<void *>(static_cast<uint8_t *>(transferPtr) + offset);
         offset += destSize;

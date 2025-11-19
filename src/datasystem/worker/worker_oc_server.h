@@ -35,12 +35,16 @@
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/master/replica_manager.h"
 #include "datasystem/master/replication_service_impl.h"
+#include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
+#include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
+#include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
+#include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/worker/worker_service_impl.h"
 #ifdef WITH_TESTS
@@ -166,6 +170,24 @@ private:
     Status InitMasterWorkerOCService();
 
     /**
+     * @brief Init stream cache service for client request.
+     * @return Status of the call.
+     */
+    Status InitClientWorkerSCService();
+
+    /**
+     * @brief Init stream cache service for worker request.
+     * @return Status of the call.
+     */
+    Status InitWorkerWorkerSCService();
+
+    /**
+     * @brief Init stream cache service for master request.
+     * @return Status of the call.
+     */
+    Status InitMasterWorkerSCService();
+
+    /**
      * @brief Init common service for client request.
      * @return Status of the call.
      */
@@ -182,6 +204,12 @@ private:
      * @return Status of the call.
      */
     Status InitMasterOCService();
+
+    /**
+     * @brief Init stream cache service for worker request.
+     * @return Status of the call.
+     */
+    Status InitMasterSCService();
 
     /**
      * @brief Init rocksdb replica service for worker request.
@@ -313,6 +341,12 @@ private:
     Status InitReplicaManager();
 
     /**
+     * @brief Check sc_encrypt_secret_key.
+     * @return Status of this call.
+     */
+    Status CheckScEncryptSecretKey();
+
+    /**
      * @brief Update cluster info in rocksdb.
      * @param[in] event The event watched from ETCD.
      */
@@ -393,6 +427,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::ReplicaManager> replicaManager_{ nullptr };
+    std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
     std::unique_ptr<datasystem::EtcdClusterManager> etcdCM_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.
     WaitPost waitCond_;
@@ -403,13 +438,21 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerWorkerOCServiceImpl> objCacheWorkerWkSvc_{ nullptr };
     // Object cache rpc service for master request.
     std::shared_ptr<datasystem::object_cache::MasterWorkerOCServiceImpl> objCacheWorkerMsSvc_{ nullptr };
+    // Stream cache rpc service for client request.
+    std::shared_ptr<stream_cache::ClientWorkerSCServiceImpl> streamCacheClientWorkerSvc_{ nullptr };
+    // Stream cache rpc service for master request.
+    std::shared_ptr<stream_cache::MasterWorkerSCServiceImpl> streamCacheMasterWorkerSvc_{ nullptr };
+    // Stream cache rpc service for worker request.
+    std::shared_ptr<stream_cache::WorkerWorkerSCServiceImpl> streamCacheWorkerWorkerSvc_{ nullptr };
 
     // Master services exist in the worker for Object cache compile mode.
     std::shared_ptr<datasystem::master::MasterServiceImpl> commonSvc_{ nullptr };
     std::unique_ptr<datasystem::master::MasterOCServiceImpl> objCacheMasterSvc_{ nullptr };
+    std::unique_ptr<datasystem::master::MasterSCServiceImpl> streamCacheMasterSvc_{ nullptr };
     std::unique_ptr<datasystem::ReplicationServiceImpl> replicaSvc_{ nullptr };
     std::future<Status> objCacheMasterSvcStatus_;
     std::future<Status> objCacheMasterAdSvcStatus_;
+    std::future<Status> streamCacheMasterSvcStatus_;
 
     // Check whether all asynchronous tasks are completed before the worker ends.
     std::unique_ptr<Thread> checkAsyncTasksThread_{ nullptr };

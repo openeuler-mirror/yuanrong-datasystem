@@ -44,8 +44,7 @@ protected:
     std::string objKey0 = "objKey0";
     std::string objKey1 = "objKey1";
     size_t shmSz = 20 * 1000ul * 1000ul;
-    CreateParam createParam = { .writeMode = WriteMode::NONE_L2_CACHE,
-                                .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
 };
  
 TEST_F(ShmThresholdTest, DISABLED_LEVEL1_AllocationFailedForThreshold)

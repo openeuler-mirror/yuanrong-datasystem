@@ -304,7 +304,7 @@ Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb, const s
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(GLOBAL_CACHE_TABLE, iter.first, iter.second));
         }
     } else {
-        if (isFromRocksdb) {
+        if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(GLOBAL_CACHE_TABLE, deleteObjects),
                                              "Load global cache delete objects from rocksdb failed.");
         } else {

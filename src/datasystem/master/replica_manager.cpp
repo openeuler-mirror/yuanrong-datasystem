@@ -42,7 +42,9 @@
 #include "datasystem/master/replica_rpc_channel_impl.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
+#include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/protos/worker_object.pb.h"
+#include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
@@ -51,6 +53,7 @@
 
 DS_DEFINE_bool(enable_meta_replica, false, "Controls whether to enable multiple meta replica");
 DS_DECLARE_uint32(rolling_update_timeout_s);
+DS_DECLARE_string(rocksdb_write_mode);
 
 namespace datasystem {
 const std::string REPLICA_MANAGER = "ReplicaManager";
@@ -70,6 +73,9 @@ void MetadataManager::Shutdown()
 {
     if (oc != nullptr) {
         oc->Shutdown();
+    }
+    if (sc != nullptr) {
+        sc->Shutdown();
     }
 }
 
@@ -92,6 +98,10 @@ ReplicaManager::~ReplicaManager()
 Status ReplicaManager::Init(ReplicaManagerParam param)
 {
     LOG(INFO) << "Init replica manager.";
+    if (FLAGS_enable_meta_replica && FLAGS_rocksdb_write_mode == "none") {
+        RETURN_STATUS(StatusCode::K_INVALID,
+                      "When using enable_meta_replica, rocksdb_write_mode cannot be set to none.");
+    }
     dbRootPath_ = std::move(param.dbRootPath);
     currentWorkerId_ = std::move(param.currWorkerId);
     akSkManager_ = param.akSkManager;
@@ -101,7 +111,9 @@ Status ReplicaManager::Init(ReplicaManagerParam param)
     etcdCM_ = param.etcdCM;
     masterWorkerService_ = param.masterWorkerService;
     workerWorkerService_ = param.workerWorkerService;
+    rpcSessionManager_ = param.rpcSessionManager;
     isOcEnabled_ = param.isOcEnabled;
+    isScEnabled_ = param.isScEnabled;
     bool multiReplicaEnabled = MultiReplicaEnabled();
     if (multiReplicaEnabled) {
         const int queueSize = 1024;
@@ -139,20 +151,21 @@ void ReplicaManager::SubscribeEvent()
     ReplicaEvent::GetInstance().AddSubscriber(REPLICA_MANAGER,
                                               [this](mvccpb::Event &event) { return EnqueEvent(event); });
 
-    HashRingEvent::ClusterInitFinish::GetInstance().AddSubscriber(
-        REPLICA_MANAGER, [this](const std::string &primaryWorkerId, const std::string &standbyWorkerId) {
-            if (currentWorkerId_ != primaryWorkerId) {
-                return;
-            }
-            INJECT_POINT("worker.ClusterInitFinish", [&] {
-                ReplicaGroupPb replicaGroupPb =
-                    CreateReplicaGroupPb(standbyWorkerId, { primaryWorkerId, standbyWorkerId });
-                LOG_IF_ERROR(PutReplicaGroupToEtcd(primaryWorkerId, replicaGroupPb), "PutReplicaGroupToEtcd failed");
-            });
-
-            LOG_IF_ERROR(AdjustReplicaLocationImpl(primaryWorkerId, { standbyWorkerId }),
-                         "AdjustReplicaLocationImpl failed");
+    HashRingEvent::ClusterInitFinish::GetInstance().AddSubscriber(REPLICA_MANAGER, [this](const std::string
+                                                                                              &primaryWorkerId,
+                                                                                          const std::string
+                                                                                              &standbyWorkerId) {
+        if (currentWorkerId_ != primaryWorkerId) {
+            return;
+        }
+        INJECT_POINT("worker.ClusterInitFinish", [&] {
+            ReplicaGroupPb replicaGroupPb = CreateReplicaGroupPb(standbyWorkerId, { primaryWorkerId, standbyWorkerId });
+            LOG_IF_ERROR(PutReplicaGroupToEtcd(primaryWorkerId, replicaGroupPb), "PutReplicaGroupToEtcd failed");
         });
+
+        LOG_IF_ERROR(AdjustReplicaLocationImpl(primaryWorkerId, { standbyWorkerId }),
+                     "AdjustReplicaLocationImpl failed");
+    });
 
     NodeTimeoutEvent::GetInstance().AddSubscriber(
         REPLICA_MANAGER, [this](const std::string &workerAddr, bool, bool, bool isOtherAzNode) {
@@ -187,13 +200,15 @@ bool ReplicaManager::MultiReplicaEnabled()
     return FLAGS_enable_meta_replica && (etcdCM_ == nullptr || !etcdCM_->IsCentralized());
 }
 
-Status ReplicaManager::CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore
-                                         )
+Status ReplicaManager::CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore,
+                                         RocksStore *streamRocksStore)
 {
+    (void)streamRocksStore;
     auto iter = metadataManagers_.find(dbName);
     if (iter == metadataManagers_.end()) {
         Timer timer;
         double ocElapsed = 0;
+        double scElapsed = 0;
         MetadataManager metadataManager;
         if (isOcEnabled_) {
             // create OCMetadataManager instance
@@ -207,8 +222,20 @@ Status ReplicaManager::CreateMetaManager(const std::string &dbName, RocksStore *
             metadataManager.oc = std::move(oc);
         }
 
+        if (isScEnabled_) {
+            // create SCMetadataManager instance
+            auto sc = std::make_shared<master::SCMetadataManager>(masterAddress_, akSkManager_, rpcSessionManager_,
+                                                                  etcdCM_, streamRocksStore, dbName);
+            LOG(INFO) << "Start init SCMetadataManager for " << dbName;
+            timer.Reset();
+            RETURN_IF_NOT_OK(sc->Init());
+            scElapsed = timer.ElapsedMilliSecond();
+            metadataManager.sc = std::move(sc);
+        }
+
         metadataManagers_.emplace(dbName, std::move(metadataManager));
-        LOG(INFO) << "OCMetadataManager init cost:" << ocElapsed << "ms for " << dbName;
+        LOG(INFO) << "OCMetadataManager init cost:" << ocElapsed << "ms, SCMetadataManager init cost:" << scElapsed
+                  << "ms for " << dbName;
     }
     return Status::OK();
 }
@@ -246,6 +273,16 @@ Status ReplicaManager::GetOcMetadataManager(const std::string &dbName,
     RETURN_IF_NOT_OK(GetMetadataManager(dbName, metadataManager));
     RETURN_RUNTIME_ERROR_IF_NULL(metadataManager.oc);
     ocMetadataManager = metadataManager.oc;
+    return Status::OK();
+}
+
+Status ReplicaManager::GetScMetadataManager(const std::string &dbName,
+                                            std::shared_ptr<master::SCMetadataManager> &scMetadataManager)
+{
+    MetadataManager metadataManager;
+    RETURN_IF_NOT_OK(GetMetadataManager(dbName, metadataManager));
+    RETURN_RUNTIME_ERROR_IF_NULL(metadataManager.sc);
+    scMetadataManager = metadataManager.sc;
     return Status::OK();
 }
 
@@ -377,6 +414,10 @@ Status ReplicaManager::AddOrSwitchTo(const std::string &dbName, ReplicaType type
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Replica::CreateOcTable(replica->GetObjectRocksStore()),
                                              "Replica create oc table failed");
         }
+        if (isScEnabled_) {
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Replica::CreateScTable(replica->GetStreamRocksStore()),
+                                             "Replica create sc table failed");
+        }
         iter = replicas_.emplace(dbName, std::move(replica)).first;
     }
     auto &replica = *iter->second;
@@ -387,7 +428,7 @@ Status ReplicaManager::AddOrSwitchTo(const std::string &dbName, ReplicaType type
     LOG(INFO) << "Replica " << dbName << ", switch to " << Replica::ReplicaTypeToString(type);
     replica.SetReplicaType(type);
     if (type == ReplicaType::Primary) {
-        RETURN_IF_NOT_OK(CreateMetaManager(dbName, replica.GetObjectRocksStore()));
+        RETURN_IF_NOT_OK(CreateMetaManager(dbName, replica.GetObjectRocksStore(), replica.GetStreamRocksStore()));
     } else {
         RETURN_IF_NOT_OK(DestroyMetaManager(dbName));
     }
@@ -507,7 +548,8 @@ Status ReplicaManager::AddDelayElectionTask(uint64_t delaySec, const std::string
         return Election(dbName);
     }
     TimerQueue::TimerImpl timer;
-    TimerQueue::GetInstance()->AddTimer(delaySec * SECTOMILLI, [this, dbName] { Election(dbName); }, timer);
+    TimerQueue::GetInstance()->AddTimer(
+        delaySec * SECTOMILLI, [this, dbName] { Election(dbName); }, timer);
 
     std::lock_guard<std::shared_timed_mutex> locker(mutex_);
     timers_.emplace(dbName, std::make_unique<TimerQueue::TimerImpl>(timer));
@@ -1163,7 +1205,8 @@ bool ReplicaManager::CheckMetaEmpty(const std::string &dbName)
     }
 
     auto oc = metadataManager.oc;
-    if (oc != nullptr && !oc->CheckMetaTableEmpty()) {
+    auto sc = metadataManager.sc;
+    if ((oc != nullptr && !oc->CheckMetaTableEmpty()) || (sc != nullptr && !sc->CheckMetaTableEmpty())) {
         return false;
     }
 
@@ -1232,6 +1275,20 @@ Status ReplicaManager::CheckMappingExpired(std::set<std::string> &expiredUuids)
             [&expiredUuids, &isUuidsEmpty](const std::string &objKey) {
                 std::string curUuid;
                 if (TrySplitWorkerIdFromObjecId(objKey, curUuid).IsOk() && ContainsKey(expiredUuids, curUuid)) {
+                    expiredUuids.erase(curUuid);
+                    isUuidsEmpty = expiredUuids.empty();
+                    return true;
+                }
+                return false;
+            },
+            objKeys, &isUuidsEmpty);
+    }
+
+    if (metadataManager.sc != nullptr && !isUuidsEmpty) {
+        metadataManager.sc->GetMetasMatch(
+            [&expiredUuids, &isUuidsEmpty](const std::string &streamName) {
+                std::string curUuid;
+                if (TrySplitWorkerIdFromObjecId(streamName, curUuid).IsOk() && ContainsKey(expiredUuids, curUuid)) {
                     expiredUuids.erase(curUuid);
                     isUuidsEmpty = expiredUuids.empty();
                     return true;

@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include <google/protobuf/util/json_util.h>
 #include <re2/re2.h>
 #include <securec.h>
 
@@ -87,6 +88,20 @@ std::string VectorToString(const Vec &vec, bool allowCut = true)
     return out.str();
 }
 
+template <typename T>
+inline std::string ToStringHelper(const T &value)
+{
+    if constexpr (std::is_base_of_v<::google::protobuf::Message, T>) {
+        return value.DebugString();
+    } else {
+        if constexpr (std::is_same_v<T, std::string>) {
+            return value;
+        } else {
+            return std::to_string(value);
+        }
+    }
+}
+
 /**
  * @brief Print map.
  * @param[in] map Map to print.
@@ -97,7 +112,7 @@ std::string MapToString(const Map &map)
 {
     std::stringstream out;
     for (auto &item : map) {
-        out << "{" << item.first << ": " << item.second << "} ";
+        out << "{" << item.first << ": " << ToStringHelper(item.second) << "} ";
     }
     return out.str();
 }
@@ -140,9 +155,9 @@ inline bool StringToInt(const std::string &str, int &num)
 }
 
 /**
-* @brief Check if the string contains the negative sign.
-* @param[in] str string to be checked.
-* @return true if has negative sign, else false.
+ * @brief Check if the string contains the negative sign.
+ * @param[in] str string to be checked.
+ * @return true if has negative sign, else false.
  */
 inline bool IsNegative(const std::string &str)
 {
@@ -157,10 +172,10 @@ inline bool IsNegative(const std::string &str)
 }
 
 /**
-* @brief Convert string to unsigned long, using stoull directly will interpret negative number as extremely large
-* positive values, therefore it’s necessary to check if the string contains a negative sign.
-* @param[in] str string to be interpreted.
-* @return Converted number.
+ * @brief Convert string to unsigned long, using stoull directly will interpret negative number as extremely large
+ * positive values, therefore it’s necessary to check if the string contains a negative sign.
+ * @param[in] str string to be interpreted.
+ * @return Converted number.
  */
 inline unsigned long StrToUnsignedLong(const std::string &str)
 {
@@ -171,10 +186,10 @@ inline unsigned long StrToUnsignedLong(const std::string &str)
 }
 
 /**
-* @brief Convert string to unsigned long long, using stoull directly will interpret negative number as extremely
-* large positive values, therefore it’s necessary to check if the string contains a negative sign.
-* @param[in] str string to be interpreted.
-* @return Converted number.
+ * @brief Convert string to unsigned long long, using stoull directly will interpret negative number as extremely
+ * large positive values, therefore it’s necessary to check if the string contains a negative sign.
+ * @param[in] str string to be interpreted.
+ * @return Converted number.
  */
 inline unsigned long long StrToUnsignedLongLong(const std::string &str)
 {
@@ -420,7 +435,7 @@ inline const char *BoolToString(bool val)
  * @param input The input string.
  * @param retainDigits The retained digits.
  * @return std::string Truncated string.
-*/
+ */
 inline std::string GetTruncatedStr(const std::string &input, size_t retainDigits = 6)
 {
     const size_t minDigits = 10;

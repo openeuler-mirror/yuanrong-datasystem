@@ -108,6 +108,7 @@ public:
         param.masterWorkerService = nullptr;
         param.workerWorkerService = nullptr;
         param.isOcEnabled = true;
+        param.isScEnabled = false;
         RETURN_IF_NOT_OK(replicaManager_->Init(param));
         RETURN_IF_NOT_OK(replicaManager_->AddOrSwitchTo(param.currWorkerId, ReplicaType::Primary));
         etcdCM_->SetWorkerReady();

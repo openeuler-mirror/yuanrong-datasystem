@@ -108,7 +108,7 @@ DS_DEFINE_uint32(data_migrate_rate_limit_mb, 40, "Data migrate rate limit for ev
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);
@@ -346,7 +346,21 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
-    return multiPublishProc_->MultiPublish(req, resp, payloads);
+    RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads));
+    if (req.auto_release_memory_ref()) {
+        std::set<std::string> failedSet{ resp.failed_object_keys().begin(), resp.failed_object_keys().end() };
+        std::vector<std::string> shmIds;
+        shmIds.reserve(req.object_info_size());
+        for (auto &info : req.object_info()) {
+            if (failedSet.find(info.object_key()) != failedSet.end()) {
+                continue;
+            }
+            shmIds.emplace_back(info.shm_id());
+        }
+        VLOG(1) << "auto release ref " << VectorToString(shmIds);
+        return DecreaseMemoryRef(req.client_id(), shmIds);
+    }
+    return Status::OK();
 }
 
 void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
@@ -450,7 +464,7 @@ Status WorkerOCServiceImpl::ProcessVoluntaryScaledown(const std::string &taskId)
     std::vector<std::string> needWaitIds;
     RETURN_IF_NOT_OK(BeforeMigrateData(taskId, needMigrateDataIds, needWaitIds));
     INJECT_POINT("VoluntaryScaledown.MigrateData.Delay");
-    MigrateData(needMigrateDataIds, taskId);
+    RETURN_IF_NOT_OK(MigrateData(needMigrateDataIds, taskId));
     // When we have finish migrate data task, we can remove the location.
     std::vector<std::string> removeFailedIds;
     GroupAndRemoveMeta(needMigrateDataIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds,
@@ -684,14 +698,16 @@ Status WorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, MigrateData
     return gMigrateProc_->MigrateData(req, rsp, std::move(payloads));
 }
 
-void WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
-                                      MigrateStrategy::MigrationStrategyStage stage)
+Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
+                                        MigrateStrategy::MigrationStrategyStage stage)
 {
-    INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.MigrateData.Delay",
-                           [](int sleepMs) { std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs)); });
+    INJECT_POINT("WorkerOCServiceImpl.MigrateData.Delay", [](int sleepMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+        return Status::OK();
+    });
     if (objectKeys.empty()) {
         LOG(INFO) << "[Migrate Data] No object data need to be migrated, we have finish the job, task id: " << taskId;
-        return;
+        return Status::OK();
     }
 
     LOG(INFO) << "[Migrate Data] Processing valuntary scale down data migrate begin, object size: " << objectKeys.size()
@@ -724,6 +740,7 @@ void WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys
         objKeysGrpByMaster.clear();
         MetaAddrInfo info;
         (void)objKeysGrpByMaster.emplace(info, objectKeys);
+        return Status::OK();
     });
     for (const auto &item : objKeysGrpByMaster) {
         futures.emplace_back(MigrateDataByNode(item.first, item.second, progress, threadPool, MigrateStrategy(stage)));
@@ -731,12 +748,13 @@ void WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys
 
     while (!futures.empty()) {
         std::vector<std::future<MigrateDataHandler::MigrateResult>> newFutures;
-        HandleMigrateDataResult(taskId, progress, threadPool, futures, newFutures);
+        RETURN_IF_NOT_OK(HandleMigrateDataResult(taskId, progress, threadPool, futures, newFutures));
         futures.swap(newFutures);
     }
+    return Status::OK();
 }
 
-void WorkerOCServiceImpl::HandleMigrateDataResult(
+Status WorkerOCServiceImpl::HandleMigrateDataResult(
     const std::string &taskId, const std::shared_ptr<MigrateProgress> progress,
     const std::unique_ptr<ThreadPool> &threadPool, std::vector<std::future<MigrateDataHandler::MigrateResult>> &futures,
     std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures)
@@ -746,9 +764,11 @@ void WorkerOCServiceImpl::HandleMigrateDataResult(
         LOG(INFO) << MigrateDataHandler::ResultToString(result);
         if (!result.failedIds.empty()) {
             if (!taskId.empty() && etcdCM_->CheckVoluntaryTaskExpired(taskId)) {
-                LOG(ERROR) << "task id has expired, no need to excute voluntary scale down migrate data task, task id:"
-                           << taskId;
-                break;
+                RETURN_STATUS_LOG_ERROR(
+                    K_RUNTIME_ERROR,
+                    FormatString(
+                        "task id has expired, no need to excute voluntary scale down migrate data task, task id: %s",
+                        taskId));
             }
             if (!taskId.empty() && etcdCM_->CheckVoluntaryScaleDown()) {
                 LOG(ERROR) << "this node maybe failed or only one node left, no need to excute voluntary scale down "
@@ -760,6 +780,7 @@ void WorkerOCServiceImpl::HandleMigrateDataResult(
                                                         result.migrateDataStrategy));
         }
     }
+    return Status::OK();
 }
 
 std::future<MigrateDataHandler::MigrateResult> WorkerOCServiceImpl::RedirectMigrateData(
@@ -2127,9 +2148,19 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     std::string traceID = Trace::Instance().GetTraceID();
     devThreadPool_->Execute([=]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        auto objectKey = req.dev_obj_meta(0).object_key();
-        LOG(INFO) << "Worker processes GetP2PMeta from client: " << clientId << ", objects: " << objectKey
-                  << ", threads Statistics: " << devThreadPool_->GetStatistics();
+        std::stringstream allKeys;
+        bool first = true;
+        for (const auto &dev_obj_meta : *req.mutable_dev_obj_meta()) {
+            if (!first) {
+                allKeys << ", ";
+            }
+            allKeys << dev_obj_meta.object_key();
+            first = false;
+        }
+        LOG(INFO) << FormatString("Worker processes GetP2PMeta from client: %s, allKeys: [%s], threads Statistics: %s",
+            clientId,
+            allKeys.str(),
+            devThreadPool_->GetStatistics());
         int64_t elapsed = timer.ElapsedMilliSecond();
         if (elapsed >= timeout) {
             LOG(ERROR) << "GetP2PMeta RPC timeout. time elapsed " << elapsed << ", subTimeout:" << timeout
@@ -2180,8 +2211,8 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
     devThreadPool_->Execute([=]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        LOG(INFO) << "Worker processes RecvRootInfo from dstClientId: " << req.dst_client_id()
-                  << ", dst_device_id: " << req.dst_device_id()
+        LOG(INFO) << "Worker processes RecvRootInfo from srcClientId: " << req.src_device_id()
+                  << ", src_device_id: " << req.src_device_id()
                   << ", threads Statistics: " << devThreadPool_->GetStatistics();
         int64_t elapsed = timer.ElapsedMilliSecond();
         if (elapsed >= timeout) {

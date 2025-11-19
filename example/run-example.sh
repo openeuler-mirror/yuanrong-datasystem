@@ -15,30 +15,61 @@
 
 set -e
 
-readonly EXAMPLE_DIR=$(dirname "$(readlink -f "$0")")
-example_build_dir="${EXAMPLE_DIR}/build"
-ds_output_dir="${EXAMPLE_DIR}/../output"
+readonly curr_dir=$(dirname "$(readlink -f "$0")")
+example_cpp_dir="${curr_dir}/cpp/build"
+example_python_dir="${curr_dir}/python"
+config_file="${curr_dir}/../config.cmake"
 old_ld_path=${LD_LIBRARY_PATH}
 
-export PATH=$PATH:${EXAMPLE_DIR}/../scripts/modules
+function get_var_from_cmake() {
+    local var_name="$1"
+    local file="$2"
+    grep -E "^set\(${var_name} " "$file" | sed -E "s/^set\(${var_name} \"(.*)\"\)/\1/"
+}
+ds_output_dir=$(get_var_from_cmake "INSTALL_DIR" "$config_file")
+run_hetero=$(get_var_from_cmake "BUILD_HETERO" "$config_file")
+run_python=$(get_var_from_cmake "PACKAGE_PYTHON" "$config_file")
+
+[[ ! -d "${ds_output_dir}"/service ]] && tar -zxf "${ds_output_dir}"/yr-datasystem-v$(cat "${curr_dir}/../VERSION").tar.gz -C ${ds_output_dir}
+python3 -m pip install ${ds_output_dir}/openyuanrong_datasystem-*.whl --force-reinstall
+
+export PATH=$PATH:${curr_dir}/../scripts/modules
 export PATH=$PATH:/usr/sbin
 . llt_util.sh
-run_hetero="$1"
-run_perf="$2"
 
-start_all "${EXAMPLE_DIR}/build" "${ds_output_dir}"
+start_all "${example_cpp_dir}" "${ds_output_dir}"
+cleanup_once=false
+cleanup() {
+    if [ "$cleanup_once" = true ]; then
+        return
+    fi
+    cleanup_once=true
+    trap '' INT TERM
+    echo "stop all service..."
+    stop_all "${ds_output_dir}"
+}
+trap cleanup EXIT INT TERM
 
-echo -e "---- Running the example..."
+# run cpp example
+echo -e "---- Running cpp example..."
 export LD_LIBRARY_PATH="${ds_output_dir}/sdk/cpp/lib:${LD_LIBRARY_PATH}"
 echo "Set LD_LIBRARY_PATH=${LD_LIBRARY_PATH} before cpp example test."
-${example_build_dir}/ds_example "127.0.0.1" "${worker_port}"
-${example_build_dir}/object_example "127.0.0.1" "${worker_port}" "1000" "false"
-${example_build_dir}/kv_example "127.0.0.1" "${worker_port}"
-
-if [ "x$run_perf" == "xon" ]; then
-  ${example_build_dir}/perf_example "127.0.0.1" "${worker_port}"
+${example_cpp_dir}/stream_client_example "127.0.0.1" "${worker_port}"
+${example_cpp_dir}/datasystem_example "127.0.0.1" "${worker_port}"
+${example_cpp_dir}/object_client_example "127.0.0.1" "${worker_port}" "1000" "false"
+${example_cpp_dir}/kv_client_example "127.0.0.1" "${worker_port}"
+if [ "x$run_hetero" == "xon" ]; then
+    ${example_cpp_dir}/hetero_client_example "127.0.0.1" "${worker_port}"
 fi
-
 export LD_LIBRARY_PATH="${old_ld_path}"
 
-stop_all "${ds_output_dir}"
+# run python example
+if [ "x$run_python" == "xon" ]; then
+    echo -e "---- Running python example..."
+    python ${example_python_dir}/object_client_example.py --host "127.0.0.1" --port "${worker_port}"
+    python ${example_python_dir}/kv_client_example.py --host "127.0.0.1" --port "${worker_port}"
+    if [ "x$run_hetero" == "xon" ]; then
+        python ${example_python_dir}/hetero_client_example.py --host "127.0.0.1" --port "${worker_port}"
+        python ${example_python_dir}/ds_tensor_client_example.py --host "127.0.0.1" --port "${worker_port}"
+    fi
+fi

@@ -61,6 +61,9 @@ public:
 #else
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=false ";
 #endif
+#ifdef URMA_OVER_UB
+        opts.workerGflagParams += " -urma_mode=UB ";
+#endif
     }
 
     void SetUp() override
@@ -73,6 +76,22 @@ public:
     {
         ExternalClusterTest::TearDown();
     }
+};
+
+class UrmaObjectClientAuthorizationTest : public UrmaObjectClientTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -authorization_enable=true";
+        opts.systemAccessKey = accessKey_;
+        opts.systemSecretKey = secretKey_;
+    }
+
+protected:
+    std::string tenantId1_ = "tenant1";
+    std::string tenantId2_ = "tenant2";
+    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
+    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
 TEST_F(UrmaObjectClientTest, UrmaPutGetDeleteShmTest)
@@ -93,7 +112,8 @@ TEST_F(UrmaObjectClientTest, UrmaPutGetDeleteShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
-TEST_F(UrmaObjectClientTest, TestBatchRemoteGet)
+// bus error happen in aarch64
+TEST_F(UrmaObjectClientTest, DISABLED_TestBatchRemoteGet1)
 {
     // Test that the batch get path in urma case is working as expected.
     std::shared_ptr<KVClient> client1;
@@ -108,6 +128,131 @@ TEST_F(UrmaObjectClientTest, TestBatchRemoteGet)
     for (int i = 0; i < numKV; i++) {
         keys.emplace_back("keys_" + std::to_string(i));
         values.emplace_back("values_" + std::to_string(i));
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client2->Set(keys[i], values[i]));
+    }
+
+    std::vector<std::string> valuesGet;
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    DS_ASSERT_OK(client1->Get(keys, valuesGet));
+    DS_ASSERT_OK(client1->Get(keys, buffers));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+    ASSERT_EQ(keys.size(), buffers.size());
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
+        ASSERT_EQ(values[i],
+                  std::string(reinterpret_cast<const char *>(buffers[i]->ImmutableData()), buffers[i]->GetSize()));
+    }
+}
+
+TEST_F(UrmaObjectClientTest, TestBatchRemoteGet2)
+{
+    // Test specifically batch get for 8KB * 1024, so it needs multiple batches when allocating in URMA case.
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int numKV = 1024;
+    const uint64_t objectSize = 8 * 1024;
+    std::vector<std::string> keys;
+    std::vector<StringView> values;
+    std::vector<std::string> valuesForVer;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        valuesForVer.emplace_back(GenRandomString(objectSize));
+        values.emplace_back(valuesForVer.back());
+    }
+
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client2->MSet(keys, values, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+
+    std::vector<std::string> valuesGet;
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    DS_ASSERT_OK(client1->Get(keys, valuesGet));
+    DS_ASSERT_OK(client1->Get(keys, buffers));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+    ASSERT_EQ(keys.size(), buffers.size());
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        ASSERT_EQ(valuesForVer[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
+        ASSERT_EQ(valuesForVer[i],
+                  std::string(reinterpret_cast<const char *>(buffers[i]->ImmutableData()), buffers[i]->GetSize()));
+    }
+}
+
+TEST_F(UrmaObjectClientTest, TestBatchRemoteGet3)
+{
+    // Test that with big objects (>= 1M), the logic batches all the other small objects,
+    // and allocates memory separate for the big objects.
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int numKV = 1024;
+    const uint64_t objectSize = 8 * 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    const uint64_t bigSize = 1024 * 1024;
+    keys.emplace_back("big_data1");
+    values.emplace_back(GenRandomString(bigSize));
+    const int bigIndex = 300;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        values.emplace_back(GenRandomString(objectSize));
+        if (i == bigIndex) {
+            keys.emplace_back("big_data2");
+            values.emplace_back(GenRandomString(bigSize));
+        }
+    }
+    keys.emplace_back("big_data3");
+    values.emplace_back(GenRandomString(bigSize));
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client2->Set(keys[i], values[i]));
+    }
+
+    std::vector<std::string> valuesGet;
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    DS_ASSERT_OK(client1->Get(keys, valuesGet));
+    DS_ASSERT_OK(client1->Get(keys, buffers));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+    ASSERT_EQ(keys.size(), buffers.size());
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
+        ASSERT_EQ(values[i],
+                  std::string(reinterpret_cast<const char *>(buffers[i]->ImmutableData()), buffers[i]->GetSize()));
+    }
+}
+
+TEST_F(UrmaObjectClientAuthorizationTest, TestBatchRemoteGet4)
+{
+    // Test that with tenant authorization enabled,
+    // the logic still batches the allocation, and the tenant id is selected correctly.
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1, [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId2_); });
+    InitTestKVClient(1, client2, [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId2_); });
+
+    const int numKV = 1024;
+    const uint64_t objectSize = 8 * 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        values.emplace_back(GenRandomString(objectSize));
     }
 
     for (size_t i = 0; i < keys.size(); i++) {

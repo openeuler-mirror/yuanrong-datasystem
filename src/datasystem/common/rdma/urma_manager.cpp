@@ -19,14 +19,17 @@
  */
 #include "datasystem/common/rdma/urma_manager.h"
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/utils/status.h"
+#include "urma_opcode.h"
 
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
@@ -46,18 +49,27 @@ UrmaManager::UrmaManager()
     urmaToken_.token = DEFAULT_TOKEN;
 
     registerSegmentFlag_.bs.token_policy = URMA_TOKEN_PLAIN_TEXT;
+    registerSegmentFlag_.bs.token_id_valid = URMA_TOKEN_ID_INVALID;
+    LOG(INFO) << "registerSegmentFlag_.token_id_valid=" << URMA_TOKEN_ID_INVALID;
     registerSegmentFlag_.bs.cacheable = URMA_NON_CACHEABLE;
-    registerSegmentFlag_.bs.access =
-        URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
     registerSegmentFlag_.bs.reserved = 0;
 
     importSegmentFlag_.bs.cacheable = URMA_NON_CACHEABLE;
-    importSegmentFlag_.bs.access =
-        URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
     importSegmentFlag_.bs.mapping = URMA_SEG_NOMAP;
     importSegmentFlag_.bs.reserved = 0;
+
+#ifdef URMA_OVER_UB
+    registerSegmentFlag_.bs.access = URMA_ACCESS_READ | URMA_ACCESS_WRITE | URMA_ACCESS_ATOMIC;
+    importSegmentFlag_.bs.access = URMA_ACCESS_READ | URMA_ACCESS_WRITE | URMA_ACCESS_ATOMIC;
+#else
+    registerSegmentFlag_.bs.access =
+        URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
+    importSegmentFlag_.bs.access =
+        URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
+#endif
     localSegmentMap_ = std::make_unique<SegmentMap>();
     remoteDeviceMap_ = std::make_unique<RemoteDeviceMap>();
+    eventMap_ = std::make_unique<EventMap>();
 }
 
 UrmaManager::~UrmaManager()
@@ -66,6 +78,7 @@ UrmaManager::~UrmaManager()
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager()";
     remoteDeviceMap_.reset();
     localSegmentMap_.reset();
+    eventMap_.reset();
     urmaJfrVec_.clear();
     urmaJfsVec_.clear();
     urmaJfc_.reset();
@@ -86,17 +99,26 @@ Status UrmaManager::Stop()
     return Status::OK();
 }
 
-Status UrmaManager::Init(const std::string &host)
+Status UrmaManager::Init(const HostPort &hostport)
 {
-    LOG(INFO) << "UrmaManager::Init(host = " << host << ")";
+    LOG(INFO) << FormatString("UrmaManager::Init(hostport = %s)", hostport.ToString());
     std::string deviceName;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(GetDevNameFromLocalIp(host, deviceName) == 0, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(GetDevNameFromLocalIp(hostport.Host(), deviceName) == 0, K_INVALID,
                                          "Invalid ip address to get device name");
-    RETURN_IF_NOT_OK(EthToRdmaDevName(deviceName, deviceName));
     LOG(INFO) << "deviceName = " << deviceName;
+    std::string urmaDeviceName;
+    if (GetUrmaMode() == UrmaMode::IB) {
+        RETURN_IF_NOT_OK(EthToRdmaDevName(deviceName, urmaDeviceName));
+    } else if (GetUrmaMode() == UrmaMode::UB) {
+        urmaDeviceName = GetStringFromEnv(ENV_UB_DEVICE_NAME.c_str(), DEFAULT_UB_DEVICE_NAME.c_str());
+        if (urmaDeviceName.empty()) {
+            RETURN_STATUS(K_INVALID, "env DS_URMA_DEV_NAME is empty");
+        }
+    }
+    LOG(INFO) << "urmaDeviceName = " << urmaDeviceName;
     RETURN_IF_NOT_OK(UrmaInit());
     urma_device_t *urmaDevice = nullptr;
-    RETURN_IF_NOT_OK(UrmaGetDeviceByName(deviceName, urmaDevice));
+    RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
     RETURN_IF_NOT_OK(UrmaQueryDevice(urmaDevice));
     int eidIndex = -1;
     RETURN_IF_NOT_OK(GetEidIndex(urmaDevice, eidIndex));
@@ -112,7 +134,23 @@ Status UrmaManager::Init(const std::string &host)
         RETURN_IF_NOT_OK(UrmaCreateJfs(urmaJfc_, urmaJfsVec_[i]));
         RETURN_IF_NOT_OK(UrmaCreateJfr(urmaJfc_, urmaJfrVec_[i]));
     }
+    RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
     serverEventThread_ = std::make_unique<std::thread>(&UrmaManager::ServerEventHandleThreadMain, this);
+    return Status::OK();
+}
+
+Status UrmaManager::InitLocalUrmaInfo(const HostPort &hostport)
+{
+    localUrmaInfo_.eid = GetEid();
+    localUrmaInfo_.uasid = GetUasid();
+    localUrmaInfo_.jfrIds = GetJfrIds();
+    localUrmaInfo_.localAddress = hostport;
+#ifdef URMA_OVER_UB
+    if (GetUrmaMode() == UrmaMode::UB) {
+        RETURN_IF_NOT_OK(GetJfrInfoForBond(localUrmaInfo_.bondInfos));
+    }
+#endif
+    LOG(INFO) << "local urma info: " << localUrmaInfo_.ToString();
     return Status::OK();
 }
 
@@ -158,7 +196,7 @@ Status UrmaManager::UrmaQueryDevice(urma_device_t *&urmaDevice)
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma query device, ret = %d", ret));
     }
-    LOG(INFO) << "urma query device success";
+    LOG(INFO) << "urma query device success with dev type:" << urmaDevice->type;
     return Status::OK();
 }
 
@@ -195,12 +233,15 @@ Status UrmaManager::GetEidIndex(urma_device_t *&urmaDevice, int &eidIndex)
     RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, "Failed to get eid index for device");
 }
 
-Status UrmaManager::UrmaCreateContext(urma_device_t *&urmaDevice, const uint32_t eidIndex)
+Status UrmaManager::UrmaCreateContext(urma_device_t *&urmaDevice, uint32_t eidIndex)
 {
-    LOG(INFO) << "UrmaManager::UrmaCreateContext()";
+    LOG(INFO) << "UrmaManager::UrmaCreateContext() with eidIndex:" << eidIndex;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!urmaContext_, K_DUPLICATED,
                                          "Failed to urma create context, context already exist");
-
+    if (GetUrmaMode() == UrmaMode::UB) {
+        LOG(INFO) << "force using eidIndex 0";
+        eidIndex = 0;
+    }
     urmaContext_ = urma_create_context(urmaDevice, eidIndex);
     if (urmaContext_) {
         LOG(INFO) << "urma create context success";
@@ -256,8 +297,13 @@ Status UrmaManager::UrmaCreateJfc(custom_unique_ptr<urma_jfc_t> &out)
     urma_jfc_cfg_t jfcConfig;
     jfcConfig.depth = urmaDeviceAttribute_.dev_cap.max_jfc_depth;
     jfcConfig.flag.value = 0;
-    jfcConfig.jfce = urmaJfce_;
+    if (GetUrmaMode() == UrmaMode::IB) {
+        jfcConfig.jfce = urmaJfce_;
+    } else if (GetUrmaMode() == UrmaMode::UB) {
+        jfcConfig.jfce = nullptr;
+    }
     jfcConfig.user_ctx = 0;
+    jfcConfig.ceqn = 0;
 
     out = MakeCustomUnique<urma_jfc_t>(urma_create_jfc(urmaContext_, &jfcConfig), [](urma_jfc_t *p) {
         std::stringstream oss;
@@ -302,6 +348,12 @@ Status UrmaManager::UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, cust
     jfsConfig.err_timeout = URMA_TYPICAL_ERR_TIMEOUT;
     jfsConfig.jfc = jfc.get();
     jfsConfig.user_ctx = 0;
+    jfsConfig.flag.value = 0;
+#ifdef URMA_OVER_UB
+    if (GetUrmaMode() == UrmaMode::UB) {
+        jfsConfig.flag.bs.multi_path = 1;
+    }
+#endif
 
     out = MakeCustomUnique<urma_jfs_t>(urma_create_jfs(urmaContext_, &jfsConfig), [](urma_jfs_t *p) {
         std::stringstream oss;
@@ -327,6 +379,7 @@ Status UrmaManager::UrmaCreateJfr(const custom_unique_ptr<urma_jfc_t> &jfc, cust
 
     urma_jfr_cfg_t jfrConfig;
     jfrConfig.depth = JETTY_SIZE_;
+    jfrConfig.flag.value = 0;
     jfrConfig.flag.bs.tag_matching = URMA_NO_TAG_MATCHING;
     jfrConfig.trans_mode = URMA_TM_RM;
     jfrConfig.min_rnr_timer = URMA_TYPICAL_MIN_RNR_TIMER;
@@ -334,6 +387,7 @@ Status UrmaManager::UrmaCreateJfr(const custom_unique_ptr<urma_jfc_t> &jfc, cust
     jfrConfig.token_value = urmaToken_;
     jfrConfig.id = 0;
     jfrConfig.max_sge = 1;
+    jfrConfig.user_ctx = (uint64_t)NULL;
 
     out = MakeCustomUnique<urma_jfr_t>(urma_create_jfr(urmaContext_, &jfrConfig), [](urma_jfr_t *p) {
         std::stringstream oss;
@@ -384,16 +438,65 @@ Status UrmaManager::RegisterSegment(const uint64_t &segAddress, const uint64_t &
     return Status::OK();
 }
 
-Status UrmaManager::GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, uint64_t &segVA,
-                                   uint64_t &segLen, uint32_t &segFlag, uint32_t &segTokenId)
+namespace {
+#ifdef URMA_OVER_UB
+Status GetUbBondSegInfo(urma_target_seg_t *tseg, urma_bond_seg_info_out_t &segInfoOut)
+{
+    urma_bond_seg_info_in_t segInfoIn;
+    segInfoIn.tseg = tseg;
+    urma_user_ctl_in_t userCtlIn;
+    userCtlIn.opcode = URMA_USER_CTL_BOND_GET_SEG_INFO;
+    userCtlIn.addr = (uint64_t)&segInfoIn;
+    userCtlIn.len = sizeof(urma_bond_seg_info_in_t);
+    urma_user_ctl_out_t userCtlOut;
+    userCtlOut.addr = (uint64_t)&segInfoOut;
+    userCtlOut.len = sizeof(urma_bond_seg_info_out_t);
+    CHECK_FAIL_RETURN_STATUS(urma_user_ctl(tseg->urma_ctx, &userCtlIn, &userCtlOut) == 0, K_RUNTIME_ERROR,
+                             "Get segment UB bond info failed.");
+    return Status::OK();
+}
+
+Status AddUbBondSegInfo(urma_context_t *ctx, urma_bond_add_remote_seg_info_in_t &segInfo)
+{
+    urma_user_ctl_in_t userCtlIn;
+    userCtlIn.opcode = URMA_USER_CTL_BOND_ADD_REMOTE_SEG_INFO;
+    userCtlIn.addr = (uint64_t)&segInfo;
+    userCtlIn.len = sizeof(urma_bond_add_remote_seg_info_in_t);
+    urma_user_ctl_out_t userCtlOut{ 0 };
+    CHECK_FAIL_RETURN_STATUS(urma_user_ctl(ctx, &userCtlIn, &userCtlOut) == 0, K_RUNTIME_ERROR,
+                             "Failed to add seg info");
+    return Status::OK();
+}
+#endif
+}  // namespace
+
+Status UrmaManager::GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, const uint64_t &shmOffset,
+                                   const uint64_t &metaSz, const HostPort &localAddress, UrmaImportSegmentPb &segInfo)
 {
     SegmentMap::ConstAccessor constAccessor;
     RETURN_IF_NOT_OK(GetOrRegisterSegment(segAddress, segSize, constAccessor));
     auto &localSegment = constAccessor.entry->data.segment_;
-    segVA = localSegment->seg.ubva.va;
-    segLen = localSegment->seg.len;
-    segFlag = localSegment->seg.attr.value;
-    segTokenId = localSegment->seg.token_id;
+    auto segPb = segInfo.mutable_seg();
+    UrmaSeg::ToProto(localSegment->seg, *segPb);
+    LOG(INFO) << "local seg info: " << UrmaSeg::ToString(localSegment->seg);
+
+    if (IsRegisterWholeArenaEnabled()) {
+        segInfo.set_seg_data_offset(shmOffset + metaSz);
+    } else {
+        segInfo.set_seg_data_offset(metaSz);
+    }
+    segInfo.mutable_request_address()->set_host(localAddress.Host());
+    segInfo.mutable_request_address()->set_port(localAddress.Port());
+#ifdef URMA_OVER_UB
+    // UB bond prehandling for segment.
+    if (GetUrmaMode() == UrmaMode::UB) {
+        UrmaBondSegInfo info;
+        RETURN_IF_NOT_OK(GetUbBondSegInfo(localSegment.get(), info.raw));
+        auto *bondInfo = segInfo.mutable_bond_info();
+        info.ToProto(*bondInfo);
+        LOG(INFO) << "local bond seg info: " << info.ToString();
+    }
+#endif
     return Status::OK();
 }
 
@@ -411,6 +514,7 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
             segmentConfig.flag = registerSegmentFlag_;
             segmentConfig.user_ctx = (uint64_t)NULL;
             segmentConfig.iova = 0;
+            segmentConfig.token_id = nullptr;
             PerfPoint point(PerfKey::URMA_REGISTER_SEGMENT);
             auto *segment = urma_register_seg(urmaContext_, &segmentConfig);
             point.Record();
@@ -487,34 +591,38 @@ Status UrmaManager::CheckAndNotify()
 
 void UrmaManager::DeleteEvent(uint64_t requestId)
 {
-    std::unique_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    eventMap_.erase(requestId);
+    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
+    EventMap::Accessor accessor;
+    if (eventMap_->Find(accessor, requestId)) {
+        eventMap_->BlockingErase(accessor);
+    }
 }
 
 Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
     std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    auto eventItr = eventMap_.find(requestId);
-    if (eventItr != eventMap_.end()) {
-        event = eventItr->second;
+    EventMap::Accessor accessor;
+    if (eventMap_->Find(accessor, requestId)) {
+        event = accessor.entry->data;
         return Status::OK();
     }
-    // can happen if event is not yet inserted by sender thread
-    // so dont log the status
+    // Can happen if event is not yet inserted by sender thread.
     RETURN_STATUS(K_NOT_FOUND, FormatString("Request id %d doesnt exist in event map", requestId));
 }
 
 Status UrmaManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
-    std::unique_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    auto result = eventMap_.emplace(requestId, std::make_shared<Event>(requestId));
-    if (result.second) {
-        event = result.first->second;
-        return Status::OK();
-    } else {
-        // If this happens that means requestId is duplicated
+    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
+    EventMap::Accessor accessor;
+    auto res = eventMap_->Insert(accessor, requestId);
+    if (!res) {
+        // If this happens that means requestId is duplicated.
         RETURN_STATUS_LOG_ERROR(K_DUPLICATED, FormatString("Request id %d already exists in event map", requestId));
+    } else {
+        event = std::make_shared<Event>(requestId);
+        accessor.entry->data = event;
     }
+    return Status::OK();
 }
 
 Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
@@ -614,8 +722,9 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
     for (uint64_t i = 0; i < maxTryCount; ++i) {
         cnt = urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
         if (cnt == 0) {
-            // if there is ntg to poll, just sleep for 10us
-            usleep(10);
+            // If there is nothing to poll, just sleep.
+            // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
+            usleep(0);
         } else if (cnt < 0) {
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to poll jfc, ret = %d", cnt));
         } else if (cnt > 0) {
@@ -628,10 +737,12 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
     RETURN_STATUS(K_TRY_AGAIN, FormatString("No Event present in JFC"));
 }
 
-Status UrmaManager::ImportRemoteJfr(const RpcChannel::UrmaInfo &urmaInfo)
+Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
 {
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
-    const std::string remoteDeviceId = urmaInfo.localAddress_.ToString();
+    // Do not need to import jfr for the local node.
+    RETURN_OK_IF_TRUE(localUrmaInfo_.localAddress == urmaInfo.localAddress);
+    const std::string remoteDeviceId = urmaInfo.localAddress.ToString();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     // Insert or update the import jfr (in case the sending worker restarts)
     RemoteDeviceMap::Accessor accessor;
@@ -643,6 +754,24 @@ Status UrmaManager::ImportRemoteJfr(const RpcChannel::UrmaInfo &urmaInfo)
         device.Clear();
     }
     device.urmaInfo_ = urmaInfo;
+    // UB bond handling before import jfr.
+#ifdef URMA_OVER_UB
+    if (GetUrmaMode() == UrmaMode::UB) {
+        for (auto &bondInfo : urmaInfo.bondInfos) {
+            urma_user_ctl_in_t userCtlIn;
+            userCtlIn.opcode = URMA_USER_CTL_BOND_ADD_RJFR_ID_INFO;
+            userCtlIn.addr = (uint64_t)&bondInfo;
+            userCtlIn.len = sizeof(urma_bond_add_rjfr_id_info_in_t);
+            urma_user_ctl_out_t userCtlOut;
+            userCtlOut.addr = 0;
+            userCtlOut.len = 0;
+            if (urma_user_ctl(urmaContext_, &userCtlIn, &userCtlOut)) {
+                return Status(K_RUNTIME_ERROR, FormatString("Failed to add rjfr info, %s", urmaInfo.ToString()));
+            }
+        }
+    }
+#endif
+
     // Now we import a new jfr
     urma_rjfr_t remoteJfr;
     urma_eid_t eid;
@@ -656,7 +785,7 @@ Status UrmaManager::ImportRemoteJfr(const RpcChannel::UrmaInfo &urmaInfo)
     remoteJfr.trans_mode = URMA_TM_RM;
     std::vector<urma_target_jetty_t *> tjfrs;
     for (uint i = 0; i < FLAGS_urma_connection_size; ++i) {
-        remoteJfr.jfr_id.id = urmaInfo.jfr_ids[i];
+        remoteJfr.jfr_id.id = urmaInfo.jfrIds[i];
         PerfPoint point1a(PerfKey::URMA_IMPORT_JFR);
         auto *tjfr = urma_import_jfr(urmaContext_, &remoteJfr, &urmaToken_);
         point1a.Record();
@@ -686,6 +815,7 @@ Status UrmaManager::ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo
     // Note that the returned keys only contain the new key(s).
     keys.clear();
     PerfPoint point(PerfKey::URMA_IMPORT_AND_WRITE_PAYLOAD);
+    auto segVa = urmaInfo.seg().va();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
     const std::string remoteDeviceId = requestAddress.ToString();
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
@@ -698,7 +828,7 @@ Status UrmaManager::ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo
     point1.Record();
     PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
     SegmentMap::ConstAccessor remoteSegAccessor;
-    RETURN_IF_NOT_OK(constAccessor.entry->data.GetOrImportRemoteSeg(urmaInfo, remoteSegAccessor));
+    RETURN_IF_NOT_OK(constAccessor.entry->data.GetOrImportRemoteSeg(urmaContext_, urmaInfo, remoteSegAccessor));
     point2.Record();
 
     PerfPoint point3(PerfKey::URMA_REGISTER_LOCAL_SEGMENT);
@@ -707,7 +837,8 @@ Status UrmaManager::ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo
     point3.Record();
 
     // Write payload
-    urma_jfs_wr_flag_t flag = { 0 };
+    urma_jfs_wr_flag_t flag;
+    flag.value = 0;
     flag.bs.complete_enable = 1;
 
     PerfPoint point4(PerfKey::URMA_TOTAL_WRITE);
@@ -720,11 +851,10 @@ Status UrmaManager::ImportSegAndWritePayload(const UrmaImportSegmentPb &urmaInfo
         urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
         urma_target_jetty_t *importJfr = constAccessor.entry->data.importJfrs_[index].get();
         PerfPoint point4a(PerfKey::URMA_WRITE);
-        urma_status_t ret =
-            urma_write(urmaJfs, importJfr, remoteSegAccessor.entry->data.segment_.get(),
-                       localSegAccessor.entry->data.segment_.get(),
-                       urmaInfo.seg_va() + urmaInfo.seg_data_offset() + readOffset + writtenSize,
-                       localObjectAddress + readOffset + metaDataSize + writtenSize, writeSize, flag, key);
+        urma_status_t ret = urma_write(
+            urmaJfs, importJfr, remoteSegAccessor.entry->data.segment_.get(),
+            localSegAccessor.entry->data.segment_.get(), segVa + urmaInfo.seg_data_offset() + readOffset + writtenSize,
+            localObjectAddress + readOffset + metaDataSize + writtenSize, writeSize, flag, key);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             ret == URMA_SUCCESS, K_RUNTIME_ERROR,
             FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
@@ -774,11 +904,6 @@ Status UrmaManager::RemoveRemoteDevice(const HostPort &remoteAddress)
                                             remoteAddress.ToString()));
 }
 
-std::string UrmaManager::EidToStr(const urma_eid_t &eid)
-{
-    return std::string(reinterpret_cast<const char *>(eid.raw), URMA_EID_SIZE);
-}
-
 Status UrmaManager::StrToEid(const std::string &eid, urma_eid_t &out)
 {
     CHECK_FAIL_RETURN_STATUS(eid.size() == URMA_EID_SIZE, K_RUNTIME_ERROR,
@@ -794,24 +919,39 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
     if (UrmaManager::IsUrmaEnabled()) {
         auto &mgr = UrmaManager::Instance();
         // Register the incoming jfr.
-        RpcChannel::UrmaInfo urmaInfo;
-        urmaInfo.eid = req.eid();
-        urmaInfo.uasid = req.uasid();
-        for (auto jfrId : req.jfr_ids()) {
-            urmaInfo.jfr_ids.emplace_back(jfrId);
-        }
-        urmaInfo.localAddress_ = HostPort(req.address().host(), req.address().port());
-        LOG(INFO) << urmaInfo.ToString();
+        UrmaJfrInfo urmaInfo;
+        RETURN_IF_NOT_OK(urmaInfo.FromProto(req));
+        LOG(INFO) << "Start import remote jfr, remote urma info: " << urmaInfo.ToString();
         LOG_IF_ERROR(mgr.ImportRemoteJfr(urmaInfo), "Error in import incoming jfr");
-        // Return our own jfr.
-        rsp.set_eid(mgr.GetEid());
-        rsp.set_uasid(mgr.GetUasid());
-        for (auto jfrId : mgr.GetJfrIds()) {
-            rsp.add_jfr_ids(jfrId);
+        // Do not need to fill in jfr response for urma_write scenario.
+    }
+    return Status::OK();
+}
+
+#ifdef URMA_OVER_UB
+Status UrmaManager::GetJfrInfoForBond(std::vector<urma_bond_id_info_out_t> &infoOut)
+{
+    auto size = urmaJfrVec_.size();
+    infoOut.resize(size);
+    for (size_t i = 0; i < size; i++) {
+        // UB bond prehandling for jfr.
+        urma_bond_id_info_in_t in;
+        in.jfr = urmaJfrVec_[i].get();
+        in.type = URMA_JFR;
+        urma_user_ctl_in_t userCtlIn;
+        userCtlIn.opcode = URMA_USER_CTL_BOND_GET_ID_INFO;
+        userCtlIn.addr = (uint64_t)&in;
+        userCtlIn.len = sizeof(urma_bond_id_info_in_t);
+        urma_user_ctl_out_t userCtlOut;
+        userCtlOut.addr = (uint64_t)&infoOut[i];
+        userCtlOut.len = sizeof(urma_bond_id_info_out_t);
+        if (urma_user_ctl(urmaJfrVec_[i]->urma_ctx, &userCtlIn, &userCtlOut)) {
+            return Status(K_RUNTIME_ERROR, "Failed to urma user ctl");
         }
     }
     return Status::OK();
 }
+#endif
 
 Segment::~Segment()
 {
@@ -858,37 +998,42 @@ void RemoteDevice::SetJfrs(std::vector<urma_target_jetty_t *> &jetties)
     }
 }
 
-Status RemoteDevice::GetOrImportRemoteSeg(const UrmaImportSegmentPb &importSegmentInfo,
+Status RemoteDevice::GetOrImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &importSegmentInfo,
                                           SegmentMap::ConstAccessor &constAccessor)
 {
-    if (!remoteSegments_.Find(constAccessor, importSegmentInfo.seg_va())) {
+    auto segVa = importSegmentInfo.seg().va();
+    if (!remoteSegments_.Find(constAccessor, segVa)) {
         SegmentMap::Accessor accessor;
-        if (remoteSegments_.Insert(accessor, importSegmentInfo.seg_va())) {
-            urma_seg_t remoteSegment;
-            urma_eid_t eid;
-            auto rc = UrmaManager::StrToEid(urmaInfo_.eid, eid);
-            if (rc.IsError()) {
-                remoteSegments_.BlockingErase(accessor);
-                return rc;
+        if (remoteSegments_.Insert(accessor, segVa)) {
+            bool needErase = true;
+            Raii eraseSegment([this, &accessor, &needErase]() {
+                if (needErase) {
+                    remoteSegments_.BlockingErase(accessor);
+                }
+            });
+            // UB bond handling before import segment.
+#ifdef URMA_OVER_UB
+            if (GetUrmaMode() == UrmaMode::UB) {
+                UrmaBondSegInfo info;
+                RETURN_IF_NOT_OK(info.FromProto(importSegmentInfo.bond_info()));
+                LOG(INFO) << "add bond remote seg info: " << info.ToString();
+                RETURN_IF_NOT_OK(AddUbBondSegInfo(urmaContext, info.raw));
             }
-            remoteSegment.ubva.eid = eid;
-            remoteSegment.ubva.uasid = urmaInfo_.uasid;
-            remoteSegment.ubva.va = importSegmentInfo.seg_va();
-            remoteSegment.len = importSegmentInfo.seg_len();
-            remoteSegment.attr.value = importSegmentInfo.seg_flag();
-            remoteSegment.token_id = importSegmentInfo.seg_token_id();
-            auto *segment = UrmaManager::Instance().ImportSegment(remoteSegment);
-            if (segment == nullptr) {
-                remoteSegments_.BlockingErase(accessor);
-                return Status(K_RUNTIME_ERROR,
-                              FormatString("Failed to import segment from device with eid %s, seg_va = %zu.",
-                                           urmaInfo_.eid, importSegmentInfo.seg_va()));
-            }
+#endif
+
+            // Import segment
+            UrmaSeg remoteSegment;
+            RETURN_IF_NOT_OK(remoteSegment.FromProto(importSegmentInfo.seg()));
+            LOG(INFO) << "import remote seg info: " << remoteSegment.ToString();
+            auto *segment = UrmaManager::Instance().ImportSegment(remoteSegment.raw);
+            CHECK_FAIL_RETURN_STATUS(segment != nullptr, K_RUNTIME_ERROR,
+                                     FormatString("Failed to import segment %s.", remoteSegment.ToString()));
             accessor.entry->data.Set(segment, false);
+            needErase = false;
         }
         accessor.Release();
         // Switch to const accessor so it does not block the others.
-        CHECK_FAIL_RETURN_STATUS(remoteSegments_.Find(constAccessor, importSegmentInfo.seg_va()), K_RUNTIME_ERROR,
+        CHECK_FAIL_RETURN_STATUS(remoteSegments_.Find(constAccessor, segVa), K_RUNTIME_ERROR,
                                  "Failed to operate on remote segment map.");
     }
     return Status::OK();
@@ -908,5 +1053,4 @@ Status RemoteDevice::UnimportRemoteSeg(const uint64_t segmentAddress)
     }
     RETURN_STATUS(K_NOT_FOUND, "Cannot unimport remote segment, remote segment is not imported");
 }
-
 }  // namespace datasystem

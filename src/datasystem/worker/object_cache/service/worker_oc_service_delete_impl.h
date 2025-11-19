@@ -43,6 +43,12 @@ public:
      */
     Status DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp);
 
+    /**
+     * @brief The rpc method to delete the objects.
+     * @param[in] req The rpc request protobuf.
+     * @param[out] resp The rpc response protobuf.
+     * @return Status of the call.
+     */
     Status DeleteCopyNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp);
 
 private:
@@ -82,11 +88,18 @@ private:
      * @param failedObjectKeys The keys of failed objects.
      * @param needDeleteObjectKey The keys of need delete objects.
      * @param deleteRsp Delete response.
-     * @return
+     * @return Status of the call.
      */
     Status InsertFailedId(Status &rpcStatus, Status &recvRc, std::unordered_set<std::string> &failedObjectKeys,
         const std::vector<std::string> &needDeleteObjectKey, master::DeleteAllCopyMetaRspPb &deleteRsp);
 
+    /**
+     * @brief Delete object from notification.
+     * @param objectKey The object key to delete.
+     * @param version The version of the key.
+     * @param async Whether it is asynchronous.
+     * @return Status of the call.
+     */
     Status DeleteObjectFromNotification(const std::string &objectKey, uint64_t version, bool async);
 
     /**
@@ -112,9 +125,8 @@ private:
 
     HostPort &localAddress_;
 
-    std::shared_ptr<WorkerOcServiceGetImpl> getProc_{ nullptr };
+    std::shared_ptr<WorkerOcServiceGetImpl> getProc_{ nullptr };  // shared pointer to the workerocservicegetimpl
 };
-
 
 }  // namespace object_cache
 }  // namespace datasystem

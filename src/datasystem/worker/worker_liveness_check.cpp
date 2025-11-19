@@ -46,6 +46,8 @@
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_string(master_address);
 DS_DECLARE_uint32(node_timeout_s);
+DS_DECLARE_int32(sc_regular_socket_num);
+DS_DECLARE_int32(sc_stream_socket_num);
 
 namespace datasystem {
 namespace worker {
@@ -66,6 +68,11 @@ WorkerLivenessCheck::WorkerLivenessCheck(WorkerOCServer *workerOcServer, std::st
     }
 }
 
+inline bool EnableSCService()
+{
+    return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
+}
+
 Status WorkerLivenessCheck::Init()
 {
     livenessKey_ = FormatString("liveness-%s;%s", GetStringUuid(), workerUuid_);
@@ -78,6 +85,14 @@ Status WorkerLivenessCheck::Init()
     servicesNames_.emplace_back("MasterWorkerOCService");
     if (IsMasterNode()) {
         servicesNames_.emplace_back("MasterOCService");
+    }
+    if (EnableSCService()) {
+        servicesNames_.emplace_back("ClientWorkerSCService");
+        servicesNames_.emplace_back("WorkerWorkerSCService");
+        servicesNames_.emplace_back("MasterWorkerSCService");
+        if (IsMasterNode()) {
+            servicesNames_.emplace_back("MasterSCService");
+        }
     }
     LivenessHealthCheckEvent::GetInstance().AddSubscriber(
         "WORKER_LIVENESS_CHECK",

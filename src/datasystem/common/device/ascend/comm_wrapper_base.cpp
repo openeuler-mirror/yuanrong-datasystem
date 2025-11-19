@@ -49,7 +49,7 @@ CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, i
     };
     pool_->Execute([func]() { (void)func(); });
 
-    hcclDetailState_ = HCCL_SUCCESS;
+    hcclDetailState_ = Status::OK();
 }
 
 CommWrapperBase::~CommWrapperBase()
@@ -61,6 +61,80 @@ aclrtStream CommWrapperBase::GetStream()
     return resource_->PrimaryStream();
 }
 
+bool CommWrapperBase::IsCommReady() const
+{
+    return commReady_.load();
+}
+
+void CommWrapperBase::SetCommReady(bool ready)
+{
+    bool wasReady = commReady_.exchange(ready);
+    if (ready && !wasReady) {
+        ExecuteReadyCallbacks();
+    }
+}
+
+void CommWrapperBase::ExecuteReadyCallbacks()
+{
+    std::vector<std::function<void()>> callbacksToExecute;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+
+        // Move all pending callbacks to local vector for execution
+        callbacksToExecute = std::move(readyCallbacks_);
+        readyCallbacks_.clear();
+
+        // Set flag to indicate callback execution is in progress
+        executingCallbacks_ = true;
+    }
+
+    // Execute all callbacks without holding the lock
+    for (auto &callback : callbacksToExecute) {
+        callback();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+
+        // Reset execution flag after all callbacks are completed
+        executingCallbacks_ = false;
+    }
+}
+
+void CommWrapperBase::AddReadyCallback(std::function<void()> callback)
+{
+    bool shouldExecute = false;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+
+        // If communication is ready, no callbacks are pending, and not currently executing,
+        // the callback can be executed immediately
+        if (IsCommReady() && !executingCallbacks_ && readyCallbacks_.empty()) {
+            shouldExecute = true;
+        } else {
+            // Add callback to the queue for ordered execution
+            readyCallbacks_.push_back(callback);
+
+            // If communication is ready and not currently executing callbacks,
+            // trigger execution after releasing the lock
+            if (IsCommReady() && !executingCallbacks_) {
+                shouldExecute = true;
+            }
+        }
+    }
+
+    // Execute callback or trigger execution outside of lock
+    if (shouldExecute) {
+        if (readyCallbacks_.empty()) {
+            // Direct execution for immediate case
+            callback();
+        } else {
+            // Batch execution for queued callbacks
+            ExecuteReadyCallbacks();
+        }
+    }
+}
+
 void CommWrapperBase::SetStatus(const Status &commStatus)
 {
     if (commStatus.IsOk()) {
@@ -70,8 +144,9 @@ void CommWrapperBase::SetStatus(const Status &commStatus)
     }
 }
 
-HcclResult CommWrapperBase::GetDetailStatus() const
+Status CommWrapperBase::GetDetailStatus() const
 {
+    std::lock_guard<std::mutex> lock(hcclDetailStateMutex_);
     return hcclDetailState_;
 }
 
@@ -80,9 +155,12 @@ HcclCommState CommWrapperBase::GetCommStatus() const
     return hcclCommState_;
 }
 
-void CommWrapperBase::SetHcclDetailState(HcclResult result)
+void CommWrapperBase::SetHcclDetailState(Status result)
 {
-    hcclDetailState_ = result;
+    std::lock_guard<std::mutex> lock(hcclDetailStateMutex_);
+    if (hcclDetailState_.IsOk()) {
+        hcclDetailState_ = result;
+    }
 }
 
 int CommWrapperBase::GetLocalDeviceId() const
@@ -144,15 +222,29 @@ Status CommWrapperBase::InitPipeline(HcclCommDirection direction)
     }
 }
 
+Status CommWrapperBase::CheckTranPointer(const void *pointer, const std::string &pointerName)
+{
+    if (pointer == nullptr) {
+        auto rc = GetDetailStatus();
+        std::string errMsg = FormatString("The pointer [%s] is null, "
+                                          "which usually indicates that the hccl communication domain creation failed. "
+                                          "Specifically: [%s]",
+            pointerName,
+            rc.GetMsg());
+        return Status(rc.GetCode(), errMsg);
+    }
+    return Status::OK();
+}
+
 Status CommWrapperBase::SubmitPipelineTask(acl::P2PSendTask task)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(sender_);
+    RETURN_IF_NOT_OK(CheckTranPointer(sender_.get(), "sender_"));
     return sender_->Submit(std::move(task));
 }
 
 Status CommWrapperBase::SubmitPipelineTask(acl::P2PRecvTask task)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(receiver_);
+    RETURN_IF_NOT_OK(CheckTranPointer(receiver_.get(), "receiver_"));
     return receiver_->Submit(std::move(task));
 }
 

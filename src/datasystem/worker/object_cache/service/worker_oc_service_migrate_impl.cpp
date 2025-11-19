@@ -21,6 +21,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <sstream>
@@ -582,7 +583,7 @@ Status WorkerOcServiceMigrateImpl::AllocateAndAssignData(
     auto needSize = size + metaSize;
     auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        shmUnit->AllocateMemory(tenantId, needSize, false,
+        shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
                                 static_cast<memory::CacheType>((*entry)->modeInfo.GetCacheType())),
         FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize));
     shmUnit->id = GetStringUuid();
@@ -813,7 +814,9 @@ bool WorkerOcServiceMigrateImpl::IsDiskAvailable(uint64_t size) const
         LOG_EVERY_T(INFO, freq) << "[Migrate Data] Disk now is not available";
         return false;
     }
-    uint64_t used = memory::Allocator::Instance()->GetTotalRealMemoryUsage(memory::CacheType::DISK) + size;
+    auto realMemoryUsage =
+        memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memory::CacheType::DISK);
+    uint64_t used = size < UINT64_MAX - realMemoryUsage ? realMemoryUsage + size : UINT64_MAX;
     uint64_t total = memory::Allocator::Instance()->GetMaxMemoryLimit(memory::CacheType::DISK);
     return used <= total * MIGRATE_HIGH_WATER_FACTOR;
 }

@@ -14,14 +14,15 @@ set(curl_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 if (curl_VERSION STREQUAL "8.8.0")
   set(curl_PATCHES
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-6197-fix-CVE-2024-6197-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-6874-fix-CVE-2024-6874-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-7264-fix-CVE-2024-7264-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-8096-fix-CVE-2024-8096-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-9681-fix-CVE-2024-9681-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-11053-fix-CVE-2024-11053-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2025-0167-fix-CVE-2025-0167-for-curl-8.8.0-c.patch
-          ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2025-0725-fix-CVE-2025-0725-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-6197-fix-CVE-2024-6197-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-6874-fix-CVE-2024-6874-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-7264-fix-CVE-2024-7264-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-8096-fix-CVE-2024-8096-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-9681-fix-CVE-2024-9681-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2024-11053-fix-CVE-2024-11053-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2025-0167-fix-CVE-2025-0167-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/Backport-CVE-2025-0725-fix-CVE-2025-0725-for-curl-8.8.0-c.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/curl/8.8.0/support_old_cmake.patch
   )
 endif()
 

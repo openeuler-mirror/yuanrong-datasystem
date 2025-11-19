@@ -364,16 +364,14 @@ class ObjectClient:
 
     @staticmethod
     def _check_or_set_default_create_param(param: Dict):
-        key_write_mode = "write_mode"
         key_consistency_type = "consistency_type"
         if param is None:
             param = {
-                key_write_mode: WriteMode.NONE_L2_CACHE,
                 key_consistency_type: ConsistencyType.PRAM,
             }
         validator.check_args_types([["param", param, dict]])
 
-        return validator.check_key_exists(param, [key_write_mode, key_consistency_type])
+        return validator.check_key_exists(param, [key_consistency_type])
 
     def init(self):
         """
@@ -394,13 +392,7 @@ class ObjectClient:
             object_key(str): The id of the object to be created.
             size(int): The size in bytes of object.
             param(dict): which contains the following three "key: value" pairs successively:
-            (1) "write_mode", write_mode(Enum): Indicating whether the object will be written through L2 cache.
-                              There are 3 options:
-                              1) WriteMode.NONE_L2_CACHE;
-                              2) WriteMode.WRITE_THROUGH_L2_CACHE;
-                              3) WriteMode.WRITE_BACK_L2_CACHE;
-                              4) WriteMode.NONE_L2_CACHE_EVICT;
-            (2) "consistency_type": consistency_type(Enum): Indicating which consistency type will be used.
+            (1) "consistency_type": consistency_type(Enum): Indicating which consistency type will be used.
                               There are 2 options:
                               1) ConsistencyType.PRAM;
                               2) ConsistencyType.CAUSAL;
@@ -413,17 +405,16 @@ class ObjectClient:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
         """
         params = self._check_or_set_default_create_param(param)
-        write_mode, consistency_type = params[0], params[1]
+        consistency_type = params[0]
 
         args = [
             ["object_key", object_key, str],
             ["size", size, int],
-            ["write_mode", write_mode, WriteMode],
             ["consistency_type", consistency_type, ConsistencyType],
         ]
         validator.check_args_types(args)
         create_status, buffer = self.client.create(
-            object_key, size, write_mode.value, consistency_type.value
+            object_key, size, consistency_type.value
         )
         if create_status.is_error():
             raise RuntimeError(create_status.to_string())
@@ -439,13 +430,7 @@ class ObjectClient:
             object_key(str): The id of the object to be created.
             value(memoryview, bytes or bytearray): the data to be put
             param(dict): which contains the following three "key: value" pairs successively:
-            (1) "write_mode", write_mode(Enum): Indicating whether the object will be written through L2 cache.
-                              There are 3 options:
-                              1) WriteMode.NONE_L2_CACHE;
-                              2) WriteMode.WRITE_THROUGH_L2_CACHE;
-                              3) WriteMode.WRITE_BACK_L2_CACHE;
-                              4) WriteMode.NONE_L2_CACHE_EVICT
-            (2) "consistency_type": consistency_type(Enum): Indicating which consistency type will be used.
+            (1) "consistency_type": consistency_type(Enum): Indicating which consistency type will be used.
                                There are 2 options:
                                1) ConsistencyType.PRAM;
                                2) ConsistencyType.CAUSAL;
@@ -456,7 +441,7 @@ class ObjectClient:
             RuntimeError: Raise a runtime error if the put fails.
         """
         params = self._check_or_set_default_create_param(param)
-        write_mode, consistency_type = params[0], params[1]
+        consistency_type = params[0]
 
         if nested_object_keys is None:
             nested_object_keys = []
@@ -464,7 +449,6 @@ class ObjectClient:
         args = [
             ["object_key", object_key, str],
             ["value", value, memoryview, bytes, bytearray],
-            ["write_mode", write_mode, WriteMode],
             ["consistency_type", consistency_type, ConsistencyType],
             ["nested_object_keys", nested_object_keys, list],
         ]
@@ -472,7 +456,6 @@ class ObjectClient:
         put_status = self.client.put(
             object_key,
             value,
-            write_mode.value,
             consistency_type.value,
             nested_object_keys,
         )

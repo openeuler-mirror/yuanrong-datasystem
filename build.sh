@@ -19,9 +19,9 @@ source /etc/profile.d/*.sh
 readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
-                     [-B <build_dir>] [-P on/off] [-X on/off] [-T <thirdparty_versions>]
-                     [-R on/off] [-D \"on <ub_url> <ub_sha256>\"/off] [-l <llt_label>] [-i on/off] [-n on/off]
-                     [-x on/off]
+                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-X on/off] [-e on/off] [-T <thirdparty_versions>]
+                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M \"on|off <urma_mode>\"/off] [-D \"on <ub_url> <ub_sha256>\"/off] 
+                     [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off][-x on/off]
 
 Options:
     -h Output this help and exit.
@@ -45,7 +45,8 @@ Options:
 
     For communication layer
     -M Build with URMA framework in addition to ZMQ, choose from on/off, default: off.
-    -D Download UB package that is needed for URMA, choose from on/off. When on, can also provide UB download options, default: on.
+       When on, can also provide the URMA mode, choose from IB/UB, default IB (URMA over IB).
+    -D Download UB package that is needed for URMA, choose from on/off. When on, can also provide UB download options, default: off.
        Notes to compile and run with URMA:
        1. The default packages are for EulerOS-V2R10 environment
        2. The downloaded rpm packages and the kernel modules need to be installed before run
@@ -124,6 +125,7 @@ function init_default_opts() {
 
   # For communication layer
   export BUILD_WITH_URMA="off"
+  export URMA_OVER_UB="off"
   export DOWNLOAD_UB="off"
   export UB_URL=""
   export UB_SHA256=""
@@ -232,6 +234,27 @@ function parse_thirdparty_versions() {
   done
 }
 
+function parse_urma_options() {
+  local args
+  check_on_off "$1" M
+  BUILD_WITH_URMA="$1"
+  if [[ $# -gt 1 ]]; then
+    IFS=',' read -ra parts <<< "$2"
+    for part in "${parts[@]}"; do
+      case $part in
+        "IB")
+          ;;
+        "UB")
+          URMA_OVER_UB="on"
+          ;;
+        *)
+          echo "Invalid URMA mode option: $part"
+          ;;
+      esac
+    done
+  fi
+}
+
 function parse_ub_download_options() {
   local args
   check_on_off "$1" D
@@ -286,17 +309,12 @@ function gen_html_coverage_report() {
 
 function build_example() {
   echo -e "---- building example..."
-  local example_build_dir="${DATASYSTEM_DIR}/example/build"
+  local example_build_dir="${DATASYSTEM_DIR}/example/cpp/build"
   # clean and create build dir.
   [[ "${BUILD_INCREMENT}" == "off" && -d "${example_build_dir}" ]] && rm -rf "${example_build_dir}"
   mkdir -p "${example_build_dir}" && cd "${example_build_dir}"
 
-  local prefix_path
-  prefix_path=${INSTALL_DIR}/sdk/cpp
-
-  cmake "${DATASYSTEM_DIR}/example" \
-    -DCMAKE_PREFIX_PATH="${prefix_path}" \
-    -DBUILD_HETERO="${BUILD_HETERO}" || go_die "---- build example CMake project failed!"
+  cmake "${DATASYSTEM_DIR}/example/cpp" || go_die "---- build example CMake project failed!"
   make || go_die "---- example make failed!"
 
   echo -e "---- build example success!"
@@ -319,9 +337,7 @@ function run_example() {
     export LD_LIBRARY_PATH=$new_ld_path
     echo -e "---- Sanitize LD_LIBRARY_PATH from ${old_ld_path} to ${new_ld_path}"
 
-    python3 -m pip install ${INSTALL_DIR}/openyuanrong_datasystem-*.whl --force-reinstall
-    bash "${DATASYSTEM_DIR}/example/run-example.sh" "${BUILD_HETERO}" "${ENABLE_PERF}" ||
-      (remove_running_pids && go_die "---- Smoke Testing failed!")
+    bash "${DATASYSTEM_DIR}/example/run-example.sh" || (remove_running_pids && go_die "---- Smoke Testing failed!")
     echo -e "---- Smoke Testing success!"
     echo -e "---- [TIMER] Run example: $(($(date +%s)-$baseTime_s)) seconds"
 
@@ -460,6 +476,15 @@ function version_lt()
     [ "$1" = "$(echo -e "$1\n$2" | sort -V | head -n1)" ] && [ "$1" != "$2" ]
 }
 
+function generate_config() 
+{
+  local config_file=${BASE_DIR}/config.cmake
+  [[ -f "${config_file}" ]] && rm -f "${config_file}"
+  echo "set(INSTALL_DIR \"${INSTALL_DIR}\")" >> "${config_file}"
+  echo "set(BUILD_HETERO \"${BUILD_HETERO}\")" >> "${config_file}"
+  echo "set(PACKAGE_PYTHON \"${PACKAGE_PYTHON}\")" >> "${config_file}"
+}
+
 function build_datasystem()
 {
   # clean and create build dir.
@@ -475,6 +500,8 @@ function build_datasystem()
     BUILD_TESTCASE="on"
   fi
 
+  generate_config
+
   local cmake_options=(
     "${DATASYSTEM_DIR}"
     "-DCMAKE_BUILD_TYPE:STRING=${BUILD_TYPE}"
@@ -489,6 +516,7 @@ function build_datasystem()
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
     "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
+    "-DURMA_OVER_UB:BOOL=${URMA_OVER_UB}"
     )
 
   if [[ "${BUILD_WITH_URMA}" == "on" ]]; then
@@ -496,9 +524,10 @@ function build_datasystem()
       "-DDOWNLOAD_UB:BOOL=${DOWNLOAD_UB}"
       "-DUB_URL:STRING=${UB_URL}"
       "-DUB_SHA256:STRING=${UB_SHA256}"
+      "-DURMA_OVER_UB:BOOL=${URMA_OVER_UB}"
     )
   fi
-
+ 
   if is_on "${PACKAGE_PYTHON}" && [ -n "${PYTHON_ROOT_DIR}" ]; then
     echo -e "-- Specify python root path: ${PYTHON_ROOT_DIR}"
     cmake_options=("${cmake_options[@]}" "-DPython3_ROOT_DIR:PATH=${PYTHON_ROOT_DIR}")
@@ -662,8 +691,7 @@ function main() {
       parse_thirdparty_versions "${OPTARG}"
       ;;
     M)
-      check_on_off "${OPTARG}" M
-      BUILD_WITH_URMA="${OPTARG}"
+      parse_urma_options ${OPTARG}
       ;;
 
     D)

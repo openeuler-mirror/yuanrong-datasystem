@@ -151,8 +151,36 @@ public:
                                       int32_t remoteDeviceId);
 
 private:
-    Status InitRootInfoReq(int32_t localDeviceId, int32_t remoteDeviceId, const std::string &remoteClientId,
-                           HcclRootInfo &rootInfo);
+    /**
+     * @brief Handle communicator creation errors and set detailed error state.
+     *
+     * This function checks if the given status indicates an error, and if so,
+     * sets the detailed HCCL communication state on the communicator object
+     * before returning the error status. If no error is detected, it returns OK status.
+     *
+     * @param[in] comm Pointer to the Communicator object to set error state on
+     * @param[in] status The status to check for errors
+     * @return Returns the original error status if status.IsError() is true,
+     *         otherwise returns Status::OK()
+     */
+    Status SetStateIfError(std::shared_ptr<CommWrapperBase> &comm, Status status);
+
+    /**
+     * @brief Asynchronously retry an operation with timeout and error handling.
+     * @param[in] comm The HCCL communicator wrapper shared pointer.
+     * @param[in] processFunc The main processing function to be executed and retried.
+     * @param[in] errorCheckFunc Function to check for errors in the communicator state before retrying.
+     * @param[in] timeoutMs Maximum timeout in milliseconds for the entire retry operation.
+     * @param[in] retryableErrors List of error status codes that should trigger a retry.
+     * @param[in] finalHandler Callback function to handle final result (success, timeout, or fatal error).
+     * @note This function will retry the processFunc for retryable errors until success or timeout.
+     *       Non-retryable errors or timeout will trigger the finalHandler with appropriate status.
+     */
+    void AsyncRetryWithTimeout(std::shared_ptr<CommWrapperBase> comm, std::function<Status()> processFunc,
+                               std::function<Status(std::shared_ptr<CommWrapperBase>)> errorCheckFunc,
+                               int32_t timeoutMs, const std::vector<StatusCode> retryableErrors,
+                               std::function<void(std::shared_ptr<CommWrapperBase>, Status, Status)> finalHandler);
+
     TbbHcclCommTable commTable_;
     // To prevent two threads from trying to create a communication domain at the same time.
     std::shared_timed_mutex mutex_;

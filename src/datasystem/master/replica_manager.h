@@ -30,6 +30,7 @@
 #include "datasystem/common/util/queue/queue.h"
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
+#include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 
@@ -47,11 +48,14 @@ struct ReplicaManagerParam {
     EtcdClusterManager *etcdCM;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService;
+    std::shared_ptr<master::RpcSessionManager> rpcSessionManager;
     bool isOcEnabled;
+    bool isScEnabled;
 };
 
 struct MetadataManager {
     std::shared_ptr<master::OCMetadataManager> oc;
+    std::shared_ptr<master::SCMetadataManager> sc;
     void Shutdown();
 };
 
@@ -102,6 +106,15 @@ public:
      */
     Status GetOcMetadataManager(const std::string &dbName,
                                 std::shared_ptr<master::OCMetadataManager> &ocMetadataManager);
+
+    /**
+     * @brief Get the ScMetadataManager instance.
+     * @param[in] dbName The rocksdb name.
+     * @param[out] scMetadataManager The ScMetadataManager instance.
+     * @return Status of this call.
+     */
+    Status GetScMetadataManager(const std::string &dbName,
+                                std::shared_ptr<master::SCMetadataManager> &scMetadataManager);
 
     /**
      * @brief Check whether there are any requests for asynchronously writing metadata to ETCD.
@@ -275,9 +288,11 @@ protected:
      * @brief Create the metadata manager instance.
      * @param[in] dbName The rocksdb name.
      * @param[in] objectRocksStore The RocksStore instance for object.
+     * @param[in] streamRocksStore The RocksStore instance for stream.
      * @return Status of this call.
      */
-    virtual Status CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore);
+    virtual Status CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore,
+                                     RocksStore *streamRocksStore);
 
     /**
      * @brief Destroy the metadata manager instance.
@@ -472,7 +487,9 @@ protected:
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService_;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService_;
     // rpc seessin manager for stream
+    std::shared_ptr<master::RpcSessionManager> rpcSessionManager_;
     bool isOcEnabled_;
+    bool isScEnabled_;
     bool isNewNode_;
     std::unique_ptr<ReplicaRpcChannel> channel_;
 

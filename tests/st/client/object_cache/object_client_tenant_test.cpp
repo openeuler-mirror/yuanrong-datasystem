@@ -225,7 +225,7 @@ TEST_F(ObjectClientTenantTest, PutAgainInOtherClient)
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->GIncreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
 
     DS_ASSERT_OK(client1->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), data.length(), param));
     client1 = nullptr;
@@ -519,7 +519,7 @@ TEST_F(TenantResourceAutoReleaseTest, DISABLED_TestResourceRelease)
     InitTestClient(1, client2_, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "PreReleaseTenantResourceInfo.IsExpired", "call(4000)"));
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
 
     std::string data1 = GenRandomString(SHM_SIZE);
     int waitTimeS = 15;
@@ -538,7 +538,7 @@ TEST_F(TenantResourceAutoReleaseTest, TestResourceNotRelease)
     InitTestClient(0, client1_, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
     InitTestClient(1, client2_, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
 
     int waitTimeS = 1;
     int loopTimes = 5;

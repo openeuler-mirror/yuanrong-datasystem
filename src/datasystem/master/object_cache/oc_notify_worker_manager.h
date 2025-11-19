@@ -141,24 +141,8 @@ public:
      * @param[in] objectItem The failed object list.
      */
 
-    void SetDeleteObjectReq(std::unique_ptr<DeleteObjectReqPb> &request, bool &isAsync, const std::string &sourceWorker,
+    void SetDeleteObjectReq(std::unique_ptr<DeleteObjectReqPb> &request, bool isAsync, const std::string &sourceWorker,
                             const std::unordered_map<std::string, std::pair<int64_t, uint32_t>> &objectItem);
-
-    /**
-     * @brief Notify worker which has object data to delete.
-     * @param[in] sourceWorker The worker initiates to delete object.
-     * @param[in] replicas2Obj Worker address and their object key.
-     * @param[in] isAsync Is async process mode.
-     * @param[out] failedObjects The failed object list.
-     * @param[out] api2Tag The map from request to tag.
-     * @param[out] lastErr The last error status of request.
-     * @return Status of the call.
-     */
-    Status HandleDeleteNotificationSend(
-        const std::string &sourceWorker, const std::string &address,
-        const std::unordered_map<std::string, std::pair<int64_t, uint32_t>> &objectItem, bool &isAsync,
-        std::unordered_map<std::shared_ptr<MasterWorkerOCApi>, std::pair<int64_t, std::string>> &api2Tag,
-        Status &lastErr);
 
     /**
      * @brief Notify worker which has object data to delete.
@@ -559,6 +543,10 @@ private:
     Status RemoveNoTargetAsyncWorkerOp(
         const std::unordered_map<std::string, std::unordered_set<std::string>> &objectKeys, NotifyWorkerOpType op);
 
+    const size_t minDeleteThreadSize = 1;
+    const size_t maxDeleteThreadSize = 8;
+    // Global thread pool for reusing worker threads across delete requests.
+    std::unique_ptr<ThreadPool> deleteThreadPool_;
     std::shared_ptr<ObjectMetaStore> objectStore_;  // Metadata store for object.
     std::shared_timed_mutex notifyWorkerOpMutex_;
     TbbNotifyWorkerOpTable notifyWorkerOpTable_;  // Key is worker address, value is object keys.

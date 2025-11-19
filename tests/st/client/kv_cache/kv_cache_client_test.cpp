@@ -35,6 +35,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "cluster/base_cluster.h"
 #include "common.h"
+#include "common_distributed_ext.h"
 #include "datasystem/client/object_cache/client_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
@@ -44,6 +45,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/flags/flags.h"
@@ -942,6 +944,7 @@ TEST_F(KVCacheClientTest, TestQueryMetaRetry)
     InitTestKVClient(1, client1, timeoutMs);
     std::string valueGet;
     auto rc = client1->Get(key, valueGet);
+    // ZMQ should be successful, because of the dispatch mode, the test point for uRPC is retry times.
     if (rc.IsError()) {
         std::string errMsg = rc.ToString();
         std::string checkStr = "RPC unavailable * 2";
@@ -1772,11 +1775,11 @@ public:
     void InitClients()
     {
         InitTestKVClient(0, client_,
-                            [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId_); });
+                         [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId_); });
         InitTestKVClient(0, client1_,
-                            [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId1_); });
+                         [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId1_); });
         InitTestKVClient(1, client2_,
-                            [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId2_); });
+                         [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId2_); });
     }
 
     std::shared_ptr<KVClient> client_;
@@ -1898,6 +1901,341 @@ TEST_F(KVClientQuerySizeTest, TestRPCError)
     ASSERT_EQ(outSizes.capacity(), keyCount);
 }
 
+class KVClientWriteRocksdbTest : public OCClientCommon, public CommonDistributedExt {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        const int workerCount = 2;
+        opts.numEtcd = 1;
+        opts.numOBS = 1;
+        opts.numWorkers = workerCount;
+        opts.enableDistributedMaster = "true";
+        opts.workerGflagParams = " -v=2 -log_monitor=true ";
+        opts.disableRocksDB = false;
+    }
 
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        DS_ASSERT_OK(Init());
+        ASSERT_TRUE(cluster_ != nullptr);
+        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        DS_ASSERT_OK(cluster_->StartOBS());
+        externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
+    }
+
+    void TearDown() override
+    {
+        ExternalClusterTest::TearDown();
+    }
+
+    BaseCluster *GetCluster() override
+    {
+        return cluster_.get();
+    }
+
+    void VoluntaryScaleDownInject(int workerIdx)
+    {
+        std::string checkFilePath = FLAGS_log_dir.c_str();
+        std::string client = "client";
+        checkFilePath = checkFilePath.substr(0, checkFilePath.length() - client.length()) + "/worker"
+                        + std::to_string(workerIdx) + "/log/worker-status";
+        std::ofstream ofs(checkFilePath);
+        if (!ofs.is_open()) {
+            LOG(ERROR) << "Can not open worker status file in " << checkFilePath
+                       << ", voluntary scale in will not start, errno: " << errno;
+        } else {
+            ofs << "voluntary scale in\n";
+        }
+        ofs.close();
+        kill(cluster_->GetWorkerPid(workerIdx), SIGTERM);
+    }
+
+    void StartWorkerAndWaitReady(std::initializer_list<int> indexes,
+                                 const std::unordered_map<int, std::string> &workerFlags = {}, int maxWaitTimeSec = 20)
+    {
+        for (auto i : indexes) {
+            std::string flags;
+            auto iter = workerFlags.find(i);
+            if (iter != workerFlags.end()) {
+                flags = " " + iter->second;
+            }
+            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), flags).IsOk()) << i;
+        }
+        for (auto i : indexes) {
+            ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
+        }
+        for (auto i : indexes) {
+            // When the scale-in scenario is tested, the scale-in failure may not be determined correctly.
+            // Therefore, the scale-in failure is directly exited.
+            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "Hashring.Scaletask.Fail", "abort()"));
+        }
+        InitWorkersInfoMap(indexes);
+    }
+
+    void StartWorkerAndWaitReady(std::initializer_list<int> indexes, const std::string &flags, int maxWaitTimeSec = 20)
+    {
+        std::unordered_map<int, std::string> workerFlags;
+        for (auto i : indexes) {
+            workerFlags.emplace(i, flags);
+        }
+        StartWorkerAndWaitReady(indexes, workerFlags, maxWaitTimeSec);
+    }
+
+protected:
+    ExternalCluster *externalCluster_ = nullptr;
+};
+
+TEST_F(KVClientWriteRocksdbTest, TestNoneModeNoneL2Cache)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=none");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client1);
+    std::string val;
+    ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_NOT_FOUND);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestNoneModeL2Cache)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=none");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    SetParam param1;
+    param1.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
+    DS_ASSERT_OK(client1->Set(key1, data, param1));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.before_sub_async_send_etcd_req", "1*return(K_OK)"));
+    std::string key2;
+    (void)client1->GenerateKey("", key2);
+    SetParam param2;
+    param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
+    DS_ASSERT_OK(client1->Set(key2, data, param2));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client1);
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_NOT_FOUND);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
+{
+    StartWorkerAndWaitReady({ 0, 1 },
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-rocksdb_write_mode=none");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+
+    VoluntaryScaleDownInject(0);
+    sleep(3);  // Wait 3 seconds for voluntary scale down finished
+
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestNoneModeScaleUp)
+{
+    StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=none");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+    StartWorkerAndWaitReady({ 1 });
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestSyncModeNoneL2Cache)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=sync");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client1);
+    std::string val;
+    ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestSyncModeL2Cache)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=sync");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    SetParam param1;
+    param1.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
+    DS_ASSERT_OK(client1->Set(key1, data, param1));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.before_sub_async_send_etcd_req", "1*return(K_OK)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "persistence.service.save", "return(K_OK)"));
+    std::string key2;
+    (void)client1->GenerateKey("", key2);
+    SetParam param2;
+    param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
+    DS_ASSERT_OK(client1->Set(key2, data, param2));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client1);
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_EQ(val, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestSyncModeVoluntaryScaleDown)
+{
+    StartWorkerAndWaitReady({ 0, 1 },
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-rocksdb_write_mode=sync");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+
+    VoluntaryScaleDownInject(0);
+    sleep(3);  // Wait 3 seconds for voluntary scale down finished
+
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestSyncModeScaleUp)
+{
+    StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=sync");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+    StartWorkerAndWaitReady({ 1 });
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestASyncModeNoneL2Cache)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=async");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client1);
+    std::string val;
+    ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestASyncModeL2Cache)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=async");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    SetParam param1;
+    param1.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
+    DS_ASSERT_OK(client1->Set(key1, data, param1));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.before_sub_async_send_etcd_req", "1*return(K_OK)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "persistence.service.save", "return(K_OK)"));
+    std::string key2;
+    (void)client1->GenerateKey("", key2);
+    SetParam param2;
+    param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
+    DS_ASSERT_OK(client1->Set(key2, data, param2));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client1);
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)
+{
+    StartWorkerAndWaitReady({ 0, 1 },
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-rocksdb_write_mode=async");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+
+    VoluntaryScaleDownInject(0);
+    sleep(3);  // Wait 3 seconds for voluntary scale down finished
+
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, TestASyncModeScaleUp)
+{
+    StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=async");
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client1);
+    uint64_t size = 128;
+    std::string data = GenRandomString(size);
+    std::string key1;
+    (void)client1->GenerateKey("", key1);
+    DS_ASSERT_OK(client1->Set(key1, data));
+    StartWorkerAndWaitReady({ 1 });
+    std::string val;
+    DS_ASSERT_OK(client1->Get(key1, val));
+    ASSERT_EQ(val, data);
+}
 }  // namespace st
 }  // namespace datasystem

@@ -107,6 +107,7 @@ Status ListenWorker::StartListenWorker(int socketFd)
             nullptr));
     } else {
         workerListenedThread_ = Thread(&ListenWorker::CheckHeartbeat, this);
+        workerListenedThread_.set_name("ListenWorker");
         firstHeartbeatWaitPost_->WaitFor(clientCommonWorker_->GetConnectTimeoutMs());
         INJECT_POINT("listen_worker.StartListenWorker");
         if (!firstHeartbeatReceived_.load()) {
@@ -268,7 +269,7 @@ void ListenWorker::RunAllCallback()
     LOG(INFO) << "All callback size: " << callBackTable_.size() << ", local worker: " << isLocalWorker_;
     auto traceId = Trace::Instance().GetTraceID();
     auto func = [this, traceId]() {
-        auto traceGuard = Trace::Instance().SetSubTraceID(traceId);
+        auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<std::shared_timed_mutex> l(callbackMutex_);
         for (const auto &func : callBackTable_) {
             if (stop_) {

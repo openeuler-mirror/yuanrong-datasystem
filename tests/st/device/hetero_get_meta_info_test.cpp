@@ -449,8 +449,7 @@ TEST_F(HeteroGetMetaInfoTest, Exceed10000Key)
     inObjectKeys.pop_back();
     devSetBlobList.pop_back();
     devSetBlobList[0].deviceIdx = -1;
-    DS_ASSERT_OK(
-        hasStr(client->DevPublish(inObjectKeys, devSetBlobList, futures), "Got Error/ABNORMAL device, deviceId: -1"));
+    DS_ASSERT_TRUE(client->DevPublish(inObjectKeys, devSetBlobList, futures).GetCode(), StatusCode::K_INVALID);
 };
 }  // namespace st
 }  // namespace datasystem

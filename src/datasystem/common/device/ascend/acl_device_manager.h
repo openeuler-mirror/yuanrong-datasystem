@@ -36,14 +36,14 @@
 #include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/utils/status.h"
 
-#define RETURN_CANN_RESULT(aclRet, interType)                                                           \
-    do {                                                                                                \
-        int _aclRet = (aclRet);                                                                         \
-        if (_aclRet != 0) {                                                                             \
-            std::string errMsg = FormatString("%s api failed with error code %d ", interType, _aclRet); \
-            return Status(StatusCode::K_ACL_ERROR, __LINE__, __FILE__, errMsg);                         \
-        }                                                                                               \
-        return Status::OK();                                                                            \
+#define RETURN_CANN_RESULT(aclRet, interType)                                                                          \
+    do {                                                                                                               \
+        int _aclRet = (aclRet);                                                                                        \
+        if (_aclRet != 0) {                                                                                            \
+            return Status(StatusCode::K_ACL_ERROR, __LINE__, __FILE__, FormatString("%s api failed with error code %d" \
+            ", please refer to %s documentation for detailed error information. ", interType, aclRet, interType));     \
+        }                                                                                                              \
+        return Status::OK();                                                                                           \
     } while (false)
 
 #define RETURN_ACL_RESULT(aclRet)          \
@@ -75,12 +75,6 @@ public:
      * @brief Shutdown manager.
      */
     virtual void Shutdown();
-
-    /**
-     * @brief Check the plugin state.
-     * @return OK if plugin is ready.
-     */
-    Status CheckState();
 
     /**
      * @brief Check the plugin is loaded ok.
@@ -299,7 +293,7 @@ public:
      * For details about other return values, see HcclResult Type.
      * @return Status of the call.
      */
-    virtual Status DSHcclGetCommAsyncError(HcclComm comm, HcclResult *asyncError);
+    virtual Status DSHcclGetCommAsyncError(HcclComm comm);
 
     virtual Status aclInit(const char *configPath);
 
@@ -309,7 +303,7 @@ public:
 
     virtual Status aclrtGetDeviceCount(uint32_t *count);
 
-    virtual Status aclrtQueryDeviceStatus(uint32_t deviceId, int32_t *deviceStatus);
+    virtual Status aclrtQueryDeviceStatus(uint32_t deviceId);
 
     virtual Status aclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind,
                                     aclrtStream stream);
@@ -387,7 +381,7 @@ public:
      * For details about other return values, see HcclResult Type.
      * @return Status of the call.
      */
-    virtual Status DSP2PGetCommAsyncError(P2PComm comm, HcclResult *asyncError);
+    virtual Status DSP2PGetCommAsyncError(P2PComm comm);
 
     virtual Status RtNotifyCreate(int32_t deviceId, void **notify);
     virtual Status RtNotifyDestroy(void *notify);
@@ -420,6 +414,18 @@ private:
      * @brief dlsym the class member function pointer.
      */
     void DlsymFuncObj();
+
+    void LoadResearchPlugin();
+
+    /**
+     * @brief Handle HCCL operation result and provide detailed error information
+     * @param hcclResult The HCCL operation result code to be checked
+     * @return Status Returns Status with detailed message if result is HCCL_E_SUSPENDING,
+     *                otherwise returns the original HCCL result conversion
+     * @note Special handling for HCCL_E_SUSPENDING (22): Provides troubleshooting guidance for communicator suspension
+     *       caused by device state reset or communication domain destruction
+     */
+    Status HandleHcclResult(int hcclResult);
 
     // Register plugin function as function pointer in class member.
     REG_METHOD(MallocDeviceMemory, int, size_t, void *&);
@@ -485,14 +491,6 @@ private:
     static std::once_flag hasLoadPlugin_;
     static std::unique_ptr<AclDeviceManager> instance_;
 
-    enum class State : int {
-        NOT_INIT = 0,
-        PENDING_INIT,
-        INIT_OK,
-        INIT_ERROR,
-    };
-
-    std::atomic<State> state_{ State::NOT_INIT };
     void *pluginHandle_{ nullptr };
     std::unique_ptr<WaitPost> waitPost_;
     std::unique_ptr<Thread> loadPluginThread_{ nullptr };

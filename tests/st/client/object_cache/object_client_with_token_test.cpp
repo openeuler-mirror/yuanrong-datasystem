@@ -221,7 +221,7 @@ void ObjectClientWithTokenTest::GetMultiObjectSuccess(int64_t size)
 TEST_F(ObjectClientWithTokenTest, CreateShmBufferSuccess)
 {
     // Shared memory, non-Keep scenario
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     CreateBufferSuccess(SHM_SIZE, param);
 }
 

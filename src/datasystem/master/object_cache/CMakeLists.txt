@@ -14,6 +14,7 @@ set(MASTER_OC_SRCS
         device/master_dev_oc_directory.cpp
         device/master_dev_npu_events.cpp
         device/master_dev_client_meta_manager.cpp
+        device/master_dev_dead_lock_manager.cpp
         master_master_oc_api.cpp
         )
 

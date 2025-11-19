@@ -1,0 +1,228 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Defines the RPC API of the master component.
+ */
+syntax = "proto3";
+package datasystem.master;
+
+import "worker_stream.proto";
+import "utils.proto";
+import "rpc_option.proto";
+
+message StreamMetaPb {
+    string stream_name = 1;
+    uint64 max_stream_size = 2;
+    int64 page_size = 3;
+    bool auto_cleanup = 4;
+    uint64 retain_num_consumer = 5;
+    uint64 consumer_life_count = 6;
+    bool encrypt_stream = 7;
+    uint64 producer_life_count = 8;
+    uint64 reserve_size = 9;
+    int32 stream_mode = 10;
+}
+
+message CreateProducerReqPb {
+    ProducerMetaPb producer_meta = 1;
+    int64 timeout = 2;
+    uint64 max_stream_size = 3;
+    int64 page_size = 4;
+    bool auto_cleanup = 5;
+    bool redirect = 6;
+    uint64 retain_num_consumer = 7;
+    bool encrypt_stream = 8;
+    uint64 reserve_size = 9;
+    int32 stream_mode = 10;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message CreateProducerRspPb {
+    RedirectMetaInfo info = 1;
+    bool meta_is_moving = 2;
+    uint32 retain_data = 3;
+    uint64 producer_no = 4;
+}
+
+message ProducerInfoPb {
+  string stream_name = 1;
+}
+
+message CloseProducerReqPb {
+    repeated ProducerInfoPb producer_infos = 1;
+    HostPortPb worker_address = 2;
+    int64 timeout = 3;
+    bool force_close = 4;
+    bool redirect = 5;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message CloseProducerRspPb {
+    repeated ProducerInfoPb failed_producers = 1;
+    repeated ProducerInfoPb success_producers = 2;
+    ErrorInfoPb err = 3;
+    repeated RedirectMetaInfo info = 4;
+    bool meta_is_moving = 5;
+}
+
+message SubscribeReqPb {
+    ConsumerMetaPb consumer_meta = 1;
+    int64 timeout = 2;
+    bool redirect = 3;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message SubscribeRspPb {
+    uint64 max_stream_size = 1;
+    int64 page_size = 2;
+    bool auto_cleanup = 3;
+    RedirectMetaInfo info = 4;
+    bool meta_is_moving = 5;
+    uint64 retain_num_consumer = 6;
+    uint32 retain_data = 7;
+    bool encrypt_stream = 8;
+    uint64 reserve_size = 9;
+    int32 stream_mode = 10;
+}
+
+message CloseConsumerReqPb {
+    ConsumerMetaPb consumer_meta = 1;
+    int64 timeout = 2;
+    bool redirect = 3;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message CloseConsumerRspPb {
+    RedirectMetaInfo info = 1;
+    bool meta_is_moving = 2;
+}
+
+message DeleteStreamReqPb {
+    string stream_name = 1;
+    HostPortPb src_node_addr = 2;
+    int64 timeout = 3;
+    bool redirect = 4;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message DeleteStreamRspPb {
+    RedirectMetaInfo info = 1;
+    bool meta_is_moving = 2;
+}
+
+message NotifyWorkerExpectedGlbConsumerNumReqPb{
+    string stream_name = 1;
+    uint64 global_consumner_num = 2;
+    HostPortPb worker_addr =3;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message QueryGlobalNumReqPb {
+    string stream_name = 1;
+    bool redirect = 2;
+
+    // put to the end, the previous data is used to generate AK and SK signatures.
+    uint64 timestamp = 100;
+    string signature = 101;
+    string access_key = 102;
+}
+
+message QueryGlobalNumRsqPb {
+    uint64 global_count = 1;
+    RedirectMetaInfo info = 2;
+    bool meta_is_moving = 3;
+}
+
+message AsyncNotificationPb {
+    bool is_pub = 1;
+    bool is_close = 2;
+    string target_worker = 3;
+    string id = 4;  // Producer worker address or consumer id.
+    bool force_close = 5;
+    uint32 retain_data = 6;
+}
+
+message MetaForSCMigrationPb {
+    StreamMetaPb meta = 1;
+    repeated ProducerMetaPb producers = 2;
+    repeated ConsumerMetaPb consumers = 3;
+    repeated string producer_rel_nodes = 4;
+    repeated string consumer_rel_nodes = 5;
+    repeated AsyncNotificationPb notifications = 6;
+}
+
+message MigrateSCMetadataReqPb {
+  string source_addr = 1;
+  repeated MetaForSCMigrationPb stream_metas = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message MigrateSCMetadataRspPb {
+  repeated Status results = 1;
+
+  enum Status {
+    SUCCESSFUL = 0;
+    FAILED = 1;
+  }
+}
+
+service MasterSCService {
+    rpc CreateProducer (CreateProducerReqPb) returns (CreateProducerRspPb) {
+      option (datasystem.unary_socket_option) = true;
+    }
+    rpc CloseProducer (CloseProducerReqPb) returns (CloseProducerRspPb) {
+      option (datasystem.unary_socket_option) = true;
+    }
+    rpc Subscribe (SubscribeReqPb) returns (SubscribeRspPb) {
+      option (datasystem.unary_socket_option) = true;
+    }
+    rpc CloseConsumer (CloseConsumerReqPb) returns (CloseConsumerRspPb) {
+      option (datasystem.unary_socket_option) = true;
+    }
+    rpc DeleteStream (DeleteStreamReqPb) returns (DeleteStreamRspPb) {}
+    rpc QueryGlobalProducersNum (QueryGlobalNumReqPb) returns (QueryGlobalNumRsqPb) {}
+    rpc QueryGlobalConsumersNum (QueryGlobalNumReqPb) returns (QueryGlobalNumRsqPb) {}
+    rpc MigrateSCMetadata(MigrateSCMetadataReqPb) returns (MigrateSCMetadataRspPb) {}
+}

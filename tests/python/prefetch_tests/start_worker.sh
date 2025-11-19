@@ -11,8 +11,7 @@ export PATH=$PATH:${BASE_DIR}/scripts/modules
 
 function run_example() {
   echo -e "---- Start Smoke Testing..."
-  bash "${DATASYSTEM_DIR}/example/run-example.sh" "off" "off" "on" ||
-    (remove_running_pids && go_die "---- Smoke Testing failed!")
+  bash "${DATASYSTEM_DIR}/example/run-example.sh" || (remove_running_pids && go_die "---- Smoke Testing failed!")
   echo -e "---- Smoke Testing success!"
 }
 

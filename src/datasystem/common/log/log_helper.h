@@ -55,10 +55,17 @@ public:
         if (tokenField != nullptr) {
             copy.GetReflection()->SetString(&copy, tokenField, "***");
         }
-        auto accessKeyField = copy.descriptor()->FindFieldByName("signature");
+
+        auto signatureField = copy.descriptor()->FindFieldByName("signature");
+        if (signatureField != nullptr) {
+            copy.GetReflection()->SetString(&copy, signatureField, "***");
+        }
+
+        auto accessKeyField = copy.descriptor()->FindFieldByName("access_key");
         if (accessKeyField != nullptr) {
             copy.GetReflection()->SetString(&copy, accessKeyField, "***");
         }
+
         return copy.ShortDebugString();
     }
 

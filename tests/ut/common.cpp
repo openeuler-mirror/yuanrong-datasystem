@@ -83,7 +83,8 @@ CommonTest::CommonTest()
 #ifdef USE_URMA
     // Test fixture can override SetUp(), so keeping init here
     if (UrmaManager::IsUrmaEnabled()) {
-        UrmaManager::Instance().Init("127.0.0.1");
+        HostPort addr("127.0.0.1", 0);
+        UrmaManager::Instance().Init(addr);
         FLAGS_arena_per_tenant = 1;
     }
 #endif

@@ -150,6 +150,8 @@ global:
 | global.rpc.zmqClientIoContext | int | `5` | Optimize the performance of the client stub. Default value is 5. The higher the throughput, the higher the value, but should be in range [1, 32] |
 | global.rpc.zmqChunkSz | int | `1048576` | Parallel payload split chunk size. Default to 1048756 bytes |
 | global.rpc.maxRpcSessionNum | int | `2048` | Maximum number of sessions that can be cached, must be within [512, 10'000] |
+| global.rpc.streamIdleTimes | int | `300` | stream idle time. default 300s (5 minutes) |
+| global.rpc.remoteSendThreadNum | int | `8` | The num of threads used to send elements to remote worker |
 
 **Example**:
 
@@ -354,6 +356,7 @@ global:
 | global.metadata.rocksdbStoreDir | string | `"/home/sn/datasystem/rocksdb"` | Config MASTER back store directory and must specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata stored in the master so that the metadata before the restart can be re-obtained when the master restarts |
 | global.metadata.rocksdbBackgroundThreads | int | `16` | Number of background threads rocksdb can use for flushing and compacting |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | Number of open files that can be used by the rocksdb |
+| global.metadata.rocksdbWriteMode | string | `async` | Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb |
 
 ### Reliability Configurations
 
@@ -369,6 +372,7 @@ global:
 | global.reliability.livenessProbeTimeoutS | int | `150` | Timeout interval of kubernetes liveness probe |
 | global.reliability.addNodeWaitTimeS | int | `60` | Time to wait for the first node that wants to join a working hash ring |
 | global.reliability.autoDelDeadNode | bool | `true` | Indicate dead nodes marked in the hash ring can be removed or not |
+| global.reliability.enableDistributedMaster | bool | `true` | Whether to support distributed master, default is true |
 
 ### Graceful Shutdown Configurations
 
@@ -391,6 +395,17 @@ global:
 | global.performance.arenaPerTenant | int | `16` | The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for the first time, but each arena will use one more fd, value range: [1, 32] |
 | global.performance.memoryReclamationTimeSecond | int | `600` | The memory reclamation time after free |
 | global.performance.asyncDelete | bool | `false` | Set whether to delete object asynchronously. If set to true, master will notify workers to delete objects asynchronously. Client doesn't need to wait for all workers to delete objects. |
+| global.performance.enableP2pTransfer | bool | `false` | Heterogeneous object transfer protocol Enables p2p transfer |
+| global.performance.enableWorkerWorkerBatchGet | bool | `false` | Enable worker->worker OC batch get, default false |
+| global.performance.ocShmTransferThresholdKB  | int | `500` | The data threshold to transfer obj data between client and worker via shm, unit is KB |
+| global.performance.enableUrma | bool | `false` | Option to turn on urma for OC worker to worker data transfer, default false |
+| global.performance.urmaPollSize | int | `8` | Number of complete record to poll at a time, 16 is the max this device can poll |
+| global.performance.urmaRegisterWholeArena | bool | `true` | Register the whole arena as segment during init, otherwise, register each object as a segment |
+| global.performance.urmaConnectionSize | int | `16` | Number of jfs and jfr pair |
+| global.performance.urmaEventMode | bool | `false` | Uses interrupt mode to poll completion events |
+| global.performance.sharedDiskDirectory | string | `""` | Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled |
+| global.performance.sharedDiskSize | int | `0` | Upper limit of the shared disk, the unit is mb |
+| global.performance.sharedDiskArenaPerTenant  | int | `8` | The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared disk allocation for the first time, but each arena will use one more fd. The valid range is 0 to 32 |
 
 ### AK/SK Configurations
 
@@ -485,5 +500,6 @@ global:
 | Configuration | Type | Default | Description |
 |-----|------|---------|-------------|
 | global.annotations | object | `{}` | Kubernetes meta annotation |
-| global.enableNonPreemptive | bool | `false` | Configure priorityClass. If the value is false, the default priorityClass is system-cluster-critical. If the value is true, a priorityClass with preemptionPolicy Never is created. |
+| global.enableNonPreemptive | bool | `false` | Configure priorityClass. If the value is false, the default priorityClass is system-cluster-critical. If the value is true, a priorityClass with preemptionPolicy Never is created |
 | global.fsGid | string | `"1002"` | fsGroup configuratio. All processes of the container are also part of the supplementary group ID |
+| global.rollingUpdateTimeoutS | int | `1800` | Maximum duration of the rolling upgrade, default value is 1800 seconds |

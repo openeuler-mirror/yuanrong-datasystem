@@ -24,6 +24,10 @@ set(DS_ST_DEPEND_LIBS
         master_object_cache_store
         master_object_cache
         worker_object_cache
+        master_stream_cache
+        worker_stream_cache
+        master_stream_cache_store
+        master_stream_protos
         httpclient
         common_persistence_api)
 
@@ -42,6 +46,9 @@ add_subdirectory(cluster)
 file(GLOB_RECURSE DS_TEST_ST_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
+file(GLOB_RECURSE DS_ST_STREAM_CACHE_SRCS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
+
 file(GLOB_RECURSE DS_ST_OBJECT_CACHE_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/**/object_cache/*.cpp")
 
@@ -53,6 +60,7 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*encrypt_util.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*hashring_parser.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/cluster/.*)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/object_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/kv_cache/.*)
 
@@ -62,27 +70,33 @@ endif()
 
 if (NOT BUILD_GO_API)
     list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client_c_api/.*)
+    list(FILTER DS_ST_STREAM_CACHE_SRCS EXCLUDE REGEX .*/client_c_api/.*)
     list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/client_c_api/.*)
     list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*/client_c_api/.*)
 endif ()
 
 set(ST_COMMON_SRCS
         test_main.cpp
-        st_oc_service_impl.cpp)
+        st_oc_service_impl.cpp
+        common/stream_cache/element_generator.cpp)
 
+add_library(_ds_st_stream_cache_obj OBJECT ${DS_ST_STREAM_CACHE_SRCS} ${ST_COMMON_SRCS})
 add_library(_ds_st_object_cache_obj OBJECT ${DS_ST_OBJECT_CACHE_SRCS} ${ST_COMMON_SRCS})
 add_library(_ds_st_kv_cache_obj OBJECT ${DS_ST_KV_CACHE_SRCS} ${ST_COMMON_SRCS})
 add_library(_ds_st_other_obj OBJECT ${DS_TEST_ST_SRCS} ${ST_COMMON_SRCS})
 
+target_link_libraries(_ds_st_stream_cache_obj nlohmann_json::nlohmann_json generic_service_protos ds_worker datasystem)
 target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json generic_service_protos ds_worker datasystem)
 target_link_libraries(_ds_st_kv_cache_obj nlohmann_json::nlohmann_json generic_service_protos ds_worker datasystem)
 target_link_libraries(_ds_st_other_obj nlohmann_json::nlohmann_json generic_service_protos ds_worker datasystem)
 
+add_executable(ds_st_stream_cache $<TARGET_OBJECTS:_ds_st_stream_cache_obj>)
 add_executable(ds_st_object_cache $<TARGET_OBJECTS:_ds_st_object_cache_obj>)
 add_executable(ds_st_kv_cache $<TARGET_OBJECTS:_ds_st_kv_cache_obj>)
 add_executable(ds_st $<TARGET_OBJECTS:_ds_st_other_obj>)
 
 target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS})
+target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS})
 target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS})
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS})
 
@@ -223,6 +237,7 @@ add_custom_command(
         ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker_authorized_clients/worker.key)
 
 add_datasystem_test(ds_st TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(ds_st_stream_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 

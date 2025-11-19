@@ -61,10 +61,10 @@ Status P2PHcclCommWrapper::InitP2PComm(const HcclRootInfo *rootInfo, P2pKind kin
     hcclCommState_ = HcclCommState::CREATING;
     Status rc;
     if (isSameNode) {
-        LOG(INFO) <<"InitP2PComm HCCS dir: "<< kind;
+        LOG(INFO) << "InitP2PComm HCCS dir: " << kind;
         rc = aclImpl_->DSP2PCommInitRootInfo(rootInfo, kind, P2pLink::P2P_LINK_HCCS, &GetRef());
     } else {
-        LOG(INFO) <<"InitP2PComm ROCE dir: "<< kind;
+        LOG(INFO) << "InitP2PComm ROCE dir: " << kind;
         rc = aclImpl_->DSP2PCommInitRootInfo(rootInfo, kind, P2pLink::P2P_LINK_ROCE, &GetRef());
     }
 
@@ -73,17 +73,17 @@ Status P2PHcclCommWrapper::InitP2PComm(const HcclRootInfo *rootInfo, P2pKind kin
     return rc;
 }
 
-Status P2PHcclCommWrapper::P2PSend(const std::vector<DataInfo> &dataInfos,
-                                   const std::shared_ptr<AclRtEventWrapper> &event, aclrtStream stream)
+Status P2PHcclCommWrapper::P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+                                   aclrtStream stream)
 {
-    LOG(INFO) << "p2phccl start to send " << (dataInfos.size() > 0 ? DataInfoToString(dataInfos[0]) : "")
-              << ", info num: " << dataInfos.size();
+    LOG(INFO) << "p2phccl start to send " << (blobs.size() > 0 ?  std::to_string(blobs[0].size) : "")
+              << ", info num: " << blobs.size();
     (void)event;
     auto &comm = GetRef();
     if (comm == nullptr) {
         return { K_RUNTIME_ERROR, "HcclComm is nullptr" };
     }
-    for (size_t i = 0; i < dataInfos.size(); i++) {
+    for (size_t i = 0; i < blobs.size(); i++) {
         auto injectTest = [] {
             INJECT_POINT("client.P2PSend.skip_DSHcclSend", [] { return true; });
             return false;
@@ -91,18 +91,18 @@ Status P2PHcclCommWrapper::P2PSend(const std::vector<DataInfo> &dataInfos,
         if (injectTest()) {
             continue;
         }
-        RETURN_IF_NOT_OK(aclImpl_->DSP2PSend(dataInfos[i].devPtr, dataInfos[i].count,
-                                             static_cast<HcclDataType>(dataInfos[i].dataType), comm, stream));
+        RETURN_IF_NOT_OK(aclImpl_->DSP2PSend(blobs[i].pointer, blobs[i].size, HcclDataType::HCCL_DATA_TYPE_INT8,
+                                             comm, stream));
     }
     VLOG(1) << "Send hccl ok";
     return Status::OK();
 }
 
-Status P2PHcclCommWrapper::P2PRecv(const std::vector<DataInfo> &dataInfos,
-                                   const std::shared_ptr<AclRtEventWrapper> &event, aclrtStream stream)
+Status P2PHcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+                                   aclrtStream stream)
 {
-    LOG(INFO) << "p2phccl receiving " << (dataInfos.size() > 0 ? DataInfoToString(dataInfos[0]) : "")
-              << ", info num: " << dataInfos.size();
+    LOG(INFO) << "p2phccl receiving " << (blobs.size() > 0 ?  std::to_string(blobs[0].size) : "")
+              << ", info num: " << blobs.size();
     auto &comm = GetRef();
     if (comm == nullptr) {
         return { K_RUNTIME_ERROR, "HcclComm is nullptr" };
@@ -119,9 +119,9 @@ Status P2PHcclCommWrapper::P2PRecv(const std::vector<DataInfo> &dataInfos,
         int eightS = 8;
         std::this_thread::sleep_for(std::chrono::seconds(eightS));
     }
-    for (size_t i = 0; i < dataInfos.size(); i++) {
-        RETURN_IF_NOT_OK(aclImpl_->DSP2PRecv(dataInfos[i].devPtr, dataInfos[i].count,
-                                             static_cast<HcclDataType>(dataInfos[i].dataType), comm, stream));
+    for (size_t i = 0; i < blobs.size(); i++) {
+        RETURN_IF_NOT_OK(
+            aclImpl_->DSP2PRecv(blobs[i].pointer, blobs[i].size, HcclDataType::HCCL_DATA_TYPE_INT8, comm, stream));
     }
 
     RETURN_IF_NOT_OK(event->RecordEvent(stream));
@@ -129,16 +129,14 @@ Status P2PHcclCommWrapper::P2PRecv(const std::vector<DataInfo> &dataInfos,
     return Status::OK();
 }
 
-HcclResult P2PHcclCommWrapper::HcclGetCommAsyncError()
+Status P2PHcclCommWrapper::HcclGetCommAsyncError()
 {
-    auto &comm = GetRef();
     // Don't check if comm is creating.
     if (hcclCommState_ == HcclCommState::CREATING || hcclCommState_ == HcclCommState::UNCREATE) {
-        return HCCL_SUCCESS;
+      return Status::OK();
     }
-    HcclResult asyncError;
-    aclImpl_->DSP2PGetCommAsyncError(comm, &asyncError);
-    return asyncError;
+    auto &comm = GetRef();
+    return aclImpl_->DSP2PGetCommAsyncError(comm);
 }
 
 Status P2PHcclCommWrapper::InitCommunicator(HcclRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode)

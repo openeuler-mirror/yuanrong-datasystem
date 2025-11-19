@@ -14,6 +14,8 @@
 """
 Test datasystem tensor client python interface.
 """
+import logging
+from multiprocessing import Process, Barrier
 import json
 import os
 import random
@@ -41,6 +43,12 @@ try:
     from datasystem import DsTensorClient, CopyRange
 except ImportError:
     is_tensor_client_exist = False
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+)
+logger = logging.getLogger(__name__)
 
 
 class TestDsTensorClient(unittest.TestCase):
@@ -226,7 +234,7 @@ class TestDsTensorClient(unittest.TestCase):
     @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
     def test_dev_mset_and_dev_mget_with_mindspore_tensor(self):
         """Test dev_mset and dev_mget device object."""
-        src_device_id, dest_device_id = 6, 7
+        src_device_id, dest_device_id = 0, 1
         key_num = 1
         keys = [self.random_str(10) for _ in range(key_num)]
         datas = [np.random.rand(2, 3) for _ in range(key_num)]
@@ -528,3 +536,85 @@ class TestDsTensorClient(unittest.TestCase):
         self.assertEqual(len(failed_keys), 0)
 
         acl.finalize()
+
+    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    def test_dev_d2d_dead_lock1(self):
+        """Test the d2d deadlock."""
+        local_rank_num = 8
+        dtype = ms.float32
+        shape = (2, 3)
+
+        def task(i, barrier, local_rank_num):
+            acl.init()
+            acl.rt.set_device(i)
+            ms.set_device(device_target="Ascend", device_id=i)
+            client = self.init_test_tensor_client(i)
+            keys = [f'{i}_{j}' for j in range(local_rank_num)]
+            send_tensors = [ms.Tensor(np.ones(shape), dtype) + 0 for i in range(local_rank_num)]
+
+            failed_keys = client.dev_mset(keys, send_tensors)
+            assert len(failed_keys) == 0
+            logger.info(f"device {i} set key_list:{keys} success")
+            barrier.wait()
+
+            get_keys = [f'{j}_{i}' for j in range(local_rank_num)]
+            recv_tensors = [ms.Tensor(np.zeros(shape), dtype) + 0 for i in range(local_rank_num)]
+            failed_keys = client.dev_mget(get_keys, recv_tensors, 60 * 1000)
+            assert len(failed_keys) == 0
+
+            self.batch_tensors_check(recv_tensors, send_tensors)
+            logger.info(f"device {i} get key_list:{get_keys} success")
+
+            barrier.wait()
+            failed_keys = client.dev_delete(keys)
+            assert len(failed_keys) == 0
+
+        processes = []
+        barrier = Barrier(local_rank_num)
+        for i in range(local_rank_num):
+            p = Process(target=task, args=(i, barrier, local_rank_num))
+            processes.append(p)
+            p.start()
+
+        for p in processes:
+            p.join()
+
+    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    def test_dev_d2d_dead_lock2(self):
+        """Test the d2d deadlock."""
+        local_rank_num = 8
+        dtype = ms.float32
+        shape = (2, 3)
+        key_lists_formal = [f"device_id_{i}" for i in range(local_rank_num)]
+        array_lists_formal = [np.random.randn(*shape) for _ in range(local_rank_num)]
+
+        def task(i, barrier, local_rank_num):
+            acl.init()
+            acl.rt.set_device(i)
+            ms.set_device(device_target="Ascend", device_id=i)
+            client = self.init_test_tensor_client(i)
+            send_tensors = [ms.Tensor(array_lists_formal[i], dtype) + 0]
+            failed_keys = client.dev_mset([key_lists_formal[i]], send_tensors)
+            assert len(failed_keys) == 0
+            logger.info(f"device {i} set key_list:{key_lists_formal[i]} success")
+            barrier.wait()
+
+            key_lists = key_lists_formal[0: i] + key_lists_formal[i + 1::]
+            recv_tensors = [ms.Tensor(np.ones(shape), dtype) + 0 for _ in range(local_rank_num - 1)]
+            failed_keys = client.dev_mget(key_lists, recv_tensors, 60 * 1000)
+            assert len(failed_keys) == 0
+            logger.info(f"device {i} get key_list:{key_lists} success")
+
+            barrier.wait()
+            failed_keys = client.dev_delete(key_lists_formal)
+            assert len(failed_keys) == 0
+
+        processes = []
+        barrier = Barrier(local_rank_num)
+        for i in range(local_rank_num):
+            p = Process(target=task, args=(i, barrier, local_rank_num))
+            processes.append(p)
+            p.start()
+
+        for p in processes:
+            p.join()

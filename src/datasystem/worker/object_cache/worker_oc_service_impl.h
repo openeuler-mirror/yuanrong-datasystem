@@ -205,8 +205,9 @@ public:
      * @param[in] taskId task id of voluntary scale down task, if task id is empty, it means we
      *                   careless about the task id.
      * @param[in] stage Migration sttrategy stage.
+     * @return Status of the call
      */
-    void MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
+    Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
                      MigrateStrategy::MigrationStrategyStage stage = MigrateStrategy::MigrationStrategyStage::FIRST);
 
     /**
@@ -216,8 +217,9 @@ public:
      * @param[in] threadPool Migrate data thread pool.
      * @param[in] futures Migrate data futures.
      * @param[out] newFutures New added migrate data futures.
+     * @return Status of the call.
      */
-    void HandleMigrateDataResult(const std::string &taskId, const std::shared_ptr<MigrateProgress> progress,
+    Status HandleMigrateDataResult(const std::string &taskId, const std::shared_ptr<MigrateProgress> progress,
                                  const std::unique_ptr<ThreadPool> &threadPool,
                                  std::vector<std::future<MigrateDataHandler::MigrateResult>> &futures,
                                  std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
@@ -1131,8 +1133,8 @@ private:
     std::mutex circularQueueMutex_;  // To protect circularQueueManager_
     std::vector<std::shared_ptr<ShmCircularQueue>> circularQueueManager_;
 
-    std::shared_timed_mutex clearIdsMutex_;
-    std::vector<std::string> voluntaryScaleDownClearIds_ = {};
+    std::shared_timed_mutex clearIdsMutex_;                     // to protect voluntaryScaleDownClearIds_
+    std::vector<std::string> voluntaryScaleDownClearIds_ = {};  // need clear ids before voluntary scaledown
     /**
      * the thread pool is only use for delete old version of object in l2cache.
      *

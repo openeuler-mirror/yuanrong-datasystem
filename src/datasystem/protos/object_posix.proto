@@ -68,6 +68,7 @@ message MultiCreateReqPb {
   repeated uint64 data_size = 3;
   string token = 4;
   string tenant_id = 5;
+  bool   skip_check_existence = 6; 
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -77,6 +78,7 @@ message MultiCreateReqPb {
 
 message MultiCreateRspPb {
   repeated CreateRspPb results = 1;
+  repeated bool exists = 2;
 }
 
 // For the meaning of the value, see 'ExistenceOpt' enum class.
@@ -131,6 +133,7 @@ message MultiPublishReqPb {
   string tenant_id = 9;
   uint32 cache_type = 10;
   bool is_replica = 11;
+  bool auto_release_memory_ref = 12 ; 
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

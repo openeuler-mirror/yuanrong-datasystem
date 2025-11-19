@@ -59,8 +59,9 @@ enum StatusCode : uint32_t {
     K_RETRY_IF_LEAVING = 30,
     K_SCALE_DOWN = 31,
     K_SCALING = 32,
-    K_LRU_HARD_LIMIT = 33,
-    K_LRU_SOFT_LIMIT = 34,
+    K_CLIENT_DEADLOCK = 33,
+    K_LRU_HARD_LIMIT = 34,
+    K_LRU_SOFT_LIMIT = 35,
 
     // rpc error code, range: [1000, 2000)
     K_RPC_CANCELLED = 1000,
@@ -76,6 +77,19 @@ enum StatusCode : uint32_t {
     K_WRITE_BACK_QUEUE_FULL = 2003,
     K_OC_KEY_ALREADY_EXIST = 2004,
     K_WORKER_PULL_OBJECT_NOT_FOUND = 2005,
+
+    // stream error code, range: [3000, 4000)
+    K_SC_STREAM_NOT_FOUND = 3000,
+    K_SC_PRODUCER_NOT_FOUND = 3001,
+    K_SC_CONSUMER_NOT_FOUND = 3002,
+    K_SC_END_OF_PAGE = 3003,
+    K_SC_STREAM_IN_RESET_STATE = 3004,
+    K_SC_WORKER_WAS_LOST = 3005,
+    K_SC_STREAM_IN_USE = 3006,
+    K_SC_STREAM_DELETE_IN_PROGRESS = 3007,
+    K_SC_STREAM_RESOURCE_ERROR = 3008,
+    K_SC_ALREADY_CLOSED = 3009,
+    K_SC_STREAM_NOTIFICATION_PENDING = 3010,
 
     // Heterogeneous error code, range: [5000, 6000]
     K_ACL_ERROR = 5000,

@@ -39,7 +39,7 @@ constexpr uint32_t SIZE_MEGA_BYTES = 1024 * 1024;  // 1 MB
 const std::string DEFAULT_FILE_LOG_LEVEL = "INFO";
 const std::string DEFAULT_LOG_DIR = "/.datasystem/logs";
 const std::string DEFAULT_LOG_PATTERN =
-    "%Y-%m-%dT%H:%M:%S.%6f | %^%L%$ | %s:%# | %v";  // %v = "pod_name | pid:tid | trace_id | az_name | message"
+    "%Y-%m-%dT%H:%M:%S.%6f | %^%L%$ | %s:%# | %v";  // %v = "pod_name | pid:tid | trace_id | cluster_name | message"
 const std::string DEFAULT_STDERR_LOG_LEVEL = "FATAL";
 }  // namespace log_param
 

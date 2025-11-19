@@ -34,8 +34,8 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
-DS_DECLARE_string(other_az_names);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(other_cluster_names);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);
 
@@ -47,8 +47,8 @@ WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &i
                                                      std::shared_ptr<AkSkManager> akSkManager)
     : WorkerOcServiceCrudCommonApi(initParam), etcdCM_(etcdCM), akSkManager_(std::move(akSkManager))
 {
-    for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-        if (azName != FLAGS_az_name) {
+    for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
+        if (azName != FLAGS_cluster_name) {
             otherAZNames_.emplace_back(azName);
         }
     }

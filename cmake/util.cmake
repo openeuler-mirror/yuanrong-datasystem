@@ -54,7 +54,7 @@ function(__EXEC_COMMAND)
 endfunction()
 
 function(DOWNLOAD_LIB_PKG LIB_NAME URL SHA256)
-  # OpenEuler tiny package url end with "rpm" suffix, we need 
+  # OpenEuler tiny package url end with "rpm" suffix, we need
   # to uncompress it and get the real source code package.
   if (URL MATCHES ".*\.src\.rpm$")
     FetchContent_Declare(
@@ -172,7 +172,7 @@ function(GEN_THIRDPARTY_PKG NAME URL SHA256 FAKE_SHA256 VERSION)
                    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     file(SHA256 "${_DEST_PATH}" _SHA256)
   endif()
-  
+
   # Set output variables.
   set(${URL} "${_DEST_PATH}" PARENT_SCOPE)
   set(${SHA256} "${_SHA256}" PARENT_SCOPE)
@@ -374,6 +374,7 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
     # extract files from rpm
     file(GLOB RPM_FILES "${${_LIB_NAME_LOWER}_SOURCE_DIR}/umdk-*.rpm")
     foreach(file ${RPM_FILES})
+      message("process ${file}")
       execute_process(COMMAND rpm2cpio ${file}
                       COMMAND cpio -idmv
                       WORKING_DIRECTORY ${${_LIB_NAME_LOWER}_SOURCE_DIR}
@@ -384,37 +385,58 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
       endif()
     endforeach()
     # Copy headers
-    file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/flowbuf/cpp/flowbuffer.h
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/common/ub_util.h
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urma_opcode.h
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urma_types.h
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urma_api.h
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urpc/cpp
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urpc/urpc.h
-         DESTINATION ${${LIB_NAME}_ROOT}/include)
+    if (URMA_OVER_UB)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/ub/umdk/urma/urma_opcode.h
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/ub/umdk/urma/urma_types.h
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/ub/umdk/urma/urma_api.h
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/ub/umdk/urma/urma_ubagg.h
+          DESTINATION ${${LIB_NAME}_ROOT}/include)
+    else()
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urma_opcode.h
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urma_types.h
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urma_api.h
+          DESTINATION ${${LIB_NAME}_ROOT}/include)
+    endif()
     # Copy libs
-    file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/libflowbuffer.so
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma.so
+    file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma.so
               ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma.so.0
               ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma.so.0.0.1
               ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma_common.so
               ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma_common.so.0
               ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburma_common.so.0.0.1
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburpc.so
-              ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburpc_cpp.so
          DESTINATION ${${LIB_NAME}_ROOT}/lib64)
-    # copy only ib libs to /urma
-    file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so
-         ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so.0
-         ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so.0.0.1
-         ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so
-         ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so.0
-         ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so.0.0.1
-       DESTINATION ${${LIB_NAME}_ROOT}/lib64/urma)
-
-    # Copy bins
-    file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/bin/flowc
-         DESTINATION ${${LIB_NAME}_ROOT}/bin)
+    # copy the ib/ip/ub libs to /urma if applicable
+    if (EXISTS ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so
+          ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so.0
+          ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ib.so.0.0.1
+        DESTINATION ${${LIB_NAME}_ROOT}/lib64/urma)
+    endif()
+    if (EXISTS ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so
+          ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so.0
+          ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ip.so.0.0.1
+        DESTINATION ${${LIB_NAME}_ROOT}/lib64/urma)
+    endif()
+    if (EXISTS ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ubagg.so)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ubagg.so
+          ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ubagg.so.0
+          ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/urma/liburma_ubagg.so.0.0.1
+        DESTINATION ${${LIB_NAME}_ROOT}/lib64/urma)
+    endif()
+    # copy libs and bins for URPC
+    if (BUILD_WITH_URPC)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/flowbuf/cpp/flowbuffer.h
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urpc/cpp
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/include/umdk/urpc/urpc.h
+            DESTINATION ${${LIB_NAME}_ROOT}/include)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/libflowbuffer.so
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburpc.so
+                ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/lib64/liburpc_cpp.so
+          DESTINATION ${${LIB_NAME}_ROOT}/lib64)
+      file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/usr/bin/flowc
+          DESTINATION ${${LIB_NAME}_ROOT}/bin)
+    endif()
   elseif(${_TOOLCHAIN_LOWER} STREQUAL "cmake")
     if (ARG_CXX_FLAGS)
       list(APPEND ARG_CONF_OPTIONS "-DCMAKE_CXX_FLAGS=${ARG_CXX_FLAGS}")
@@ -509,7 +531,7 @@ endfunction()
 #
 #   ${LIB_NAME}_URL
 #       third-party library download url.
-# 
+#
 #   ${LIB_NAME}_SHA256
 #       third-party library SHA256 for verify.
 function(ADJUICE_THIRDPARTY_VERSION LIB_NAME)
@@ -596,7 +618,7 @@ endmacro()
 #
 #   WORKING_DIR <working-directory>
 #       Specify the working directory when running test executable.
-# 
+#
 #   TEST_ENVIRONMENTS <var1> <var2> ...
 #       Specify the test environments variables when running test executable.
 function(ADD_DATASYSTEM_TEST TARGET)
@@ -604,7 +626,7 @@ function(ADD_DATASYSTEM_TEST TARGET)
   set(one_value_args WORKING_DIR)
   set(multi_value_args TEST_ENVIRONMENTS)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
-  
+
   if (NOT ARG_WORKING_DIR)
     set(ARG_WORKING_DIR ${CMAKE_CURRENT_BINARY_DIR})
   endif()
@@ -644,7 +666,7 @@ function(ADD_DATASYSTEM_TEST TARGET)
 endfunction()
 
 # Clean target build rpath. Some targets like python shared library
-# would package as jar/wheel format file first then install. But there 
+# would package as jar/wheel format file first then install. But there
 # build rpath need to erase first.
 #
 # TARGET is CMake target, shared library or executable is available.
@@ -665,8 +687,8 @@ function(CLEAN_BUILD_RPATH TARGET)
 endfunction()
 
 # Run StripAndGenHash.cmake to strip libraries in install stage.
-# 
-# LIB_LIST <list-variable> 
+#
+# LIB_LIST <list-variable>
 #    Specify the list of library path waiting to strip.
 # DST_DIR <directory-path>
 #    Specify the destination directory path of StripAndGenHash run.
@@ -691,7 +713,7 @@ endfunction()
 # PACKAGE_NAME is the package name of python library
 #
 # Additional optional arguments:
-# 
+#
 #   CMAKE_INSTALL_PATH <output-path>
 #       Specify the directory path where python whl file save.
 #
@@ -711,7 +733,7 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   set(DATASYSTEM_WHEEL_PATH ${CMAKE_BINARY_DIR}/dist/datasystem)
   set(DATASYSTEM_SETUP_PATH ${CMAKE_BINARY_DIR}/dist)
   set(DATASYSTEM_PACKAGE_LIBPATH ${CMAKE_SOURCE_DIR})
- 
+
   # Store helm chart
   set(HELM_CHART_PATH ${CMAKE_SOURCE_DIR}/k8s/helm_chart)
   set(SERVER_LIB ${CMAKE_INSTALL_PREFIX}/service/lib)
@@ -725,7 +747,7 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
 
   foreach(_PATTERN ${ARG_THIRDPATRY_LIBS_PATTERN})
     file(GLOB_RECURSE THIRDPARTY_LIB_LIST ${_PATTERN})
-    foreach(_THIRDPARTY_LIB ${THIRDPARTY_LIB_LIST}) 
+    foreach(_THIRDPARTY_LIB ${THIRDPARTY_LIB_LIST})
       install(FILES ${_THIRDPARTY_LIB} DESTINATION ${PYTHON_LIBPATH})
       if (NOT IS_SYMLINK ${_THIRDPARTY_LIB})
         get_filename_component(_LIB_NAME ${_THIRDPARTY_LIB} NAME)
@@ -744,45 +766,45 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   # Strip libraries in PYTON_LIBPATH
   list(TRANSFORM ARG_NEED_STRIP_LIBS PREPEND "${PYTHON_LIBPATH}/")
   strip_libs_in_install_stage(NEED_STRIP_LIBS PYTHON_LIBPATH)
- 
+
   # Copy chart files to package lib path
   install(DIRECTORY ${HELM_CHART_PATH}/
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/helm_chart)
-  
+
   # Copy cpp include files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/include
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/)
- 
+
   # Copy service lib to package lib path
   install(DIRECTORY ${SERVER_LIB}/
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/lib/)
- 
+
   # Copy sdk lib
   install(DIRECTORY ${SDK_LIB}/
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/lib/
           PATTERN "cmake" EXCLUDE)
- 
+
   # Copy python sdk
   install(DIRECTORY ${PYTHON_SDK}/
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/)
- 
+
   # Copy ds cli source files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli
     DESTINATION ${DATASYSTEM_WHEEL_PATH})
- 
+
   #Copy setup.py
-  install(FILES ${CMAKE_SOURCE_DIR}/setup.py DESTINATION ${DATASYSTEM_SETUP_PATH})
-  
+  install(FILES ${CMAKE_SOURCE_DIR}/setup.py DESTINATION ${DATASYSTEM_SETUP_PATH}/)
+
   # Copy VERSION and LICENSE to package lib path
   install(FILES ${CMAKE_SOURCE_DIR}/VERSION ${CMAKE_SOURCE_DIR}/LICENSE ${CMAKE_SOURCE_DIR}/README.md
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
   # Copy cpp template to package lib path
-  install(DIRECTORY ${CMAKE_SOURCE_DIR}/example/cpp_template
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli/cpp_template
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
   # Copy worker and worker_config to package lib path
   install(FILES ${CMAKE_INSTALL_PREFIX}/service/datasystem_worker ${CMAKE_SOURCE_DIR}/cli/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/cluster_config.json
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
- 
+
   find_package(Python3 COMPONENTS Interpreter Development)
   set(CONFIG_PACKAGE_SCRIPT ${CMAKE_BINARY_DIR}/PackageDatasystem.cmake)
   # Generate PackagePythonSDK.cmake to run setup.py
@@ -916,10 +938,10 @@ endfunction()
 #
 #   DEST_DIR <directory-path>
 #       Specify the destination directory path of installing file.
-# 
+#
 #   PATH_PATTERN <pattern1> <pattern2> ...
 #       Specify the library path pattern, like ${zlib_LIBRARY}/libz.so* .
-# 
+#
 #   PERMISSIONS <permission1> <permission2> ...
 #       Specify permissions of copied file.
 function(INSTALL_FILE_PATTERN)

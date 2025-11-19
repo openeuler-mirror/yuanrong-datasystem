@@ -51,6 +51,9 @@ public:
      */
     ~MasterOCServiceImpl();
 
+    /**
+     * @brief shutdown master oc server impl.
+     */
     void Shutdown();
 
     /**

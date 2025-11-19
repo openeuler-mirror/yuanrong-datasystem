@@ -921,5 +921,21 @@ public:
         }
         return true;
     }
+
+    /**
+     * @brief Validate the given string matches the cache type supported.
+     * @param[in] flagName Cache type flag.
+     * @param[in] value The string to be checked.
+     * @return True if valid.
+     */
+    static bool ValidateRocksdbModeType(const char *flagName, const std::string &value)
+    {
+        if (value == "none" || value == "sync" || value == "async") {
+            return true;
+        }
+        LOG(ERROR) << FormatString(
+            "The value of %s flag is %s, which must be 'none'/'sync'/'async'.", flagName, value);
+        return false;
+    }
 };
 #endif  // DATASYSTEM_COMMON_UTIL_FLAG_VALIDATOR_H

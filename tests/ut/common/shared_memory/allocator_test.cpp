@@ -71,6 +71,7 @@ struct AllocatorConfig {
     ssize_t decayMs = 5'000;
     int objectThreshold = 100;
     int streamThreshold = 100;
+    ServiceType serviceType = ServiceType::OBJECT;
     memory::CacheType cacheType = memory::CacheType::MEMORY;
 
     AllocatorConfig() = default;
@@ -100,7 +101,7 @@ public:
         }
         return datasystem::memory::Allocator::Instance()->Init(config_.shmSize, config_.shdSize, config_.populate,
                                                                config_.scaling, config_.decayMs,
-                                                               config_.objectThreshold);
+                                                               config_.objectThreshold, config_.streamThreshold);
     }
 
     uint64_t MaxSize()
@@ -111,17 +112,19 @@ public:
     Status AllocateMemory(uint64_t needSize, ShmUnitInfo &unit, const std::string &tenantId = DEFAULT_TENANT_ID)
     {
         return datasystem::memory::Allocator::Instance()->AllocateMemory(
-            tenantId, needSize, config_.populate, unit.pointer, unit.fd, unit.offset, unit.mmapSize, config_.cacheType);
+            tenantId, needSize, config_.populate, unit.pointer, unit.fd, unit.offset, unit.mmapSize,
+            config_.serviceType, config_.cacheType);
     }
 
     Status AllocateMemory(ShmUnit &unit, uint64_t needSize, const std::string &tenantId = DEFAULT_TENANT_ID)
     {
-        return unit.AllocateMemory(tenantId, needSize, config_.populate, config_.cacheType);
+        return unit.AllocateMemory(tenantId, needSize, config_.populate, config_.serviceType, config_.cacheType);
     }
 
     Status FreeMemory(void *&pointer, const std::string &tenantId = DEFAULT_TENANT_ID)
     {
-        return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId, pointer, config_.cacheType);
+        return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId, pointer, config_.serviceType,
+                                                                     config_.cacheType);
     }
 
     Status FreeMemory(ShmUnit &unit)
@@ -151,9 +154,9 @@ public:
         return datasystem::memory::Allocator::Instance()->GetMemoryUsage(tenantId, config_.cacheType);
     }
 
-    uint64_t GetMaxMemorySize()
+    uint64_t GetMaxMemorySize(ServiceType serviceType = ServiceType::OBJECT)
     {
-        return datasystem::memory::Allocator::Instance()->GetMaxMemorySize(config_.cacheType);
+        return datasystem::memory::Allocator::Instance()->GetMaxMemorySize(serviceType, config_.cacheType);
     }
 
 protected:
@@ -320,26 +323,32 @@ TEST_F(AllocatorTest, TestAllocateMemoryWithThreshold)
     LOG(INFO) << "Test allocate memory with threshold.";
     auto *allocator = datasystem::memory::Allocator::Instance();
     uint64_t maxSize = 64 * 1024ul * 1024ul;
-    uint64_t ocShmPercentage = 80;
-    uint64_t maxOcSize = (maxSize * ocShmPercentage) / 100;
+    uint64_t scShmPercentage = 90, ocShmPercentage = 80;
+    uint64_t maxOcSize = (maxSize * ocShmPercentage) / 100, maxScSize = (maxSize * scShmPercentage) / 100;
     ssize_t decayMs = 5000;
     ShmUnit shmUnit;
     ResetShmUnit(shmUnit);
 
-    DS_ASSERT_OK(allocator->Init(maxSize, 0, false, true, decayMs, ocShmPercentage));
-    ASSERT_EQ(allocator->GetMaxMemorySize(), size_t(maxOcSize));
+    DS_ASSERT_OK(allocator->Init(maxSize, 0, false, true, decayMs, ocShmPercentage, scShmPercentage));
+    ASSERT_EQ(allocator->GetMaxMemorySize(ServiceType::OBJECT), size_t(maxOcSize));
+    ASSERT_EQ(allocator->GetMaxMemorySize(ServiceType::STREAM), size_t(maxScSize));
     ASSERT_EQ(allocator->GetMemoryUsage(), size_t(0));
 
     EXPECT_EQ(allocator
                   ->AllocateMemory(DEFAULT_TENANT_ID, maxOcSize + 1, false, shmUnit.pointer, shmUnit.fd, shmUnit.offset,
-                                   shmUnit.mmapSize)
+                                   shmUnit.mmapSize, ServiceType::OBJECT)
                   .GetCode(),
               StatusCode::K_OUT_OF_MEMORY);
     ExpectUnChanged(shmUnit);
 
+    uint64_t needSize = 16;
     ResetShmUnit(shmUnit);
+    DS_ASSERT_OK(allocator->AllocateMemory(DEFAULT_TENANT_ID, needSize, false, shmUnit.pointer, shmUnit.fd,
+                                           shmUnit.offset, shmUnit.mmapSize, ServiceType::STREAM));
+    ASSERT_EQ(allocator->GetMemoryUsage(), needSize);
 
-    DS_ASSERT_NOT_OK(allocator->FreeMemory(shmUnit.pointer));
+    DS_ASSERT_NOT_OK(allocator->FreeMemory(shmUnit.pointer, ServiceType::OBJECT));
+    DS_ASSERT_OK(allocator->FreeMemory(shmUnit.pointer, ServiceType::STREAM));
 
     ASSERT_EQ(allocator->GetMemoryUsage(), size_t(0));
     allocator->Shutdown();
@@ -546,6 +555,7 @@ TEST_F(AllocatorTest, TestAllocateMemoryInMultiThreads)
     allocator->Shutdown();
 }
 
+
 void AllocatorTest::TestAllocatedAddresses()
 {
     LOG(INFO) << "Test allocated addresses.";
@@ -647,7 +657,7 @@ TEST_F(AllocatorTest, TestArenaBasicFunction)
 {
     AllocatorConfig config;
     config.shmSize = 64 * 1024ul * 1024ul;  // 64 MB
-    config.decayMs = 1'000;                 // 1'000 MS
+    config.decayMs = 1'000;  // 1'000 MS
     DS_ASSERT_OK(Init(config));
     TestArenaBasicFunction();
 }
@@ -656,7 +666,7 @@ TEST_F(AllocatorTest, TestArenaBasicFunctionDisk)
 {
     AllocatorConfig config;
     config.shdSize = 64 * 1024ul * 1024ul;  // 64 MB
-    config.decayMs = 1'000;                 // 1'000 MS
+    config.decayMs = 1'000;  // 1'000 MS
     config.cacheType = memory::CacheType::DISK;
     DS_ASSERT_OK(Init(config));
     TestArenaBasicFunction();
@@ -964,7 +974,7 @@ void AllocatorTest::TestUsedupAndFree2()
 TEST_F(AllocatorTest, TestUsedupAndFree2)
 {
     AllocatorConfig config;
-    config.shmSize = 2 * 1024ul * 1024ul * 1024ul;      // 2 GB
+    config.shmSize = 2 * 1024ul * 1024ul * 1024ul;  // 2 GB
     config.decayMs = 10 * SEC_PER_MIN * MS_PER_SECOND;  // 10 minus.
     DS_ASSERT_OK(Init(config));
     TestUsedupAndFree2();
@@ -973,7 +983,7 @@ TEST_F(AllocatorTest, TestUsedupAndFree2)
 TEST_F(AllocatorTest, TestUsedupAndFree2Disk)
 {
     AllocatorConfig config;
-    config.shdSize = 2 * 1024ul * 1024ul * 1024ul;      // 2 GB
+    config.shdSize = 2 * 1024ul * 1024ul * 1024ul;  // 2 GB
     config.decayMs = 10 * SEC_PER_MIN * MS_PER_SECOND;  // 10 minus.
     config.cacheType = memory::CacheType::DISK;
     DS_ASSERT_OK(Init(config));
@@ -1167,7 +1177,7 @@ TEST_F(AllocatorTest, FakeAllocate)
 {
     FLAGS_arena_per_tenant = 1;
     AllocatorConfig config;
-    config.shmSize = 10 * 1024ul * 1024ul * 1024ul;     // 10 GB
+    config.shmSize = 10 * 1024ul * 1024ul * 1024ul;  // 10 GB
     config.decayMs = 10 * SEC_PER_MIN * MS_PER_SECOND;  // 10 minus.
     DS_ASSERT_OK(Init(config));
     FakeAllocate();
@@ -1177,7 +1187,7 @@ TEST_F(AllocatorTest, FakeAllocateDisk)
 {
     FLAGS_shared_disk_arena_per_tenant = 1;
     AllocatorConfig config;
-    config.shdSize = 10 * 1024ul * 1024ul * 1024ul;     // 10 GB
+    config.shdSize = 10 * 1024ul * 1024ul * 1024ul;  // 10 GB
     config.decayMs = 10 * SEC_PER_MIN * MS_PER_SECOND;  // 10 minus.
     config.cacheType = memory::CacheType::DISK;
     DS_ASSERT_OK(Init(config));
@@ -1398,13 +1408,14 @@ public:
     Status AllocateMemory(uint64_t needSize, ShmUnitInfo &unit, memory::CacheType cacheType,
                           const std::string &tenantId = DEFAULT_TENANT_ID)
     {
-        return datasystem::memory::Allocator::Instance()->AllocateMemory(
-            tenantId, needSize, false, unit.pointer, unit.fd, unit.offset, unit.mmapSize, cacheType);
+        return datasystem::memory::Allocator::Instance()->AllocateMemory(tenantId, needSize, false, unit.pointer,
+                                                                         unit.fd, unit.offset, unit.mmapSize,
+                                                                         ServiceType::OBJECT, cacheType);
     }
 
     Status FreeMemory(void *&pointer, memory::CacheType cacheType, const std::string &tenantId = DEFAULT_TENANT_ID)
     {
-        return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId, pointer, cacheType);
+        return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId, pointer, ServiceType::OBJECT, cacheType);
     }
 };
 

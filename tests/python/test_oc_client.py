@@ -23,7 +23,7 @@ import threading
 import time
 import unittest
 
-from datasystem.object_client import Buffer, ConsistencyType, ObjectClient, WriteMode
+from datasystem.object_client import Buffer, ConsistencyType, ObjectClient
 
 
 class TestOcClientMethods(unittest.TestCase):
@@ -90,7 +90,7 @@ class TestOcClientMethods(unittest.TestCase):
         client = self.init_test_client()
         object_key = self.random_str(10)
         value = bytes(self.random_str(50), encoding='utf8')
-        param = {"write_mode": WriteMode.NONE_L2_CACHE, "consistency_type": ConsistencyType.PRAM}
+        param = {"consistency_type": ConsistencyType.PRAM}
         client.put(object_key, value, param)
         buffer_list = client.get([object_key], 5)
         self.assertEqual(value, buffer_list[0].immutable_data())
@@ -102,7 +102,7 @@ class TestOcClientMethods(unittest.TestCase):
         client = self.init_test_client()
         object_key = self.random_str(10)
         value = bytes(self.random_str(50), encoding='utf8')
-        param = {"write_mode": WriteMode.NONE_L2_CACHE, "consistency_type": ConsistencyType.PRAM}
+        param = {"consistency_type": ConsistencyType.PRAM}
         client.put(object_key, value, param)
         buffer_list = client.get([object_key], 5)
         read_data = buffer_list[0].immutable_data()
@@ -117,7 +117,7 @@ class TestOcClientMethods(unittest.TestCase):
         object_key = self.random_str(10)
         value = bytes(self.random_str(50), encoding='utf8')
         size = len(value)
-        param = {"write_mode": WriteMode.NONE_L2_CACHE, "consistency_type": ConsistencyType.PRAM}
+        param = {"consistency_type": ConsistencyType.PRAM}
         buffer = client.create(object_key, size, param)
         self.assertEqual(buffer.get_size(), size)
         buffer.wlatch()
@@ -360,7 +360,7 @@ class TestOcClientMethods(unittest.TestCase):
         self.assertEqual(client.query_global_ref_num(object2), 1)
         self.assertEqual(client.query_global_ref_num(object3), 1)
 
-        param = {"write_mode": WriteMode.NONE_L2_CACHE, "consistency_type": ConsistencyType.PRAM}
+        param = {"consistency_type": ConsistencyType.PRAM}
         client.put(object2, value, param)
         client.put(object3, value, param)
 

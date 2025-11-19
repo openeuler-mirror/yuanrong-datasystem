@@ -26,6 +26,7 @@
 #include "datasystem/hetero_client.h"
 #include "datasystem/object_client.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/stream_client.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

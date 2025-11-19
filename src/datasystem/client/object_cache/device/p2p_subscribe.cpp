@@ -136,72 +136,81 @@ void P2PSubscribe::ProcessP2PSend(
         auto recvDeviceId = kv.first.remoteDeviceId;
         bool isSameNode = kv.first.sameNode;
         auto &npuEvents = kv.second;
+        std::vector<std::string> objectKeys;
+        std::transform(npuEvents.begin(), npuEvents.end(), std::back_inserter(objectKeys),
+                       [](const SubscribeReceiveNpuEventPb &npuEvent) { return npuEvent.object_key(); });
+        LOG(INFO) << FormatString("Get send event from npuId: %s;%d, keys:%s", recvClientId, recvDeviceId,
+                                  VectorToString(objectKeys));
 
         StartMonitorThread();
         std::shared_ptr<CommWrapperBase> comm;
         Status rc = commFactory_->GetOrCreateHcclComm(P2PEventType::SEND, deviceId_, recvClientId, recvDeviceId,
                                                       isSameNode, clientEnableP2Ptransfer_, comm);
         if (rc.IsError()) {
-            std::vector<std::string> objectKeys;
-            std::transform(npuEvents.begin(), npuEvents.end(), std::back_inserter(objectKeys),
-                           [](const SubscribeReceiveNpuEventPb &npuEvent) { return npuEvent.object_key(); });
             LOG(ERROR) << "ObjectKeys: " << VectorToString(objectKeys) << ",  GetOrCreateHcclComm failed, "
                        << rc.ToString();
-            continue;
+            return;
         }
         CommRefCheckMoreThanOne();
+
+        // Register a callback function to be executed after the communication domain is ready
         Timer timer;
         auto traceId = Trace::Instance().GetTraceID();
-        comm->Execute([this, npuEvents = std::move(npuEvents), comm, traceId, timer]() {
-            auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMicroSecond() * ONE_SECOND_MS);
-            PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_PUB_SUBMIT_DELAY, elapsedMs);
-            PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_PUB_SUBMIT_KEY_COUNT, npuEvents.size());
-            PerfPoint point(PerfKey::CLIENT_P2P_PUB_PIPELINE_PREPARE);
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            point.RecordAndReset(PerfKey::CLIENT_P2P_PUB_PIPELINE_SUBMIT_ALL);
-            for (const auto &npuEvent : npuEvents) {
-                const auto &objectKey = npuEvent.object_key();
-                std::shared_ptr<P2PPutRequest> putRequest;
-                auto found = GetPutRequest(objectKey, putRequest);
-                if (!found) {
-                    LOG(ERROR) << FormatString("Can't find %s P2PPutRequest info", objectKey);
-                    continue;
-                }
-                PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_PUB_SUBMIT_KEY_SIZE, putRequest->GetTotalSize());
-                putRequest->CreateEvent();
-                size_t srcOffset = npuEvent.src_offset();
-                size_t length = npuEvent.length();
-                std::vector<DataInfo> dataInfos = putRequest->GetDataInfoStorage();
-                // Calculate minimum size from all dataInfos
-                size_t minSize =
-                    std::min_element(dataInfos.begin(), dataInfos.end(), [](const DataInfo &a, const DataInfo &b) {
-                        return a.Size() < b.Size();
-                    })->Size();
-                // Execute if receiver expects only partial data
-                if (srcOffset > 0 || length < minSize) {
-                    VLOG(1) << "Adjusting data info parameters: srcOffset=" << srcOffset << ", length=" << length
-                            << ", minSize=" << minSize;
-                    for (auto &dataInfo : dataInfos) {
-                        dataInfo.devPtr = static_cast<void *>(static_cast<uint8_t *>(dataInfo.devPtr) + srcOffset);
-                        dataInfo.count = npuEvent.length();
+        comm->AddReadyCallback([this, npuEvents = std::move(npuEvents), comm, traceId, timer]() {
+            comm->Execute([this, npuEvents, comm, traceId, timer]() {
+                auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMicroSecond() * ONE_SECOND_MS);
+                PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_PUB_SUBMIT_DELAY, elapsedMs);
+                PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_PUB_SUBMIT_KEY_COUNT, npuEvents.size());
+                PerfPoint point(PerfKey::CLIENT_P2P_PUB_PIPELINE_PREPARE);
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+                point.RecordAndReset(PerfKey::CLIENT_P2P_PUB_PIPELINE_SUBMIT_ALL);
+                for (const auto &npuEvent : npuEvents) {
+                    std::shared_ptr<P2PPutRequest> putRequest;
+                    const auto &objectKey = npuEvent.object_key();
+                    auto found = GetPutRequest(objectKey, putRequest);
+                    if (!found) {
+                        LOG(ERROR) << FormatString("Can't find %s P2PPutRequest info", objectKey);
+                        continue;
                     }
+                    PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_PUB_SUBMIT_KEY_SIZE, putRequest->GetTotalSize());
+                    putRequest->CreateEvent();
+                    size_t srcOffset = npuEvent.src_offset();
+                    size_t length = npuEvent.length();
+                    std::vector<Blob> blobs = putRequest->GetBlobsStorage();
+                    // Calculate minimum size from all blobs
+                    size_t minSize =
+                        std::min_element(blobs.begin(), blobs.end(), [](const Blob &a, const Blob &b) {
+                            return a.size < b.size;
+                        })->size;
+                    // Execute if receiver expects only partial data
+                    if (srcOffset > 0 || length < minSize) {
+                        VLOG(1) << "Adjusting data info parameters: srcOffset=" << srcOffset << ", length=" << length
+                                << ", minSize=" << minSize;
+                        for (auto &blob : blobs) {
+                            blob.pointer =
+                                static_cast<void *>(static_cast<uint8_t *>(blob.pointer) + srcOffset);
+                            blob.size = npuEvent.length();
+                        }
+                    }
+                    LOG(INFO) << "Start submit send task for object key:" << objectKey;
+                    acl::P2PSendTask sendTask{ .srcBuffers = putRequest->GetBlobsStorage(),
+                                               .totalSize = putRequest->GetTotalSize(),
+                                               .comm = comm,
+                                               .event = putRequest->GetEvent() };
+                    auto rc = comm->SubmitPipelineTask(std::move(sendTask));
+                    if (rc.IsError()) {
+                        LOG(ERROR) << FormatString(
+                            "Submitted P2P send task execution failed for object:%s, error msg: [%s]",
+                            objectKey,
+                            rc.GetMsg());
+                        LOG_IF_ERROR(putRequest->SetPromiseValue(rc), "promise set value failed.");
+                        return;
+                    }
+                    std::shared_ptr<P2PAckReq> ackReq = std::make_shared<P2PAckReq>(putRequest);
+                    p2pAckQueue_.Push(ackReq);
                 }
-                LOG(INFO) << "Start submit send task for object key:" << objectKey;
-                acl::P2PSendTask sendTask{ .srcBuffers = dataInfos,
-                                           .totalSize = putRequest->GetTotalSize(),
-                                           .comm = comm,
-                                           .event = putRequest->GetEvent() };
-                auto rc = comm->SubmitPipelineTask(std::move(sendTask));
-                if (rc.IsError()) {
-                    LOG(ERROR) << FormatString("ObjectKey %s submit task failed, %s", objectKey, rc.ToString());
-                    putRequest->SetPromiseValue(rc);
-                    continue;
-                }
-
-                std::shared_ptr<P2PAckReq> ackReq = std::make_shared<P2PAckReq>(putRequest);
-                p2pAckQueue_.Push(ackReq);
-            }
-            point.RecordAndReset(PerfKey::CLIENT_P2P_PUB_PIPELINE_OTHER);
+                point.RecordAndReset(PerfKey::CLIENT_P2P_PUB_PIPELINE_OTHER);
+            });
         });
     }
 }
@@ -219,7 +228,7 @@ void P2PSubscribe::RunP2PRecvLoop()
         if (p2pGetRequests->Size() == 0) {
             continue;
         }
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(GetStringUuid());
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(p2pGetRequests->getTraceId_);
         if (!first) {
             auto elapsedMs = static_cast<uint64_t>(lastGetTimer.ElapsedMicroSecond() * ONE_SECOND_MS);
             PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_NEXT_GET_DELAY, elapsedMs);
@@ -282,6 +291,7 @@ void P2PSubscribe::RunP2PAckLoop()
         if (p2pAckQueue_.Pop(p2pAckReq).IsError() || p2pAckReq == nullptr) {
             continue;
         }
+        TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
         if (p2pAckReq->type == P2PAckReqType::GET) {
             auto &p2pGetRequest = p2pAckReq->p2pGetRequest;
             if (p2pGetRequest->GetEvent() == nullptr) {
@@ -318,15 +328,15 @@ Status P2PSubscribe::ProcessP2PGet(const std::shared_ptr<P2PGetRequestsWrapper> 
         return Status(K_NOT_FOUND, "p2p meta data get timeout");
     }
     std::vector<std::shared_ptr<DeviceBufferInfo>> bufferInfoList;
-    std::vector<std::vector<DataInfo>> dataInfoStorageList;
+    std::vector<DeviceBlobList> blobStorageList;
     std::unordered_map<std::string, std::shared_ptr<P2PGetRequest>> objKeyToP2PRequest;
     for (size_t i = 0; i < p2pGetRequests->Size(); i++) {
         auto &p2pGetRequest = p2pGetRequests->requestList_[i];
         const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
         const auto &objectKey = bufferInfo->devObjKey;
-        const auto &dataInfoStorage = p2pGetRequest->GetDataInfoStorage();
+        const auto &blobStorage = p2pGetRequest->GetBlobsStorage();
         bufferInfoList.emplace_back(bufferInfo);
-        dataInfoStorageList.emplace_back(dataInfoStorage);
+        blobStorageList.emplace_back(DeviceBlobList{ .blobs = blobStorage, .deviceIdx = -1 });
         (void)objKeyToP2PRequest.emplace(objectKey, p2pGetRequest);
         VLOG(1) << FormatString("%s is ready to P2PGet", objectKey);
     }
@@ -336,7 +346,7 @@ Status P2PSubscribe::ProcessP2PGet(const std::shared_ptr<P2PGetRequestsWrapper> 
         std::chrono::duration_cast<std::chrono::milliseconds>(now - p2pGetRequests->initializationTime_).count();
     auto subTimeout = elapsedTime > p2pGetRequests->subTimeout_ ? 0 : p2pGetRequests->subTimeout_ - elapsedTime;
     point.RecordAndReset(PerfKey::CLIENT_P2P_SUB_GETMETA);
-    auto ret = clientWorkerApi_->GetP2PMeta(bufferInfoList, dataInfoStorageList, resp, subTimeout);
+    auto ret = clientWorkerApi_->GetP2PMeta(bufferInfoList, blobStorageList, resp, subTimeout);
     if (ret.IsError()) {
         LOG(ERROR) << "GetP2PMeta error,msg:" << ret.GetMsg();
         if (ret.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
@@ -363,7 +373,6 @@ void P2PSubscribe::ProcessP2PRecv(
         auto isSameNode = kv.first.sameNode;
         auto &respList = kv.second;
         std::shared_ptr<CommWrapperBase> comm;
-        auto traceId = Trace::Instance().GetTraceID();
         StartMonitorThread();
         auto rc = commFactory_->GetOrCreateHcclComm(P2PEventType::RECV, deviceId_, srcClientId, srcDeviceId, isSameNode,
                                                     clientEnableP2Ptransfer_, comm);
@@ -376,54 +385,63 @@ void P2PSubscribe::ProcessP2PRecv(
         }
         finishedList.insert(objectKeys.cbegin(), objectKeys.cend());
         CommRefCheckMoreThanOne();
+
+        // Register a callback function to be executed after the communication domain is ready
         Timer timer;
-        comm->Execute([this, respList = std::move(respList), comm, objKeyToP2PRequest, srcClientId, srcDeviceId,
-                       traceId, timer]() mutable {
-            auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMicroSecond() * ONE_SECOND_MS);
-            PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_DELAY, elapsedMs);
-            PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_KEY_COUNT, respList.size());
-            PerfPoint point(PerfKey::CLIENT_P2P_SUB_PIPELINE_PREPARE);
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            std::vector<std::shared_ptr<P2PGetRequest>> requests;
-            size_t maxObjectSize = 0;
-            for (const auto &resp : respList) {
-                const auto &objectKey = resp.object_key();
-                auto iter = objKeyToP2PRequest.find(objectKey);
-                if (iter == objKeyToP2PRequest.end()) {
-                    LOG(ERROR) << "object key:" << objectKey << " not found in objKeyToP2PRequest";
-                    continue;
+        auto traceId = Trace::Instance().GetTraceID();
+        comm->AddReadyCallback([this, respList = std::move(respList), comm, objKeyToP2PRequest, srcClientId,
+                                srcDeviceId, traceId, timer]() {
+            comm->Execute([this, respList, comm, objKeyToP2PRequest, srcClientId, srcDeviceId, traceId,
+                           timer]() mutable {
+                auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMicroSecond() * ONE_SECOND_MS);
+                PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_DELAY, elapsedMs);
+                PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_KEY_COUNT, respList.size());
+                PerfPoint point(PerfKey::CLIENT_P2P_SUB_PIPELINE_PREPARE);
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+                std::vector<std::shared_ptr<P2PGetRequest>> requests;
+                size_t maxObjectSize = 0;
+                for (const auto &resp : respList) {
+                    const auto &objectKey = resp.object_key();
+                    auto iter = objKeyToP2PRequest.find(objectKey);
+                    if (iter == objKeyToP2PRequest.end()) {
+                        LOG(ERROR) << "object key:" << objectKey << " not found in objKeyToP2PRequest";
+                        continue;
+                    }
+                    auto &getRequest = iter->second;
+                    requests.emplace_back(getRequest);
+                    maxObjectSize = std::max<size_t>(maxObjectSize, getRequest->GetTotalSize());
                 }
-                auto &getRequest = iter->second;
-                requests.emplace_back(getRequest);
-                maxObjectSize = std::max<size_t>(maxObjectSize, getRequest->GetTotalSize());
-            }
-            point.RecordAndReset(PerfKey::CLIENT_P2P_SUB_PIPELINE_SUBMIT_ALL);
-            for (const auto &p2pGetRequest : requests) {
-                PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_KEY_SIZE, p2pGetRequest->GetTotalSize());
-                const auto &objectKey = p2pGetRequest->GetObjectKey();
-                const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
-                auto dataInfoStorage = p2pGetRequest->GetDataInfoStorage();
-                LOG(INFO) << FormatString("Start submit recv task for object key: %s", objectKey);
-                acl::P2PRecvTask recvTask{ .destBuffers = dataInfoStorage,
-                                           .totalSize = p2pGetRequest->GetTotalSize(),
-                                           .comm = comm,
-                                           .event = p2pGetRequest->GetEvent() };
-                auto rc = comm->SubmitPipelineTask(std::move(recvTask));
-                if (rc.IsError()) {
-                    LOG(ERROR) << "P2Precv error objkey: " << objectKey << " with error " << rc.GetMsg();
-                    LOG_IF_ERROR(p2pGetRequest->SetPromiseValue(rc), "promise set value failed.");
-                    continue;
+                point.RecordAndReset(PerfKey::CLIENT_P2P_SUB_PIPELINE_SUBMIT_ALL);
+                for (const auto &p2pGetRequest : requests) {
+                    PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_KEY_SIZE, p2pGetRequest->GetTotalSize());
+                    const auto &objectKey = p2pGetRequest->GetObjectKey();
+                    const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
+                    auto blobStorage = p2pGetRequest->GetBlobsStorage();
+                    LOG(INFO) << FormatString("Start submit recv task for object key: %s", objectKey);
+                    acl::P2PRecvTask recvTask{ .destBuffers = blobStorage,
+                                               .totalSize = p2pGetRequest->GetTotalSize(),
+                                               .comm = comm,
+                                               .event = p2pGetRequest->GetEvent() };
+                    auto rc = comm->SubmitPipelineTask(std::move(recvTask));
+                    if (rc.IsError()) {
+                        LOG(ERROR) << FormatString(
+                            "Submitted P2P receive task execution failed for object:%s, error msg: [%s]",
+                            objectKey,
+                            rc.GetMsg());
+                        LOG_IF_ERROR(p2pGetRequest->SetPromiseValue(rc), "promise set value failed.");
+                        continue;
+                    }
+                    if (bufferInfo->cacheLocation) {
+                        AddSubscribe(bufferInfo, blobStorage);
+                        (void)devMemUnitTable_.insert(std::make_pair(objectKey, p2pGetRequest->GetMemUnit()));
+                    }
+                    p2pGetRequest->SetSrcClientId(srcClientId);
+                    p2pGetRequest->SetSrcDeviceId(srcDeviceId);
+                    std::shared_ptr<P2PAckReq> req = std::make_shared<P2PAckReq>(p2pGetRequest);
+                    p2pAckQueue_.Push(req);
                 }
-                if (bufferInfo->cacheLocation) {
-                    AddSubscribe(bufferInfo, dataInfoStorage);
-                    (void)devMemUnitTable_.insert(std::make_pair(objectKey, p2pGetRequest->GetMemUnit()));
-                }
-                p2pGetRequest->SetSrcClientId(srcClientId);
-                p2pGetRequest->SetSrcDeviceId(srcDeviceId);
-                std::shared_ptr<P2PAckReq> req = std::make_shared<P2PAckReq>(p2pGetRequest);
-                p2pAckQueue_.Push(req);
-            }
-            point.RecordAndReset(PerfKey::CLIENT_P2P_SUB_PIPELINE_OTHER);
+                point.RecordAndReset(PerfKey::CLIENT_P2P_SUB_PIPELINE_OTHER);
+            });
         });
     }
 }
@@ -456,16 +474,24 @@ Status P2PSubscribe::ProcessP2PResponse(
         groupedSubResp[groupKey].emplace_back(std::move(subResp));
     }
     ProcessP2PRecv(groupedSubResp, objKeyToP2PRequest, finishedList);
+    std::stringstream retryKeys;
+    bool first = true;
     auto remainTasks =
         std::make_shared<P2PGetRequestsWrapper>(p2pGetRequests->prefetchTimeout_, p2pGetRequests->subTimeout_);
     for (size_t i = 0; i < p2pGetRequests->Size(); i++) {
         const auto &objectKey = p2pGetRequests->requestList_[i]->GetBufferInfo()->devObjKey;
         if (finishedList.find(objectKey) == finishedList.end()) {
             remainTasks->requestList_.emplace_back(std::move(p2pGetRequests->requestList_[i]));
+            if (!first) {
+                retryKeys << ", ";
+            }
+            retryKeys << objectKey;
+            first = false;
         }
         remainTasks->initializationTime_ = p2pGetRequests->initializationTime_;
     }
     if (remainTasks->Size() > 0) {
+        VLOG(1) << FormatString("Re-adding unfinished keys [%s] to p2pGetQueue_", retryKeys.str());
         p2pGetQueue_.Push(remainTasks);
     }
     return Status::OK();
@@ -490,9 +516,9 @@ bool P2PSubscribe::GetPutRequest(const std::string &objectKey, std::shared_ptr<P
 }
 
 std::shared_ptr<P2PPutRequest> P2PSubscribe::AddSubscribe(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                                          const std::vector<DataInfo> &dataInfoList)
+                                                          const std::vector<Blob> &blobs)
 {
-    auto putRequest = std::make_shared<P2PPutRequest>(bufferInfo, dataInfoList);
+    auto putRequest = std::make_shared<P2PPutRequest>(bufferInfo, blobs);
     (void)objKey2PutReqTable_.insert(std::make_pair(bufferInfo->devObjKey, putRequest));
     return putRequest;
 }
@@ -509,11 +535,11 @@ Status P2PSubscribe::PublishDeviceObject(const std::shared_ptr<DeviceBuffer> &bu
             RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
                                     FormatString("The ID already exists,ID:%s", bufferInfo->devObjKey));
         }
-        auto &storagedataInfoVec = buffAcc->second->GetDataInfoStorage();
-        auto &newDataInfoVec = buffer->GetDeviceMemUnit()->GetDataInfoStorage();
+        auto &storageBlobVec = buffAcc->second->GetBlobsStorage();
+        auto &newBlobVec = buffer->GetDeviceMemUnit()->GetBlobsStorage();
         auto sameDataPtr =
-            std::equal(storagedataInfoVec.begin(), storagedataInfoVec.end(), newDataInfoVec.begin(),
-                       newDataInfoVec.end(), [](const DataInfo &a, const DataInfo &b) { return a.devPtr == b.devPtr; });
+            std::equal(storageBlobVec.begin(), storageBlobVec.end(), newBlobVec.begin(),
+                       newBlobVec.end(), [](const Blob &a, const Blob &b) { return a.pointer == b.pointer; });
         if (sameDataPtr) {
             return Status::OK();
         }
@@ -522,9 +548,9 @@ Status P2PSubscribe::PublishDeviceObject(const std::shared_ptr<DeviceBuffer> &bu
                                                               bufferInfo->devObjKey));
     }
     auto devMemUnit = buffer->GetDeviceMemUnit();
-    auto putRequest = AddSubscribe(bufferInfo, devMemUnit->GetDataInfoStorage());
+    auto putRequest = AddSubscribe(bufferInfo, devMemUnit->GetBlobsStorage());
     VLOG(1) << "PutP2PMeta to worker, objectKey: " << buffer->GetObjectKey();
-    auto rc = clientWorkerApi_->PutP2PMeta(bufferInfo, devMemUnit->GetDataInfoStorage());
+    auto rc = clientWorkerApi_->PutP2PMeta(bufferInfo, devMemUnit->GetBlobsStorage());
     INJECT_POINT("PublishDeviceObject.PutP2PMeta.Timeout", [&rc]() {
         rc = Status(StatusCode::K_RUNTIME_ERROR, "timeout");
         return Status::OK();
@@ -544,7 +570,7 @@ Status P2PSubscribe::GetSendStatus(const std::string &objectKey, std::vector<Fut
     TbbP2PPutRequestTable::const_accessor acc;
     if (objKey2PutReqTable_.find(acc, objectKey)) {
         auto &putRequest = acc->second;
-        return putRequest->CreateEventAndFutureList(putRequest->GetDataInfoStorage().size(), futureVec);
+        return putRequest->CreateEventAndFutureList(putRequest->GetBlobsStorage().size(), futureVec);
     }
     RETURN_STATUS(K_NOT_FOUND, FormatString("The objectKey [ %s ] is not found in this client.", objectKey));
 }
@@ -602,7 +628,7 @@ void P2PSubscribe::MonitorLoop()
             for (const auto &comm : hcclCommVec) {
                 auto rc = comm->CheckHealth(connectTimeOutMS_);
                 if (rc.IsError()) {
-                    LOG(ERROR) << rc.ToString();
+                    LOG(ERROR) << FormatString("Hccl comm health check failed, %s", rc.ToString());
                     (void)commFactory_->DelComm(comm->GetCommId());
                 }
             }
@@ -655,14 +681,16 @@ Status P2PSubscribe::AsyncGet(const std::vector<std::shared_ptr<DeviceBuffer>> &
         std::string devObjKey = buffer->bufferInfo_->devObjKey;
         TbbP2PPutRequestTable::accessor acc;
         if (objKey2PutReqTable_.find(acc, devObjKey)) {
+            LOG(INFO) << "Get key " << devObjKey
+                      << " found locally in put request table, performing on-device D2D copy directly.";
             std::shared_ptr<P2PPutRequest> putRequest = acc->second;
-            const std::vector<DataInfo> dataInfosInPut = putRequest->GetDataInfoStorage();
-            std::vector<DataInfo> dataInfosInGet = buffer->GetDataInfoList();
-            for (size_t i = 0; i < dataInfosInPut.size(); i++) {
-                auto adjustedPtr = static_cast<void *>(static_cast<uint8_t *>(dataInfosInPut[i].devPtr)
+            const std::vector<Blob> blobsInPut = putRequest->GetBlobsStorage();
+            std::vector<Blob> blobsInGet = buffer->GetDevBlobList();
+            for (size_t i = 0; i < blobsInPut.size(); i++) {
+                auto adjustedPtr = static_cast<void *>(static_cast<uint8_t *>(blobsInPut[i].pointer)
                                                        + buffer->bufferInfo_->srcOffset);
-                RETURN_IF_NOT_OK(aclImpl_->MemCopyD2D(dataInfosInGet[i].devPtr, dataInfosInGet[i].Size(),
-                                                      static_cast<void *>(adjustedPtr), dataInfosInGet[i].Size()));
+                RETURN_IF_NOT_OK(aclImpl_->MemCopyD2D(blobsInGet[i].pointer, blobsInGet[i].size,
+                                                      static_cast<void *>(adjustedPtr), blobsInGet[i].size));
             }
             auto promise = std::make_shared<PromiseWithEvent>(devObjKey);
             promise->CreateEventAndFutureList(0, futureVec);
@@ -670,11 +698,12 @@ Status P2PSubscribe::AsyncGet(const std::vector<std::shared_ptr<DeviceBuffer>> &
             continue;
         }
         auto getRequest =
-            std::make_shared<P2PGetRequest>(buffer->bufferInfo_, buffer->GetDataInfoList(), buffer->GetDeviceMemUnit());
+            std::make_shared<P2PGetRequest>(buffer->bufferInfo_, buffer->GetDevBlobList(), buffer->GetDeviceMemUnit());
         p2pRequestsWrapper->requestList_.emplace_back(getRequest);
-        RETURN_IF_NOT_OK(getRequest->CreateEventAndFutureList(buffer->GetDataInfoList().size(), futureVec));
+        RETURN_IF_NOT_OK(getRequest->CreateEventAndFutureList(buffer->GetDevBlobList().size(), futureVec));
     }
     p2pRequestsWrapper->subTimeout_ = subTimeoutMs;
+    p2pRequestsWrapper->getTraceId_ = Trace::Instance().GetTraceID();
     p2pGetQueue_.Push(p2pRequestsWrapper);
     return Status::OK();
 }

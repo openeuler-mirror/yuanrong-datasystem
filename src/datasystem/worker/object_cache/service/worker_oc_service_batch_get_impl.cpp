@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -80,6 +81,23 @@ Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDa
     CHECK_FAIL_RETURN_STATUS(needReceiveSz == payloadLen, K_RUNTIME_ERROR, "Data size does not match.");
     RETURN_IF_NOT_OK(entry->GetShmUnit()->MemoryCopy(payloadData, memCpyThreadPool_, metaSz + offset));
     return Status::OK();
+}
+
+void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey, uint64_t version,
+                                                    std::shared_ptr<SafeObjType> &entry, bool isInsert)
+{
+    LOG(WARNING) << "Get object from remote failed, start to remove location from master";
+    (void)RemoveLocation(objectKey, version);
+    if (entry->Get() != nullptr && entry->Get()->GetShmUnit() != nullptr) {
+        entry->Get()->GetShmUnit()->SetHardFreeMemory();
+    }
+    if (isInsert) {
+        (void)objectTable_->Erase(objectKey, *entry);
+    } else if (entry->Get() != nullptr) {
+        entry->Get()->FreeResources();
+        entry->Get()->SetLifeState(ObjectLifeState::OBJECT_INVALID);
+        entry->Get()->stateInfo.SetCacheInvalid(true);
+    }
 }
 
 Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
@@ -143,17 +161,16 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
         auto &address = queryMeta->first;
         auto &metaList = queryMeta->second;
         futures.emplace_back(workerBatchThreadPool_->Submit([this, &lastRc, address, &metaList, readKeys, &request,
-                                                            &lockedEntries, &tempSuccessIds, &tempNeedRetryIds,
-                                                            &tempFailedIds, &tempFailedMetas, index, traceId] {
-        for (auto &metaPair : metaList) {
-            auto &metas = metaPair.first;
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            lastRc =
-                BatchGetObjectFromRemoteOnLock(address, metas, readKeys, request, lockedEntries,
-                                            tempSuccessIds[index], tempNeedRetryIds[index], tempFailedIds[index],
-                                            tempFailedMetas[index]);
-        }
-        return lastRc;
+                                                             &lockedEntries, &tempSuccessIds, &tempNeedRetryIds,
+                                                             &tempFailedIds, &tempFailedMetas, index, traceId] {
+            for (auto &metaPair : metaList) {
+                auto &metas = metaPair.first;
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, readKeys, request, lockedEntries,
+                                                        tempSuccessIds[index], tempNeedRetryIds[index],
+                                                        tempFailedIds[index], tempFailedMetas[index]);
+            }
+            return lastRc;
         }));
     }
     for (auto &fut : futures) {
@@ -195,14 +212,18 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(
     return lastRc;
 }
 
-void WorkerOcServiceGetImpl::GroupQueryMeta(master::QueryMetaInfoPb &queryMeta, std::unordered_map<std::string,
-    std::list<std::pair<std::list<ObjectMetaPb *>, uint64_t>>> &groupedQueryMetas)
+void WorkerOcServiceGetImpl::GroupQueryMeta(
+    master::QueryMetaInfoPb &queryMeta,
+    std::unordered_map<std::string, std::list<std::pair<std::list<ObjectMetaPb *>, uint64_t>>> &groupedQueryMetas)
 {
     const static uint64_t maxPayloadSize = FLAGS_batch_get_threshold_mb * 1024 * 1024;
     const auto &meta = queryMeta.meta();
     auto &splitList = groupedQueryMetas[queryMeta.address()];
     if (!(FLAGS_enable_urma) && (FLAGS_batch_get_threshold_mb != 0)) {
-        if (splitList.empty() || splitList.back().second + meta.data_size() > maxPayloadSize) {
+        auto payloadSize = meta.data_size() < UINT64_MAX - splitList.back().second
+                               ? splitList.back().second + meta.data_size()
+                               : UINT64_MAX;
+        if (splitList.empty() || payloadSize > maxPayloadSize) {
             splitList.emplace_back(std::make_pair(std::list<ObjectMetaPb *>{}, 0));
         }
     } else {
@@ -457,5 +478,39 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
     return rc;
 }
 
+Status WorkerOcServiceGetImpl::AggregateAllocateHelper(
+    const std::list<ObjectMetaPb *> &metas,
+    std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+    std::vector<std::shared_ptr<ShmOwner>> &shmOwners, std::vector<uint32_t> &shmIndexMapping)
+{
+    std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> traversalHelper =
+        [&metas, &lockedEntries](std::function<void(uint64_t, uint64_t, uint32_t)> collector,
+                                 bool &needAggregate) {
+            needAggregate = metas.size() > 1;
+            uint32_t objectId = 0;
+            for (auto metaIter = metas.begin(); metaIter != metas.end() && needAggregate; metaIter++, objectId++) {
+                auto &meta = *metaIter;
+                auto dataSz = meta->data_size();
+
+                const auto &objectKey = meta->object_key();
+                auto &pair = lockedEntries.at(objectKey);
+                auto &entry = *(pair.first);
+                auto metaSz = entry->GetMetadataSize();
+                uint64_t shmSize = dataSz + metaSz;
+
+                auto shmUnit = entry->GetShmUnit();
+                // Skip the aggregation if allocation is not needed for the object.
+                bool szChanged = (shmUnit == nullptr) || (shmUnit->size != shmSize);
+                if (!szChanged) {
+                    continue;
+                }
+                collector(dataSz, shmSize, objectId);
+            }
+        };
+    auto firstObjectKey = metas.front()->object_key();
+    RETURN_IF_NOT_OK(
+        AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping));
+    return Status::OK();
+}
 }  // namespace object_cache
 }  // namespace datasystem

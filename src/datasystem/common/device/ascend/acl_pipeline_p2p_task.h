@@ -33,11 +33,11 @@ namespace datasystem {
 class CommWrapperBase;
 namespace acl {
 struct P2PSendTask {
-    std::vector<DataInfo> srcBuffers;
+    std::vector<Blob> srcBuffers;
     size_t totalSize;
     std::shared_ptr<CommWrapperBase> comm;
     std::shared_ptr<AclRtEventWrapper> event;
-    DataInfo transBuffer;
+    Blob transBuffer;
     uint64_t seq{ 0 };
 };
 
@@ -53,7 +53,7 @@ public:
     static void NotifyCallback(void *userData);
 
 protected:
-    Status AllocTransferBuffer(size_t objectSize, DataInfo &transBuffer, uint64_t &seq);
+    Status AllocTransferBuffer(size_t objectSize, Blob &transBuffer, uint64_t &seq);
 
     AclResourceManager *aclResourceMgr_;
 
@@ -101,11 +101,11 @@ private:
 };
 
 struct P2PRecvTask {
-    std::vector<DataInfo> destBuffers;
+    std::vector<Blob> destBuffers;
     size_t totalSize;
     std::shared_ptr<CommWrapperBase> comm;
     std::shared_ptr<AclRtEventWrapper> event;
-    DataInfo transBuffer;
+    Blob transBuffer;
     uint64_t seq{ 0 };
 };
 

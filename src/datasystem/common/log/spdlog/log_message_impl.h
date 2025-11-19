@@ -74,9 +74,9 @@ private:
      */
     void ToStderr();
 
-    std::shared_ptr<spdlog::logger> logger_;
-    spdlog::level::level_enum level_;
-    spdlog::source_loc sourceLoc_;
+    std::shared_ptr<ds_spdlog::logger> logger_;
+    ds_spdlog::level::level_enum level_;
+    ds_spdlog::source_loc sourceLoc_;
     static std::string podName_;
     LogStreamBuf streamBuf_;
     std::ostream logStream_;

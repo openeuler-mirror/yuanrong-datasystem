@@ -324,11 +324,11 @@ public:
         opts.enableDistributedMaster = enableDistributedMaster_;
         opts.disableRocksDB = false;
         opts.workerGflagParams = FormatString(
-            " -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d -other_az_names=AZ1,AZ2 "
+            " -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d -other_cluster_names=AZ1,AZ2 "
             "-cross_az_get_meta_from_worker=true",
             timeoutS_, deadTimeoutS_);
         for (size_t i = 0; i < workerNum_; i++) {
-            std::string param = "-az_name=" + azNames_[i % azNames_.size()];
+            std::string param = "-cluster_name=" + azNames_[i % azNames_.size()];
             opts.workerSpecifyGflagParams[i] += param;
         }
     }
@@ -371,11 +371,11 @@ public:
         opts.addNodeTime = SCALE_UP_ADD_TIME;
         opts.enableDistributedMaster = enableDistributedMaster_;
         opts.workerGflagParams = FormatString(
-            " -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d -other_az_names=AZ1,AZ2 "
+            " -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d -other_cluster_names=AZ1,AZ2 "
             "-cross_az_get_meta_from_worker=true",
             timeoutS_, deadTimeoutS_);
         for (size_t i = 0; i < workerNum_; i++) {
-            std::string param = "-az_name=" + azNames_[i % azNames_.size()];
+            std::string param = "-cluster_name=" + azNames_[i % azNames_.size()];
             opts.workerSpecifyGflagParams[i] += param;
         }
     }

@@ -28,7 +28,7 @@
 
 namespace datasystem {
 
-using DsLogger = std::shared_ptr<spdlog::logger>;
+using DsLogger = std::shared_ptr<ds_spdlog::logger>;
 
 const std::string DS_LOGGER_NAME = "DsLogger";
 

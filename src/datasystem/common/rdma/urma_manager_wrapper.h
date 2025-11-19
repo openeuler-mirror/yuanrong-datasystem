@@ -42,7 +42,7 @@ bool IsUrmaEnabled();
  * @param[in] deviceName.
  * @return Status of the call.
  */
-Status InitializeUrmaManager(const std::string &host);
+Status InitializeUrmaManager(const HostPort &hostport);
 
 /**
  * @brief Remove Remote Device and all associated segments

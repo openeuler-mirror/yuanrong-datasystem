@@ -12,14 +12,14 @@
 
 ## 1.2 Hierarchical Design of Proto Files
 
-### 1.2.1 Object proto files
+### 1.2.1 Object/Stream proto files
 
 | layer | type              | protos files                                                    |
 | ----- | ----------------- |-----------------------------------------------------------------|
 | 0     | utils proto files | rpc_options.proto、utils.proto、                                  |
-| 1     | POSIX API         | object_posix.proto/share_memory.proto        |
-| 2     | worker RPC API    | worker_object.proto                         |
-| 3     | master RPC API    | master_object.proto/master_heartbeat.protoc |
+| 1     | POSIX API         | object_posix.proto/stream_posix.proto/share_memory.proto        |
+| 2     | worker RPC API    | worker_object.proto/worker_stream.proto                         |
+| 3     | master RPC API    | master_object.proto/master_stream.proto/master_heartbeat.protoc |
 
 ### 1.2.2 Agent proto files
 

@@ -34,7 +34,7 @@ std::vector<uint32_t> __attribute__((weak)) UrmaManager::GetJfrIds()
     return std::vector<uint32_t>();
 }
 
-Status __attribute__((weak)) UrmaManager::ImportRemoteJfr(const RpcChannel::UrmaInfo &urmaInfo)
+Status __attribute__((weak)) UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
 {
     (void)urmaInfo;
     return Status::OK();

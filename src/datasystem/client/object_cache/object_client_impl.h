@@ -71,6 +71,10 @@ struct P2PPeer {
     uint64_t count;
 };
 
+struct FullParam : public CreateParam {
+    WriteMode writeMode = WriteMode::NONE_L2_CACHE;
+};
+
 using P2PPeerTable = tbb::concurrent_hash_map<std::string, P2PPeer>;
 
 class __attribute((visibility("default"))) ObjectClientImpl : public std::enable_shared_from_this<ObjectClientImpl> {
@@ -136,7 +140,7 @@ public:
      *         K_RUNTIME_ERROR: client fd mmap failed.
      *         K_DUPLICATED: the object already exists, no need to create.
      */
-    Status Create(const std::string &objectKey, uint64_t dataSize, const CreateParam &param,
+    Status Create(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
                   std::shared_ptr<Buffer> &buffer);
 
     /**
@@ -192,7 +196,7 @@ public:
      * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already exist.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const CreateParam &param,
+    Status Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond = 0, int existence = 0);
 
     /**
@@ -340,21 +344,6 @@ public:
     std::string GetFutureMapIdentifier(const std::string &devObjKey, std::shared_ptr<DeviceBuffer> deviceBuffer);
 
     /**
-     * @brief Invoke worker client to create a device object.
-     * @param[in] objectKey The ID of the device object to create. ID should not be empty and should only contains
-     * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
-     * @param[in] size The size in bytes of device object.
-     * @param[in] devPtr The device memory pointer. Pass the pointer if user want do malloc by self.
-     * Pass the nullptr then client will malloc device memory and free when DeviceBuffer is destructed.
-     * @param[in] deviceIdx The device index of the device memory.
-     * @param[out] deviceBuffer The device buffer for the object.
-     * @return Status K_OK on success; the error code otherwise.
-     */
-
-    Status CreateDevBuffer(const std::string &devObjKey, uint64_t size, void *devPtr, int32_t deviceIdx,
-                           std::shared_ptr<DeviceBuffer> &deviceBuffer);
-
-    /**
      * @brief Publish device object to datasystem.
      * @param[in] buffer The device buffer ready to publish.
      * @return Status of the result.
@@ -376,13 +365,12 @@ public:
      * @brief Invoke worker client to create a device object with p2p.
      * @param[in] objectKey The ID of the device object to create. ID should not be empty and should only contains
      * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
-     * @param[in] dataInfoList The list of data info.
-     * @param[in] deviceIdx The device index of the device memory.
+     * @param[in] devBlobList The list of blob info.
      * @param[in] param The create param of device object.
      * @param[out] deviceBuffer The device buffer for the object.
      * @return Status K_OK on success; the error code otherwise.
      */
-    Status CreateDevBuffer(const std::string &devObjKey, const std::vector<DataInfo> &dataInfoList, int32_t deviceIdx,
+    Status CreateDevBuffer(const std::string &devObjKey, const DeviceBlobList &devBlobList,
                            const CreateDeviceParam &param, std::shared_ptr<DeviceBuffer> &deviceBuffer);
 
     /**
@@ -413,15 +401,15 @@ public:
     Status GetSendStatus(const std::shared_ptr<DeviceBuffer> &buffer, std::vector<Future> &futureVec);
 
     /**
-     * @brief Obtains the DataInfos, including the number of DataInfo, and the count and DataType of each DataInfo.
+     * @brief Obtains the DBlobInfos, including the number of blobs, and the count
      * @param[in] devObjKey The object key. ID should not be empty and should only contains english
      * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
      * @param[in] timeoutMs Waiting for the result return if object not ready. A positive integer number required.
      * 0 means no waiting time allowed. And the range is [0, INT32_MAX].
-     * @param[out] dataInfos The list of data info. (Include pointer、count and data type)
+     * @param[out] blobs The list of data info. (Include pointer、count and data type)
      * @return K_OK on any object success; the error code otherwise.
      */
-    Status GetDataInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<DataInfo> &dataInfos);
+    Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs);
 
     /**
      * @brief Remove the location of device object
@@ -463,12 +451,12 @@ public:
     /**
      * @brief For device object, to async get multiple objects
      * @param[in] objectKeys multiple keys support
-     * @param[out] devBlobList vector of compose DataInfo
+     * @param[out] devBlobList vector of compose blobInfo
      * @param[in] timeoutMs max waiting time of getting data
      * @return future of AsyncResult, describe get status and failed list.
      */
     std::shared_future<AsyncResult> MGetH2D(const std::vector<std::string> &objectKeys,
-                                         const std::vector<DeviceBlobList> &devBlobList, uint64_t timeout);
+                                            const std::vector<DeviceBlobList> &devBlobList, uint64_t timeout);
 
     /**
      * @brief For device object, to invoke worker client to create and async publish multiple objects
@@ -589,7 +577,7 @@ private:
     struct MGetAsyncRPCSource {
         std::future<Status> rpcFuture;
         std::promise<AsyncResult> promise;
-        std::vector<std::vector<DataInfo>> dataInfoList;
+        std::vector<DeviceBlobList> devBlobList;
         // hold the buffer to avoid it destroy before batch release.
         std::vector<Optional<Buffer>> bufferList;
         std::vector<Buffer *> existBufferList;
@@ -608,24 +596,22 @@ private:
      * @brief Check and construct the multi createParam.
      * @param[in] objectKeyList The vector of the object key that needs to create.
      * @param[in] dataSizeList The object sizes.
-     * @param[in] param The create param of device object.
      * @param[out] bufferList The buffer list needs to store data information.
      * @param[out] multiCreateParamList The list of objects create param.
      * @return Status of the result.
      */
     Status ConstructMultiCreateParam(const std::vector<std::string> &objectKeyList,
-                                     const std::vector<uint64_t> &dataSizeList, const CreateParam &param,
+                                     const std::vector<uint64_t> &dataSizeList,
                                      std::vector<std::shared_ptr<Buffer>> &bufferList,
                                      std::vector<MultiCreateParam> &multiCreateParamList);
 
     /**
      * @brief For device object, to async get multiple objects
-     * @param[in] dataInfoList The user dataInfo list of device data.
+     * @param[in] devBlobList The user blobInfo list of device data.
      * @param[in] existBufferList The tmp buffer list which will be decrease after memory copy
      * @return Status of the result.
      */
-    Status HostDataCopy2Device(std::vector<std::vector<DataInfo>> &dataInfoList,
-                               std::vector<Buffer *> &existBufferList);
+    Status HostDataCopy2Device(std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &existBufferList);
 
     /**
      * @brief Multiple shared memory and copy data from device.
@@ -637,18 +623,21 @@ private:
      */
     Status DeviceDataCreate(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
                             const SetParam &setParam, std::vector<std::shared_ptr<Buffer>> &bufferList,
-                            std::vector<Buffer *> &destroyBufferList);
+                            std::vector<bool> &exists);
 
     /**
      * @brief Create multiple objects at a time to the worker.
      * @param[in] objectKeyList The vector of the object key that needs to create.
      * @param[in] dataSizeList The object sizes.
      * @param[in] param The create param of device object.
+     * @param[in] skipCheckExistence Whether skip check existence of key.
      * @param[out] bufferList The buffer list needs to store data information.
+     * @param[out] exists The exist list of key.
      * @return Status of the result.
      */
     Status MultiCreate(const std::vector<std::string> &objectKeyList, const std::vector<uint64_t> &dataSizeList,
-                       const CreateParam &param, std::vector<std::shared_ptr<Buffer>> &bufferList);
+                       const FullParam &param, const bool skipCheckExistence,
+                       std::vector<std::shared_ptr<Buffer>> &bufferList, std::vector<bool> &exists);
 
     /**
      * @brief Publish multiple objects at a time to the worker.
@@ -796,7 +785,7 @@ private:
      * @return ObjectBufferInfo The struct which stores buffer info.
      */
     static ObjectBufferInfo SetObjectBufferInfo(const std::string &objectKey, uint8_t *pointer, uint64_t size,
-                                                uint64_t metaSize, const CreateParam &param, bool isSeal,
+                                                uint64_t metaSize, const FullParam &param, bool isSeal,
                                                 uint32_t version, const std::string &shmId = {},
                                                 const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
                                                 std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
@@ -842,22 +831,28 @@ private:
                               std::map<std::string, GlobalRefInfo> &accessorTable);
 
     /**
+     * @brief Check that the key is in the correct format.
+     * @param[in] key The key to check.
+     * @return K_OK on success; the error code otherwise.
+     */
+    static Status CheckValidObjectKey(const std::string &key);
+
+    /**
      * @brief Check that the string inside the container is legitimate.
      * @param[in] vec Vector to check.
      * @param[in] nullable Allow empty vector.
      * @return K_OK on success; the error code otherwise.
      */
     template <typename Vec>
-    Status CheckStringVector(const Vec &vec, bool nullable = false)
+    static Status CheckValidObjectKeyVector(const Vec &vec, bool nullable = false)
     {
         CHECK_FAIL_RETURN_STATUS(nullable || !vec.empty(), K_INVALID, "The keys are empty");
+        size_t index = 0;
         for (const auto &objectKey : vec) {
-            CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
             CHECK_FAIL_RETURN_STATUS(
-                Validator::IsIdFormat(objectKey), K_INVALID,
-                FormatString(
-                    "The key contains illegal char(s), allowed regex format: %s or the length of key is %d > 255.",
-                    Validator::idFormat, objectKey.size()));
+                !objectKey.empty(), K_INVALID, FormatString("The objectKey at position %d is empty", index));
+            RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
+            index++;
         }
         return Status::OK();
     }
@@ -980,7 +975,7 @@ private:
      * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already exist.
      * @return K_OK on success; the error code otherwise.
      */
-    Status ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const CreateParam &param,
+    Status ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
                          const std::shared_ptr<ClientWorkerApi> &workerApi, int existence);
 
@@ -1051,15 +1046,6 @@ private:
     {
         return clientStateManager_->GetState();
     }
-
-    /**
-     * @brief Convert devBlobList to dataInfoList.
-     * @param[in] devBlobList The blob list of device data.
-     * @param[out] dataInfoList The dataInfo list of device data.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status ConvertToDataInfoList(const std::vector<DeviceBlobList> &devBlobList,
-                                 std::vector<std::vector<DataInfo>> &dataInfoList);
 
     /**
      * @brief Convert a list of devBlobList to a list of device buffer pointers.

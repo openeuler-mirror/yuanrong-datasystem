@@ -174,7 +174,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status GetMapOfObjectKeys(const std::vector<std::basic_string<char>> &objectKeys,
-                             std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, Status &lastRc);
+                              std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, Status &lastRc);
 
     /**
      * @brief Process a get request from client.
@@ -294,16 +294,31 @@ private:
     Status UpdateLocation(const std::string &objectKey, ObjectKV &objectKV);
 
     /**
+     * @brief Helper function to allocate aggregated memory for objects at Batch Get.
+     * @param[in] metas The batched object meta info contains data size.
+     * @param[in] lockedEntries The object lock entries.
+     * @param[out] shmOwners The allocated shared memory chunks.
+     * @param[out] shmIndexMapping The object key to shmOwners index mapping.
+     * @return Status of the call.
+     */
+    Status AggregateAllocateHelper(const std::list<ObjectMetaPb *> &metas,
+                                   std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+                                   std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                   std::vector<uint32_t> &shmIndexMapping);
+
+    /**
      * @brief Pull object data from remote worker.
      * @note The request protobuf needs to contain data_size and urma_info fields.
      * @param[in] dataSize The object data size.
      * @param[in] kv The reserved and locked safe object and its corresponding objectKey.
      * @param[in] reqPb The remote GetObject rpc req protobuf.
-     * @param[out] shmUnitAllocated did memory allocated during this call
+     * @param[out] shmUnitAllocated did memory allocated during this call.
+     * @param[in] shmOwner The allocated shared memory chunks.
      * @return Status of the call.
      */
     template <typename Req>
-    Status PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated);
+    Status PrepareUrmaInfo(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated,
+                           std::shared_ptr<ShmOwner> shmOwner = nullptr);
 
     /**
      * @brief Pull object data from remote worker.
@@ -422,6 +437,23 @@ private:
                                   std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds);
 
     /**
+     * @brief Get objects from anywhere parallelly.
+     * @param[in] queryMetas QueryMeta result requested from master.
+     * @param[in] readKeys read key info, contain offset, size, objKey.
+     * @param[in] request Get request instance.
+     * @param[in] payloads Get payloads that contains object data.
+     * @param[in] lockedEntries Object lock entries.
+     * @param[out] failedIds Failed get object keys.
+     * @param[out] needRetryIds Need retry get id list.
+     * @return Status of the call.
+     */
+    Status GetObjectsFromAnywhereParallelly(
+        const std::vector<master::QueryMetaInfoPb> &queryMetas, const std::map<std::string, ReadKey> &readKeys,
+        const std::shared_ptr<GetRequest> &request, std::vector<RpcMessage> &payloads,
+        std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>> &lockedEntries,
+        std::unordered_set<std::string> &failedIds, std::vector<ReadKey> &needRetryIds);
+
+    /**
      * @brief Get objects from anywhere serially.
      * @param[in] queryMetas QueryMeta result requested from master.
      * @param[in] readKeys read key info, contain offset, size, objKey.
@@ -527,8 +559,9 @@ private:
      * @param[out] groupedQueryMeta Grouped meta by address and payload split by threshold.
      * @return Status of the call.
      */
-    void GroupQueryMeta(master::QueryMetaInfoPb &queryMeta, std::unordered_map<std::string,
-        std::list<std::pair<std::list<ObjectMetaPb *>, uint64_t>>> &groupedQueryMetas);
+    void GroupQueryMeta(
+        master::QueryMetaInfoPb &queryMeta,
+        std::unordered_map<std::string, std::list<std::pair<std::list<ObjectMetaPb *>, uint64_t>>> &groupedQueryMetas);
 
     /**
      * @brief Helper function to handle individual status returned from the batch get request.
@@ -835,8 +868,7 @@ private:
      */
     void ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
         const std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
-        std::unordered_set<std::string> &&objectKeysNotExist,
-        const std::unordered_set<std::string> &objectKeysPuzzled,
+        std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
         const std::unordered_set<std::string> &objectKeysMayInOtherAz, std::vector<master::QueryMetaInfoPb> &queryMetas,
         std::vector<std::string> &absentObjectKeys);
 
@@ -868,17 +900,19 @@ private:
 
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
 
+    std::unique_ptr<ThreadPool> remoteGetThreadPool_{ nullptr };
+
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     HostPort localAddress_;
 
-    std::shared_timed_mutex inRemoteGetIdsMutex_;
+    std::shared_timed_mutex inRemoteGetIdsMutex_; // the mutex for inRemoteGetIds_
 
-    std::unordered_set<std::string> inRemoteGetIds_;
+    std::unordered_set<std::string> inRemoteGetIds_; // the object keys that in remote get
 
     std::vector<std::string> otherAZNames_;
 
-    std::shared_mutex objectsInGetProcessMutex_;
+    std::shared_mutex objectsInGetProcessMutex_; // the mutex for objectsInGetProcess_
 
     std::unordered_map<std::string, int> objectsInGetProcess_;
 

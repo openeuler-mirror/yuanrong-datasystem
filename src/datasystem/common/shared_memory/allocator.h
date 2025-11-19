@@ -57,10 +57,11 @@ public:
      * @param[in] scaling Shared memory need scaling or not.
      * @param[in] decayMs Decay clean dirty pages milliseconds.
      * @param[in] objectThreshold A limit to restrict the memory usage of object cache / kv service.
+     * @param[in] streamThreshold A limit to restrict the memory usage of stream cache service.
      * @return Status of the call.
      */
     Status Init(uint64_t shmSize, uint64_t shdSize = 0, bool populate = false, bool scaling = true,
-                ssize_t decayMs = 5'000, int objectThreshold = 100);
+                ssize_t decayMs = 5'000, int objectThreshold = 100, int streamThreshold = 100);
 
     /**
      * @brief Pre allocate device memory size. The method will create a devHost mem and devDevice mem.
@@ -111,10 +112,11 @@ public:
     /**
      * @brief Increase the memory usage for the given service type.
      * @param[in] needSize Memory size to be allocated in bytes.
+     * @param[in] serviceType The type of datasystem service for which memory usage is increased.
      * @param[in] cacheType The cache type.
      * @return Status of the call.
      */
-    Status IncrementMemoryUsage(uint64_t needSize, CacheType cacheType);
+    Status IncrementMemoryUsage(uint64_t needSize, ServiceType serviceType, CacheType cacheType);
 
     /**
      * @brief Allocate memory from shared memory for the specific tenant.
@@ -125,18 +127,21 @@ public:
      * @param[out] fd File descriptor of the allocated shared memory segments.
      * @param[out] offset Offset from the base of the shared memory mmap.
      * @param[out] mmapSize Total size of shared memory segments.
+     * @param[in] serviceType The type of datasystem service for this allocation request.
      * @param[in] cacheType The cache type, either MEMORY or DISK.
      * @return Status of the call.
      */
     Status AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
-                          ptrdiff_t &offset, uint64_t &mmapSize, CacheType cacheType = CacheType::MEMORY);
+                          ptrdiff_t &offset, uint64_t &mmapSize, ServiceType serviceType = ServiceType::OBJECT,
+                          CacheType cacheType = CacheType::MEMORY);
 
     /**
      * @brief Free memory from shared memory.
      * @param[in] pointer reference to the pointer to free. Sets pointer to nullptr after.
+     * @param[in] type The service type for which memory is getting freed.
      * @return Status of the call.
      */
-    Status FreeMemory(void *&pointer);
+    Status FreeMemory(void *&pointer, ServiceType type = ServiceType::OBJECT);
 
     /**
      * @brief Free memory from shared memory for the specific tenant.
@@ -146,14 +151,17 @@ public:
      * @param[in] cacheType The cache type, either MEMORY or DISK.
      * @return Status of the call.
      */
-    Status FreeMemory(const std::string &tenantId, void *&pointer, CacheType cacheType = CacheType::MEMORY);
+    Status FreeMemory(const std::string &tenantId, void *&pointer, ServiceType serviceType = ServiceType::OBJECT,
+                      CacheType cacheType = CacheType::MEMORY);
 
     /**
      * @brief Get max memory size for the requested service type.
+     * @param[in] serviceType The service type for which the max memory size is requested.
      * @param[in] cacheType The cache type.
      * @return max memory size in bytes for the requested type.
      */
-    uint64_t GetMaxMemorySize(CacheType cacheType = CacheType::MEMORY) const;
+    uint64_t GetMaxMemorySize(ServiceType serviceType = ServiceType::OBJECT,
+                              CacheType cacheType = CacheType::MEMORY) const;
 
     /**
      * @brief Get the Max Memory Limit size.
@@ -215,22 +223,25 @@ public:
 
     /**
      * @brief Get the total memory usage for the given service type.
+     * @param[in] serviceType The service type for which total memory usage is requested.
      * @param[in] cacheType The cache type.
      * @return The total memory usage.
      */
-    uint64_t GetTotalMemoryUsage(CacheType cacheType = CacheType::MEMORY)
+    uint64_t GetTotalMemoryUsage(ServiceType serviceType = ServiceType::OBJECT, CacheType cacheType = CacheType::MEMORY)
     {
-        return GetResourcePoolByType(cacheType)->Usage();
+        return GetResourcePoolByType(serviceType, cacheType)->Usage();
     }
 
     /**
      * @brief Get the total real memory usage.
+     * @param[in] serviceType The service type for which total real memory usage is requested.
      * @param[in] cacheType The cache type.
      * @return The total real memory usage.
      */
-    uint64_t GetTotalRealMemoryUsage(CacheType cacheType = CacheType::MEMORY)
+    uint64_t GetTotalRealMemoryUsage(ServiceType serviceType = ServiceType::OBJECT,
+                                     CacheType cacheType = CacheType::MEMORY)
     {
-        return GetResourcePoolByType(cacheType)->RealUsage();
+        return GetResourcePoolByType(serviceType, cacheType)->RealUsage();
     }
 
     /**
@@ -238,9 +249,14 @@ public:
      * @param[in] type The service type for which total real memory limit is requested.
      * @return The total real memory limit.
      */
-    uint64_t GetTotalMemoryLimit()
+    uint64_t GetTotalMemoryLimit(ServiceType type = ServiceType::OBJECT)
     {
-        return std::min(objectMemoryStats_->FootprintLimit(), physicalMemoryStats_->FootprintLimit());
+        if (type == ServiceType::OBJECT) {
+            return std::min(objectMemoryStats_->FootprintLimit(),
+                            physicalMemoryStats_->FootprintLimit() - streamMemoryStats_->RealUsage());
+        }
+        return std::min(streamMemoryStats_->FootprintLimit(),
+                        physicalMemoryStats_->FootprintLimit() - objectMemoryStats_->RealUsage());
     }
 
     /**
@@ -257,7 +273,7 @@ public:
             realUsage = diskStats_->RealUsage();
         } else {
             limit = physicalMemoryStats_->FootprintLimit();
-            realUsage = objectMemoryStats_->RealUsage();
+            realUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
         }
         return limit > realUsage ? limit - realUsage : 0;
     }
@@ -277,7 +293,7 @@ public:
             realUsage = diskStats_->RealUsage();
         } else {
             limit = physicalMemoryStats_->FootprintLimit();
-            realUsage = objectMemoryStats_->RealUsage();
+            realUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
         }
 
         if (limit == 0) {
@@ -302,7 +318,7 @@ public:
     /**
      * @brief Obtains the usage of shared memory.
      * @return Usage:
-     * "memoryUsage/physicalMemoryUsage/totalLimit/workerShareMemoryUsage"
+     * "memoryUsage/physicalMemoryUsage/totalLimit/workerShareMemoryUsage/streamMemoryUsage/streamMemoryLimit"
      */
     std::string GetMemoryStatistics()
     {
@@ -310,10 +326,13 @@ public:
             return "0/0/0/0/0/0";
         }
         auto objectMemoryUsage = objectMemoryStats_->RealUsage();
-        auto memoryUsage = objectMemoryUsage;
+        auto streamMemoryUsage = streamMemoryStats_->RealUsage();
+        auto memoryUsage = objectMemoryUsage + streamMemoryUsage;
         auto workerShareMemoryUsage = memoryUsage / static_cast<float>(physicalMemoryStats_->FootprintLimit());
-        return FormatString("%lu/%lu/%lu/%.3f", memoryUsage, physicalMemoryStats_->RealUsage(),
-                            physicalMemoryStats_->FootprintLimit(), workerShareMemoryUsage);
+        auto streamMemoryLimit = GetTotalMemoryLimit(ServiceType::STREAM);
+        return FormatString("%lu/%lu/%lu/%.3f/%lu/%lu", memoryUsage, physicalMemoryStats_->RealUsage(),
+                            physicalMemoryStats_->FootprintLimit(), workerShareMemoryUsage, streamMemoryUsage,
+                            streamMemoryLimit);
     }
 
     /**
@@ -383,13 +402,15 @@ private:
 
     /**
      * @brief Get the ResourcePool by type.
+     * @param[in] serviceType The service type.
      * @param[in] cacheType The cache type.
      * @return ResourcePool* The ResourcePool.
      */
-    ResourcePool *GetResourcePoolByType(CacheType cacheType) const;
+    ResourcePool *GetResourcePoolByType(ServiceType serviceType, CacheType cacheType) const;
 
     /**
      * @brief Get the ResourcePool by type.
+     * @param[in] serviceType The service type.
      * @param[in] cacheType The cache type.
      * @return ResourcePool* The ResourcePool.
      */
@@ -399,9 +420,10 @@ private:
      * @brief Init shared memory.
      * @param[in] size The shared memory size.
      * @param[in] objectThreshold A limit to restrict the memory usage of object cache / kv service.
+     * @param[in] streamThreshold A limit to restrict the memory usage of stream cache service.
      * @return Status K_OK if success, the error otherwise.
      */
-    Status InitSharedMemory(uint64_t size, int objectThreshold);
+    Status InitSharedMemory(uint64_t size, int objectThreshold, int streamThreshold);
 
     /**
      * @brief Init shared disk.
@@ -431,7 +453,7 @@ private:
     std::atomic<int64_t> noRefPageCount_{ 0 };
 
     // Record the shared memory already binding to physical memory.
-    // physicalMemoryStats_.realUsage_ = Size of the cache memory that has not been released
+    // physicalMemoryStats_.realUsage_ = realUsage_(object+stream) + Size of the cache memory that has not been released
     // after the memory is free.
     std::unique_ptr<ResourcePool> physicalMemoryStats_;
 
@@ -451,6 +473,7 @@ private:
     // Record the shared memory real allocated in bytes among all arenas for different service types.
     // realUsage = usage + Additional memory for jemalloc alignment
     std::unique_ptr<ResourcePool> objectMemoryStats_;
+    std::unique_ptr<ResourcePool> streamMemoryStats_;
 
     std::function<bool(const std::vector<int> &)> checkIfAllFdReleasedHandler_;
 

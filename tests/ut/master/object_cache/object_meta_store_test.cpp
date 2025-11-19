@@ -127,6 +127,7 @@ TEST_F(ObjectMetaStoreTest, TestCreateQueryRemoveMeta)
     EXPECT_EQ(this->StoreRemove(removeIds), Status::OK());
     // Remove not exist
     EXPECT_EQ(this->StoreRemove(removeIds), Status::OK());
+    sleep(1);
 }
 
 }  // namespace ut

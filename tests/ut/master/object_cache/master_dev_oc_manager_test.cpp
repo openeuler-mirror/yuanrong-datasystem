@@ -166,7 +166,7 @@ TEST_F(MasterDevOcManagerTest, DISABLED_TestHcclSelect_ExitingHccl)
     // client b npu 1 -> client c npu 2
     AddLocs(manager, tempObjectKey, clientB, clientC, clientBDeviceId, clientCDeviceId);
 
-    // add graph_
+    // add hcclRelationshipGraph_
     // client b npu 1 -> client a npu 0
     AddGraph(manager, clientB, clientA, clientBDeviceId, clientADeviceId);
 

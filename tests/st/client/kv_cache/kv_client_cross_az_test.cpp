@@ -73,14 +73,14 @@ public:
         opts.enableDistributedMaster = "true";
         opts.numOBS = 1;
         std::string OBSGflag = FormatString(
-            "-other_az_names=AZ1,AZ2,AZ3 "
+            "-other_cluster_names=AZ1,AZ2,AZ3 "
             "-v=2 "
             "-cross_az_get_meta_from_worker=%s -inject_actions=TryGetObjectFromRemote.NoRetry:call() ",
             crossAzGetMetaFromWorker_) + appendCmd_;
 
         opts.workerGflagParams = OBSGflag;
         for (size_t i = 0; i < workerNum_; i++) {
-            std::string param = "-az_name=";
+            std::string param = "-cluster_name=";
             if (i % MASTER_NUM == 0) {
                 param.append(AZ1);
             } else {
@@ -436,7 +436,7 @@ public:
         opts.enableDistributedMaster = "true";
         opts.numOBS = 1;
         std::string obsGflag =
-            "-other_az_names=AZ1,AZ2,AZ3 "
+            "-other_cluster_names=AZ1,AZ2,AZ3 "
             "-system_access_key=datasystem_ak "
             "-system_secret_key=datasystem_ak "
             "-authorization_enable=true "
@@ -445,7 +445,7 @@ public:
 
         opts.workerGflagParams = obsGflag;
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
-            std::string param = "-az_name=";
+            std::string param = "-cluster_name=";
             if (i % MASTER_NUM == 0) {
                 param.append(AZ1);
             } else {
@@ -479,14 +479,14 @@ public:
         opts.addNodeTime = SCALE_RESTART_ADD_TIME;
         std::string obsGflag =
             "-shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=false "
-            "-other_az_names=AZ1,AZ2 -v=1 -log_monitor=true";
+            "-other_cluster_names=AZ1,AZ2 -v=1 -log_monitor=true";
         FLAGS_v = 1;
         opts.workerGflagParams = obsGflag;
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
 
-            std::string param = "-az_name=";
+            std::string param = "-cluster_name=";
             if (i < EACH_AZ_WORKER_NUM) {
                 param.append(AZ1);
             } else {
@@ -1021,14 +1021,14 @@ public:
         opts.numOBS = 1;
         std::string gflag =
             " -v=2 -shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=true "
-            "-other_az_names=AZ1,AZ2,AZ3,AZ4 -cross_az_get_meta_from_worker=true -v=2";
+            "-other_cluster_names=AZ1,AZ2,AZ3,AZ4 -cross_az_get_meta_from_worker=true -v=2";
 
         opts.workerGflagParams = gflag;
         std::vector<std::string> otherAzNames = { "AZ1", "AZ2", "AZ3", "AZ4" };
         for (size_t i = 0; i < workerNum_; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
-            std::string param = "-az_name=";
+            std::string param = "-cluster_name=";
             param.append(otherAzNames[i]);
             opts.workerSpecifyGflagParams[i] = param;
         }
@@ -1159,11 +1159,12 @@ public:
         opts.numOBS = 1;
         std::string gflag =
             " -v=2 -shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=true "
-            "-other_az_names=AZ1,AZ2 -cross_az_get_meta_from_worker=true -oc_io_from_l2cache_need_metadata=false -v=2";
+            "-other_cluster_names=AZ1,AZ2 -cross_az_get_meta_from_worker=true -oc_io_from_l2cache_need_metadata=false "
+            "-v=2";
 
         opts.workerGflagParams = gflag;
-        opts.workerSpecifyGflagParams[0] += " -az_name=AZ1 ";
-        opts.workerSpecifyGflagParams[1] += " -az_name=AZ2 ";
+        opts.workerSpecifyGflagParams[0] += " -cluster_name=AZ1 ";
+        opts.workerSpecifyGflagParams[1] += " -cluster_name=AZ2 ";
         std::vector<std::string> otherAzNames = { "AZ1", "AZ2" };
         for (size_t i = 0; i < workerNum_; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
@@ -1236,7 +1237,7 @@ public:
         for (size_t i = 0; i < workerNum_; i++) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
-            std::string param = "-az_name=";
+            std::string param = "-cluster_name=";
             param.append(otherAzNames_[i % otherAzNames_.size()]);
             opts.workerSpecifyGflagParams[i] = param;
         }
@@ -1273,7 +1274,7 @@ protected:
     const std::vector<std::string> otherAzNames_ = { "AZ1", "AZ2", "AZ3", "AZ4" };
     std::string gflag_ =
         " -v=2 -shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=true "
-        "-other_az_names=AZ1,AZ2,AZ3,AZ4 -cross_az_get_meta_from_worker=true";
+        "-other_cluster_names=AZ1,AZ2,AZ3,AZ4 -cross_az_get_meta_from_worker=true";
 };
 
 TEST_F(KVClientCrossAzGetMetaAndDataTwoWorkerPerAz, LEVEL2_TestParallelCrossAzSet)
@@ -1485,12 +1486,12 @@ public:
         opts.disableRocksDB = false;
         std::string gflag =
             " -v=1 -shared_memory_size_mb=512 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=true "
-            "-other_az_names=AZ1,AZ2 -cross_az_get_meta_from_worker=true ";
+            "-other_cluster_names=AZ1,AZ2 -cross_az_get_meta_from_worker=true ";
 
         opts.workerGflagParams = gflag;
         for (size_t i = 0; i < workerNum_; i++) {
             auto azName = azNames_[i % azNames_.size()];
-            std::string param = "-az_name=" + azName;
+            std::string param = "-cluster_name=" + azName;
             opts.workerSpecifyGflagParams[i] = param;
         }
     }

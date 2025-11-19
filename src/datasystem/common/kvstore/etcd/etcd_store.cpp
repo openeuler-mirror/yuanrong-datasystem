@@ -41,12 +41,12 @@
 
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);
-DS_DEFINE_string(other_az_names, "", "Specify other az names using the same etcd. Split by ','");
-DS_DEFINE_validator(other_az_names, &Validator::ValidateOtherAzNames);
+DS_DEFINE_string(other_cluster_names, "", "Specify other az names using the same etcd. Split by ','");
+DS_DEFINE_validator(other_cluster_names, &Validator::ValidateOtherAzNames);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_bool(auto_del_dead_node);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 EtcdStore::EtcdStore(const std::string &address) : address_(address)
@@ -156,15 +156,15 @@ Status EtcdStore::CreateTable(const std::string &tableName, const std::string &t
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
     CHECK_FAIL_RETURN_STATUS(tableMap_.find(tableName) == tableMap_.end(), K_DUPLICATED,
                              "The table already exists. tableName:" + tableName);
-    if (!FLAGS_az_name.empty()) {
-        tableMap_.emplace(tableName, "/" + FLAGS_az_name + tablePrefix);
+    if (!FLAGS_cluster_name.empty()) {
+        tableMap_.emplace(tableName, "/" + FLAGS_cluster_name + tablePrefix);
     } else {
         tableMap_.emplace(tableName, tablePrefix);
     }
 
-    if (!FLAGS_other_az_names.empty()) {
-        for (auto &azName : Split(FLAGS_other_az_names, ",")) {
-            if (azName != FLAGS_az_name) {
+    if (!FLAGS_other_cluster_names.empty()) {
+        for (auto &azName : Split(FLAGS_other_cluster_names, ",")) {
+            if (azName != FLAGS_cluster_name) {
                 std::lock_guard<std::shared_timed_mutex> lck(otherAzTblMutex_);
                 otherAzTableMap_[tableName].emplace_back("/" + azName + tablePrefix);
             }

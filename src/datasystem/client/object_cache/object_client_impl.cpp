@@ -255,7 +255,7 @@ void ObjectClientImpl::MGetAsyncRpcThread(const std::shared_ptr<MGetAsyncRPCSour
         resourcePtr->promise.set_value({ result, resourcePtr->failList });
         return;
     }
-    auto rc = HostDataCopy2Device(resourcePtr->dataInfoList, resourcePtr->existBufferList);
+    auto rc = HostDataCopy2Device(resourcePtr->devBlobList, resourcePtr->existBufferList);
     resourcePtr->promise.set_value({ rc, resourcePtr->failList });
 }
 
@@ -541,33 +541,6 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> 
     return Status::OK();
 }
 
-Status ObjectClientImpl::ConvertToDataInfoList(const std::vector<DeviceBlobList> &devBlobList,
-                                               std::vector<std::vector<DataInfo>> &dataInfoList)
-{
-    auto defaultType = DataType::DATA_TYPE_INT8;
-    auto dataByteSize = GetBytesFromDataType(defaultType);
-    if (dataByteSize == 0) {
-        return Status(K_RUNTIME_ERROR, "Get unexpected data type!");
-    }
-    if (devBlobList.empty()) {
-        return Status::OK();
-    }
-    dataInfoList.resize(devBlobList.size());
-    std::vector<uint32_t> device;
-    for (size_t i = 0; i < devBlobList.size(); i++) {
-        for (const auto &blob : devBlobList[i].blobs) {
-            CHECK_FAIL_RETURN_STATUS(
-                blob.size > 0, K_INVALID,
-                FormatString("Got empty or illegal size in devBlobList and the illegal size is: %lu", blob.size));
-            DataInfo info{ blob.pointer, defaultType, (blob.size / dataByteSize), blob.size, devBlobList[i].deviceIdx };
-            dataInfoList[i].emplace_back(std::move(info));
-        }
-        device.emplace_back(devBlobList[i].deviceIdx);
-    }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid(device), "Check device failed.");
-    return Status::OK();
-}
-
 std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std::string> &objectKeys,
                                                           const std::vector<DeviceBlobList> &devBlobList,
                                                           uint64_t timeoutMs)
@@ -600,7 +573,10 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
 
             std::vector<Buffer *> &existBufferList = asyncResource->existBufferList;
             existBufferList.reserve(bufferList.size());
+            std::vector<uint32_t> devices;
+            devices.reserve(objectKeys.size());
             for (auto i = 0ul; i < objectKeys.size(); i++) {
+                devices.emplace_back(devBlobList[i].deviceIdx);
                 if (!bufferList[i]) {
                     asyncResource->failList.emplace_back(objectKeys[i]);
                     existBufferList.emplace_back(nullptr);
@@ -609,8 +585,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
                 existBufferList.emplace_back(&bufferList[i].value());
             }
 
-            std::vector<std::vector<DataInfo>> &dataInfoList = asyncResource->dataInfoList;
-            RETURN_IF_NOT_OK(ConvertToDataInfoList(devBlobList, dataInfoList));
+            asyncResource->devBlobList = devBlobList;
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid(devices), "Check device failed.");
             return Status::OK();
         });
 
@@ -622,11 +598,11 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
     return future;
 }
 
-Status ObjectClientImpl::HostDataCopy2Device(std::vector<std::vector<DataInfo>> &dataInfoList,
+Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlobList,
                                              std::vector<Buffer *> &existBufferList)
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY);
-    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(dataInfoList, existBufferList,
+    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList,
                                                           aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
                                                           workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
 
@@ -638,35 +614,46 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<std::vector<DataInfo>> 
 
 Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &objectKeys,
                                           const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam,
-                                          std::vector<std::shared_ptr<Buffer>> &bufferList,
-                                          std::vector<Buffer *> &destroyBufferList)
+                                          std::vector<std::shared_ptr<Buffer>> &bufferList, std::vector<bool> &exists)
 {
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_OBJECT);
     CHECK_FAIL_RETURN_STATUS(!objectKeys.empty(), K_INVALID, "The keys are empty");
     CHECK_FAIL_RETURN_STATUS(objectKeys.size() == devBlobList.size(), K_INVALID,
                              "The size of objectKeys and devBlobList does not match");
 
-    std::vector<std::vector<DataInfo>> dataInfoList;
-    RETURN_IF_NOT_OK(ConvertToDataInfoList(devBlobList, dataInfoList));
-    CreateParam param;
+    FullParam param;
     param.writeMode = setParam.writeMode;
     param.cacheType = setParam.cacheType;
     std::vector<size_t> dataSizeList;
     dataSizeList.reserve(objectKeys.size());
     BlobListInfo blobInfo;
-    RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, dataInfoList, blobInfo));
+    RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo));
     LOG(INFO) << blobInfo.ToString(true);
-
-    RETURN_IF_NOT_OK(MultiCreate(objectKeys, dataSizeList, param, bufferList));
-    point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY);
-    ComposeBufferData(bufferList, dataInfoList);
-
-    // destroyBufferList same as bufferList
-    destroyBufferList.reserve(bufferList.size());
-    for (auto &buff : bufferList) {
-        destroyBufferList.emplace_back(buff.get());
+    RETURN_IF_NOT_OK(MultiCreate(objectKeys, dataSizeList, param, false, bufferList, exists));
+    std::vector<std::shared_ptr<Buffer>> filterBufferList;
+    std::vector<DeviceBlobList> filterDevBlobList;
+    filterBufferList.reserve(objectKeys.size());
+    filterDevBlobList.reserve(objectKeys.size());
+    for (auto idx = 0u; idx < objectKeys.size(); idx++) {
+        if (exists[idx]) {
+            continue;
+        }
+        filterBufferList.emplace_back(bufferList[idx]);
+        filterDevBlobList.emplace_back(devBlobList[idx]);
     }
-    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(dataInfoList, destroyBufferList,
+
+    bufferList = filterBufferList;
+    if (bufferList.empty()) {
+        return Status::OK();
+    }
+    point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY);
+    ComposeBufferData(bufferList, filterDevBlobList);
+    std::vector<Buffer *> bufferRawPtrList;
+    bufferRawPtrList.reserve(bufferList.size());
+    for (auto &buff : bufferList) {
+        bufferRawPtrList.emplace_back(buff.get());
+    }
+    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(filterDevBlobList, bufferRawPtrList,
                                                           aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST,
                                                           workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
 
@@ -698,14 +685,14 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
         promise.set_value({ err, objectKeys });
         return future;
     }
-    auto err = CheckStringVector(objectKeys);
+    auto err = CheckValidObjectKeyVector(objectKeys);
     if (err.IsError()) {
         promise.set_value({ err, objectKeys });
         return future;
     }
     if (!Validator::IsBatchSizeUnderLimit(objectKeys.size())) {
-        Status err = Status(K_INVALID, __LINE__, __FILE__,
-                            FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+        err = Status(K_INVALID, __LINE__, __FILE__,
+                     FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
         promise.set_value({ err, objectKeys });
         return future;
     }
@@ -717,20 +704,28 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
         AsyncResult result;
 
         // Step1: execute Exist check
+        std::vector<std::shared_ptr<Buffer>> bufferList;
         std::vector<bool> exists;
-        {
-            PerfPoint point(PerfKey::CLIENT_MSET_CHECK_EXISTS);
-            (void)Exist(objectKeys, exists, false, true);
+        auto rc = DeviceDataCreate(objectKeys, devBlobList, setParam, bufferList, exists);
+        if (rc.IsError()) {
+            result.status = rc;
+            return result;
         }
-
         // Filter non-existing objects
         std::vector<std::string> nonExistobjectKeys;
         std::vector<DeviceBlobList> nonExistDevBlobList;
+        std::vector<uint32_t> devices;
         for (size_t i = 0; i < objectKeys.size(); ++i) {
             if (!exists[i]) {
                 nonExistobjectKeys.emplace_back(objectKeys[i]);
                 nonExistDevBlobList.emplace_back(devBlobList[i]);
+                devices.emplace_back(devBlobList[i].deviceIdx);
             }
+        }
+        auto deviceCheckRc = CheckDeviceValid(devices);
+        if (deviceCheckRc.IsError()) {
+            result.status = deviceCheckRc;
+            return result;
         }
 
         // If all objects already exist, return success immediately
@@ -738,22 +733,12 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
             result.status = Status::OK();
             return result;
         }
-
-        // Step2: execute DeviceDataCreate
-        std::vector<std::shared_ptr<Buffer>> bufferList;
-        std::vector<Buffer *> destroyBufferList;
-        auto rc = DeviceDataCreate(nonExistobjectKeys, nonExistDevBlobList, setParam, bufferList, destroyBufferList);
-        if (rc.IsError()) {
-            result.status = rc;
-            return result;
-        }
-
         // Step3: Execute final MultiPublish operation
         {
             PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_OBJECT);
             std::vector<std::vector<std::uint64_t>> blobSizes;
-            blobSizes.reserve(devBlobList.size());
-            for (auto &devblob : devBlobList) {
+            blobSizes.reserve(nonExistDevBlobList.size());
+            for (auto &devblob : nonExistDevBlobList) {
                 std::vector<uint64_t> sizeList;
                 sizeList.reserve(devblob.blobs.size());
                 for (auto &blob : devblob.blobs) {
@@ -765,12 +750,6 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
             if (result.status.IsError()) {
                 return result;
             }
-        }
-
-        // Step4: Release buffer resources
-        {
-            PerfPoint point(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_PUT);
-            BatchReleaseBufferPtr(destroyBufferList);
         }
         return result;
     });
@@ -814,13 +793,13 @@ Status ObjectClientImpl::CheckConnectionWhileShmModify()
     return IsClientReady();
 }
 
-Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize, const CreateParam &param,
+Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
                                 std::shared_ptr<Buffer> &buffer)
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(objectKey), K_INVALID, "The objectKey contains illegal char(s).");
+    RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
     RETURN_IF_NOT_OK(CheckConnection());
     PerfPoint createPoint(PerfKey::CLIENT_CREATE_OBJECT);
@@ -858,52 +837,34 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
 }
 
 Status ObjectClientImpl::ConstructMultiCreateParam(const std::vector<std::string> &objectKeyList,
-                                                   const std::vector<uint64_t> &dataSizeList, const CreateParam &param,
+                                                   const std::vector<uint64_t> &dataSizeList,
                                                    std::vector<std::shared_ptr<Buffer>> &bufferList,
                                                    std::vector<MultiCreateParam> &multiCreateParamList)
 {
     CHECK_FAIL_RETURN_STATUS(objectKeyList.size() == dataSizeList.size(), K_INVALID,
                              "The length of objectKeyList and dataSizeList should be the same.");
-    auto totalDataSize = 0ul;
     for (size_t i = 0; i < objectKeyList.size(); i++) {
         auto &objectKey = objectKeyList[i];
         auto dataSize = dataSizeList[i];
         CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
-        CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(objectKey), K_INVALID,
-                                 "The objectKey contains illegal char(s).");
+        RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
         CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
-        totalDataSize += dataSize;
     }
     bufferList.resize(objectKeyList.size());
     // if total size >=500k , transfer by shm
-    if (totalDataSize >= workerApi_[LOCAL_WORKER]->GetShmThreshold() && ShmEnable()) {
-        size_t index = 0;
-        std::for_each(objectKeyList.begin(), objectKeyList.end(),
-                      [&index, &multiCreateParamList, &dataSizeList](const std::string &objectKey) {
-                          multiCreateParamList.emplace_back(index, objectKey, dataSizeList[index]);
-                          index++;
-                      });
-        return Status::OK();
-    }
-    for (size_t i = 0; i < objectKeyList.size(); i++) {
-        auto &objectKey = objectKeyList[i];
-        auto dataSize = dataSizeList[i];
-        auto version = 0u;
-        std::shared_ptr<Buffer> newBuffer;
-        ObjectBufferInfo bufferInfo = SetObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
-        auto rc = Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer);
-        if (rc.IsError()) {
-            bufferList.clear();
-            return rc;
-        }
-        bufferList[i] = std::move(newBuffer);
-    }
+    size_t index = 0;
+    std::for_each(objectKeyList.begin(), objectKeyList.end(),
+                  [&index, &multiCreateParamList, &dataSizeList](const std::string &objectKey) {
+                      multiCreateParamList.emplace_back(index, objectKey, dataSizeList[index]);
+                      index++;
+                  });
     return Status::OK();
 }
 
 Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyList,
-                                     const std::vector<uint64_t> &dataSizeList, const CreateParam &param,
-                                     std::vector<std::shared_ptr<Buffer>> &bufferList)
+                                     const std::vector<uint64_t> &dataSizeList, const FullParam &param,
+                                     const bool skipCheckExistence, std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                     std::vector<bool> &exists)
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
@@ -912,15 +873,37 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     std::vector<MultiCreateParam> multiCreateParamList;
-    RETURN_IF_NOT_OK(ConstructMultiCreateParam(objectKeyList, dataSizeList, param, bufferList, multiCreateParamList));
-    // if multiCreateParamList is empty, not call MultiCreate rpc
-    if (multiCreateParamList.empty()) {
-        return Status::OK();
-    }
+    RETURN_IF_NOT_OK(ConstructMultiCreateParam(objectKeyList, dataSizeList, bufferList, multiCreateParamList));
     // If failed with create, need to rollback.
     auto version = 0u;
-    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(multiCreateParamList, version));
+    auto useShmTransfer = false;
+    auto sizeSum = std::accumulate(dataSizeList.begin(), dataSizeList.end(), 0);
+    if (!skipCheckExistence || static_cast<uint64_t>(sizeSum) >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
+        RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
+                                                               exists, useShmTransfer));
+    } else {
+        exists.resize(objectKeyList.size(), false);
+    }
 
+    if (!useShmTransfer) {
+        for (size_t i = 0; i < objectKeyList.size(); i++) {
+            if (exists[i]) {
+                continue;
+            }
+            auto &objectKey = objectKeyList[i];
+            auto dataSize = dataSizeList[i];
+            auto version = 0u;
+            std::shared_ptr<Buffer> newBuffer;
+            ObjectBufferInfo bufferInfo = SetObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
+            auto rc = Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer);
+            if (rc.IsError()) {
+                bufferList.clear();
+                return rc;
+            }
+            bufferList[i] = std::move(newBuffer);
+        }
+        return Status::OK();
+    }
     bool isInactive = false;
     Raii handlerCreateFailed([&isInactive, &bufferList, this]() {
         if (isInactive) {
@@ -934,9 +917,11 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
         }
         bufferList.clear();
     });
-
     Status injectRC = Status::OK();
     for (auto &createParam : multiCreateParamList) {
+        if (exists[createParam.index]) {
+            continue;
+        }
         PerfPoint mmapPoint(PerfKey::CLIENT_LOOK_UP_MMAP_FD);
         auto &shmBuf = createParam.shmBuf;
         RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
@@ -961,7 +946,6 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
         bufferList[createParam.index] = std::move(newBuffer);
     }
     isInactive = true;
-
     return Status::OK();
 }
 
@@ -1097,7 +1081,7 @@ Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInf
     RETURN_IF_NOT_OK(IsClientReady());
     PerfPoint sealPoint(PerfKey::CLIENT_SEAL_OBJECT);
     RETURN_IF_NOT_OK(CheckConnection());
-    RETURN_IF_NOT_OK(CheckStringVector(nestedObjectKeys, true));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(nestedObjectKeys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsBatchSizeUnderLimit(nestedObjectKeys.size()), K_INVALID,
         FormatString("The nestedObjectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
@@ -1123,7 +1107,7 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     RETURN_IF_NOT_OK(IsClientReady());
     PerfPoint perfPoint(PerfKey::CLIENT_PUBLISH_OBJECT);
     RETURN_IF_NOT_OK(CheckConnection());
-    RETURN_IF_NOT_OK(CheckStringVector(nestedObjectKeys, true));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(nestedObjectKeys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsBatchSizeUnderLimit(nestedObjectKeys.size()), K_INVALID,
         FormatString("The nestedObjectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
@@ -1141,14 +1125,14 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(objectKey), K_INVALID, "The objectKey contains illegal char(s).");
+    RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     RETURN_IF_NOT_OK(CheckConnection());
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->InvalidateBuffer(objectKey));
     return Status::OK();
 }
 
 Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
-                                       const CreateParam &param,
+                                       const FullParam &param,
                                        const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
                                        const std::shared_ptr<ClientWorkerApi> &workerApi, int existence)
 {
@@ -1248,14 +1232,14 @@ Status ObjectClientImpl::Publish(const std::vector<std::shared_ptr<DeviceBuffer>
     return result;
 }
 
-Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const CreateParam &param,
+Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                              const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence)
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
     PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey should not be empty.");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(objectKey), K_INVALID, "The objectKey contains illegal char(s).");
+    RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     CHECK_FAIL_RETURN_STATUS(data != nullptr, K_INVALID, "The data pointer should not be null.");
     CHECK_FAIL_RETURN_STATUS(size > 0, K_INVALID, "The dataSize value should be bigger than zero.");
     CHECK_FAIL_RETURN_STATUS(nestedObjectKeys.find(objectKey) == nestedObjectKeys.end(), K_UNKNOWN_ERROR,
@@ -1304,7 +1288,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
 {
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -1342,7 +1326,7 @@ Status ObjectClientImpl::Read(const std::vector<ReadParam> &readParams, std::vec
     for (const auto &param : readParams) {
         objectKeys.emplace_back(param.key);
     }
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     GetParam getParam{ .objectKeys = objectKeys, .subTimeoutMs = 0, .readParams = readParams };
     Status rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
     buffers.clear();
@@ -1365,9 +1349,10 @@ Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const 
     std::shared_ptr<client::MmapTableEntry> mmapEntry;
     uint8_t *pointer;
     RETURN_IF_NOT_OK(MmapShmUnit(info.store_fd(), info.mmap_size(), info.offset(), mmapEntry, pointer));
-    CreateParam param{ .writeMode = WriteMode(info.write_mode()),
-                       .consistencyType = ConsistencyType(info.consistency_type()),
-                       .cacheType = CacheType(info.cache_type()) };
+    FullParam param;
+    param.writeMode = WriteMode(info.write_mode());
+    param.consistencyType = ConsistencyType(info.consistency_type());
+    param.cacheType = CacheType(info.cache_type());
     ObjectBufferInfo bufferInfo =
         SetObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
                             info.shm_id(), nullptr, std::move(mmapEntry));
@@ -1397,7 +1382,7 @@ Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t of
 }
 
 ObjectBufferInfo ObjectClientImpl::SetObjectBufferInfo(const std::string &objectKey, uint8_t *pointer, uint64_t size,
-                                                       uint64_t metaSize, const CreateParam &param, bool isSeal,
+                                                       uint64_t metaSize, const FullParam &param, bool isSeal,
                                                        uint32_t version, const std::string &shmId,
                                                        const std::shared_ptr<RpcMessage> &payloadPointer,
                                                        std::shared_ptr<client::MmapTableEntry> mmapEntry)
@@ -1508,9 +1493,10 @@ Status ObjectClientImpl::SetNonShmObjectBuffer(const std::string &objectKey, con
                                                int version, std::vector<RpcMessage> &payloads,
                                                std::shared_ptr<Buffer> &bufferPtr)
 {
-    CreateParam param{ .writeMode = WriteMode(payloadInfo.write_mode()),
-                       .consistencyType = ConsistencyType(payloadInfo.consistency_type()),
-                       .cacheType = CacheType(payloadInfo.cache_type()) };
+    FullParam param;
+    param.writeMode = WriteMode(payloadInfo.write_mode());
+    param.consistencyType = ConsistencyType(payloadInfo.consistency_type());
+    param.cacheType = CacheType(payloadInfo.cache_type());
     int payloadIndexSize = payloadInfo.part_index().size();
     if (payloadIndexSize == 1) {
         std::shared_ptr<RpcMessage> payloadSharedPtr =
@@ -1566,9 +1552,10 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
     std::shared_ptr<client::MmapTableEntry> mmapEntry;
     uint8_t *pointer;
     MmapShmUnit(info.store_fd(), info.mmap_size(), info.offset(), mmapEntry, pointer);
-    CreateParam param{ .writeMode = WriteMode(info.write_mode()),
-                       .consistencyType = ConsistencyType(info.consistency_type()),
-                       .cacheType = CacheType(info.cache_type()) };
+    FullParam param;
+    param.writeMode = WriteMode(info.write_mode());
+    param.consistencyType = ConsistencyType(info.consistency_type());
+    param.cacheType = CacheType(info.cache_type());
     ObjectBufferInfo bufferInfo =
         SetObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
                             info.shm_id(), nullptr, std::move(mmapEntry));
@@ -1598,7 +1585,7 @@ Status ObjectClientImpl::GIncreaseRef(const std::vector<std::string> &objectKeys
     PerfPoint point(PerfKey::CLIENT_GINCREASE_REFERENCE);
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(failedObjectKeys.empty(), K_INVALID, "The failedObjectKeys not empty");
@@ -1701,8 +1688,7 @@ Status ObjectClientImpl::GDecreaseRef(const std::vector<std::string> &objectKeys
     PerfPoint point(PerfKey::CLIENT_GDECREASE_REFERENCE);
     RETURN_IF_NOT_OK(IsClientReady());
     for (auto &objectKey : objectKeys) {
-        CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(objectKey), K_INVALID,
-                                 "The objectKey contains illegal char(s).");
+        RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     }
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
@@ -1782,6 +1768,15 @@ void ObjectClientImpl::GDecreaseRefRollback(const std::vector<std::string> &roll
     LOG(WARNING) << "[Ref] failed GDecreaseRef objectKeys " << VectorToString(rollbackObjectKeys);
 }
 
+Status ObjectClientImpl::CheckValidObjectKey(const std::string &key)
+{
+    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key), K_INVALID,
+        FormatString("The key contains illegal char(s), allowed regex format: %s "
+        "or the length of key must be no more than 255, current key length is %d.",
+            Validator::objKeyFormat, key.size()));
+    return Status::OK();
+}
+
 void ObjectClientImpl::RemoveZeroGlobalRefByRefTable(const std::vector<std::string> &checkIds,
                                                      std::map<std::string, GlobalRefInfo> &accessorTable)
 {
@@ -1832,7 +1827,7 @@ Status ObjectClientImpl::Delete(const std::vector<std::string> &objectKeys, std:
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DELETE);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -1866,10 +1861,11 @@ void ObjectClientImpl::AddTbbLockForGlobalRefIds(const std::vector<std::string> 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key), K_INVALID, "The key contains illegal char(s).");
-    CreateParam param{ .writeMode = setParam.writeMode,
-                       .consistencyType = ConsistencyType::CAUSAL,
-                       .cacheType = setParam.cacheType };
+    RETURN_IF_NOT_OK(CheckValidObjectKey(key));
+    FullParam param;
+    param.writeMode = setParam.writeMode;
+    param.consistencyType = ConsistencyType::CAUSAL;
+    param.cacheType = setParam.cacheType;
     return Put(key, reinterpret_cast<const uint8_t *>(val.data()), val.size(), param, {}, setParam.ttlSecond,
                static_cast<int>(setParam.existence));
 }
@@ -1891,19 +1887,12 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidationNtx(const std::vector<
                                                               std::map<std::string, StringView> &kv)
 {
     CHECK_FAIL_RETURN_STATUS(keys.size() > 0, K_INVALID, "The keys should not be empty.");
-    CHECK_FAIL_RETURN_STATUS(
-        keys.size() < BATCH_SET_MAX_KEY_COUNT, K_INVALID,
-        FormatString("The maximum size of keys in single operation is less than %d.", BATCH_SET_MAX_KEY_COUNT));
     CHECK_FAIL_RETURN_STATUS(keys.size() == vals.size(), K_INVALID, "The number of key and value is not the same.");
     for (size_t i = 0; i < keys.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
-        CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(keys[i]), K_INVALID,
-                                 FormatString("The key %s contains illegal char(s).", keys[i]));
+        RETURN_IF_NOT_OK(CheckValidObjectKey(keys[i]));
         CHECK_FAIL_RETURN_STATUS(vals[i].data() != nullptr, K_INVALID,
                                  FormatString("The value associated with key %s should not be empty.", keys[i]));
-        CHECK_FAIL_RETURN_STATUS(vals[i].size() < workerApi_[LOCAL_WORKER]->GetShmThreshold(), K_INVALID,
-                                 FormatString("The size for the val must be less than %d Byte",
-                                              workerApi_[LOCAL_WORKER]->GetShmThreshold()));
         if (kv.find(keys[i]) == kv.end()) {
             kv[keys[i]] = vals[i];
         } else {
@@ -1928,8 +1917,7 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidation(const std::vector<std
     std::unordered_set<std::string> keyRecord;
     for (size_t i = 0; i < keys.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
-        CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(keys[i]), K_INVALID,
-                                 FormatString("The key %s contains illegal char(s).", keys[i]));
+        RETURN_IF_NOT_OK(CheckValidObjectKey(keys[i]));
         CHECK_FAIL_RETURN_STATUS(vals[i].data() != nullptr, K_INVALID,
                                  FormatString("The value associated with key %s should not be empty.", keys[i]));
         CHECK_FAIL_RETURN_STATUS(kv.find(keys[i]) == kv.end(), K_INVALID,
@@ -1946,7 +1934,10 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
                                                std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                                const CacheType &cacheType)
 {
-    CreateParam param{ .writeMode = writeMode, .consistencyType = ConsistencyType::CAUSAL, .cacheType = cacheType };
+    FullParam param;
+    param.writeMode = writeMode,
+    param.consistencyType = ConsistencyType::CAUSAL;
+    param.cacheType = cacheType;
     int i = 0;
     for (const auto &keyValue : kv) {
         ObjectBufferInfo objInfo;
@@ -1992,30 +1983,54 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
-    std::vector<std::shared_ptr<Buffer>> buffers(kv.size(), nullptr);
-    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfo(kv.size(), nullptr);
-    CreateParam creatParam{ .writeMode = param.writeMode,
-                            .consistencyType = ConsistencyType::CAUSAL,
-                            .cacheType = param.cacheType };
-    int i = 0;
-    for (const auto &keyValue : kv) {
-        ObjectBufferInfo objInfo;
-        // if is not transaction, the val  of object must less than 500k, not ShmCreateable.
-        objInfo =
-            SetObjectBufferInfo(keyValue.first, reinterpret_cast<uint8_t *>(const_cast<char *>(keyValue.second.data())),
-                                keyValue.second.size(), 0, creatParam, false, 0);
-        bufferInfo[i] = std::make_shared<ObjectBufferInfo>(objInfo);
-        i++;
+    FullParam creatParam;
+    creatParam.writeMode = param.writeMode;
+    creatParam.consistencyType = ConsistencyType::CAUSAL;
+    creatParam.cacheType = param.cacheType;
+    std::vector<std::string> filteredKeys;
+    std::vector<StringView> filteredValues;
+    filteredKeys.reserve(kv.size());
+    filteredValues.reserve(kv.size());
+    for (const auto &key : keys) {
+        if (kv.find(key) != kv.end()) {
+            filteredKeys.emplace_back(key);
+            filteredValues.emplace_back(kv[key]);
+        }
     }
+    PerfPoint point(PerfKey::CLIENT_MSET_MULTICREATE);
+    std::vector<uint64_t> dataSizeList;
+    for (const auto &val : filteredValues) {
+        dataSizeList.emplace_back(val.size());
+    }
+    std::vector<std::shared_ptr<Buffer>> bufferList;
+    std::vector<bool> exist;
+    RETURN_IF_NOT_OK(MultiCreate(filteredKeys, dataSizeList, creatParam, true, bufferList, exist));
+    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
+    bufferInfoList.reserve(bufferList.size());
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
+    auto idx = 0;
+    for (auto &buffer : bufferList) {
+        if (buffer == nullptr) {
+            bufferInfoList.emplace_back(std::make_shared<ObjectBufferInfo>(SetObjectBufferInfo(
+                filteredKeys[idx], reinterpret_cast<uint8_t *>(const_cast<char *>(filteredValues[idx].data())),
+                filteredValues[idx].size(), 0, creatParam, false, 0)));
+            continue;
+        }
+        RETURN_IF_NOT_OK(buffer->CheckDeprecated());
+        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
+        RETURN_IF_NOT_OK(buffer->MemoryCopy(filteredValues[idx].data(), filteredValues[idx].size()));
+        bufferInfoList.emplace_back(buffer->bufferInfo_);
+        idx++;
+    }
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLSIH);
     MultiPublishRspPb rsp;
     PublishParam publishParam{
         .isTx = false, .isReplica = false, .existence = param.existence, .ttlSecond = param.ttlSecond
     };
-    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfo, publishParam, rsp));
+    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     for (const auto &objKey : rsp.failed_object_keys()) {
         outFailedKeys.emplace_back(objKey);
     }
-    LOG(INFO) << "Finish to multiset key: " << VectorToString(keys);
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     if (!outFailedKeys.empty() || recvRc.IsError()) {
         LOG(WARNING) << "Cannot set all the objects from worker, status:" << recvRc.ToString()
@@ -2072,8 +2087,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
 
 Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefixKey)
 {
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(prefixKey), K_INVALID,
-                             "The objectKey contains illegal char(s), allowed regex format: " + Validator::idFormat);
+    RETURN_IF_NOT_OK(CheckValidObjectKey(prefixKey));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(IsClientReady(), "Generate key failed.");
 
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2136,20 +2150,12 @@ std::shared_ptr<ThreadPool> ObjectClientImpl::GetMemoryCopyThreadPool()
     return memoryCopyThreadPool_;
 }
 
-Status ObjectClientImpl::CreateDevBuffer(const std::string &devObjKey, uint64_t size, void *devPtr, int32_t deviceIdx,
-                                         std::shared_ptr<DeviceBuffer> &deviceBuffer)
+Status ObjectClientImpl::CreateDevBuffer(const std::string &devObjKey, const DeviceBlobList &devBlobList,
+                                         const CreateDeviceParam &param, std::shared_ptr<DeviceBuffer> &deviceBuffer)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    return devOcImpl_->CreateDevBuffer(devObjKey, size, devPtr, deviceIdx, deviceBuffer);
-}
-
-Status ObjectClientImpl::CreateDevBuffer(const std::string &devObjKey, const std::vector<DataInfo> &dataInfoList,
-                                         int32_t deviceIdx, const CreateDeviceParam &param,
-                                         std::shared_ptr<DeviceBuffer> &deviceBuffer)
-{
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_CREATE_DEV_BUFFER);
-    RETURN_IF_NOT_OK(IsClientReady());
-    return devOcImpl_->CreateDevBuffer(devObjKey, dataInfoList, deviceIdx, param, deviceBuffer);
+    return devOcImpl_->CreateDevBuffer(devObjKey, devBlobList, param, deviceBuffer);
 }
 
 Status ObjectClientImpl::PublishDeviceObject(std::shared_ptr<DeviceBuffer> buffer)
@@ -2173,19 +2179,18 @@ Status ObjectClientImpl::GetSendStatus(const std::shared_ptr<DeviceBuffer> &buff
     return devOcImpl_->GetSendStatus(buffer, futureVec);
 }
 
-Status ObjectClientImpl::GetDataInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<DataInfo> &dataInfos)
+Status ObjectClientImpl::GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs)
 {
     RETURN_IF_NOT_OK(IsClientReady());
     CHECK_FAIL_RETURN_STATUS(!devObjKey.empty(), K_INVALID, "The objectKey is empty");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(devObjKey), K_INVALID,
-                             "The devObjKey maybe contains illegal char(s) or the length of id is > 255.");
+    RETURN_IF_NOT_OK(CheckValidObjectKey(devObjKey));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsInNonNegativeInt32(timeoutMs), K_INVALID,
         FormatString("timeoutMs %d is out of range., which should be between [%d, %d]", timeoutMs, 0, INT32_MAX));
     std::shared_ptr<ClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    return workerApi->GetDataInfo(devObjKey, timeoutMs, dataInfos);
+    return workerApi->GetBlobsInfo(devObjKey, timeoutMs, blobs);
 }
 
 Status ObjectClientImpl::RemoveP2PLocation(const std::string &objectKey, int32_t deviceId)
@@ -2201,7 +2206,7 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
                                         std::vector<ObjMetaInfo> &objMetas)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() <= OBJ_META_MAX_SIZE_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJ_META_MAX_SIZE_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2228,7 +2233,7 @@ Status ObjectClientImpl::DeleteDevObjects(const std::vector<std::string> &objKey
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DEV_DELETE);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(objKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2274,8 +2279,13 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
     }
 
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    auto failedSet = std::set<std::string>{ rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
     for (auto &buffer : bufferList) {
         if (buffer->isShm_) {
+            if (failedSet.find(buffer->bufferInfo_->objectKey) == failedSet.end()) {
+                memoryRefCount_.erase(buffer->bufferInfo_->shmId);
+                buffer->isReleased_ = true;
+            }
             buffer->SetVisibility(recvRc.IsOk());
         }
     }
@@ -2292,7 +2302,7 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
 Status ObjectClientImpl::QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2336,10 +2346,9 @@ Status ObjectClientImpl::DevPublish(const std::vector<std::string> &objectKeys,
                              "The size of objectKeys and devBlobList does not match");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys, true));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::vector<std::vector<datasystem::DataInfo>> dataInfoList;
     std::vector<std::shared_ptr<DeviceBuffer>> devBuffPtrList;
     CreateDeviceParam createParam = CreateDeviceParam{ LifetimeType::MOVE, false };
     RETURN_IF_NOT_OK(ConvertToDevBufferPtrList(objectKeys, devBlobList, createParam, devBuffPtrList));
@@ -2371,10 +2380,9 @@ Status ObjectClientImpl::DevSubscribe(const std::vector<std::string> &objectKeys
                              "The size of objectKeys and devBlobList does not match");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys, true));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::vector<std::vector<datasystem::DataInfo>> dataInfoList;
     std::vector<std::shared_ptr<DeviceBuffer>> devBuffPtrList;
     CreateDeviceParam createParam{ LifetimeType::MOVE, false };
     RETURN_IF_NOT_OK(ConvertToDevBufferPtrList(objectKeys, devBlobList, createParam, devBuffPtrList));
@@ -2390,7 +2398,7 @@ Status ObjectClientImpl::DevLocalDelete(const std::vector<std::string> &objectKe
                                         std::vector<std::string> &failedObjectKeys)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_LOCAL_DELETE);
-    RETURN_IF_NOT_OK(CheckStringVector(objectKeys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     auto ret = Status::OK();
@@ -2432,6 +2440,7 @@ Status ObjectClientImpl::DevMSet(const std::vector<std::string> &keys, const std
                              "The size of keys and devBlobList does not match");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(keys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys, true));
     std::vector<std::shared_ptr<DeviceBuffer>> devBuffPtrList;
     CreateDeviceParam createParam{ LifetimeType::REFERENCE, true };
     RETURN_IF_NOT_OK(ConvertToDevBufferPtrList(keys, blob2dList, createParam, devBuffPtrList));
@@ -2452,7 +2461,7 @@ Status ObjectClientImpl::DevMGet(const std::vector<std::string> &keys, const std
         FormatString("Got empty parameters : keys nums %d, blobList nums %d.", keys.size(), blob2dList.size()));
     CHECK_FAIL_RETURN_STATUS(keys.size() == blob2dList.size(), K_INVALID,
                              "The size of objectKeys and blob2dList does not match");
-    RETURN_IF_NOT_OK(CheckStringVector(keys, true));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(keys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::vector<std::shared_ptr<DeviceBuffer>> devBuffPtrList;
@@ -2467,11 +2476,11 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
                                                    const CreateDeviceParam &createParam,
                                                    std::vector<std::shared_ptr<DeviceBuffer>> &deviceBuffPtrList)
 {
-    std::vector<std::vector<datasystem::DataInfo>> dataInfoList;
-    RETURN_IF_NOT_OK(ConvertToDataInfoList(blob2dList, dataInfoList));
-    for (size_t i = 0; i < dataInfoList.size(); i++) {
+    for (size_t i = 0; i < blob2dList.size(); i++) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ (uint32_t)blob2dList[i].deviceIdx }),
+                                         "Check device failed.");
         std::shared_ptr<DeviceBuffer> devBuff;
-        RETURN_IF_NOT_OK(CreateDevBuffer(keys[i], dataInfoList[i], dataInfoList[i][0].deviceIdx, createParam, devBuff));
+        RETURN_IF_NOT_OK(CreateDevBuffer(keys[i], blob2dList[i], createParam, devBuff));
         devBuff->bufferInfo_->autoRelease = false;
         devBuff->bufferInfo_->srcOffset = blob2dList[i].srcOffset;
         deviceBuffPtrList.emplace_back(devBuff);
@@ -2523,7 +2532,7 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_EXIST);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(keys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2538,7 +2547,7 @@ Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t t
 {
     PerfPoint perfPoint(PerfKey::CLIENT_EXPIRE_OBJECT);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(keys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;
@@ -2553,7 +2562,7 @@ Status ObjectClientImpl::GetMetaInfo(const std::vector<std::string> &keys, const
                                      std::vector<MetaInfo> &metaInfos, std::vector<std::string> &failKeys)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckStringVector(keys));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
     std::shared_ptr<ClientWorkerApi> workerApi;

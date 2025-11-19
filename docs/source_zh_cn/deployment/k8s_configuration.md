@@ -153,6 +153,8 @@ global:
 | global.rpc.zmqClientIoContext | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | global.rpc.zmqChunkSz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
 | global.rpc.maxRpcSessionNum | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
+| global.rpc.streamIdleTimes | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
+| global.rpc.remoteSendThreadNum | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 
 **样例**：
 配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号
@@ -356,6 +358,7 @@ global:
 | global.metadata.rocksdbStoreDir | string | `"/home/sn/datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
+| global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
 
 
 ### 可靠性相关配置
@@ -372,6 +375,7 @@ global:
 | global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置 |
 | global.reliability.addNodeWaitTimeS | int | `60` | 新节点加入哈希环的等待超时时间 |
 | global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
+| global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
 
 ### 优雅退出相关配置
 
@@ -394,6 +398,17 @@ global:
 | global.performance.arenaPerTenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
 | global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率 |
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
+| global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
+| global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
+| global.performance.ocShmTransferThresholdKB  | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
+| global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输 |
+| global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
+| global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
+| global.performance.urmaConnectionSize | int | `16` | jfs和jfr对的数量 |
+| global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
+| global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
+| global.performance.sharedDiskSize | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
+| global.performance.sharedDiskArenaPerTenant  | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
 
 ### AK/SK相关配置
 
@@ -492,3 +507,4 @@ global:
 | global.annotations | object | `{}` | Kubernetes 元注解 |
 | global.enableNonPreemptive | bool | `false` | 配置priorityClass。如果该值为false，则默认priorityClass为system-cluster-key。如果为true，则会创建一个preemptionPolicy Never的priorityClass |
 | global.fsGid | string | `"1002"` | fsGroup配置。容器的所有进程也是附加组ID的一部分 |
+| global.rollingUpdateTimeoutS | int | `1800` | 滚动升级的最大持续时间，默认值为1800秒 |

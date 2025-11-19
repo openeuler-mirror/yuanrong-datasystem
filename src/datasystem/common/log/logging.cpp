@@ -90,7 +90,7 @@ DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of as
 DS_DEFINE_validator(log_filename, &Validator::ValidateEligibleChar);
 
 DS_DECLARE_bool(log_monitor);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(cluster_name);
 
 using namespace std::chrono;
 
@@ -372,7 +372,7 @@ Status Logging::WriteLogToFile(int lineOfCode, const std::string &fileNameOfCode
     auto pos = fileNameOfCode.find_last_of('/');
     std::string name = pos == std::string::npos ? fileNameOfCode : fileNameOfCode.substr(pos + 1);
     ConstructLogPrefix(ss, logTime.getTm(), logTime.getUsec(), name.c_str(), lineOfCode, podName_.c_str(), level,
-                       FLAGS_az_name);
+                       FLAGS_cluster_name);
     ss << message;
     if (message.empty() || message[message.size() - 1] != '\n') {
         ss << '\n';

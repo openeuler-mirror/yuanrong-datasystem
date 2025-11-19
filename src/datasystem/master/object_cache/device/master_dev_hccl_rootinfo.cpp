@@ -36,6 +36,13 @@ Status HcclRootInfoTable::PutRootInfo(const std::string &hcclPeerId, const std::
     return Status::OK();
 }
 
+bool HcclRootInfoTable::IsExistRootInfo(const std::string &dstNpuId)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(rootInfoTableMutex_);
+    TbbRootInfoTable::accessor rootInfoAccess;
+    return rootInfoTable_.find(rootInfoAccess, dstNpuId);
+}
+
 void HcclRootInfoTable::GetAndEraseRootInfo(const std::string &hcclPeerId,
                                             const std::function<void(const std::string &)> &onGetCallback)
 {
@@ -56,6 +63,11 @@ void HcclRootInfoTable::EraseRootInfo(const std::string &hcclPeerId)
         // erase dstNpuId from rootInfoTable_
         (void)rootInfoTable_.erase(rootInfoAccess);
     }
+}
+
+bool HcclRootInfoSubscriptionTable::IsExistRecvRootInfoReq(const std::string &objectKey)
+{
+    return recvRootInfoRequestTable_.ObjectInRequest(objectKey);
 }
 
 void HcclRootInfoSubscriptionTable::EraseRootInfoSubscription(const std::string &hcclPeerId)
@@ -94,9 +106,10 @@ void HcclRootInfoSubscriptionTable::RemoveRecvRootInfoRequest(std::shared_ptr<Re
 }
 
 Status HcclRootInfoSubscriptionTable::UpdateRecvRootInfoRequestForSuccess(const std::string &objectKey,
-                                                                          const std::string &rootInfo)
+                                                                          const std::string &rootInfo,
+                                                                          const bool isDeadLock)
 {
-    auto entryParam = RecvRootInfoEntryParams::ConstructRecvRootInfoEntryParams(rootInfo);
+    auto entryParam = RecvRootInfoEntryParams::ConstructRecvRootInfoEntryParams(rootInfo, isDeadLock);
     return recvRootInfoRequestTable_.UpdateRequest(
         objectKey, entryParam, Status::OK(), [this](std::shared_ptr<RecvRootInfoRequest> req) {
             LOG_IF_ERROR(ReturnFromRecvRootInfoRequest(req), "ReturnFromRecvRootInfoRequest failed");
@@ -125,6 +138,7 @@ Status HcclRootInfoSubscriptionTable::ReturnFromRecvRootInfoRequest(std::shared_
         if (request->objects_.find(accessor, objectKey) && accessor->second != nullptr) {
             auto &param = accessor->second;
             resp.set_root_info(std::string(std::begin(param->rootInfo), std::end(param->rootInfo)));
+            resp.set_is_dead_lock(param->isDeadLock);
             isFindObj = true;
         }
         if (!isFindObj) {
@@ -155,7 +169,7 @@ void HcclRelationshipTable::AddEdge(const std::string &dataReceiver, const std::
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     TbbHcclRelationshipTable::accessor acc;
-    (void)graph_.insert(acc, dataReceiver);
+    (void)hcclRelationshipGraph_.insert(acc, dataReceiver);
     acc->second.insert(dataSender);
 }
 
@@ -163,7 +177,7 @@ bool HcclRelationshipTable::Contains(const std::string &dataReceiver, const std:
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     TbbHcclRelationshipTable::const_accessor acc;
-    if (!graph_.find(acc, dataReceiver)) {
+    if (!hcclRelationshipGraph_.find(acc, dataReceiver)) {
         return false;
     }
     return acc->second.count(dataSender) > 0;
@@ -173,7 +187,7 @@ std::set<std::string> HcclRelationshipTable::GetClientNpuId(const std::string &c
 {
     std::set<std::string> clientNpuIds;
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-    for (const auto &iter : graph_) {
+    for (const auto &iter : hcclRelationshipGraph_) {
         if (iter.first.find(clientId) != std::string::npos) {
             clientNpuIds.insert(iter.first);
         }
@@ -191,13 +205,13 @@ void HcclRelationshipTable::EraseNode(const std::string &dataSender, std::set<st
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
 
     TbbHcclRelationshipTable::const_accessor acc;
-    if (graph_.find(acc, dataSender)) {
+    if (hcclRelationshipGraph_.find(acc, dataSender)) {
         connectIds = std::set<std::string>(acc->second.begin(), acc->second.end());
     }
-    graph_.erase(acc);
+    hcclRelationshipGraph_.erase(acc);
     std::set<std::string> eraseList;
 
-    for (auto &iter : graph_) {
+    for (auto &iter : hcclRelationshipGraph_) {
         auto &connectSet = iter.second;
         if (connectSet.find(dataSender) == connectSet.end()) {
             continue;
@@ -209,14 +223,14 @@ void HcclRelationshipTable::EraseNode(const std::string &dataSender, std::set<st
         }
     }
     for (auto &key : eraseList) {
-        graph_.erase(key);
+        hcclRelationshipGraph_.erase(key);
     }
 }
 
 void HcclRelationshipTable::FillMigrateData(MigrateMetadataReqPb &req)
 {
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-    for (const auto &iter : graph_) {
+    for (const auto &iter : hcclRelationshipGraph_) {
         auto HcclRelationshipPb = req.add_hccl_relationship();
         HcclRelationshipPb->set_data_receiver_id(iter.first);
 
@@ -239,7 +253,7 @@ void HcclRelationshipTable::Clear()
 {
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
     LOG(INFO) << "Clear HcclRelationshipTable.";
-    graph_.clear();
+    hcclRelationshipGraph_.clear();
 }
 
 }  // namespace master

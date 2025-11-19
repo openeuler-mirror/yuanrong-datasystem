@@ -25,12 +25,17 @@
 #include <thread>
 #include <unordered_map>
 
-#include "urma_api.h"
+#include <urma_api.h>
+#ifdef URMA_OVER_UB
+#include <urma_ubagg.h>
+#endif
+
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
@@ -99,12 +104,14 @@ public:
     void SetJfrs(std::vector<urma_target_jetty_t *> &jetties);
 
     /**
-     * @brief Get remote segment or import remote segment from the device
-     * @param[in] UrmaImportSegmentPb Pb with remote segment info
-     * @param[out] constAccessor Accessor in segment table
+     * @brief Get remote segment or import remote segment from the device.
+     * @param[in] urmaContext The urma context.
+     * @param[in] UrmaImportSegmentPb Pb with remote segment info.
+     * @param[out] constAccessor Accessor in segment table.
      * @return Status of the call.
      */
-    Status GetOrImportRemoteSeg(const UrmaImportSegmentPb &urmaInfo, SegmentMap::ConstAccessor &constAccessor);
+    Status GetOrImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &urmaInfo,
+                                SegmentMap::ConstAccessor &constAccessor);
 
     /**
      * @brief Unimport a remote segment
@@ -117,7 +124,7 @@ public:
      * @brief Clears all remote Jfrs
      */
     void Clear();
-    RpcChannel::UrmaInfo urmaInfo_;
+    UrmaJfrInfo urmaInfo_;
     std::vector<custom_unique_ptr<urma_target_jetty_t>> importJfrs_;
     SegmentMap remoteSegments_;
 };
@@ -184,6 +191,8 @@ private:
     bool failed_{ false };
 };
 
+using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
+
 class UrmaManager {
 public:
     /**
@@ -196,10 +205,10 @@ public:
 
     /**
      * @brief Init a Urma device
-     * @param[in] deviceName
+     * @param[in] hostport
      * @return Status of the call.
      */
-    Status Init(const std::string &deviceName);
+    Status Init(const HostPort &hostport);
 
     /**
      * @brief Check if Urma worker flag is set
@@ -252,18 +261,17 @@ public:
     Status RegisterSegment(const uint64_t &segAddress, const uint64_t &segSize);
 
     /**
-     * @brief Gets the segment if present or
-     * Registers the segment if address is not already registered
-     * @param[in] segAddress Starting address of the segment
-     * @param[in] segSize Size of the segment
-     * @param[out] segVA UB virtual address of the segment
-     * @param[out] segLen Size of the segment (==segSize)
-     * @param[out] segFlag Flags set for the segment
-     * @param[out] segTokenId Token provided for the segment
+     * @brief Fill segment info. Register the segment if not already registered.
+     * @param[in] segAddress Starting address of the segment.
+     * @param[in] segSize Size of the segment.
+     * @param[in] shmOffset The shared memory offset of the object.
+     * @param[in] metaSz The size of the shared memory metadata size.
+     * @param[in] localAddress The local worker hostport.
+     * @param[out] segInfo The urma segment info for import purposes.
      * @return Status of the call.
      */
-    Status GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, uint64_t &segVA, uint64_t &segLen,
-                          uint32_t &segFlag, uint32_t &segTokenId);
+    Status GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, const uint64_t &shmOffset,
+                          const uint64_t &metaSz, const HostPort &localAddress, UrmaImportSegmentPb &segInfo);
 
     /**
      * @brief Does a RDMA write to remote worker memory location
@@ -298,7 +306,7 @@ public:
      * @param[in] urmaInfo local urma device info
      * @return Status of the call
      */
-    Status ImportRemoteJfr(const RpcChannel::UrmaInfo &urmaInfo);
+    Status ImportRemoteJfr(const UrmaJfrInfo &urmaInfo);
 
     /**
      * @brief Import segment
@@ -320,7 +328,10 @@ public:
      * @param[in] eid Urma device eid object
      * @return String
      */
-    static std::string EidToStr(const urma_eid_t &eid);
+    static std::string EidToStr(const urma_eid_t &eid)
+    {
+        return std::string(reinterpret_cast<const char *>(eid.raw), URMA_EID_SIZE);
+    }
 
     /**
      * @brief Converts a valid string to Urma Eid
@@ -337,6 +348,20 @@ public:
      * @return Status of the call.
      */
     Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
+
+#ifdef URMA_OVER_UB
+    /**
+     * @brief Get the jfr info for UB bond purposes.
+     * @param[out] infoOut A vector of bond info for each created jfr.
+     * @return Status of the call.
+     */
+    Status GetJfrInfoForBond(std::vector<urma_bond_id_info_out_t> &infoOut);
+#endif
+
+    const UrmaJfrInfo &GetLocalUrmaInfo()
+    {
+        return localUrmaInfo_;
+    }
 
 private:
     UrmaManager();
@@ -524,6 +549,8 @@ private:
      */
     void DeleteEvent(uint64_t requestId);
 
+    Status InitLocalUrmaInfo(const HostPort &hostport);
+
     // Polling thread
     std::unique_ptr<std::thread> serverEventThread_{ nullptr };
 
@@ -538,6 +565,7 @@ private:
     uint32_t JETTY_SIZE_ = 256;
     urma_reg_seg_flag_t registerSegmentFlag_;
     urma_import_seg_flag_t importSegmentFlag_;
+    UrmaJfrInfo localUrmaInfo_;
 
     // protect for segment maps.
     mutable std::shared_timed_mutex localMapMutex_;
@@ -547,7 +575,7 @@ private:
     // Eid to segment maps mapping for remote jfr and segment.
     std::unique_ptr<RemoteDeviceMap> remoteDeviceMap_;
     mutable std::shared_timed_mutex eventMapMutex_;
-    std::unordered_map<uint64_t, std::shared_ptr<Event>> eventMap_;
+    std::unique_ptr<EventMap> eventMap_;
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };

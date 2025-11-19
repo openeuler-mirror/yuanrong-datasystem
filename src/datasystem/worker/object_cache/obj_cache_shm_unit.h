@@ -149,7 +149,6 @@ private:
     ObjectLifeState lifeState_ = ObjectLifeState::OBJECT_INVALID;
 };
 
-
 /**
  * @brief Copy and split buffer into multiple rpc message which size small than 2G.
  * @param[in] tenantId The tenant of the data
@@ -175,6 +174,34 @@ Status CopyAndSplitBuffer(const std::string &tenantId, const void *data, size_t 
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                                ShmUnit &shmUnit, CacheType cacheType = CacheType::MEMORY);
+
+/**
+ * @brief Distribute memory from already allocated ShmOwner for object.
+ * @param[in] objectKey The object key of entry that need to allocate memory.
+ * @param[in] dataSize The data size of memory in bytes.
+ * @param[in] metadataSize The metadata size of memory in bytes.
+ * @param[in] populate Indicate need populate or not.
+ * @param[in] shmOwner The share memory owner.
+ * @param[out] shmUnit The share memory info of object.
+ * @return Status of the call.
+ */
+Status DistributeMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
+                                 bool populate, std::shared_ptr<ShmOwner> shmOwner, ShmUnit &shmUnit);
+
+/**
+ * @brief Allocate aggregated chunks of shared memory.
+ * @param[in] firstObjectKey The first object key.
+ * @param[in] traversalHelper Helper function that does the customized traversal work.
+ * @param[in] evictionManager Eviction manager.
+ * @param[out] shmOwners The allocated shared memory chunks.
+ * @param[out] shmIndexMapping The object id to shmOwners index mapping.
+ * @return Status of the call.
+ */
+Status AggregateAllocate(
+    const std::string &firstObjectKey,
+    std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> &traversalHelper,
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+    std::vector<uint32_t> &shmIndexMapping);
 
 /**
  * @brief Allocate Shm unit and init its id.

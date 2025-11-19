@@ -65,6 +65,16 @@ static Status RetryCreate(std::shared_ptr<ObjectClient> client, const std::strin
     return rc;
 }
 
+static Status RetrySet(std::shared_ptr<KVClient> client, const std::string &objectKey, std::string &data,
+                          SetParam param)
+{
+    Status rc;
+    do {
+        rc = client->Set(objectKey, data, param);
+    } while (rc.GetCode() == K_OUT_OF_MEMORY);
+    return rc;
+}
+
 static bool ExistsNone(std::vector<Optional<Buffer>> &buffers)
 {
     return std::any_of(buffers.cbegin(), buffers.cend(), [](const Optional<Buffer> &buffer) { return !buffer; });
@@ -1001,9 +1011,11 @@ TEST_F(EvictionManagerSaveToRedisTest, TestEvictWriteThroughObj)
 {
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
+    std::shared_ptr<KVClient> client;
     InitTestClient(0, client1);
     InitTestClient(1, client2);
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    InitTestKVClient(0, client);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
     HostPort metaAddress;
     cluster_->GetMetaServerAddr(metaAddress);
 
@@ -1016,10 +1028,7 @@ TEST_F(EvictionManagerSaveToRedisTest, TestEvictWriteThroughObj)
     for (int i = 0; i < objNum; i++) {
         // Put exceed shared_memory_size_mb, will trigger evict
         std::string objectKey = "key_" + std::to_string(i);
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(RetryCreate(client1, objectKey, dataSize, param, buffer));
-        buffer->MemoryCopy(reinterpret_cast<uint8_t *>(const_cast<char *>(data.c_str())), data.size());
-        DS_ASSERT_OK(buffer->Publish());
+        DS_ASSERT_OK(RetrySet(client, objectKey, data, param));
 
         // Remote get exceed shared_memory_size_mb, will trigger evict
         std::vector<Optional<Buffer>> buffers;
@@ -1129,9 +1138,11 @@ TEST_F(EvictionManagerEndToEndTest, LEVEL2_TestEvictWriteThroughObj)
 {
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
+    std::shared_ptr<KVClient> client;
     InitTestClient(0, client1);
     InitTestClient(1, client2);
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    InitTestKVClient(0, client);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
     HostPort metaAddress;
     cluster_->GetMetaServerAddr(metaAddress);
 
@@ -1144,10 +1155,7 @@ TEST_F(EvictionManagerEndToEndTest, LEVEL2_TestEvictWriteThroughObj)
     for (int i = 0; i < objNum; i++) {
         // Put exceed shared_memory_size_mb, will trigger evict
         std::string objectKey = "key_" + std::to_string(i);
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(RetryCreate(client1, objectKey, dataSize, param, buffer));
-        buffer->MemoryCopy(reinterpret_cast<uint8_t *>(const_cast<char *>(data.c_str())), data.size());
-        DS_ASSERT_OK(buffer->Publish());
+        DS_ASSERT_OK(RetrySet(client, objectKey, data, param));
 
         // Remote get exceed shared_memory_size_mb, will trigger evict
         std::vector<Optional<Buffer>> buffers;
@@ -1476,7 +1484,7 @@ TEST_F(EvictionManagerEndToEndTest, DISABLED_MutableSpillMultiNodeTest)
     InitTestClient(0, client0);
     InitTestClient(1, client1);
     uint64_t dataSize = 500 * 1024;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     HostPort metaAddress;
     cluster_->GetMetaServerAddr(metaAddress);
     int objNum = 30;  // obj num is 30;
@@ -1547,7 +1555,7 @@ TEST_F(EvictionManagerEndToEndTest2, DISABLED_TestEvictWriteThroughSpaceFull)
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
     InitTestClient(1, client2);
-    CreateParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    CreateParam param{};
     HostPort metaAddress;
     cluster_->GetMetaServerAddr(metaAddress);
 

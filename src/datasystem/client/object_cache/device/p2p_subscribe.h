@@ -119,10 +119,10 @@ private:
 
 class P2PPutRequest : public PromiseWithEvent {
 public:
-    P2PPutRequest(std::shared_ptr<DeviceBufferInfo> deviceBufferInfo, std::vector<DataInfo> dataInfoStorage)
+    P2PPutRequest(std::shared_ptr<DeviceBufferInfo> deviceBufferInfo, std::vector<Blob> blobStorage)
         : PromiseWithEvent(deviceBufferInfo->devObjKey),
           bufferInfo_(std::move(deviceBufferInfo)),
-          dataInfoStorage_(std::move(dataInfoStorage))
+          blobStorage_(std::move(blobStorage))
     {
     }
     std::shared_ptr<DeviceBufferInfo> GetBufferInfo()
@@ -130,15 +130,15 @@ public:
         return bufferInfo_;
     }
 
-    const std::vector<DataInfo> &GetDataInfoStorage() const
+    const std::vector<Blob> &GetBlobsStorage() const
     {
-        return dataInfoStorage_;
+        return blobStorage_;
     }
 
     size_t GetTotalSize() const
     {
-        return std::accumulate(dataInfoStorage_.begin(), dataInfoStorage_.end(), 0ul,
-                               [](size_t total, const DataInfo &info) { return total + info.size; });
+        return std::accumulate(blobStorage_.begin(), blobStorage_.end(), 0ul,
+                               [](size_t total, const Blob &info) { return total + info.size; });
     }
 
     const std::string &GetObjectKey() const
@@ -148,14 +148,14 @@ public:
 
 private:
     std::shared_ptr<DeviceBufferInfo> bufferInfo_;
-    std::vector<DataInfo> dataInfoStorage_;
+    std::vector<Blob> blobStorage_;
 };
 
 class P2PGetRequest : public P2PPutRequest {
 public:
-    P2PGetRequest(std::shared_ptr<DeviceBufferInfo> deviceBufferInfo, std::vector<DataInfo> dataInfoStorage,
+    P2PGetRequest(std::shared_ptr<DeviceBufferInfo> deviceBufferInfo, std::vector<Blob> blobStorage,
                   std::shared_ptr<DeviceMemoryUnit> memUnit)
-        : P2PPutRequest(std::move(deviceBufferInfo), std::move(dataInfoStorage)), devMemUnit_(memUnit)
+        : P2PPutRequest(std::move(deviceBufferInfo), std::move(blobStorage)), devMemUnit_(memUnit)
     {
     }
 
@@ -225,6 +225,7 @@ public:
     std::vector<std::shared_ptr<P2PGetRequest>> requestList_;
     int64_t prefetchTimeout_;
     int64_t subTimeout_;
+    std::string getTraceId_;
 };
 
 enum class P2PEventReqType { CREATE, UNCREATE };
@@ -276,12 +277,12 @@ public:
     /**
      * @brief Add the device object key to the subscribe queue.
      * @param[in] bufferInfo The info of device buffer.
-     * @param[in] dataInfoList The list of data info.
+     * @param[in] blobs The list of blob info.
      * @return The future vector of HcclSend result. You can use the Get() method of the future object corresponding to
      * sendDataList to wait for and access the result of HcclSend.
      */
     std::shared_ptr<P2PPutRequest> AddSubscribe(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                                const std::vector<DataInfo> &dataInfoList);
+                                                const std::vector<Blob> &blobs);
 
     /**
      * @brief Remove the device object key from the subscribe queue in worker.
@@ -342,7 +343,7 @@ public:
     /**
      * @brief Get the Data Info object.
      * @param[in] objectKey The device object key.
-     * @param[in] dataInfos The list of data info.
+     * @param[in] putRequest The request of put.
      * @return true if get data info success.
      */
     bool GetPutRequest(const std::string &objectKey, std::shared_ptr<P2PPutRequest> &putRequest);

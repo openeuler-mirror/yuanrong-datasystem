@@ -1,4 +1,5 @@
 add_subdirectory(object_cache)
+add_subdirectory(stream_cache)
 
 # Set source files
 set(MASTER_SRCS
@@ -22,6 +23,7 @@ set(MASTER_DEPEND_LIBS
         ds_server
         master_heartbeat_protos
         master_object_cache
+        master_stream_cache
         rpc_stub_cache_mgr
         worker_client_manager
         cluster_manager

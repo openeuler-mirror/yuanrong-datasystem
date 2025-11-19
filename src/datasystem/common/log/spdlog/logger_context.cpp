@@ -37,7 +37,7 @@
 
 namespace datasystem {
 
-constexpr auto LOG_LEVEL_OFF = spdlog::level::off;
+constexpr auto LOG_LEVEL_OFF = ds_spdlog::level::off;
 
 static std::vector<std::string> GetLogFiles(const LogParam &logParam)
 {
@@ -65,39 +65,40 @@ static void FlushLogger(DsLogger logger)
     }
 }
 
-static const std::map<std::string, spdlog::level::level_enum> &GetLogLevelMap()
+static const std::map<std::string, ds_spdlog::level::level_enum> &GetLogLevelMap()
 {
-    static const std::map<std::string, spdlog::level::level_enum> LOG_LEVEL_MAP = { { "INFO", spdlog::level::info },
-                                                                                    { "WARNING", spdlog::level::warn },
-                                                                                    { "ERROR", spdlog::level::err },
-                                                                                    { "FATAL",
-                                                                                      spdlog::level::critical } };
+    static const std::map<std::string, ds_spdlog::level::level_enum> LOG_LEVEL_MAP = {
+        { "INFO", ds_spdlog::level::info },
+        { "WARNING", ds_spdlog::level::warn },
+        { "ERROR", ds_spdlog::level::err },
+        { "FATAL", ds_spdlog::level::critical }
+    };
     return LOG_LEVEL_MAP;
 }
 
-static spdlog::level::level_enum GetLogLevel(const std::string &level)
+static ds_spdlog::level::level_enum GetLogLevel(const std::string &level)
 {
     auto iter = GetLogLevelMap().find(level);
-    return iter == GetLogLevelMap().end() ? spdlog::level::info : iter->second;
+    return iter == GetLogLevelMap().end() ? ds_spdlog::level::info : iter->second;
 }
 
 LoggerContext::LoggerContext(const GlobalLogParam &globalLogParam) noexcept : globalLogParam_(globalLogParam)
 {
-    spdlog::drop_all();
-    if (!spdlog::thread_pool()) {
-        spdlog::init_thread_pool(static_cast<size_t>(globalLogParam_.maxAsyncQueueSize),
-                                 static_cast<size_t>(globalLogParam_.asyncThreadCount));
+    ds_spdlog::drop_all();
+    if (!ds_spdlog::thread_pool()) {
+        ds_spdlog::init_thread_pool(static_cast<size_t>(globalLogParam_.maxAsyncQueueSize),
+                                    static_cast<size_t>(globalLogParam_.asyncThreadCount));
     }
-    spdlog::flush_every(std::chrono::seconds(globalLogParam_.logBufSecs));
+    ds_spdlog::flush_every(std::chrono::seconds(globalLogParam_.logBufSecs));
 }
 
 DsLogger LoggerContext::CreateLogger(const LogParam &logParam)
 {
     try {
-        std::vector<spdlog::sink_ptr> sinks{};
+        std::vector<ds_spdlog::sink_ptr> sinks{};
         std::vector<std::string> logFiles = GetLogFiles(logParam);
         for (size_t i = 0; i < logFiles.size(); ++i) {
-            auto rotatingSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+            auto rotatingSink = std::make_shared<ds_spdlog::sinks::rotating_file_sink_mt>(
                 logFiles[i], logParam.maxSize * log_param::SIZE_MEGA_BYTES, logParam.maxFiles);
             const auto log2FileLevel = ToSpdlogLevel(LogSeverity(i % (NUM_SEVERITIES - 1)));
             rotatingSink->set_level(log2FileLevel);
@@ -108,22 +109,22 @@ DsLogger LoggerContext::CreateLogger(const LogParam &logParam)
                                         ? GetLogLevel(logParam.stderrLogLevel)
                                         : (logParam.alsoLog2Stderr ? GetLogLevel(logParam.logLevel) : LOG_LEVEL_OFF);
         if (stderrLogLevel != LOG_LEVEL_OFF) {
-            auto errSink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+            auto errSink = std::make_shared<ds_spdlog::sinks::stderr_color_sink_mt>();
             errSink->set_level(stderrLogLevel);
             sinks.emplace_back(errSink);
         }
 
-        std::shared_ptr<spdlog::logger> logger;
+        std::shared_ptr<ds_spdlog::logger> logger;
         if (logParam.logAsync) {
-            logger = std::make_shared<spdlog::async_logger>(DS_LOGGER_NAME, sinks.begin(), sinks.end(),
-                                                            spdlog::thread_pool(),
-                                                            spdlog::async_overflow_policy::overrun_oldest);
+            logger = std::make_shared<ds_spdlog::async_logger>(DS_LOGGER_NAME, sinks.begin(), sinks.end(),
+                                                               ds_spdlog::thread_pool(),
+                                                               ds_spdlog::async_overflow_policy::overrun_oldest);
         } else {
-            logger = std::make_shared<spdlog::logger>(DS_LOGGER_NAME, sinks.begin(), sinks.end());
+            logger = std::make_shared<ds_spdlog::logger>(DS_LOGGER_NAME, sinks.begin(), sinks.end());
         }
 
-        spdlog::initialize_logger(logger);
-        logger->set_pattern(logParam.pattern, spdlog::pattern_time_type::utc);
+        ds_spdlog::initialize_logger(logger);
+        logger->set_pattern(logParam.pattern, ds_spdlog::pattern_time_type::utc);
 
         const auto logLevel = GetLogLevel(logParam.logLevel);
         logger->set_level(logLevel);
@@ -140,22 +141,22 @@ DsLogger LoggerContext::CreateLogger(const LogParam &logParam)
 
 DsLogger LoggerContext::GetLogger(const std::string &loggerName) const noexcept
 {
-    return spdlog::get(loggerName);
+    return ds_spdlog::get(loggerName);
 }
 
 DsLogger LoggerContext::GetDefaultLogger() noexcept
 {
-    return spdlog::default_logger();
+    return ds_spdlog::default_logger();
 }
 
 void LoggerContext::DropLogger(const std::string &loggerName) const noexcept
 {
-    spdlog::drop(loggerName);
+    ds_spdlog::drop(loggerName);
 }
 
 bool LoggerContext::ForceFlush(std::chrono::microseconds) const noexcept
 {
-    spdlog::apply_all(FlushLogger);
+    ds_spdlog::apply_all(FlushLogger);
     return true;
 }
 

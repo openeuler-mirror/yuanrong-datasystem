@@ -159,7 +159,8 @@ Status TimerQueue::AddTimer(const uint64_t &durationMs, const std::function<void
 {
     CHECK_FAIL_RETURN_STATUS(timeOutCallBack != nullptr, StatusCode::K_INVALID, "The timeOutCallBack is nullptr.");
     static std::atomic<uint64_t> id(1);
-    uint64_t timeWatch = CurrentTimeMs() + durationMs;
+    auto currentTimeMs = CurrentTimeMs();
+    uint64_t timeWatch = durationMs > UINT64_MAX - currentTimeMs ? UINT64_MAX : currentTimeMs + durationMs;
     timer = TimerImpl(id.fetch_add(1), timeWatch, timeOutCallBack);
     VLOG(DEBUG_LOG_LEVEL) << FormatString("AddTimer with delay %llu at expire time %llu, with id %llu", durationMs,
                                           timeWatch, timer.GetId());

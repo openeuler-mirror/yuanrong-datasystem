@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "datasystem/client/hetero_cache/device_util.h"
+#include "datasystem/hetero/device_common.h"
 #include "datasystem/hetero/future.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
@@ -82,11 +83,11 @@ public:
     /// \return Status of the result. Return error if lifetime is not MOVE.
     Status GetSendStatus(std::vector<Future> &futureVec);
 
-    /// \brief Gets the list of DataInfo.
+    /// \brief Gets the list of Blob.
     ///
     ///
-    /// \return The list of DataInfo.
-    std::vector<DataInfo> GetDataInfoList() const;
+    /// \return The list of Blob.
+    std::vector<Blob> GetDevBlobList() const;
 
     /// \brief Detach a directory location
     ///
@@ -123,7 +124,7 @@ private:
 
     /// \brief Release the buffer owned resources.
     void Release();
-    
+
     /// \brief Get the device memory unit.
     ///
     /// \return The device memory unit.

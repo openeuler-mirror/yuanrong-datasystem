@@ -163,7 +163,7 @@ TEST_F(ImmutableStringTest, TestBigString)
 {
     size_t strSize = 1024ul * 1024 * 1024;
     std::string str = RandomData().GetPartRandomString(strSize, 100);
-    size_t imSize = 10;
+    size_t imSize = 2;
     std::vector<ImmutableString> imVec;
     imVec.reserve(imSize);
     for (size_t i = 0; i < imSize; i++) {

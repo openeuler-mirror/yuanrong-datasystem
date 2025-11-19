@@ -33,7 +33,13 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
 
+DS_DEFINE_int32(sc_regular_socket_num, 16,
+             "The number of regular backend socket for stream cache. Must be great equal than 0.");
+DS_DEFINE_int32(sc_stream_socket_num, 16,
+             "The number of stream backend socket for stream cache. Must be great equal than 0.");
 DS_DEFINE_int32(log_monitor_interval_ms, 10000, "The sleep time between iterations of observability collector scan");
+DS_DEFINE_validator(sc_regular_socket_num, &Validator::ValidateRpcThreadNum);
+DS_DEFINE_validator(sc_stream_socket_num, &Validator::ValidateRpcThreadNum);
 DS_DEFINE_validator(log_monitor_interval_ms, &Validator::ValidateInt32);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(log_monitor_exporter);

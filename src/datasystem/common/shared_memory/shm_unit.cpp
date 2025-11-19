@@ -67,6 +67,11 @@ void ShmUnit::SetHardFreeMemory()
 Status ShmUnit::FreeMemory()
 {
     RETURN_OK_IF_TRUE(pointer == nullptr);
+    // If shm owner exists, the memory will be freed together at shmOwner destruction.
+    if (shmOwner_) {
+        shmOwner_.reset();
+        return Status::OK();
+    }
     // This call will set pointer to nullptr on success.
     VLOG(1) << "[ShmUnit] Arena FreeMemory, Tenant:" << (tenantId_.empty() ? "Default" : tenantId_)
             << ", needHardFree: " << needHardFree_;
@@ -80,19 +85,45 @@ Status ShmUnit::FreeMemory()
             LOG(WARNING) << FormatString("[ShmId %s] memset failed, error code: %d.", id, ret);
         }
     }
-    return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId_, pointer, cacheType_);
+    return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId_, pointer, serviceType_, cacheType_);
 }
 
-Status ShmUnit::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate,
+Status ShmUnit::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, ServiceType serviceType,
                                memory::CacheType cacheType)
 {
     VLOG(1) << "[ShmUnit] AllocateMemory, Tenant: " << (tenantId.empty() ? "Default" : tenantId)
             << ", size: " << needSize << ", cachetype: " << static_cast<int>(cacheType);
+    serviceType_ = serviceType;
     cacheType_ = cacheType;
-    RETURN_IF_NOT_OK(datasystem::memory::Allocator::Instance()->AllocateMemory(tenantId, needSize, populate, pointer,
-                                                                               fd, offset, mmapSize, cacheType_));
+    RETURN_IF_NOT_OK(datasystem::memory::Allocator::Instance()->AllocateMemory(
+        tenantId, needSize, populate, pointer, fd, offset, mmapSize, serviceType_, cacheType_));
     size = needSize;
     tenantId_ = tenantId;
     return Status::OK();
+}
+
+Status ShmOwner::DistributeMemory(uint64_t shmSize, ShmUnit &shmUnit)
+{
+    // Distribute allocated memory to individual shmUnit.
+    // Note: Parallel distribute memory is supported via atomic cursor.
+    uint64_t positionCursor = AllocatePosition(shmSize);
+    CHECK_FAIL_RETURN_STATUS(positionCursor + shmSize <= size, K_RUNTIME_ERROR,
+                             "Object needs more memory than available.");
+    shmUnit.size = shmSize;
+    shmUnit.pointer = reinterpret_cast<void *>(reinterpret_cast<uint64_t>(pointer) + positionCursor);
+    shmUnit.fd = fd;
+    shmUnit.offset = offset + positionCursor;
+    shmUnit.mmapSize = mmapSize;
+    shmUnit.serviceType_ = serviceType_;
+    shmUnit.cacheType_ = cacheType_;
+    shmUnit.tenantId_ = tenantId_;
+    shmUnit.needHardFree_ = needHardFree_;
+    shmUnit.shmOwner_ = shared_from_this();
+    return Status::OK();
+}
+
+uint64_t ShmOwner::AllocatePosition(uint64_t shmSize)
+{
+    return cursor_.fetch_add(shmSize, std::memory_order_acq_rel);
 }
 }  // namespace datasystem

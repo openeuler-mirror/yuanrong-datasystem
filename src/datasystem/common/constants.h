@@ -48,7 +48,19 @@ static const std::string HEALTH_TABLE = "health_table";                        /
 
 static const int CHECK_FILE_EXIST_INTERVAL_S = 5;  // The time for back up replica check db path exsit.
 
+// sc meta tables
+static const std::string STREAM_TABLE_NAME = "stream_table";
+static const std::string PUB_TABLE_NAME = "pub_table";
+static const std::string SUB_TABLE_NAME = "sub_table";
+static const std::string NOTIFY_PUB_TABLE_NAME = "notify_pub_table";
+static const std::string NOTIFY_SUB_TABLE_NAME = "notify_sub_table";
+static const std::string STREAM_CON_CNT_TABLE_NAME = "stream_consumer_count";
+static const std::string STREAM_PRODUCER_COUNT = "stream_producer_count";
+
 static const int ASYNC_LOGGER_STOP_MAX_WAIT_SEC = 15;  // The max wait time when AsyncLogger Stop.
+
+// stream data object
+static const uint64_t DEFAULT_TIMEOUT_MS = 1000;
 
 // cluster info table in rocksDb
 static const std::string CLUSTER_TABLE = "cluster_table";
@@ -87,6 +99,10 @@ struct CreateDeviceParam {
     LifetimeType lifetime = LifetimeType::REFERENCE;
     bool cacheLocation = true;
 };
+
+// ub device
+static const std::string ENV_UB_DEVICE_NAME = "DS_UB_DEV_NAME";
+static const std::string DEFAULT_UB_DEVICE_NAME = "bonding_dev_0";
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_CONSTANTS_H

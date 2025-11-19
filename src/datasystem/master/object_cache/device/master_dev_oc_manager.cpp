@@ -59,6 +59,8 @@ void MasterDevOcManager::Init()
 
     objectKeyLockTable_ = std::make_shared<TbbLockTable>();
 
+    masterDevDeadLockManager_ = std::make_shared<MasterDevDeadLockManager>();
+
     CheckAndClearDeviceMeta::GetInstance().AddSubscriber(
         MASTER_DEV_OC_MANAGER, [this](const std::string &objectKey) { return CheckAndClearDeviceMeta(objectKey); });
 
@@ -314,46 +316,90 @@ Status MasterDevOcManager::ProcessSubscribeReceiveEventRequest(
 
 Status MasterDevOcManager::SendRootInfoImpl(const SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
+    (void)resp;
+
+    // Extract request parameters
+    auto srcClientId = req.src_client_id();
+    auto dstClientId = req.dst_client_id();
     auto hcclPeerId = GetHcclPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
-    std::string rootInfo = std::string(std::begin(req.root_info()), std::end(req.root_info()));
-    // Step 1: Update Key Value Table.
-
-    LOG_IF_ERROR(deviceMetaOpRecordTable_->AddValue(RecordType::HCCLPEERID, req.dst_client_id(), hcclPeerId),
-                 "add record error");
-    LOG_IF_ERROR(deviceMetaOpRecordTable_->AddValue(RecordType::HCCLPEERID, req.src_client_id(), hcclPeerId),
-                 "add record error");
-
-    rootInfoTable_->PutRootInfo(hcclPeerId, rootInfo);
+    auto rootInfo = std::string(std::begin(req.root_info()), std::end(req.root_info()));
 
     auto dataSender = ConcatClientAndDeviceId(req.src_client_id(), req.src_device_id());
     auto dataReceiver = ConcatClientAndDeviceId(req.dst_client_id(), req.dst_device_id());
-    commRelationMap_->AddEdge(dataReceiver, dataSender);
 
-    // Step 2: Notify the Request Table.
-    // Try to update the SubscribeReceiveEvent request because there may be a request subscribed to the objectKey
-    RETURN_IF_NOT_OK(rootInfoSubscriptionTable_->UpdateRecvRootInfoRequestForSuccess(hcclPeerId, rootInfo));
-    (void)resp;
-    return Status::OK();
+    auto recordPeerIds = [&]() {
+        RETURN_IF_NOT_OK(deviceMetaOpRecordTable_->AddValue(RecordType::HCCLPEERID, dstClientId, hcclPeerId));
+        return deviceMetaOpRecordTable_->AddValue(RecordType::HCCLPEERID, srcClientId, hcclPeerId);
+    };
+
+    auto updateCommRelation = [&]() {
+        commRelationMap_->AddEdge(ConcatClientAndDeviceId(dstClientId, req.dst_device_id()),
+                                  ConcatClientAndDeviceId(srcClientId, req.src_device_id()));
+        return rootInfoTable_->PutRootInfo(hcclPeerId, rootInfo);
+    };
+
+    // Case 1: Matching RecvRootInfo subscription exists
+    if (rootInfoSubscriptionTable_->IsExistRecvRootInfoReq(hcclPeerId)) {
+        masterDevDeadLockManager_->RemoveDependencyEdge(srcClientId, dstClientId);
+        RETURN_IF_NOT_OK(recordPeerIds());
+        RETURN_IF_NOT_OK(updateCommRelation());
+
+        return rootInfoSubscriptionTable_->UpdateRecvRootInfoRequestForSuccess(hcclPeerId, rootInfo);
+    }
+
+    // Case 2: No matching subscription exists
+    masterDevDeadLockManager_->AddDependencyEdge(srcClientId, dstClientId);
+    // Check for deadlock
+    if (masterDevDeadLockManager_->IsExistDeadlock()) {
+        std::string msg =
+            FormatString("Deadlock detected (peer:%s), notify the receiver to release the lock and retry.", hcclPeerId);
+        LOG(INFO) << msg;
+        masterDevDeadLockManager_->RemoveDependencyEdge(srcClientId, dstClientId);
+        RETURN_STATUS(K_CLIENT_DEADLOCK, msg);
+    }
+
+    // Store root info and update communication relation
+    LOG(INFO) << FormatString("updateCommRelation, hcclPeerId:%s", hcclPeerId);
+    RETURN_IF_NOT_OK(recordPeerIds());
+    return updateCommRelation();
 }
 
 Status MasterDevOcManager::ProcessRecvRootInfoRequest(
     const RecvRootInfoReqPb &req,
     const std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> &serverApi)
 {
+    auto srcClientId = req.src_client_id();
+    auto dstClientId = req.dst_client_id();
     auto hcclPeerId = GetHcclPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
     auto request = std::make_shared<RecvRootInfoRequest>(std::vector<std::string>{ hcclPeerId }, serverApi,
                                                          req.dst_client_id(), req.dst_device_id(), req);
 
-    // Step 1: To avoid missing subscription notifications,
-    // we firstly subscribe and then check the key value table.
+    bool isExistRootInfo = rootInfoTable_->IsExistRootInfo(hcclPeerId);
+    if (isExistRootInfo) {
+        masterDevDeadLockManager_->RemoveDependencyEdge(srcClientId, dstClientId);
+        rootInfoTable_->GetAndEraseRootInfo(hcclPeerId, [&request, &hcclPeerId](const std::string &rootInfo) {
+            request->objects_.emplace(hcclPeerId,
+                                      RecvRootInfoEntryParams::ConstructRecvRootInfoEntryParams(rootInfo, false));
+            request->numSatisfiedObjects_.fetch_add(1);
+        });
+
+        RETURN_IF_NOT_OK(rootInfoSubscriptionTable_->AddRecvRootInfoRequest(hcclPeerId, request));
+
+        return DirectRespOrAddTimer<RecvRootInfoRequest>(request, [this](std::shared_ptr<RecvRootInfoRequest> req) {
+            return rootInfoSubscriptionTable_->ReturnFromRecvRootInfoRequest(std::move(req));
+        });
+    }
+
+    masterDevDeadLockManager_->AddDependencyEdge(srcClientId, dstClientId);
+    bool isExistDeadlock = masterDevDeadLockManager_->IsExistDeadlock();
+    if (isExistDeadlock) {
+        masterDevDeadLockManager_->RemoveDependencyEdge(srcClientId, dstClientId);
+        RecvRootInfoRspPb resp;
+        resp.set_is_dead_lock(true);
+        return request->serverApi_->Write(resp);
+    }
+
     RETURN_IF_NOT_OK(rootInfoSubscriptionTable_->AddRecvRootInfoRequest(hcclPeerId, request));
-
-    // Step 2: Check root info.
-    rootInfoTable_->GetAndEraseRootInfo(hcclPeerId, [&request, &hcclPeerId](const std::string &rootInfo) {
-        request->objects_.emplace(hcclPeerId, RecvRootInfoEntryParams::ConstructRecvRootInfoEntryParams(rootInfo));
-        request->numSatisfiedObjects_.fetch_add(1);
-    });
-
     return DirectRespOrAddTimer<RecvRootInfoRequest>(request, [this](std::shared_ptr<RecvRootInfoRequest> req) {
         return rootInfoSubscriptionTable_->ReturnFromRecvRootInfoRequest(std::move(req));
     });

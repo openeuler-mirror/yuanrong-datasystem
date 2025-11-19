@@ -62,15 +62,17 @@ Allocator::~Allocator() noexcept
     LOG(INFO) << "Allocator destructor.";
 }
 
-Status Allocator::InitSharedMemory(uint64_t size, int objectThreshold)
+Status Allocator::InitSharedMemory(uint64_t size, int objectThreshold, int streamThreshold)
 {
     CHECK_FAIL_RETURN_STATUS((size > 0) && (size < UINT64_MAX / HUNDRED_PERCENT), K_INVALID,
                              "the memory size should be greater than 0 and less than UINT64_MAX/100");
     CHECK_FAIL_RETURN_STATUS(
-        (objectThreshold > 0 && objectThreshold <= HUNDRED_PERCENT), K_INVALID,
-        "the allocation threshold percentage should be greater than 0 and less than or equal to 100");
+        (objectThreshold > 0 && objectThreshold <= HUNDRED_PERCENT)
+            && (streamThreshold > 0 && streamThreshold <= HUNDRED_PERCENT),
+        K_INVALID, "the allocation threshold percentage should be greater than 0 and less than or equal to 100");
     physicalMemoryStats_ = std::make_unique<ResourcePool>(size);
     objectMemoryStats_ = std::make_unique<ResourcePool>((size * objectThreshold) / HUNDRED_PERCENT);
+    streamMemoryStats_ = std::make_unique<ResourcePool>((size * streamThreshold) / HUNDRED_PERCENT);
     return Status::OK();
 }
 
@@ -107,9 +109,9 @@ bool Allocator::IsDiskAvailable()
 }
 
 Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool scaling, ssize_t decayMs,
-                       int objectThreshold)
+                       int objectThreshold, int streamThreshold)
 {
-    RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold));
+    RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold, streamThreshold));
     RETURN_IF_NOT_OK(InitSharedDisk(shdSize));
 
     if (arenaManager_) {
@@ -175,8 +177,11 @@ uint64_t Allocator::GetMaxMemoryLimit(CacheType cacheType) const
     }
 }
 
-ResourcePool *Allocator::GetResourcePoolByType(CacheType cacheType) const
+ResourcePool *Allocator::GetResourcePoolByType(ServiceType serviceType, CacheType cacheType) const
 {
+    if (serviceType == ServiceType::STREAM) {
+        return streamMemoryStats_.get();
+    }
     switch (cacheType) {
         case CacheType::DISK:
             return diskStats_.get();
@@ -208,7 +213,7 @@ void Allocator::Shutdown()
 }
 
 Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
-                                 ptrdiff_t &offset, uint64_t &mmapSize, CacheType cacheType)
+                                 ptrdiff_t &offset, uint64_t &mmapSize, ServiceType serviceType, CacheType cacheType)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(arenaManager_);
     INJECT_POINT("worker.Allocator.AllocateMemory");
@@ -221,15 +226,15 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
         }
     }
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(IncrementMemoryUsage(needSize, cacheType), "ADD failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(IncrementMemoryUsage(needSize, serviceType, cacheType), "ADD failed");
     std::shared_ptr<ArenaGroup> arenaGroup;
     Status rc = arenaManager_->GetOrCreateArenaGroup({ tenantId, cacheType }, GetMaxMemoryLimit(cacheType), arenaGroup);
     uint64_t realSize;
     if (rc.IsOk()) {
         RETURN_RUNTIME_ERROR_IF_NULL(arenaGroup);
-        rc = arenaGroup->AllocateMemory(needSize, populate, realSize, pointer, fd, offset, mmapSize);
+        rc = arenaGroup->AllocateMemory(needSize, populate, realSize, pointer, fd, offset, mmapSize, serviceType);
     }
-    auto stats = GetResourcePoolByType(cacheType);
+    auto stats = GetResourcePoolByType(serviceType, cacheType);
     if (rc.IsError()) {
         stats->SubUsage(needSize);
         return rc;
@@ -247,7 +252,7 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
     return Status::OK();
 }
 
-Status Allocator::IncrementMemoryUsage(uint64_t needSize, CacheType cacheType)
+Status Allocator::IncrementMemoryUsage(uint64_t needSize, ServiceType serviceType, CacheType cacheType)
 {
     if (cacheType == CacheType::DISK) {
         return diskStats_->AddUsageCAS(needSize);
@@ -256,23 +261,34 @@ Status Allocator::IncrementMemoryUsage(uint64_t needSize, CacheType cacheType)
     } else if (cacheType == CacheType::DEV_HOST) {
         return devHostMemStats_->AddUsageCAS(needSize);
     }
-
-    return objectMemoryStats_->AddUsageCAS(needSize, physicalMemoryStats_->FootprintLimit());
+    INJECT_POINT("worker.Allocator.MemoryAllocatedToStream", [this](int streamMemoryUsage) {
+        streamMemoryStats_->SetUsage(streamMemoryUsage);
+        streamMemoryStats_->SetRealUsage(streamMemoryUsage);
+        return Status::OK();
+    });
+    if (serviceType == ServiceType::OBJECT) {
+        return objectMemoryStats_->AddUsageCAS(
+            needSize, physicalMemoryStats_->FootprintLimit() - streamMemoryStats_->RealUsage());
+    } else {
+        return streamMemoryStats_->AddUsageCAS(
+            needSize, physicalMemoryStats_->FootprintLimit() - objectMemoryStats_->RealUsage());
+    }
+    return Status::OK();
 }
 
-Status Allocator::FreeMemory(void *&pointer)
+Status Allocator::FreeMemory(void *&pointer, ServiceType type)
 {
-    return FreeMemory(DEFAULT_TENANT_ID, pointer);
+    return FreeMemory(DEFAULT_TENANT_ID, pointer, type);
 }
 
-Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, CacheType cacheType)
+Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, ServiceType serviceType, CacheType cacheType)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(arenaManager_);
     std::shared_ptr<ArenaGroup> arenaGroup;
     uint64_t bytesFree = 0;
     uint64_t bytesRealFree = 0;
     RETURN_IF_NOT_OK(arenaManager_->GetArenaGroup({ tenantId, cacheType }, arenaGroup));
-    auto stats = GetResourcePoolByType(cacheType);
+    auto stats = GetResourcePoolByType(serviceType, cacheType);
     RETURN_IF_NOT_OK(arenaGroup->FreeMemory(pointer, bytesFree, bytesRealFree, stats->Usage()));
 
     if (arenaGroup->GetMemoryUsage() == 0) {
@@ -287,9 +303,9 @@ Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, CacheT
     return Status::OK();
 }
 
-uint64_t Allocator::GetMaxMemorySize(CacheType cacheType) const
+uint64_t Allocator::GetMaxMemorySize(ServiceType serviceType, CacheType cacheType) const
 {
-    return GetResourcePoolByType(cacheType)->FootprintLimit();
+    return GetResourcePoolByType(serviceType, cacheType)->FootprintLimit();
 }
 
 uint64_t Allocator::GetMemoryUsage(const std::string &tenantId, CacheType cacheType)
@@ -322,8 +338,8 @@ Status Allocator::FdToPointer(const ArenaGroupKey &key, int fd, std::pair<void *
 Status Allocator::GetMemStat(ShmMemStat &shmMemStat)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(arenaManager_);
-    shmMemStat.memoryUsage = objectMemoryStats_->Usage();
-    shmMemStat.realMemoryUsage = objectMemoryStats_->RealUsage();
+    shmMemStat.memoryUsage = objectMemoryStats_->Usage() + streamMemoryStats_->Usage();
+    shmMemStat.realMemoryUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
     shmMemStat.objectMemoryUsage = objectMemoryStats_->Usage();
     shmMemStat.physicalMemoryUsage = GetTotalPhysicalMemoryUsage();
     shmMemStat.numOfFds = arenaManager_->GetArenaCounts();
@@ -358,7 +374,8 @@ uint64_t Allocator::GetTotalPhysicalMemoryUsage(CacheType cacheType)
         physicalMemoryStats_->SetRealUsage(usage);
         return 0;
     });
-    return physicalMemoryStats_->GetOrUpdateRealUsage(objectMemoryStats_->RealUsage());
+    return physicalMemoryStats_->GetOrUpdateRealUsage(objectMemoryStats_->RealUsage()
+                                                      + streamMemoryStats_->RealUsage());
 }
 
 bool Allocator::AddTotalPhysicalMemoryUsage(CacheType type, uint64_t size)

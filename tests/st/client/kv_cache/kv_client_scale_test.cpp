@@ -41,7 +41,7 @@
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace st {
@@ -1507,7 +1507,7 @@ TEST_F(STCScaleDownTest, ShutdownWorkerAndDelKeyInEtcdTest)
     StartWorkerAndWaitReady({ 0 });
     HostPort w0;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(0, w0));
-    std::string key = FLAGS_az_name + "/" + ETCD_CLUSTER_TABLE + "/" + w0.ToString();
+    std::string key = FLAGS_cluster_name + "/" + ETCD_CLUSTER_TABLE + "/" + w0.ToString();
     RangeSearchResult res;
     DS_ASSERT_OK(db_->RawGet(key, res));
     DS_ASSERT_OK(externalCluster_->ShutdownNode(WORKER, 0));

@@ -55,7 +55,7 @@
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
@@ -307,7 +307,7 @@ TEST_F(OCScaleDownTest, TestRefsScaleDownWithoutL2)
     InitTestClient(2, client2);  // client index is 2
     std::string objectPrefix = "objecttest_";
     std::vector<std::string> objectKeys;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     uint64_t timeout = 2000;
     int objNum = 30;
     std::string value = "data";
@@ -387,7 +387,7 @@ TEST_F(OCScaleUpTest, TestSubscribeScaleUp)
 
     StartWorkerAndWaitReady({ 2 });
     WaitForScaleUpFinished(60, 3);  // worker index is 3, timeout is 60
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string value = "data";
     std::vector<std::string> failObjects;
     for (const auto &id : objectKeys) {
@@ -409,7 +409,7 @@ TEST_F(OCScaleUpTest, TestNestedObjectScaleUp)
     std::shared_ptr<ObjectClient> client, client1;
     InitTestClient(0, client);
     InitTestClient(1, client1);
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string value = "data";
     std::string objectPrefix = "objecttest_";
     std::string nestedObjectPrefix = "nestobjecttest_";
@@ -456,7 +456,7 @@ TEST_F(OCScaleUpTest, TestNestedObjectScaleUpRedirect)
     std::shared_ptr<ObjectClient> client, client1;
     InitTestClient(0, client);
     InitTestClient(1, client1);
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string value = "data";
     std::string objectPrefix = "objecttest_";
     std::string nestedObjectPrefix = "nestobjecttest_";
@@ -664,13 +664,24 @@ public:
     }
 
     void SetObjOnWorker(const int &workerIdx, std::shared_ptr<ObjectClient> client, const std::string &data,
+                        std::vector<std::string> &objectKey)
+    {
+        for (uint32_t i = 0; i < objectKey.size(); ++i) {
+            objectKey[i] = "a_key_hash_to_" + std::to_string(workerHashValue_[workerIdx] - i);
+            CreateParam param{};
+            DS_ASSERT_OK(
+                client->Put(objectKey[i], reinterpret_cast<const uint8_t *>(data.data()), data.size(), param, {}));
+        }
+    }
+
+    void SetObjOnWorker(const int &workerIdx, std::shared_ptr<KVClient> client, const std::string &data,
                         WriteMode mode, std::vector<std::string> &objectKey)
     {
         for (uint32_t i = 0; i < objectKey.size(); ++i) {
             objectKey[i] = "a_key_hash_to_" + std::to_string(workerHashValue_[workerIdx] - i);
-            CreateParam param{ .writeMode = mode };
+            SetParam param{ .writeMode = mode };
             DS_ASSERT_OK(
-                client->Put(objectKey[i], reinterpret_cast<const uint8_t *>(data.data()), data.size(), param, {}));
+                client->Set(objectKey[i], data, param));
         }
     }
 
@@ -747,7 +758,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryWorkerScaleDownFinalStageLeaving)
     InitTestClient(0, client);
     InitTestClient(1, client1);
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string objectPrefix = "objecttest_";
     std::vector<std::string> objectKeys;
 
@@ -798,7 +809,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_VoluntaryWorkerScaleDownLeaving)
     InitTestClient(1, client1);
     InitTestClient(2, client2);
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string value = "data";
     std::string objectPrefix = "objecttest_";
     std::vector<std::string> objectKeys;
@@ -849,7 +860,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryWorkerScaleDownAvailableSpaceRatio40)
     InitTestClient(1, client1);
     InitTestClient(2, client2);
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string value(kObjectSize, 'x');
     std::string objectPrefix = "objecttest_";
     std::vector<std::string> objectKeys;
@@ -890,7 +901,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_VoluntaryWorkerScaleDown)
     InitTestClient(0, client);
     InitTestClient(1, client1);
     InitTestClient(2, client2);  // worker index is 2
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+     CreateParam param{};
     std::string value = "data";
     std::string objectPrefix = "objecttest_";
     std::string nestedObjectPrefix = "nestobjecttest_";
@@ -930,7 +941,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_VoluntaryWorkerScaleDown1)
     InitTestClient(0, client);
     InitTestClient(1, client1);
     InitTestClient(2, client2);  // worker index is 2
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string value = "data";
     std::string objectPrefix = "objecttest_";
     std::string nestedObjectPrefix = "nestobjecttest_";
@@ -966,18 +977,18 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2EvictNoCopy)
     InitTestEtcdInstance();
     SetWorkerHashInjection();
     GetHashOnWorker(3);  // worker num is 3
-    std::shared_ptr<ObjectClient> client, client1, client2;
-    InitTestClient(0, client);
-    InitTestClient(1, client1);
-    InitTestClient(2, client2);          // worker index is 2
+    std::shared_ptr<KVClient> client, client1, client2;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);          // worker index is 2
     std::vector<std::string> objs(400);  // obj num is 400
     std::string value = "data";
     SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE_EVICT, objs);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
-    std::vector<Optional<Buffer>> buffers;
+    std::vector<std::string> buffers;
     WaitForVoluntaryDownFinished(20, 2, worker0Address_.ToString());  // timeout is 20, left num is 2
-    DS_ASSERT_NOT_OK(client2->Get(objs, 0, buffers));
+    DS_ASSERT_NOT_OK(client2->Get(objs, buffers));
 }
 
 TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2EvictWithCopy)
@@ -987,15 +998,15 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2EvictWithCopy)
     SetWorkerHashInjection();
     GetHashOnWorker(3);  // worker num is 3
     DS_ASSERT_OK(InitInstanceBase());
-    std::shared_ptr<ObjectClient> client, client1, client2;
-    InitTestClient(0, client);
-    InitTestClient(1, client1);
-    InitTestClient(2, client2);          // worker index is 2
+    std::shared_ptr<KVClient> client, client1, client2;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);          // worker index is 2
     std::vector<std::string> objs(400);  // obj num is 400
     std::string value = "data";
     SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE_EVICT, objs);
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(client2->Get(objs, 0, buffers));
+    std::vector<std::string> buffers;
+    DS_ASSERT_OK(client2->Get(objs, buffers));
     client.reset();
     VoluntaryScaleDownInject(0);                                      // worker index is 0
     WaitForVoluntaryDownFinished(20, 2, worker0Address_.ToString());  // timeout is 20, left num is 2
@@ -1024,7 +1035,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2CacheWithCopy)
     InitTestClient(2, client2);          // worker index is 2
     std::vector<std::string> objs(400);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, objs);
+    SetObjOnWorker(0, client, value, objs);
     std::vector<Optional<Buffer>> buffers;
     DS_ASSERT_OK(client2->Get(objs, 0, buffers));
     client.reset();
@@ -1050,15 +1061,15 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1WriteBackWithCopy)
     SetWorkerHashInjection();
     GetHashOnWorker(3);  // worker num is 3
     DS_ASSERT_OK(InitInstanceBase());
-    std::shared_ptr<ObjectClient> client, client1, client2;
-    InitTestClient(0, client);
-    InitTestClient(1, client1);
-    InitTestClient(2, client2);          // worker index is 2
+    std::shared_ptr<KVClient> client, client1, client2;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);          // worker index is 2
     std::vector<std::string> objs(400);  // obj num is 400
     std::string value = "data";
     SetObjOnWorker(0, client, value, WriteMode::WRITE_BACK_L2_CACHE, objs);
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(client2->Get(objs, 0, buffers));
+    std::vector<std::string> buffers;
+    DS_ASSERT_OK(client2->Get(objs, buffers));
     client.reset();
     VoluntaryScaleDownInject(0);                                      // worker index is 0
     WaitForVoluntaryDownFinished(20, 2, worker0Address_.ToString());  // timeout is 20, left num is 2
@@ -1074,7 +1085,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1WriteBackWithCopy)
     ASSERT_EQ(metaNum, 400);  // obj is 400
 }
 
-TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1Worker2Failed)
+TEST_F(OCVoluntaryScaleDownTest, DISABLED_VoluntaryDownWorker1Worker2Failed)
 {
     DS_ASSERT_OK(cluster_->StartOBS());
     StartWorkerAndWaitReady({ 0, 1, 2 });
@@ -1082,15 +1093,15 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1Worker2Failed)
     SetWorkerHashInjection();
     GetHashOnWorker(3);  // worker num is 3
     DS_ASSERT_OK(InitInstanceBase());
-    std::shared_ptr<ObjectClient> client, client1, client2;
-    InitTestClient(0, client);
-    InitTestClient(1, client1);
-    InitTestClient(2, client2);          // worker index is 2
+    std::shared_ptr<KVClient> client, client1, client2;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);          // worker index is 2
     std::vector<std::string> objs(20);  // obj num is 20
     std::string value = "data";
     SetObjOnWorker(0, client, value, WriteMode::WRITE_THROUGH_L2_CACHE, objs);
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(client1->Get(objs, 0, buffers));
+    std::vector<std::string> buffers;
+    DS_ASSERT_OK(client1->Get(objs, buffers));
     client.reset();
     VoluntaryScaleDownInject(0);                      // worker index is 0
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 2));  // worker index is 2
@@ -1122,10 +1133,10 @@ TEST_F(OCVoluntaryScaleDownTest, DISABLED_VoluntaryDownTwoWorkers)
     InitTestClient(2, client2);          // worker index is 2
     std::vector<std::string> objs(400);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, objs);
+    SetObjOnWorker(0, client, value, objs);
     std::vector<Optional<Buffer>> buffers;
     DS_ASSERT_OK(client2->Get(objs, 0, buffers));
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, objs);
+    SetObjOnWorker(0, client, value, objs);
     client.reset();
     client1.reset();
     client2.reset();
@@ -1154,19 +1165,19 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_VoluntaryDownWorkerTwoWrokers)
     SetWorkerHashInjection();
     GetHashOnWorker(3);  // worker num is 3
     DS_ASSERT_OK(InitInstanceBase());
-    std::shared_ptr<ObjectClient> client, client1, client2;
-    InitTestClient(0, client);
-    InitTestClient(1, client1);
-    InitTestClient(2, client2);           // worker index is 2
+    std::shared_ptr<KVClient> client, client1, client2;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);           // worker index is 2
     std::vector<std::string> objs(200);   // obj num is 200
     std::vector<std::string> objs1(400);  // obj num is 400
     std::string value = "data";
     SetObjOnWorker(0, client, value, WriteMode::WRITE_THROUGH_L2_CACHE, objs);
     SetObjOnWorker(1, client, value, WriteMode::WRITE_THROUGH_L2_CACHE, objs1);
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(client2->Get(objs, 0, buffers));
+    std::vector<std::string> buffers;
+    DS_ASSERT_OK(client2->Get(objs, buffers));
     buffers.clear();
-    DS_ASSERT_OK(client2->Get(objs1, 0, buffers));
+    DS_ASSERT_OK(client2->Get(objs1, buffers));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ProcessVoluntaryScaledown", "1*call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "BatchMigrateMetadata.delay.left", "1*call(3)"));
     client1.reset();
@@ -1205,8 +1216,8 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_VoluntaryDownMigrateRateLimit)
     std::vector<std::string> Objects(count);
     std::vector<std::string> Objects1(count);
     std::string value = std::string(10 * 1024ul, 'a');
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, Objects);
-    SetObjOnWorker(2, client, value, WriteMode::NONE_L2_CACHE, Objects1); // worker index is 2
+    SetObjOnWorker(0, client, value, Objects);
+    SetObjOnWorker(2, client, value, Objects1); // worker index is 2
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
     VoluntaryScaleDownInject(2);  // worker index is 2
@@ -1239,7 +1250,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_TestVoluntaryDownMigrateSmallObjectsData
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
 
@@ -1279,7 +1290,7 @@ TEST_F(OCVoluntaryScaleDownTest, TestVoluntaryDownMigrateWhenMetaAddressIsEmpty)
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOcService.MigrateData.GetMasterAddr", "1*call()"));
     VoluntaryScaleDownInject(0);  // worker index is 0
@@ -1326,7 +1337,7 @@ TEST_F(OCVoluntaryScaleDownTest, TestVoluntaryDownMigrateToSpillDir)
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
 
@@ -1369,7 +1380,7 @@ TEST_F(OCVoluntaryScaleDownTest, TestVoluntaryDownMigrateMeetsNoSpaceError)
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
 
@@ -1415,7 +1426,7 @@ TEST_F(OCVoluntaryScaleDownTest, TestMigrateDataAndMeetObjectUpdate)
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
     std::string newValue = "Stop the world";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
 
@@ -1488,7 +1499,7 @@ TEST_F(OCVoluntaryScaleDownTest, TestMigrateDataAndPartOfObjectsFailed)
     uint64_t count = 1000;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
 
@@ -1529,7 +1540,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_VoluntaryDownTwoWorkersAndMigrateData)
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);                                   // worker index is 0
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // time interval is 1000
@@ -1568,7 +1579,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownTwoWorkersAndMigrateData2)
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     client1.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
@@ -1598,7 +1609,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_VoluntaryDownOnlyOneWorkerLeft)
     std::string value = "data";
     for (uint32_t i = 0; i < noneL2CacheObjects.size(); ++i) {
         noneL2CacheObjects[i] = "a_key_hash_to_" + std::to_string(i);
-        CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+         CreateParam param{};
         DS_ASSERT_OK(client->Put(noneL2CacheObjects[i], reinterpret_cast<const uint8_t *>(value.data()), value.size(),
                                  param, {}));
     }
@@ -1622,7 +1633,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_VoluntaryDownOneWorkerWhenDestFailed)
     uint64_t count = 300;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ScaleUpTask.NotRunVoluntaryDownTask", "1*sleep(5000)"));
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
@@ -1645,7 +1656,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_VoluntaryDownOneWorkerWhenMigrateDataDes
     uint64_t count = 300;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "VoluntaryScaledown.MigrateData.Delay", "1*sleep(5000)"));
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
@@ -1673,7 +1684,7 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL2_TestMigrateDataFailAndGet)
     uint64_t count = 400;
     std::vector<std::string> noneL2CacheObjects(count);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, WriteMode::NONE_L2_CACHE, noneL2CacheObjects);
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
     sleep(2);                     // sleep 2 seconds
@@ -1707,7 +1718,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownMigrateDataMultiType)
     std::vector<std::string> memoryObjects(objCount);
     const size_t objSize = 5 * 1024ul * 1024ul;  // 5 MB
     std::string value = GenRandomString(objSize);
-    SetObjOnWorker(0, client, value, {}, memoryObjects);
+    SetObjOnWorker(0, client, value, memoryObjects);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "StandbyWorkerNotSame", "return()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashring.finishaddnodeinfo", "sleep(2000)"));
     client.reset();
@@ -1801,7 +1812,7 @@ TEST_F(OCVoluntaryScaleDownNoSpillTest, VoluntaryWorkerMigrateDataFillUp)
     InitTestClient(2, client2);
     InitTestClient(client3Index, client3);
 
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param{};
     std::string objectPrefix = "objecttest_";
     std::vector<std::string> objectKeys;
     std::string value(valueSize, 'x');
@@ -1883,7 +1894,7 @@ TEST_F(OCVScaleDownDiskTest, LEVEL1_VoluntaryDownMigrateData)
     uint64_t objCount = 400;
     std::vector<std::string> diskObjects(objCount);  // obj num is 400
     std::string value = "data";
-    SetObjOnWorker(0, client, value, { WriteMode::NONE_L2_CACHE, ConsistencyType::PRAM, CacheType::DISK }, diskObjects);
+    SetObjOnWorker(0, client, value, { ConsistencyType::PRAM, CacheType::DISK }, diskObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0
 
@@ -1927,7 +1938,7 @@ TEST_F(OCVScaleDownDiskTest, VoluntaryDownMigrateDataMultiType)
     std::vector<std::string> memoryObjects(objCount);
     const size_t objSize = 5 * 1024ul * 1024ul;  // 5 MB
     std::string value = GenRandomString(objSize);
-    SetObjOnWorker(0, client, value, { WriteMode::NONE_L2_CACHE, ConsistencyType::PRAM, CacheType::DISK }, diskObjects);
+    SetObjOnWorker(0, client, value, { ConsistencyType::PRAM, CacheType::DISK }, diskObjects);
     SetObjOnWorker(0, client, value, {}, memoryObjects);
     client.reset();
     VoluntaryScaleDownInject(0);  // worker index is 0

@@ -58,6 +58,7 @@ ClientWorkerCommonApi::ClientWorkerCommonApi(HostPort hostPort, RpcCredential cr
                                              bool enableCrossNodeConnection)
     : hostPort_(std::move(hostPort)),
       cred_(std::move(cred)),
+      pageSize_(0),
       socketFd_(-1),
       heartbeatType_(heartbeatType),
       signature_(signature),
@@ -110,7 +111,7 @@ Status ClientWorkerCommonApi::Init(int32_t timeoutMs)
     CHECK_FAIL_RETURN_STATUS(TimerQueue::GetInstance()->Initialize(), K_RUNTIME_ERROR, "TimerQueue init failed!");
     RegisterClientReqPb req;
     RETURN_IF_NOT_OK(Connect(req, timeoutMs));
-    VLOG(1) << "The new client id is: " << clientId_;
+    VLOG(1) << "The new client id is: " << clientId_ << ", Received pageSize= " << pageSize_ << " from worker.";
     return Status::OK();
 }
 
@@ -365,6 +366,7 @@ Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t t
     workerTimeoutMult_ = rsp.quorum_timeout_mult();
     clientId_ = rsp.client_id();
     workerStartId_ = rsp.worker_start_id();
+    pageSize_ = static_cast<uint32_t>(rsp.page_size());
     lockId_ = rsp.lock_id();
     (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
     shmThreshold_ = rsp.shm_threshold();

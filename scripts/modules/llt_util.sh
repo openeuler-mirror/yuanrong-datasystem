@@ -58,6 +58,7 @@ function get_random_port()
 
 function check_etcd_ready()
 {
+  echo "start check etcd status"
   local check_flag=false
   for i in $(seq 1 ${WAIT_COMPONENT_READY_TIMES}); do
     if etcdctl --endpoints ${etcd_client_url} endpoint health; then
@@ -168,6 +169,6 @@ function stop_all()
   if ps -p ${etcd_pid} >/dev/null; then
     # interrupt signal will shutdown the etcd cluster
     echo "Shutting down etcd service pid: ${etcd_pid}"
-    kill -2 ${etcd_pid} && echo "Success" || echo "Error: $!"
+    kill -2 ${etcd_pid} || echo "stop etcd failed: $!"
   fi
 }

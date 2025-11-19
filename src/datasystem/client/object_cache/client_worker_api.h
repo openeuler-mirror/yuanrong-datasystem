@@ -36,6 +36,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/hetero/device_common.h"
 #include "datasystem/object/buffer.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -287,29 +288,29 @@ public:
     /**
      * @brief Put the p2p metadata to worker.
      * @param[in] bufferInfo The info of device buffer.
-     * @param[in] dataInfoList The list of data info.
+     * @param[in] blobs The list of device blob.
      * @return Status of the call
      */
-    Status PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<DataInfo> &dataInfoList);
+    Status PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs);
 
     /**
      * @brief Get the p2p metadata from worker.
      * @param[in] bufferInfoList The info of device buffer.
-     * @param[in] dataInfoList The list of data info.
+     * @param[in] devBlobList The list of device blob.
      * @param[out] resp The response of the rpc call.
      * @param[in] subTimeoutMs The maximum time elapse of subscriptions.
      * @return Status of the call
      */
     Status GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
-                      std::vector<std::vector<DataInfo>> &dataInfoList, GetP2PMetaRspPb &resp,
-                      int64_t subTimeoutMs = 500);
+                      std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp, int64_t subTimeoutMs = 500);
 
     /**
      * @brief Send the root info to worker.
      * @param[in] req The request of the call.
+     * @param[out] resp The response of the call.
      * @return Status of the call.
      */
-    Status SendRootInfo(SendRootInfoReqPb &req);
+    Status SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp);
 
     /**
      * @brief Receive the root info from worker.
@@ -320,14 +321,14 @@ public:
     Status RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp);
 
     /**
-     * @brief Obtains the DataInfos, including the number of DataInfo, and the count and DataType of each DataInfo.
+     * @brief Obtains the BlobInfos, including the number of DataInfo, and the count and DataType of each DataInfo.
      * @param[in] devObjKey The object key.
      * @param[in] timeoutMs Waiting for the result return if object not ready. A positive integer number required.
      * 0 means no waiting time allowed. And the range is [0, INT32_MAX].
-     * @param[out] dataInfos The list of data info. (Include pointer、count and data type)
+     * @param[out] blobs The list of blob info. (Include pointer、count and data type)
      * @return K_OK on any object success; the error code otherwise.
      */
-    Status GetDataInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<DataInfo> &dataInfos);
+    Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs);
 
     /**
      * @brief Acknowledge the get operation is ok, and indicate whether worker as data providers
@@ -359,11 +360,15 @@ public:
 
     /**
      * @brief Create multiple objects in the store-server.
+     * @param[in]  skipCheckExistence Whether skip existence check.
      * @param[out] createParams The params for create operation.
      * @param[out] version Object version.
+     * @param[out] exists The Key exist list.
+     * @param[out] useShmTransfer Transfer by shm.
      * @return K_OK on success; the error code otherwise.
      */
-    Status MultiCreate(std::vector<MultiCreateParam> &createParams, uint32_t &version);
+    Status MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams, uint32_t &version,
+                       std::vector<bool> &exists, bool &useShmTransfer);
 
     /**
      * @brief Invoke worker client to query the size of objectKeys (include the objectKeys of other AZ).
@@ -448,10 +453,10 @@ private:
     /**
      * @brief Fill device object meta to Pb.
      * @param[in] bufferInfo The info of device buffer.
-     * @param[in] dataInfoList The list of data info.
+     * @param[in] blobs The list of blob info.
      * @param[out] metaPb The device object meta pb.
      */
-    void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<DataInfo> &dataInfoList,
+    void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs,
                         DeviceObjectMetaPb *metaPb);
 
     // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.

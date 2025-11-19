@@ -35,13 +35,13 @@ Status Context::SetTraceId(const std::string &traceId)
     CHECK_FAIL_RETURN_STATUS(traceId.length() <= Trace::TRACEID_PREFIX_SIZE, K_INVALID,
                              FormatString("The length of trace id should less than %d", Trace::TRACEID_PREFIX_SIZE));
     Trace::Instance().SetPrefix(traceId);
-    VLOG(1) << "set trace id:" << traceId;
+    VLOG(1) << "Set trace id: " << traceId;
     return Status::OK();
 }
 
 void Context::SetTenantId(const std::string &tenantId)
 {
     g_ContextTenantId = tenantId;
-    LOG(INFO) << "set tenant id : " << g_ContextTenantId;
+    LOG(INFO) << "Set tenant id: " << g_ContextTenantId;
 }
 }  // namespace datasystem

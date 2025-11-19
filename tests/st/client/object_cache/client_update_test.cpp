@@ -220,7 +220,7 @@ TEST_F(OCClientUpdateTest, BufferInvalidedTest)
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> data;
     int bufferSize = 8;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client->Create(objectKey, bufferSize, param, data));
     std::string test = "abcdefg";
     DS_ASSERT_OK(data->MemoryCopy(const_cast<char *>(test.data()), test.length()));
@@ -250,7 +250,7 @@ TEST_F(OCClientUpdateTest, MultiUpdateTest)
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> workerOBuffer;
     int bufferSize = 8;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client->Create(objectKey, bufferSize, param, workerOBuffer));
     std::string worker0_data = "abcdefg";
     DS_ASSERT_OK(workerOBuffer->MemoryCopy(const_cast<char *>(worker0_data.data()), worker0_data.length()));
@@ -316,7 +316,7 @@ TEST_F(OCClientUpdateTest, UpdateDataTest)
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> data;
     int bufferSize = 8;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client1->Create(objectKey, bufferSize, param, data));
     std::string worker0_data = "abcdefg";
     DS_ASSERT_OK(data->MemoryCopy(const_cast<char *>(worker0_data.data()), worker0_data.length()));

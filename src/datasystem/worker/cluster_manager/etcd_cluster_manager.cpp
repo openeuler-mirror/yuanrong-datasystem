@@ -54,8 +54,8 @@ DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(add_node_wait_time_s);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(other_az_names);
-DS_DECLARE_string(az_name);
+DS_DECLARE_string(other_cluster_names);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(auto_del_dead_node);
 DS_DEFINE_bool(cross_az_get_meta_from_worker, false, "cross az to get metadata from worker");
@@ -100,10 +100,10 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
     eventPq_ = std::make_unique<PriorityQueue<std::unique_ptr<CmEvent>, CmEventCmp>>(pqSize);
     workerWaitPost_ = std::make_unique<WaitPost>();
 
-    if (!FLAGS_other_az_names.empty() && FLAGS_enable_distributed_master) {
+    if (!FLAGS_other_cluster_names.empty() && FLAGS_enable_distributed_master) {
         ConstructOtherAzHashRings();
-        for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-            if (azName != FLAGS_az_name) {
+        for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
+            if (azName != FLAGS_cluster_name) {
                 otherAZNames_.emplace_back(azName);
             }
         }
@@ -134,8 +134,8 @@ EtcdClusterManager::~EtcdClusterManager()
 
 void EtcdClusterManager::ConstructOtherAzHashRings()
 {
-    for (const auto &azName : Split(FLAGS_other_az_names, ",")) {
-        if (azName != FLAGS_az_name) {
+    for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
+        if (azName != FLAGS_cluster_name) {
             auto readRing = std::make_unique<worker::ReadHashRing>(azName, workerAddress_.ToString(), etcdDB_);
             (void)otherAzHashRings_.insert(std::make_pair(azName, std::move(readRing)));
         }
@@ -155,6 +155,13 @@ Status EtcdClusterManager::Shutdown()
         workerWaitPost_->Set();
         thread_->join();
         thread_.reset();
+    }
+
+    if (orphanNodeMonitorThread_) {
+        exitFlag_ = true;
+        orphanWaitPost_.Set();
+        orphanNodeMonitorThread_->join();
+        orphanNodeMonitorThread_.reset();
     }
 
     return Status::OK();
@@ -260,7 +267,7 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
     // as early as possible. Also, cluster manager needs this thread to to add nodes to its node table.
     // This thread monitors timed out nodes and demotes them to failed nodes. It also tries to generate hash tokens,
     // to give up reconciliation when there is timeout, and to handle etcd events (ring, node addition, node removal).
-    RETURN_IF_NOT_OK(StartNodeUtilThread());
+    RETURN_IF_NOT_OK(StartBackgroundThread());
 
     RETURN_IF_NOT_OK(SetupInitialClusterNodes(clusterInfo));
 
@@ -901,7 +908,7 @@ Status EtcdClusterManager::StartNodeUtilThread()
 {
     static const int CHECK_INTERVAL_MS = 100;
     auto traceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
-    LOG(INFO) << "Start background thread in cluster manager with traceId: " << traceId;
+    LOG(INFO) << "Start node util thread in cluster manager with traceId: " << traceId;
     const int clearScaledDownNodeInClusterTableMaxIntervelMs = 30'000;
     thread_ = std::make_unique<Thread>([this, traceId]() {
         Status rc;
@@ -938,6 +945,118 @@ Status EtcdClusterManager::StartNodeUtilThread()
         }
     });
     thread_->set_name("EtcdUtil");
+    return Status::OK();
+}
+
+void EtcdClusterManager::GetToBeCleanNodes(const std::unordered_map<std::string, std::string> &orphanNodes,
+                                           std::set<std::pair<std::string, bool>> &toBeCleanNodes)
+{
+    static const int timeoutMs = 5000;
+    for (const auto &[orphanNode, timeEpoch] : orphanNodes) {
+        HostPort addr;
+        if (addr.ParseString(orphanNode).IsError()) {
+            continue;
+        }
+        // check the nodes that not found in hash ring
+        RangeSearchResult res;
+        auto status = etcdDB_->Get(ETCD_CLUSTER_TABLE, orphanNode, res, timeoutMs);
+
+        typename TbbNodeTable::const_accessor accessor;
+        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        auto nodeExist = clusterNodeTable_.find(accessor, addr);
+        if (!nodeExist) {
+            LOG(INFO) << "Node " << orphanNode << " is not found in cluster table";
+            continue;
+        }
+        if (timeEpoch != accessor->second->GetTimeEpoch()) {
+            LOG(INFO) << "Node " << orphanNode << " is updated in cluster table";
+            continue;
+        }
+        auto &node = accessor->second;
+        if (status.GetCode() == K_NOT_FOUND) {
+            // if the node is not found in etcd, it needs to be removed whatever its state in clusterNodeTable_
+            // is.
+            LOG(INFO) << "Ready to clear resource of worker " << orphanNode
+                      << " that not found in etcd, state in cluster node table before cleanup: "
+                      << node->ToString(addr);
+            if (node->NodeWasExiting()) {
+                toBeCleanNodes.emplace(orphanNode, false);
+            } else {
+                toBeCleanNodes.emplace(orphanNode, node->IsFailed());
+            }
+        } else if (status.IsOk()) {
+            // the node has been rejoined or is ready to rejoin
+            if (node->IsFailed()) {
+                LOG(INFO) << "Ready to clear resource of worker " << orphanNode
+                          << " that has rejoined into etcd, state in cluster node table before cleanup: "
+                          << node->ToString(addr);
+                // erase the failed node to prevent scale down again and wait for the new node coming
+                toBeCleanNodes.emplace(orphanNode, true);
+            } else {
+                // skip the erasure. we should wait at least until the lease expires to prevent remove the
+                // joined node incorrectly
+                LOG(INFO) << "Skip to clear resource of worker " << orphanNode
+                          << ", state in cluster node table: " << node->ToString(addr)
+                          << ", state in etcd: " << res.value;
+            }
+        } else {
+            LOG(INFO) << "Failed to get node " << orphanNode << " from etcd, status: " << status.ToString();
+        }
+    }
+}
+
+Status EtcdClusterManager::StartOrphanNodeMonitorThread()
+{
+    auto traceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
+    LOG(INFO) << "Start orphan node monitor thread in cluster manager with traceId: " << traceId;
+    orphanNodeMonitorThread_ = std::make_unique<Thread>([this, traceId]() {
+        Timer timer;
+        while (!exitFlag_) {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            orphanWaitPost_.Wait();
+            std::unordered_map<std::string, std::string> orphanNodes;
+            {
+                std::lock_guard<std::shared_timed_mutex> lock(orphanNodeMutex_);
+                for (const auto &iter : orphanNodeTable_) {
+                    orphanNodes.emplace(iter.first, iter.second);
+                }
+                orphanNodeTable_.clear();
+            }
+            auto sz = orphanNodes.size();
+            if (sz == 0) {
+                continue;
+            }
+            if (etcdDB_->IsKeepAliveTimeout()) {
+                const int logEveryN = 1000;
+                LOG_EVERY_N(INFO, logEveryN)
+                    << "etcd is currently unavailable, synchronization cannot be completed, waiting for the next round "
+                       "of retry";
+                return;
+            }
+            timer.Reset();
+            Raii raii([&timer, &sz]() {
+                static const int logThresholdMs = 1'000;
+                LOG_IF(INFO, timer.ElapsedMilliSecond() > logThresholdMs)
+                    << "Cleanup" << sz << " nodes elapsed: " << timer.ElapsedMilliSecond();
+            });
+            std::set<std::pair<std::string, bool>> toBeCleanNodes;
+            GetToBeCleanNodes(orphanNodes, toBeCleanNodes);
+            for (const auto &[addr, isFailed] : toBeCleanNodes) {
+                CleanupWorker(addr, isFailed);
+            }
+            if (!toBeCleanNodes.empty()) {
+                LOG(INFO) << "After sync with hash ring: " << NodesToString();
+            }
+        }
+    });
+    orphanNodeMonitorThread_->set_name("OrphanNodeMonitor");
+    return Status::OK();
+}
+
+Status EtcdClusterManager::StartBackgroundThread()
+{
+    RETURN_IF_NOT_OK(StartNodeUtilThread());
+    RETURN_IF_NOT_OK(StartOrphanNodeMonitorThread());
     return Status::OK();
 }
 
@@ -1004,14 +1123,7 @@ std::unordered_set<std::string> EtcdClusterManager::GetFailedWorkers()
 void EtcdClusterManager::SyncNodeTableWithHashRing(const std::set<std::string> &workersInRing)
 {
     INJECT_POINT("SyncNodeTableWithHashRing", [] { return; });
-    const int32_t timeoutMs = 5'000;
-    const int maxLckTimeMs = 1'000;
-    Timer timer;
-    Raii raii([&timer]() {
-        LOG_IF(INFO, timer.ElapsedMilliSecond() > maxLckTimeMs)
-            << "SyncNodeTableWithHashRing ElapsedMilliSecond: " << timer.ElapsedMilliSecond();
-    });
-    std::set<std::pair<std::string, bool>> toBeCleanNodes;
+    bool isNotify = false;
     {
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
         std::string workerAddr;
@@ -1020,49 +1132,15 @@ void EtcdClusterManager::SyncNodeTableWithHashRing(const std::set<std::string> &
             if (ContainsKey(workersInRing, workerAddr)) {
                 continue;
             }
-            if (etcdDB_->IsKeepAliveTimeout()) {
-                const int logEveryN = 1000;
-                LOG_EVERY_N(INFO, logEveryN)
-                    << "etcd is currently unavailable, synchronization cannot be completed, waiting for the next round "
-                       "of retry";
-                break;
+            {
+                std::shared_lock<std::shared_timed_mutex> l(orphanNodeMutex_);
+                orphanNodeTable_.emplace(workerAddr, iter.second->GetTimeEpoch());
             }
-            // check the nodes that not found in hash ring
-            RangeSearchResult res;
-            auto status = etcdDB_->Get(ETCD_CLUSTER_TABLE, workerAddr, res, timeoutMs);
-            if (status.GetCode() == K_NOT_FOUND) {
-                // if the node is not found in etcd, it needs to be removed whatever its state in clusterNodeTable_ is.
-                LOG(INFO) << "Ready to clear resource of worker " << workerAddr
-                          << " that not found in etcd, state in cluster node table before cleanup: "
-                          << iter.second->ToString(iter.first);
-                if (iter.second->NodeWasExiting()) {
-                    toBeCleanNodes.emplace(workerAddr, false);
-                } else {
-                    toBeCleanNodes.emplace(workerAddr, iter.second->IsFailed());
-                }
-            } else if (status.IsOk()) {
-                // the node has been rejoined or is ready to rejoin
-                if (iter.second->IsFailed()) {
-                    LOG(INFO) << "Ready to clear resource of worker " << workerAddr
-                              << " that has rejoined into etcd, state in cluster node table before cleanup: "
-                              << iter.second->ToString(iter.first);
-                    // erase the failed node to prevent scale down again and wait for the new node coming
-                    toBeCleanNodes.emplace(workerAddr, true);
-                } else {
-                    // skip the erasure. we should wait at least until the lease expires to prevent remove the joined
-                    // node incorrectly
-                    LOG(INFO) << "Skip to clear resource of worker " << workerAddr
-                              << ", state in cluster node table: " << iter.second->ToString(iter.first)
-                              << ", state in etcd: " << res.value << ", get result: " << status.ToString();
-                }
-            }
+            isNotify = true;
         }
     }
-    for (const auto &[addr, isFailed] : toBeCleanNodes) {
-        CleanupWorker(addr, isFailed);
-    }
-    if (!toBeCleanNodes.empty()) {
-        LOG(INFO) << "After sync with hash ring: " << NodesToString();
+    if (isNotify) {
+        orphanWaitPost_.Set();
     }
 }
 

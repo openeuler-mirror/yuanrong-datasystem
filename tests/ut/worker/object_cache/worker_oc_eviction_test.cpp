@@ -40,6 +40,7 @@
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
+#include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "eviction_manager_common.h"
 
 using namespace datasystem::object_cache;
@@ -240,18 +241,21 @@ public:
         allocator = datasystem::memory::Allocator::Instance();
         akSkManager_ = std::make_shared<AkSkManager>(0);
 
-        allocator->Init(maxSize_, 0, false, true, 5000, ocPercent_);  // decay is 5000 ms.
+        allocator->Init(maxSize_, 0, false, true, 5000, ocPercent_, scPercent_);  // decay is 5000 ms.
         std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
         evictionManager_ = std::make_shared<object_cache::WorkerOcEvictionManager>(
             objectTable, HostPort("127.0.0.1", 32131), // worker port is 32131,
             HostPort("127.0.0.1", 52319));  // master port is 52319;
         auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
         DS_ASSERT_OK(evictionManager_->Init(globalRefTable, akSkManager_));
+        scAllocateManager_ = std::make_shared<worker::stream_cache::WorkerSCAllocateMemory>(evictionManager_);
     }
 
     std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_;
+    std::shared_ptr<worker::stream_cache::WorkerSCAllocateMemory> scAllocateManager_;
     uint64_t maxSize_ = 0;
+    int scPercent_ = 0;
     int ocPercent_ = 0;
     int limit = 100 * 1024 * 1024;  // spill limit size is 100 * 1024 * 1024;
 };
@@ -259,16 +263,55 @@ public:
 TEST_F(ScEvictionObjectTest, DISABLED_TestEvictSc50Oc50)
 {
     maxSize_ = 50 * 1024 * 1024;                 // shared memory size 50 * 1024 * 1024
+    scPercent_ = 70;                             // sc shared memory max size is 70 / 100 * maxSize_
     ocPercent_ = 100;                            // oc shared memory max size is 50 / 100 * maxSize_
     constexpr size_t limit = 100 * 1024 * 1024;  //
     FLAGS_spill_size_limit = limit;
     FLAGS_spill_directory = "./spill_TestEvictSc50Oc50";
     InitTest();
+    auto streamSize = 1 * 1024 * 1024;  // stream page size is 1 * 1024 * 1024;
     for (int i = 0; i < 30; i++) {      // object num is 30
         auto prefix = "test_for_evict_";
         auto objectSize = 1 * 1024 * 1024;
         DS_ASSERT_OK(CreateObject(prefix + std::to_string(i), objectSize));
         evictionManager_->Add(prefix + std::to_string(i));
+    }
+    auto unit = std::make_shared<ShmUnit>();
+    for (int i = 0; i < 30; i++) {  // stream num is 30
+        DS_ASSERT_OK(scAllocateManager_->AllocateMemoryForStream(DEFAULT_TENANT_ID, "qwer" + std::to_string(i),
+                                                                 streamSize, true, *unit, true));
+    }
+}
+
+TEST_F(ScEvictionObjectTest, TestEvictScSizeMax)
+{
+    maxSize_ = 50 * 1024 * 1024;  // shared memory size 50 * 1024 * 1024
+    scPercent_ = 50;              // sc shared memory max size is 50% * maxSize_
+    ocPercent_ = 100;             // oc shared memory max size is 100% * maxSize_
+    FLAGS_spill_size_limit = limit;
+    FLAGS_spill_directory = "./spill_TestEvictScSizeMax";
+    InitTest();
+    auto size = 27 * 1024 * 1024;  // stream page size is 27 * 1024 * 1024;
+    auto unit = std::make_shared<ShmUnit>();
+    auto status = unit->AllocateMemory("", size, true, ServiceType::STREAM);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_OUT_OF_MEMORY) << status.GetMsg();
+    status = scAllocateManager_->AllocateMemoryForStream(DEFAULT_TENANT_ID, "qwer", size, true, *unit, true);
+    ASSERT_TRUE(status.GetMsg().find("Stream cache memory size overflow, maxStreamSize") != std::string::npos);
+}
+
+TEST_F(ScEvictionObjectTest, TestScNotEvictObject)
+{
+    maxSize_ = 50 * 1024 * 1024;  // shared memory size 50 * 1024 * 1024
+    scPercent_ = 100;             // sc shared memory max size is 100% * maxSize_
+    ocPercent_ = 100;             // oc shared memory max size is 100% * maxSize_
+    FLAGS_spill_size_limit = limit;
+    FLAGS_spill_directory = "./spill_TestScNotEvictObject";
+    auto streamSize = 2 * 1024 * 1024;  // stream page size is 2 * 1024 * 1024;
+    InitTest();
+    auto unit = std::make_shared<ShmUnit>();
+    for (int i = 0; i < 9; i++) {  // stream page num is 9
+        DS_ASSERT_OK(scAllocateManager_->AllocateMemoryForStream(DEFAULT_TENANT_ID, "qwer" + std::to_string(i),
+                                                                 streamSize, true, *unit, true));
     }
 }
 
@@ -276,11 +319,15 @@ TEST_F(ScEvictionObjectTest, TestEvictObject)
 {
     LOG_IF_ERROR(inject::Set("worker.Spill.Sync", "return()"), "set inject point failed");
     maxSize_ = 10 * 1024 * 1024;                 // shared memory size 10 * 1024 * 1024
+    scPercent_ = 100;                            // sc shared memory max size is 100% * maxSize_
     ocPercent_ = 50;                             // oc shared memory max size is 50% * maxSize_
     constexpr size_t limit = 100 * 1024 * 1024;  // spill limit size is 100 * 1024 * 1024;
     FLAGS_spill_size_limit = limit;
     FLAGS_spill_directory = "./spill_TestEvictObject";
+    auto streamSize = 8 * 1024 * 1024;
     InitTest();
+    auto unit = std::make_shared<ShmUnit>();
+    DS_ASSERT_OK(scAllocateManager_->AllocateMemoryForStream(DEFAULT_TENANT_ID, "qwer", streamSize, true, *unit, true));
     const int kNumObjectsToCreate = 10;
     for (int i = 0; i < kNumObjectsToCreate; i++) {
         auto prefix = "test_for_evict_";

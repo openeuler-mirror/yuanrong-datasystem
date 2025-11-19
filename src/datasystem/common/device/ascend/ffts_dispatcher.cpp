@@ -191,7 +191,7 @@ HcclResult FftsDispatcher::ConstructFftsSqe(rtFftsPlusSqe_t &fftsPlusSqe, uint16
     // 0x5A: identifies the communication task and optimizes the FFTS+ scheduling performance.
     const uint8_t TASK_TYPE_AIV_AIC = 0x5B;
     const uint8_t TASK_TYPE_OTHER = 0x5A;
-    fftsPlusSqe.subType = argsHandleList_.empty() ? TASK_TYPE_OTHER : TASK_TYPE_AIV_AIC;
+    fftsPlusSqe.subType = TASK_TYPE_OTHER;
     return HCCL_SUCCESS;
 }
 
@@ -201,11 +201,6 @@ HcclResult FftsDispatcher::ConstructFftsTask(rtFftsPlusTaskInfo_t &task, rtFftsP
     task.descBuf = fftsCtxsPtr_->contexts.data();
     task.descBufLen = sizeof(rtFftsPlusComCtx_t) * fftsCtxsPtr_->ctxNum;
     task.descAddrType = 0;
-    if (!argsHandleList_.empty()) {
-        task.argsHandleInfoNum = argsHandleList_.size();
-        task.argsHandleInfoPtr = argsHandleList_.data();
-        argsHandleList_.clear();
-    }
     return HCCL_SUCCESS;
 }
 

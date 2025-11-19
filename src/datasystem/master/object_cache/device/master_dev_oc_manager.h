@@ -27,6 +27,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/client/hetero_cache/device_util.h"
+#include "datasystem/master/object_cache/device/master_dev_dead_lock_manager.h"
 #include "datasystem/master/object_cache/device/master_dev_hccl_rootinfo.h"
 #include "datasystem/master/object_cache/device/master_dev_npu_events.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_directory.h"
@@ -321,7 +322,9 @@ private:
 
     std::shared_ptr<HcclRelationshipTable> commRelationMap_{ nullptr };
 
-    std::shared_ptr<TbbLockTable> objectKeyLockTable_{ nullptr };
+    std::shared_ptr<TbbLockTable> objectKeyLockTable_ {nullptr};
+
+    std::shared_ptr<MasterDevDeadLockManager> masterDevDeadLockManager_ {nullptr};
 };
 }  // namespace master
 }  // namespace datasystem

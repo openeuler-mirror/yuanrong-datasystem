@@ -23,6 +23,7 @@ spec:
     rollingUpdate:
       maxUnavailable: {{ $.Values.global.maxUnavailable }}
     type: RollingUpdate
+  progressDeadlineSeconds: {{ $.Values.global.rollingUpdateTimeoutS }}
   template:
     metadata:
       labels:
@@ -95,12 +96,30 @@ spec:
         - -log_compress={{ $.Values.global.log.logCompress }}
         - -logfile_mode=416
         - -shared_memory_size_mb=$(SHARE_MEMORY_SIZE)
+        - -sc_local_cache_memory_size_mb={{ $.Values.global.resources.datasystemWorker.scLocalCacheMemorySizeMb }}
+        - -sc_scan_thread_num={{ $.Values.global.rpc.scScanThreadNum }}
+        - -sc_scan_num_buckets={{ $.Values.global.rpc.scScanNumBuckets }}
+        - -sc_shared_page_size_mb={{ $.Values.global.resources.datasystemWorker.scSharedPageSizeMb }}
+        - -sc_shared_page_group_count={{ $.Values.global.resources.datasystemWorker.scSharedPageGroupCount }}
+        - -oc_shm_threshold_percentage={{ $.Values.global.resources.datasystemWorker.ocShmThresholdPercentage }}
+        - -sc_shm_threshold_percentage={{ $.Values.global.resources.datasystemWorker.scShmThresholdPercentage }}
         - -rpc_thread_num={{ $.Values.global.rpc.rpcThreadNum }}
         - -oc_thread_num={{ $.Values.global.rpc.ocThreadNum }}
+        - -sc_regular_socket_num={{ $.Values.global.rpc.scRegularSocketNum }}
+        - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
         - -eviction_thread_num={{ $.Values.global.spill.evictionThreadNum }}
         - -eviction_reserve_mem_threshold_mb={{ $.Values.global.spill.evictionReserveMemThresholdMB }}
+        - -sc_worker_worker_direct_port={{ $.Values.global.rpc.scWorkerWorkerDirectPort }}
+        - -sc_worker_worker_pool_size={{ $.Values.global.rpc.scWorkerWorkerPoolSize }}
+        - -sc_gc_interval_ms={{ $.Values.global.rpc.scGcIntervalMs }}
+        - -sc_scan_interval_ms={{ $.Values.global.rpc.scScanIntervalMs }}
+        - -sc_metrics_log_interval_s={{ $.Values.global.log.scMetricsLogIntervalS }}
+        - -sc_cache_pages={{ $.Values.global.resources.datasystemWorker.scCachePages }}
+        - -page_size={{ $.Values.global.resources.datasystemWorker.pageSize }}
+        - -remote_send_thread_num={{ $.Values.global.rpc.remoteSendThreadNum }}
+        - -master_sc_thread_num={{ $.Values.global.rpc.masterScThreadNum }}
         - -unix_domain_socket_dir={{ $.Values.global.ipc.udsDir }}
         - -health_check_path=$(HEALTH_CHECK_PATH)
         - -ready_check_path=$(READY_CHECK_PATH)
@@ -135,6 +154,7 @@ spec:
         - -rocksdb_store_dir=/home/sn/datasystem/rocksdb
         - -rocksdb_max_open_file={{ $.Values.global.metadata.rocksdbMaxOpenFile }}
         - -rocksdb_background_threads={{ $.Values.global.metadata.rocksdbBackgroundThreads }}
+        - -rocksdb_write_mode={{ $.Values.global.metadata.rocksdbWriteMode }}
         - -node_timeout_s={{ $.Values.global.reliability.nodeTimeoutS }}
         - -node_dead_timeout_s={{ $.Values.global.reliability.nodeDeadTimeoutS }}
         - -enable_etcd_auth={{ $.Values.global.etcd.enableEtcdAuth }}
@@ -161,8 +181,8 @@ spec:
         - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}
-        - -az_name={{ $.Values.global.azName }}
-        - -other_az_names={{ $.Values.global.crossAz.otherAzNames }}
+        - -cluster_name={{ $.Values.global.clusterName }}
+        - -other_cluster_names={{ $.Values.global.crossAz.otherClusterNames }}
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
         - -etcd_meta_pool_size={{ $.Values.global.etcd.etcdMetaPoolSize }}
         - -arena_per_tenant={{ $.Values.global.performance.arenaPerTenant }}
@@ -178,6 +198,20 @@ spec:
         - -liveness_probe_timeout_s={{ $.Values.global.reliability.livenessProbeTimeoutS }}
         - -check_async_queue_empty_time_s={{ $.Values.global.gracefulShutdown.checkAsyncQueueEmptyTimeS }}
         - -enable_lossless_data_exit_mode={{ $.Values.global.gracefulShutdown.enableLosslessDataExitMode }}
+        - -enable_urma={{ $.Values.global.performance.enableUrma }}
+        - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
+        - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
+        - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
+        - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}
+        - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
+        - -shared_disk_directory={{ $.Values.global.performance.sharedDiskDirectory }}
+        - -shared_disk_size_mb={{ $.Values.global.performance.sharedDiskSize }}
+        - -shared_disk_arena_per_tenant={{ $.Values.global.performance.sharedDiskArenaPerTenant }}
+        - -stream_idle_time_s={{ $.Values.global.rpc.streamIdleTimes }}
+        - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
+        - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
+        - -rolling_update_timeout_s={{ $.Values.global.rollingUpdateTimeoutS }}
+        - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}
         command:
         - /home/sn/worker_entry.sh
         securityContext:

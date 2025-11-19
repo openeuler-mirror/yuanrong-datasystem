@@ -25,7 +25,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/common/util/id_tool.h"
 
-DS_DECLARE_string(other_az_names);
+DS_DECLARE_string(other_cluster_names);
 
 namespace datasystem {
 Status TrySplitWorkerIdFromObjecId(const std::string &objKey, std::string &workerUuid)

@@ -98,13 +98,21 @@ public:
     static Status CreateOcTable(RocksStore *store);
 
     /**
+     * @brief Create stream cache tables.
+     * @return Status of this call.
+     */
+    static Status CreateScTable(RocksStore *store);
+
+    /**
      * @brief Create table in rocksdb.
      * @param[in] table The Rocksdb table name to be created.
      * @param[in] store The rocks store pointer.
+     * @param[in] isSc Create for stream cache.
      * @param[in] tables The tables currently in rocksdb.
      * @return Status of the call.
      */
-    static Status CreateTable(const std::string &tableName, RocksStore *store, std::vector<std::string> &tables);
+    static Status CreateTable(const std::string &tableName, RocksStore *store, bool isSc,
+                              std::vector<std::string> &tables);
 
     /**
      * @brief Get the object rocks store instance.
@@ -113,6 +121,15 @@ public:
     RocksStore *GetObjectRocksStore()
     {
         return ocStore_.get();
+    }
+
+    /**
+     * @brief Get the stream rocks store instance.
+     * @return The rocks store instance.
+     */
+    RocksStore *GetStreamRocksStore()
+    {
+        return scStore_.get();
     }
 
     /**

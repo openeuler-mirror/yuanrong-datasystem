@@ -44,7 +44,7 @@ public:
 
     /**
      * @brief Loop the input share memory unit and mmap the fd if it was not mmapped in the client.
-     * @param[in] tenantId for producer consumer get clientfd by tenantId.
+     * @param[in] tenantId for stream producer consumer get clientfd by tenantId.
      * @param[in] unit The input share memory unit.
      * @return Status of the call.
      */
@@ -52,7 +52,7 @@ public:
 
     /**
      * @brief Loop the input share memory unit and mmap the fd if it was not mmapped in the client.
-     * @param[in] tenantId for producer consumer get clientfd by tenantId
+     * @param[in] tenantId for stream producer consumer get clientfd by tenantId
      * @param[in] units The input share memory unit.
      * @return Status of the call.
      */

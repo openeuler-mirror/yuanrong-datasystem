@@ -164,8 +164,7 @@ private:
             if (!info.empty()) {
                 ss << info << ", ";
             }
-            ss << "evict action " << actionName << ", total cost " << elapsed << " ms, "
-               << "obj size: " << objectSize;
+            ss << "evict action " << actionName << ", total cost " << elapsed << " ms, " << "obj size: " << objectSize;
             if (action == Action::SPILL) {
                 ss << "spill cost " << spillCost << " ms, ";
             }
@@ -377,12 +376,13 @@ private:
  * @param[in] keyInfo The ID of the object need to allocate.
  * @param[in] needSize The size need to allocate.
  * @param[in] evictionManager The class of eviction process.
+ * @param[in] type The service type.
  * @param[in] cacheType The type of cache.
  * @return True if eviction is triggered.
  */
 bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize,
                                    const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
-                                   CacheType cacheType = CacheType::MEMORY);
+                                   ServiceType type = ServiceType::OBJECT, CacheType cacheType = CacheType::MEMORY);
 
 }  // namespace object_cache
 }  // namespace datasystem

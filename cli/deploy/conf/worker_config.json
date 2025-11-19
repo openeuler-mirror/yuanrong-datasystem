@@ -11,17 +11,21 @@
         "value": "1024",
         "description": "Upper limit of the shared memory, the unit is mb, must be greater than 0."
     },
+    "sc_local_cache_memory_size_mb": {
+        "value": "1024",
+        "description": "Upper limit of the local cache used by stream cache, the unit is mb, must be greater than 0."
+    },
     "oc_shm_threshold_percentage": {
         "value": "100",
         "description": "Upper limit of the shared memory in percentage can be used by OC, must be within (0, 100]"
     },
+     "sc_shm_threshold_percentage": {
+        "value": "100",
+        "description": "Upper limit of the shared memory in percentage can be used by SC, must be within (0, 100]"
+    },
     "heartbeat_interval_ms": {
         "value": "1000",
         "description": "Time interval between worker and etcd heartbeats."
-    },
-    "authorization_enable": {
-        "value": "false",
-        "description": "Indicates whether to enable the tenant authentication, default is false."
     },
     "ipc_through_shared_memory": {
         "value": "true",
@@ -39,21 +43,69 @@
         "value": "",
         "description": "Specify other az names using the same etcd. Split by ','"
     },
-    "oc_io_from_l2cache_need_metadata": {
-        "value": "true",
-        "description": "Control whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd."
-    },
     "enable_distributed_master": {
         "value": "true",
         "description": "Whether to support distributed master, default is true."
     },
+    "sc_regular_socket_num": {
+        "value": "32",
+        "description": "The number of regular backend socket for stream cache, must be great equal than 0."
+      },
+    "sc_stream_socket_num": {
+        "value": "32",
+        "description": "The number of stream backend socket for stream cache, must be great equal than 0."
+      },
     "oc_worker_worker_direct_port": {
         "value": "0",
         "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Acceptable values:0 or a positive integer. 0 indicates disabled."
     },
+    "sc_worker_worker_direct_port": {
+        "value": "0",
+        "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Acceptable values:0, or some positive integer. 0 means disabled."
+    },
     "oc_worker_worker_pool_size": {
         "value": "3",
         "description": "Number of parallel connections between worker/worker oc service. The flag `oc_worker_worker_direct_port` must be enabled for this setting to take effect"
+    },
+    "sc_worker_worker_pool_size": {
+        "value": "3",
+        "description": "Number of parallel connections between worker/worker sc service. Flag sc_worker_worker_direct_port must be enabled to take effect."
+    },
+    "sc_gc_interval_ms": {
+        "value": "50",
+        "description": "Memory resource clean up interval."
+      },
+    "sc_scan_interval_ms": {
+        "value": "10",
+        "description": "Scan interval for remote send"
+      },
+    "sc_metrics_log_interval_s": {
+        "value": "60",
+        "description": "Interval between logging stream metrics"
+      },
+    "sc_cache_pages": {
+        "value": "16",
+        "description": "Default number of cache pages"
+    },
+    "sc_scan_thread_num": {
+        "value": "16",
+        "description": "The num of threads used to scan new elements in shared memory."
+    },
+    "sc_scan_num_buckets": {
+        "value": "1024",
+        "description": "Number of partitions for scanning streams."
+    },
+    "sc_shared_page_size_mb": {
+        "value": "4",
+        "description": "The shared page size, should be in range [1, 16]."
+    },
+    "sc_shared_page_group_count": {
+        "value": "4",
+        "description": "The shared page group count for each remote worker, should be in range [1, 64]."
+    },
+    "master_sc_thread_num": {
+        "value": "128",
+        "description": "Max number of threads for (non rpc) master stream cache service work."
     },
     "payload_nocopy_threshold": {
         "value": "104857600",
@@ -74,6 +126,10 @@
     "client_reconnect_wait_s": {
         "value": "5",
         "description": "Client reconnect wait seconds, default is 5."
+    },
+    "page_size": {
+        "value": "1048576",
+        "description": "Size of the page used for caching worker files. The valid range is 4096-1073741824."
     },
     "etcd_meta_pool_size": {
         "value": "8",
@@ -155,17 +211,9 @@
         "value": "3600",
         "description": "when we delete the object which is in uploading process, in this scenarios we need delay some time to retry."
     },
-    "cache_rpc_session": {
-        "value": "true",
-        "description": "Deprecated: This flag is deprecated and will be removed in future releases."
-    },
     "rocksdb_store_dir": {
         "value": "./datasystem/rocksdb",
         "description": "Config MASTER back store directory and must specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata stored in the master so that the metadata before the restart can be re-obtained when the master restarts."
-    },
-    "rocksdb_sync_write": {
-        "value": "false",
-        "description": "Controls whether rocksdb sets sync to true when writing data."
     },
     "rocksdb_max_open_file": {
         "value": "128",
@@ -175,6 +223,10 @@
         "value": "16",
         "description": "Number of background threads rocksdb can use for flushing and compacting, default value is 16(Should be greater than 0)."
     },
+    "rocksdb_write_mode": {
+        "value": "async",
+        "description": "Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb."
+    }, 
     "node_timeout_s": {
         "value": "60",
         "description": "Maximum time interval before a node is considered lost."
@@ -236,11 +288,11 @@
         "description": "Control whether get meta data from other AZ's worker, if false then get meta data from local AZ."
     },
     "enable_worker_worker_batch_get": {
-        "value" : "false",
-        "description" : "Enable worker->worker OC batch get, default false."
+        "value": "false",
+        "description": "Enable worker->worker OC batch get, default false."
     },
     "batch_get_threshold_mb": {
-        "value" : "100",
+        "value": "100",
         "description": "The payload threshold to batch get objects, the unit is mb, must be greater than 0. Setting to 0 will indicate no split."
     },
     "enable_reconciliation": {
@@ -355,10 +407,6 @@
         "value": "",
         "description": "The directory to find ZMQ curve key files. This path must be specified when zmq authentication is enabled."
     },
-    "encrypt_kit": {
-        "value": "plaintext",
-        "description": "choose the type of encrypt. Support plaintext, default is plaintext."
-    },
     "enable_etcd_auth": {
         "value": "false",
         "description": "Whether to enable ETCD auth, default is false. ETCD certificate will be obtained."
@@ -402,5 +450,61 @@
     "enable_p2p_transfer": {
         "value": "false",
         "description": "Heterogeneous object transfer protocol Enables p2ptransfer."
+    },
+    "enable_cloud_service_token_rotation": {
+        "value": "false",
+        "description": "Enable the OBS client to access OBS using a temporary token. After the token expires, obtain a new token and connect to OBS again."
+    },
+    "enable_meta_replica": {
+        "value": "false",
+        "description": "Controls whether to enable multiple meta replica"
+    },
+    "enable_urma": {
+        "value": "false",
+        "description": "Option to turn on urma for OC worker to worker data transfer, default false."
+    },
+    "urma_connection_size": {
+        "value": "16",
+        "description": "Number of jfs and jfr pair"
+    },
+    "urma_event_mode": {
+        "value": "false",
+        "description": "Uses interrupt mode to poll completion events."
+    },
+    "urma_poll_size": {
+        "value": "8",
+        "description": "Number of complete record to poll at a time, 16 is the max this device can poll"
+    },
+    "urma_register_whole_arena": {
+        "value": "true",
+        "description": "Register the whole arena as segment during init, otherwise, register each object as a segment."
+    },
+    "logfile_mode": {
+        "value": "416",
+        "description": "Log file mode/permissions."
+    },
+    "oc_shm_transfer_threshold_kb": {
+        "value": "500",
+        "description": "The data threshold to transfer obj data between client and worker via shm, unit is KB"
+    },
+    "remote_send_thread_num": {
+        "value": "8",
+        "description": "The num of threads used to send elements to remote worker."
+    },
+    "shared_disk_arena_per_tenant": {
+        "value": "8",
+        "description": "The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared disk allocation for the first time, but each arena will use one more fd. The valid range is 0 to 32."
+    },
+    "shared_disk_directory": {
+        "value": "",
+        "description": "Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled."
+    },
+    "shared_disk_size_mb": {
+        "value": "0",
+        "description": "Upper limit of the shared disk, the unit is mb."
+    },
+    "stream_idle_time_s": {
+        "value": "300",
+        "description": "stream idle time. default 300s (5 minutes)"
     }
 }

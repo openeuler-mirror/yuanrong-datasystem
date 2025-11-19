@@ -53,7 +53,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams =
-            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -sc_stream_socket_num=0 -node_timeout_s=1 "
             "-heartbeat_interval_ms=500";
         opts.numWorkers = 3;
         opts.masterIdx = 1;
@@ -286,7 +286,7 @@ TEST_F(WorkerDfxTest, DISABLED_TestWorkerNotFirstGincreaseAndMasterCrash)
     std::string objectKey = NewObjectKey();
     std::string data = "123456";
     int dataSize = data.size();
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     std::shared_ptr<Buffer> buffer1;
     DS_ASSERT_OK(client2->Create(objectKey, dataSize, param, buffer1));
     DS_ASSERT_OK(buffer1->MemoryCopy(data.data(), dataSize));
@@ -717,7 +717,7 @@ TEST_F(WorkerDfxTest, LEVEL1_TestChangePrimaryCopy)
     DS_ASSERT_OK(client1->GIncreaseRef({ objectKey }, failObjects));
     int64_t dataSize = 10;
     std::string value1 = GenRandomString(dataSize);
-    CreateParam param = { .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param = { .consistencyType = ConsistencyType::CAUSAL };
     DS_ASSERT_OK(client1->Put(objectKey, reinterpret_cast<const uint8_t *>(value1.data()), value1.size(), param));
     std::vector<Optional<Buffer>> buffers;
     DS_ASSERT_OK(client3->Get({ objectKey }, 1'000, buffers));
@@ -851,7 +851,7 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterCrashAndGet)
     LOG(INFO) << "Test master crash and get";
     InitTestClients();
     std::string objKey = "Stuart";
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::CAUSAL };
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     size_t objSize = 600 * 1024ul;
     std::shared_ptr<Buffer> buffer;
     DS_ASSERT_OK(objClient0_->Create(objKey, objSize, param, buffer));
@@ -1989,7 +1989,7 @@ TEST_F(WorkerKillTest, LEVEL1_GetAfterGDecrease)
     size_t size = 600 * 1024;
     std::string data = GenRandomString(size);
     std::shared_ptr<Buffer> buffer;
-    CreateParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .consistencyType = ConsistencyType::PRAM };
+    CreateParam param{ .consistencyType = ConsistencyType::PRAM };
     DS_ASSERT_OK(client1->Create(objectKey, size, param, buffer));
     buffer->MemoryCopy((void *)data.data(), size);
     buffer->Publish();
@@ -2026,7 +2026,7 @@ TEST_F(WorkerKillTest, DISABLED_ClearPrimaryAfterWorkerRestart)
     std::string objectKey = "obj1";
     int64_t dataSize = 10;
     std::string value1 = GenRandomString(dataSize);
-    CreateParam param = { .writeMode = WriteMode::NONE_L2_CACHE };
+    CreateParam param = {};
     DS_ASSERT_OK(client1->Put(objectKey, reinterpret_cast<const uint8_t *>(value1.data()), value1.size(), param));
     sleep(1);
     DS_ASSERT_OK(externalCluster_->KillWorker(1));

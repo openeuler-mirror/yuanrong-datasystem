@@ -27,7 +27,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DEFINE_uint64(client_dead_timeout_s, 120,
-                 "Maximum time interval for the worker to determine client death, value range: [15, UINT64_MAX)");
+                 "Maximum time interval for the worker to determine client death, value range: [15, UINT64_MAX/1000)");
 static bool ValidClientDeadTimeoutSecs(const char *flagName, uint64_t value)
 {
 #ifdef WITH_TESTS

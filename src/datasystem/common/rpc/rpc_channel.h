@@ -31,17 +31,6 @@
 namespace datasystem {
 class RpcChannel {
 public:
-#ifdef USE_URMA
-    struct UrmaInfo {
-        std::string eid;
-        uint32_t uasid{ 0 };
-        std::vector<uint32_t> jfr_ids;
-        HostPort localAddress_;
-
-        std::string ToString() const;
-    };
-#endif
-
     /**
      * @brief This form of constructor takes a ZMQ transport directly.
      * @note A ZMQ transport begins with tcpip:// or ipc:// or inproc://.
@@ -132,24 +121,6 @@ public:
      */
     size_t GetServiceConnectPoolSize(const std::string &svcName);
 
-    /**
-     * @brief Set up local address info (for urma purposes).
-     * @param[in] localAddress Local host address.
-     */
-    void SetLocalInfo(const HostPort &localAddress);
-
-#ifdef USE_URMA
-    /**
-     * @brief Get local jfr info from the channel
-     */
-    void GetLocalUrmaInfo(UrmaInfo &out) const;
-
-    bool UrmaEnabled() const
-    {
-        return localUrmaInfo_ != nullptr;
-    }
-#endif
-
 private:
     std::string endPoint_;
     RpcCredential cred_;
@@ -158,9 +129,6 @@ private:
     std::map<std::string, bool> tcpDirect_;
     std::map<std::string, size_t> connectPoolSize_;
     const HostPort destAddr_;
-#ifdef USE_URMA
-    std::unique_ptr<UrmaInfo> localUrmaInfo_{ nullptr };
-#endif
 };
 
 }  // namespace datasystem

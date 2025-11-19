@@ -14,7 +14,8 @@ set(spdlog_CMAKE_OPTIONS
     -DSPDLOG_BUILD_SHARED:BOOL=ON)
 
 set(spdlog_PATCHES 
-    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-filename.patch 
+    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-filename.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-namespace.patch 
     ${CMAKE_SOURCE_DIR}/third_party/patches/spdlog/change-rotating-file-sink.patch)
 
 add_thirdparty_lib(SPDLOG
@@ -36,5 +37,5 @@ find_library(SPDLOG
 
 set(CMAKE_PREFIX_PATH ${SPDLOG_ROOT})
 find_package(spdlog ${spdlog_VERSION} REQUIRED)
-get_property(spdlog_INCLUDE_DIR TARGET spdlog::spdlog PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
+get_property(spdlog_INCLUDE_DIR TARGET ds_spdlog::spdlog PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 include_directories(SYSTEM ${spdlog_INCLUDE_DIR})

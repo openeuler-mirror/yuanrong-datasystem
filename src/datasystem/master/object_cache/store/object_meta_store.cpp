@@ -52,6 +52,7 @@
 
 DS_DEFINE_uint32(etcd_meta_pool_size, 8, "ETCD metadata async pool size");
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
+DS_DECLARE_string(rocksdb_write_mode);
 
 static bool ValidateEtcdPoolSize(const char *flagName, uint32_t value)
 {
@@ -121,8 +122,6 @@ Status ObjectMetaStore::InitEtcdStore()
     // Hash table for normal key.
     RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
                                              std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
-                                             std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
     RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
                                              std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
     RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
@@ -131,8 +130,6 @@ Status ObjectMetaStore::InitEtcdStore()
     // Worker table for key with worker id.
     RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
                                              std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                             std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
     RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
                                              std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
     return etcdStore_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
@@ -239,12 +236,28 @@ void ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler(int threadNum, const std::
         if (!ret || element == nullptr) {
             continue;
         }
-        INJECT_POINT("AsyncMetaOpToEtcdStorageHandler.delete.delay", [element](int delayS) {
-            if (element->Table().find(ETCD_META_TABLE_PREFIX) != std::string::npos) {
-                std::this_thread::sleep_for(std::chrono::seconds(delayS));
+#ifdef WITH_TESTS
+        static const auto injectFunc = [&element, this](int delayMs, const std::string &tableName, bool passAdd = false,
+                                                        bool passDel = false) {
+            if (passAdd && element->RequestType() == AsyncElement::ReqType::ADD) {
+                return;
             }
-            return;
-        });
+            if (passDel && element->RequestType() == AsyncElement::ReqType::DEL) {
+                return;
+            }
+            if (element->Table().find(tableName) != std::string::npos) {
+                Timer timer;
+                while (running_ && timer.ElapsedMilliSecond() < delayMs) {
+                    const int checkIntervalMs = 100;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(checkIntervalMs));
+                }
+            }
+        };
+#endif
+        INJECT_POINT("ObjectMetaStore.AsyncMetaOpToEtcdStorageHandler.Delay.MetaTable",
+                     [](int delayS) { injectFunc(delayS, ETCD_META_TABLE_PREFIX); });
+        INJECT_POINT("ObjectMetaStore.AsyncMetaOpToEtcdStorageHandler.Delay.GlobalCacheTable.PassAdd",
+                     [](int delayS) { injectFunc(delayS, ETCD_GLOBAL_CACHE_TABLE_PREFIX, true); });
         const auto &etcdKey = element->Key();
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(element->TraceID());
         VLOG(1) << FormatString("handler %d get key: %s", threadNum, etcdKey);
@@ -259,6 +272,7 @@ void ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler(int threadNum, const std::
                 break;
             case AsyncElement::ReqType::DEL:
                 EXEC_UTIL_SUCCESS(etcdStore_->Delete(element->Table(), etcdKey, asyncElapse), K_NOT_FOUND, !running_);
+                LOG_IF_ERROR(element->ExcutePostHandler(), "Excute post handler failed, etcd key: " + etcdKey);
                 break;
             default:
                 LOG(WARNING) << "unknown operation: " << static_cast<uint8_t>(element->RequestType());
@@ -271,7 +285,7 @@ void ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler(int threadNum, const std::
 Status ObjectMetaStore::AddOneAsyncTaskToEtcdStore(const std::string &objectKey, const std::string &table,
                                                    const std::string &etcdKey, const std::string &value,
                                                    AsyncElement::ReqType requestType, uint64_t timestamp,
-                                                   const std::string &traceId)
+                                                   const std::string &traceId, std::function<Status()> &&postHandler)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!queues_.empty(), K_NOT_READY,
                                          "It does not support executing etcd asynchronous tasks currently.");
@@ -279,6 +293,9 @@ Status ObjectMetaStore::AddOneAsyncTaskToEtcdStore(const std::string &objectKey,
     auto element = timestamp == 0 ? std::make_shared<AsyncElement>(objectKey, table, etcdKey, value, requestType)
                                   : std::make_shared<AsyncElement>(objectKey, table, etcdKey, value, requestType,
                                                                    timestamp, traceId);
+    if (postHandler) {
+        element->SetPostHandler(std::move(postHandler));
+    }
     auto threadIdx = MurmurHash3_32(objectKey) % FLAGS_etcd_meta_pool_size;
     std::shared_ptr<AsyncElement> elderElement;
     int incrCnt = 0;
@@ -354,7 +371,7 @@ Status ObjectMetaStore::BatchPutToEtcdStore(const std::string &tablePrefix,
 }
 
 Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::string &key,
-                                      const std::string &tablePrefix)
+                                      const std::string &tablePrefix, std::function<Status()> &&postHandler)
 {
     RETURN_OK_IF_TRUE(!EtcdEnable());
     auto res = Split(objectKey, ";");
@@ -387,7 +404,8 @@ Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::s
     Status rc;
     std::string etcdKey = Hash2Str(hash) + "/" + key;
     if (async) {
-        RETURN_IF_NOT_OK(AddOneAsyncTaskToEtcdStore(objectKey, table, etcdKey, "", AsyncElement::ReqType::DEL));
+        RETURN_IF_NOT_OK(AddOneAsyncTaskToEtcdStore(objectKey, table, etcdKey, "", AsyncElement::ReqType::DEL, 0, "",
+                                                    std::move(postHandler)));
     } else {
         rc = etcdStore_->Delete(table, etcdKey);
     }
@@ -395,9 +413,9 @@ Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::s
     if (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND) {
         std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
         (void)etcdKeyMap_[table].emplace(key, std::make_pair(hash, async));
+        return rc;
     }
-    RETURN_OK_IF_TRUE(rc.GetCode() == StatusCode::K_NOT_FOUND);
-    return rc;
+    return postHandler != nullptr && !async ? postHandler() : Status::OK();
 }
 
 void ObjectMetaStore::PrefixSearchAndErase(const std::string &table, const std::string &prefixKey,
@@ -479,6 +497,11 @@ Status ObjectMetaStore::InitRocksStore()
     return Replica::CreateOcTable(rocksStore_);
 }
 
+bool ObjectMetaStore::IsRocksdbEnableWriteMeta()
+{
+    return FLAGS_rocksdb_write_mode != "none";
+}
+
 Status ObjectMetaStore::AddRocksdbHealthTag()
 {
     RETURN_IF_NOT_OK(PutToRocksStore(HEALTH_TABLE, "status", HEALTH_STATUS));
@@ -505,7 +528,7 @@ void ObjectMetaStore::GetMetasMatch(
     for (size_t i = 0; i < queues_.size(); ++i) {
         uint64_t count = 0;
         queues_[i]->PollMetasByObjectKey(std::forward<std::function<bool(const std::string &)>>(matchFunc), objAsyncMap,
-                                        count);
+                                         count);
         (void)asyncReqSize_.fetch_sub(count, std::memory_order_relaxed);
     }
     {
@@ -517,7 +540,7 @@ void ObjectMetaStore::GetMetasMatch(
 }
 
 void ObjectMetaStore::PollAsyncElementsByObjectKey(const std::string &objectKey,
-                                                  std::unordered_set<std::shared_ptr<AsyncElement>> &elements)
+                                                   std::unordered_set<std::shared_ptr<AsyncElement>> &elements)
 {
     if (queues_.empty()) {
         LOG(WARNING) << "It does not support executing etcd asynchronous tasks currently.";
@@ -582,6 +605,7 @@ Status ObjectMetaStore::CreateOrUpdateBatchMeta(std::unordered_map<std::string, 
     PerfPoint point(PerfKey::MASTER_ROCKSDB_CREATE_META);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->BatchPut(META_TABLE, metaInfos),
                                      FormatString("Failed to add object meta: %s", MapToString(metaInfos)));
+
     Status rc = BatchPutToEtcdStore(ETCD_META_TABLE_PREFIX, metaInfos, type, true);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("Failed to add object meta to etcd store: %s", MapToString(metaInfos));
@@ -603,33 +627,23 @@ Status ObjectMetaStore::RemoveMeta(const std::string &key, bool needRemoveEtcdDa
     return Status::OK();
 }
 
-Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr, WriteType type)
+Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_ADD_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(LOCATION_TABLE, key, ""),
                                      FormatString("Failed to add global ref to rocksdb: %s", key));
-    Status rc = PutToEtcdStore(ETCD_LOCATION_TABLE_PREFIX, objectKey, key, "", type);
-    if (rc.IsError()) {
-        LOG(ERROR) << FormatString("Failed to add object meta to etcd store: %s", key);
-        (void)rocksStore_->Delete(LOCATION_TABLE, key);
-    }
-    return rc;
+    return Status::OK();
 }
 
-Status ObjectMetaStore::RemoveObjectLocation(const std::string &objectKey, const std::string &workerAddr,
-                                             bool needRemoveEtcdData)
+Status ObjectMetaStore::RemoveObjectLocation(const std::string &objectKey, const std::string &workerAddr)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_REMOVE_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveRocksKey(key, LOCATION_TABLE),
                                      FormatString("Failed to delete location from rocksdb: %s", key));
-    if (needRemoveEtcdData) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveEtcdKey(objectKey, key, ETCD_LOCATION_TABLE_PREFIX),
-                                         FormatString("Failed to delete location from etcd: %s", key));
-    }
     return Status::OK();
 }
 
@@ -653,7 +667,6 @@ Status ObjectMetaStore::AddNestedRelationship(const std::string &parentObjKey, c
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     std::string key = parentObjKey + "_" + childObjKey;
-
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(NESTED_TABLE, key, childObjKey),
                                      FormatString("Failed to add nested relationship, objectKey: %s", childObjKey));
     return Status::OK();
@@ -892,11 +905,16 @@ Status ObjectMetaStore::RemoveDeletedObject(const std::string &objectKey, uint64
 {
     std::string versionStr = std::to_string(version);
     std::string key = objectKey + "/" + versionStr;
+
+    auto postRemoveEtcdKeyFunc = [this, key, objectKey, versionStr]() -> Status {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            RemoveRocksKey(key, GLOBAL_CACHE_TABLE),
+            FormatString("Failed to delete l2 cache from rocksdb: objectKey=%s,version=%s", objectKey, versionStr));
+        return Status::OK();
+    };
+
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RemoveRocksKey(key, GLOBAL_CACHE_TABLE),
-        FormatString("Failed to delete l2 cache from rocksdb: objectKey=%s,version=%s", objectKey, versionStr));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RemoveEtcdKey(objectKey, key, ETCD_GLOBAL_CACHE_TABLE_PREFIX),
+        RemoveEtcdKey(objectKey, key, ETCD_GLOBAL_CACHE_TABLE_PREFIX, std::move(postRemoveEtcdKeyFunc)),
         FormatString("Failed to delete l2 cache from etcd: objectKey=%s,version=%s", objectKey, versionStr));
     return Status::OK();
 }

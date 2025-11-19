@@ -81,7 +81,7 @@ public:
     std::map<uint32_t, uint32_t> crossAZMap;
 
     // Parameters for starting the worker
-    // For example, "-shared_memory_size_mb=1024"
+    // For example, "-page_size=102400 -shared_memory_size_mb=1024"
     std::string workerGflagParams;
 
     // Parameter for specific worker.
@@ -121,6 +121,8 @@ public:
 
     // Skip the shutdown process to accelerate worker exit.
     bool skipWorkerPreShutdown;
+
+    bool isStreamCacheCase;
 
     // Disable rocksdb, default true
     bool disableRocksDB;

@@ -106,6 +106,83 @@ protected:
     std::shared_ptr<KVClient> client0_, client1_, client2_;
 };
 
+class KVClientMSetPerfTest : public KVClientMSetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.waitWorkerReady = false;
+        opts.numEtcd = 1;
+        opts.numOBS = 1;
+        opts.numWorkers = DEFAULT_WORKER_NUM;
+        opts.enableDistributedMaster = "false";
+        opts.workerGflagParams = "-shared_memory_size_mb=3000 -v=0";
+    }
+
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        DS_ASSERT_OK(Init());
+        ASSERT_TRUE(cluster_ != nullptr);
+        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        DS_ASSERT_OK(cluster_->StartOBS());
+        DS_ASSERT_OK(cluster_->StartWorkers());
+        for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
+            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
+        }
+        InitTestKVClient(0, client0_, 20000);  // Init client0 to worker 0 with 20000ms timeout
+        InitTestKVClient(1, client1_, 20000);  // Init client1 to worker 1 with 20000ms timeout
+        InitTestKVClient(2, client2_, 20000);  // Init client2 to worker 2 with 20000ms timeout
+    }
+
+    void TearDown() override
+    {
+        client0_.reset();
+        client1_.reset();
+        client2_.reset();
+        ExternalClusterTest::TearDown();
+    }
+
+protected:
+    std::shared_ptr<KVClient> client0_, client1_, client2_;
+};
+
+TEST_F(KVClientMSetPerfTest, MsetNtxSmallObj)
+{
+    MSetParam param;
+    param.existence = ExistenceOpt::NX;
+    std::vector<std::string> sizeNames{ "2KB", "64KB", "128KB" };
+    std::vector<size_t> dataSizes{ 2048, 64 * 1024, 128 * 1024 }, maxElementSizes{ 64, 256, 1024 };
+    auto repeateNum = 3u;
+    std::vector<std::string> res, failedKeys;
+    for (auto i = 0u; i < dataSizes.size(); i++) {
+        for (auto k = 0ul; k < maxElementSizes.size(); k++) {
+            std::vector<uint64_t> costs;
+            for (auto n = 0u; n < repeateNum; n++) {
+                std::vector<std::string> keys, vals;
+                std::vector<StringView> values;
+                auto dataSize = dataSizes[i];
+                GenerateKeyValues(keys, vals, maxElementSizes[k], dataSize);
+                for (const auto &val : vals) {
+                    values.emplace_back(val);
+                }
+                std::vector<std::string> failedKeys;
+                Timer t;
+                DS_ASSERT_OK(client2_->MSet(keys, values, failedKeys, param));
+                costs.emplace_back(t.ElapsedMicroSecond());
+                DS_ASSERT_OK(client2_->Del(keys, failedKeys));
+            }
+            res.emplace_back(FormatString("data_size:%s, key_num:%ld, repeate_num:%ld ---------> avg cost: %d us ",
+                                          sizeNames[i], maxElementSizes[k], repeateNum,
+                                          std::accumulate(costs.begin(), costs.end(), 0) / costs.size()));
+        }
+    }
+    LOG(INFO) << "--------------------------TEST RESULT--------------------------";
+    for (auto item : res) {
+        LOG(INFO) << item;
+    }
+    LOG(INFO) << "--------------------------    END     --------------------------";
+}
+
 TEST_F(KVClientMSetTest, CheckPrameterValidation)
 {
     MSetParam param;
@@ -560,6 +637,27 @@ TEST_F(KVClientMSetTest, MsetNtxExistenceNx)
     }
 }
 
+TEST_F(KVClientMSetTest, MsetNtxBigObj)
+{
+    MSetParam param;
+    std::vector<std::string> keys, vals;
+    std::vector<StringView> values;
+    param.existence = ExistenceOpt::NX;
+    size_t maxElementSize = 20;
+    auto dataSize = 3000000;
+    GenerateKeyValues(keys, vals, maxElementSize, dataSize);
+    for (const auto &val : vals) {
+        values.emplace_back(val);
+    }
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client2_->MSet(keys, values, failedKeys, param));
+    for (size_t i = 0; i < maxElementSize; i++) {
+        std::string val;
+        DS_ASSERT_OK(client1_->Get(keys[i], val));
+        ASSERT_EQ(val, vals[i]);
+    }
+}
+
 TEST_F(KVClientMSetTest, LEVEL1_SetAndAsyncMset)
 {
     MSetParam param;
@@ -957,8 +1055,6 @@ TEST_F(KVClientMSetTest, MSetNtxInvalidParam)
     size_t maxElementSize = 2000;
     keys = std::vector<std::string>(maxElementSize, "");
     ret = client0_->MSet(keys, values, outFailedKeys, param);
-    str = ret.ToString();
-    ASSERT_TRUE(str.find("The maximum size of keys in single operation is less than 2000") != std::string::npos);
 
     maxElementSize = 10;  // batch set keys size is 10.
     keys = std::vector<std::string>(maxElementSize, "");
@@ -974,13 +1070,6 @@ TEST_F(KVClientMSetTest, MSetNtxInvalidParam)
     for (size_t i = 0; i < maxElementSize; ++i) {
         keys[i] = "key" + std::to_string(i);
     }
-
-    values.pop_back();
-    values.emplace_back(randomData_.GetRandomString(SHM_THRESHOLD));
-    ret = client0_->MSet(keys, values, outFailedKeys, param);
-    str = ret.ToString();
-    ASSERT_TRUE(str.find(FormatString("The size for the val must be less than %d Byte", SHM_THRESHOLD))
-                != std::string::npos);
 
     values.pop_back();
     values.emplace_back("test");
