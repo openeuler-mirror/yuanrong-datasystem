@@ -57,6 +57,7 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/object_cache/safe_object.h"
+#include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -244,6 +245,7 @@ Status WorkerOCServiceImpl::Init()
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Hash master get failed, Init failed");
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ = std::make_shared<ThreadPool>(FLAGS_oc_thread_num, 0, "OcGetThread"));
     RETURN_IF_EXCEPTION_OCCURS(memCpyThreadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM));
+    datasystem::Parallel::InitParallelThreadPool(PARALLEL_THREAD_NUM);
     constexpr uint32_t gcThrdNum = 4;
     RETURN_IF_EXCEPTION_OCCURS(gcThreadPool_ = std::make_unique<ThreadPool>(gcThrdNum, 0, "OcCleanClient"));
 

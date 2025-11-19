@@ -63,7 +63,13 @@ static inline void InitParallelThreadPool(int minThreadNum, int maxThreadNum = 0
 template <typename Index, typename Handler>
 Status ParallelFor(Index start, Index end, const Handler &handler, size_t chunkSize = 0, int workThreadSize = -1)
 {
-    if ((workThreadSize != -1 && workThreadSize < 1) || (chunkSize < 1 || (Index)(INT_MAX - chunkSize) <= end)) {
+    if (end == start) {
+        return Status::OK();
+    }
+    if (end < start) {
+        return Status(K_INVALID, "ParallelFor: end must be greater than start");
+    }
+    if ((workThreadSize != -1 && workThreadSize < 1) || (Index)(INT_MAX - chunkSize) <= end) {
         return Status(K_INVALID, "Parameter validation failed");
     }
     if (!ParallelThreadPool::Instance()->IsInitialized()) {

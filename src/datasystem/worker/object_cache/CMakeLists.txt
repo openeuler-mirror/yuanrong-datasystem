@@ -42,6 +42,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         common_shared_memory
         common_immutable_string
         common_persistence_api
+        common_parallel
         master_heartbeat_protos
         posix_protos
         worker_object_protos

@@ -85,6 +85,7 @@ class MasterOCServiceImpl;
 }
 namespace object_cache {
 static constexpr int MEMCOPY_THREAD_NUM = 16;
+static constexpr int PARALLEL_THREAD_NUM = 8;
 class MasterWorkerOCServiceImpl;
 class WorkerWorkerOCServiceImpl;
 class WorkerDeviceOcManager;

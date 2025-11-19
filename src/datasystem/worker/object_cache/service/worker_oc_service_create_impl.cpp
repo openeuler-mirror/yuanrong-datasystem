@@ -21,6 +21,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
+#include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -127,49 +128,68 @@ Status WorkerOcServiceCreateImpl::AggregateAllocateHelper(const MultiCreateReqPb
 Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, const std::string &tenantId,
                                                   MultiCreateRspPb &resp)
 {
-    std::vector<std::shared_ptr<ShmOwner>> shmOwners;
+    int objectSize = req.object_key_size();
     std::vector<uint32_t> shmIndexMapping(req.object_key_size(), std::numeric_limits<uint32_t>::max());
+    std::vector<std::shared_ptr<ShmOwner>> shmOwners;
     AggregateAllocateHelper(req, shmOwners, shmIndexMapping);
+    std::vector<CreateRspPb> subRsp(objectSize);
+    std::vector<Status> results(objectSize);
 
-    std::vector<std::shared_ptr<ShmUnit>> shmUnits(req.object_key_size());
-    for (int i = 0; i < req.object_key_size(); i++) {
-        if (!req.skip_check_existence() && resp.exists(i)) {
-            resp.add_results();
-            continue;
+    auto createMeta = [&] (int start, int end) {
+        std::vector<std::shared_ptr<ShmUnit>> shmUnits(end - start + 1);
+        for (int i = start, j = 0; i < end; i++, j++) {
+            if (!req.skip_check_existence() && resp.exists(i)) {
+                continue;
+            }
+            const auto &objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key(i));
+
+            std::shared_ptr<ShmOwner> shmOwner = nullptr;
+            if (shmIndexMapping.size() > static_cast<size_t>(i) && shmOwners.size() > shmIndexMapping[i]) {
+                shmOwner = shmOwners[shmIndexMapping[i]];
+            }
+            // Given size, construct shmUnit, generate shm uuid and add client's reference on shmUnit.
+            auto shmUnit = std::make_shared<ShmUnit>();
+            auto metadataSize = GetMetadataSize();
+            auto dataSize = req.data_size(i);
+            if (shmOwner) {
+                results[i] = DistributeMemoryForObject(objectKey, dataSize, metadataSize, true, shmOwner, *shmUnit);
+            } else {
+                results[i] =
+                    AllocateMemoryForObject(objectKey, dataSize, metadataSize, true, evictionManager_, *shmUnit);
+            }
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(results[i], "worker allocate memory failed");
+
+            std::string shmUnitId;
+            IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
+            shmUnit->id = ShmKey::Intern(shmUnitId);
+            shmUnits[j] = shmUnit;
+
+            // Construct CreateRespPb.
+            CreateRspPb subResp;
+            subRsp[i].set_store_fd(shmUnit->GetFd());
+            subRsp[i].set_mmap_size(shmUnit->GetMmapSize());
+            subRsp[i].set_offset(shmUnit->GetOffset());
+            subRsp[i].set_shm_id(shmUnit->GetId());
+            subRsp[i].set_metadata_size(metadataSize);
         }
-        auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key(i));
+        memoryRefTable_->AddShmUnits(req.client_id(), shmUnits);
+        return Status::OK();
+    };
 
-        std::shared_ptr<ShmOwner> shmOwner = nullptr;
-        if (shmIndexMapping.size() > static_cast<size_t>(i) && shmOwners.size() > shmIndexMapping[i]) {
-            shmOwner = shmOwners[shmIndexMapping[i]];
-        }
-        // Given size, construct shmUnit, generate shm uuid and add client's reference on shmUnit.
-        auto shmUnit = std::make_shared<ShmUnit>();
-        auto metadataSize = GetMetadataSize();
-        auto dataSize = req.data_size(i);
-        if (shmOwner) {
-            RETURN_IF_NOT_OK(DistributeMemoryForObject(objectKey, dataSize, metadataSize, true, shmOwner, *shmUnit));
-        } else {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                AllocateMemoryForObject(objectKey, dataSize, metadataSize, true, evictionManager_, *shmUnit),
-                "worker allocate memory failed");
-        }
-
-        std::string shmUnitId;
-        IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
-        shmUnit->id = ShmKey::Intern(std::move(shmUnitId));
-        shmUnits[i] = shmUnit;
-
-        // Construct CreateRespPb.
-        CreateRspPb subResp;
-        subResp.set_store_fd(shmUnit->GetFd());
-        subResp.set_mmap_size(shmUnit->GetMmapSize());
-        subResp.set_offset(shmUnit->GetOffset());
-        subResp.set_shm_id(shmUnit->GetId());
-        subResp.set_metadata_size(metadataSize);
-        resp.mutable_results()->Add(std::move(subResp));
+    static const int parallelThreshold = 128;
+    static const int parallism = 4;
+    if (objectSize > parallelThreshold) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Parallel::ParallelFor<int>(0, objectSize, createMeta, 0, parallism),
+                                         "ParallelFor failed");
+    } else {
+        createMeta(0, objectSize);
     }
-    memoryRefTable_->AddShmUnits(req.client_id(), shmUnits);
+
+    resp.mutable_results()->Reserve(objectSize);
+    for (int i = 0; i < objectSize; i++) {
+        RETURN_IF_NOT_OK(results[i]);
+        resp.mutable_results()->Add(std::move(subRsp[i]));
+    }
     return Status::OK();
 }
 
