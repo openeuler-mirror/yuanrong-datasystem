@@ -91,9 +91,9 @@ void ThreadPool::DoThreadWork()
 
 void ThreadPool::AddThread()
 {
-    std::lock_guard<std::shared_timed_mutex> workerLock(workersMtx_);
     auto thread = Thread([this] { this->DoThreadWork(); });
     thread.set_name(name_);
+    std::lock_guard<std::shared_timed_mutex> workerLock(workersMtx_);
     workers_[thread.get_id()] = std::move(thread);
 }
 

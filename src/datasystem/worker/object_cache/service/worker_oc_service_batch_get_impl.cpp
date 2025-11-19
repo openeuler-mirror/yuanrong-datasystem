@@ -107,6 +107,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                                                              std::unordered_set<std::string> &failedIds,
                                                              std::set<ReadKey> &needRetryIds)
 {
+    RETURN_RUNTIME_ERROR_IF_NULL(workerBatchRemoteGetThreadPool_);
     Status lastRc = Status::OK();
     std::vector<std::string> successIds;
     successIds.reserve(queryMetas.size());
@@ -151,25 +152,28 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     std::vector<std::vector<std::string>> tempSuccessIds(groupedQueryMetas.size());
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
     std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
-    int index = 0;
-    auto workerBatchThreadPool_ = std::make_shared<ThreadPool>(1, WORKER_BATCH_THREAD_NUM, "OcWorkerBatch");
+    size_t index = 0;
     auto traceId = Trace::Instance().GetTraceID();
-
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &metaList = queryMeta->second;
-        futures.emplace_back(workerBatchThreadPool_->Submit([this, &lastRc, address, &metaList, &request,
-                                                             &lockedEntries, &tempSuccessIds, &tempNeedRetryIds,
-                                                             &tempFailedIds, &tempFailedMetas, index, traceId] {
+
+        auto func = [this, &lastRc, address, &metaList, &request, &lockedEntries, &tempSuccessIds,
+                     &tempNeedRetryIds, &tempFailedIds, &tempFailedMetas, index, traceId] {
             for (auto &metaPair : metaList) {
                 auto &metas = metaPair.first;
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, request, lockedEntries, tempSuccessIds[index],
-                                                        tempNeedRetryIds[index], tempFailedIds[index],
-                                                        tempFailedMetas[index]);
+                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, request, lockedEntries,
+                                                        tempSuccessIds[index], tempNeedRetryIds[index],
+                                                        tempFailedIds[index], tempFailedMetas[index]);
             }
             return lastRc;
-        }));
+        };
+        if (index + 1 == groupedQueryMetas.size()) {
+            LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
+        } else {
+            futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
+        }
     }
     for (auto &fut : futures) {
         if (!fut.get().IsOk()) {

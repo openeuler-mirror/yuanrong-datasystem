@@ -87,6 +87,10 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
             }
         }
     }
+    workerBatchQueryMetaThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchQureyMeta");
+    if (FLAGS_enable_worker_worker_batch_get) {
+        workerBatchRemoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchRemoteGet");
+    }
 }
 
 Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> &serverApi)
@@ -1201,12 +1205,9 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     std::vector<BatchQueryMetaResult> batchQueryResults;
     batchQueryResults.resize(objKeysGrpByMaster.size());
     size_t idx = 0;
-    size_t threadNum = std::min<size_t>(objKeysGrpByMaster.size(), FLAGS_rpc_thread_num);
-    auto batchQueryThreadPool = std::make_unique<ThreadPool>(1, threadNum, "BatchQureyMeta");
     for (auto &item : objKeysGrpByMaster) {
         BatchQueryMetaResult &res = batchQueryResults[idx++];
-        futures.emplace_back(batchQueryThreadPool->Submit([&res, realTimeoutMs, subTimeout, item, traceID, timer,
-                                                           this]() {
+        auto func = [&res, realTimeoutMs, subTimeout, item, traceID, timer, this]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
@@ -1223,7 +1224,13 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             for (auto &meta : *rsp.mutable_query_metas()) {
                 meta.set_is_from_other_az(isFromOtherAz);
             }
-        }));
+        };
+        if (idx == objKeysGrpByMaster.size()) {
+            // using current thread handle the last task.
+            func();
+        } else {
+            futures.emplace_back(workerBatchQueryMetaThreadPool_->Submit(std::move(func)));
+        }
     }
     for (auto &f : futures) {
         f.wait();
