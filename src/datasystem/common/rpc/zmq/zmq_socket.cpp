@@ -110,7 +110,7 @@ void ZmqSocket::Close()
 Status ZmqSocket::Connect(const RpcChannel &channel)
 {
     PerfPoint point(PerfKey::ZMQ_SOCKET_CONNECT);
-    return sock_.Connect(channel.GetZmqEndPoint());
+    return sock_.Connect(channel.GetZmqEndPoint(), channel.IsIPv6());
 }
 
 Status ZmqSocket::GetAllFrames(ZmqMsgFrames &queue, ZmqRecvFlags flags)

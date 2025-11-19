@@ -32,18 +32,7 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-constexpr int SPLIT_NUM_AUTO = -1;
-constexpr int SPLIT_LIST_NUM = 2;
-constexpr int SPLIT_NODE_LIST_NUM = 3;
 static constexpr int TO_MILLISECOND = 1000;
-
-/**
- * @brief Get the ip address of the input device name.
- * @param[in] devName The network device name.
- * @param[out] devIp The ip address.
- * @return The system return code.
- */
-int GetDeviceIp(const std::string &devName, std::string &devIp);
 
 /**
  * @brief Split string.
@@ -54,30 +43,18 @@ int GetDeviceIp(const std::string &devName, std::string &devIp);
 std::vector<std::string> Split(const std::string &input, const std::string &pattern);
 
 /**
- * @brief Split string of format nodeId:host:port to get nodeId
- * @param[in] str String to be split.
- * @param[out] nodeId Node ID.
- * @return Status of the call.
- */
-Status ParseToNodeIdString(const std::string &str, std::string &nodeId);
-
-/**
  * @brief Split string to get host string and port string.
  * @param[in] str String to be split.
  * @param[out] host Host string.
  * @param[out] port Port string.
- * @param[in] expectedSz Expected size of vector of parsed string (must be SPLIT_NUM_AUTO, SPLIT_LIST_NUM,
- * or SPLIT_NODE_LIST_NUM). SPLIT_NUM_AUTO means that both SPLIT_LIST_NUM and SPLIT_NODE_LIST_NUM are accepted.
+ * @param[out] isIPv6 T/F of the input host port string was an IPv6 format
  * @return Status of the call.
  */
-Status ParseToHostPortString(const std::string &str, std::string &host, std::string &port,
-                             int expectedSz = SPLIT_NUM_AUTO);
+Status ParseToHostPortString(const std::string &str, std::string &host, std::string &port, bool &isIPv6);
 
 class HostPort {
 public:
-    explicit HostPort(std::string host = "", int port = -1) : host_(std::move(host)), port_(port)
-    {
-    }
+    explicit HostPort(std::string host = "", int port = -1);
 
     HostPort(const HostPort &other) = default;
 
@@ -85,6 +62,7 @@ public:
     {
         this->host_.swap(other.host_);
         this->port_ = other.port_;
+        this->isIPv6_ = other.isIPv6_;
     }
 
     ~HostPort() = default;
@@ -95,11 +73,13 @@ public:
     {
         this->host_.swap(other.host_);
         this->port_ = other.port_;
+        this->isIPv6_ = other.isIPv6_;
         return *this;
     }
 
     bool operator==(const HostPort &other) const
     {
+        // not required to compare the isIPv6_ flag. If host and port are equal then the 2 are equal.
         return this->host_ == other.host_ && this->port_ == other.port_;
     }
 
@@ -121,7 +101,13 @@ public:
         if (host_.empty() && port_ == -1) {
             return "";
         }
-        return host_ + ":" + std::to_string(port_);
+        // v4 address format: "ip_string:host"
+        // v6 address format: "[ip_string]:host"
+        if (!isIPv6_) {
+            return host_ + ":" + std::to_string(port_);
+        } else {
+            return "[" + host_ + "]:" + std::to_string(port_);
+        }
     }
 
     friend std::ostream &operator<<(std::ostream &os, const HostPort &h)
@@ -140,12 +126,7 @@ public:
         return host_;
     }
 
-    // If it cannot parse the str, assign this object the defaultHostPort
-    Status ParseString(const std::string &str, const HostPort &defaultHostPort);
-
     Status ParseString(const std::string &str);
-
-    static bool IsValidateAddress(const std::string &address);
 
     bool Empty() const
     {
@@ -163,9 +144,15 @@ public:
         port_ = -1;
     }
 
+    bool IsIPv6() const
+    {
+        return isIPv6_;
+    }
+
 private:
     std::string host_;
     int port_;
+    bool isIPv6_{ false };
 };
 }  // namespace datasystem
 

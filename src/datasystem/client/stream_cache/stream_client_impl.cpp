@@ -112,13 +112,15 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     if (!needRollbackState) {
         return rc;
     }
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIpv4OrUrl(ip, false), K_INVALID, "Invalid IP address.");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsInPortRange(port, false), K_INVALID, "Invalid port number.");
+
+    HostPort hostPort(ip, port);
+    CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("StreamClient", hostPort.ToString()), K_INVALID,
+                             FormatString("Invalid host or port: %s : %d", ip, port));
 
     RpcCredential cred;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred));
 
-    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(HostPort(ip, port), cred, signature_.get(), tenantId_);
+    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, cred, signature_.get(), tenantId_);
     RETURN_IF_NOT_OK(clientWorkerApi_->Init(timeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(
@@ -218,7 +220,7 @@ Status StreamClientImpl::CreateProducer(const std::string &streamName, std::shar
     ShmView pageView, streamMetaView;
     DataVerificationHeader::SenderProducerNo senderProducerNo;
     DataVerificationHeader::Address address;
-    inet_pton(AF_INET, clientWorkerApi_->GetWorkHost().c_str(), &address);
+    inet_pton(clientWorkerApi_->GetWorkHostPortINETFamily(), clientWorkerApi_->GetWorkHost().c_str(), &address);
     DataVerificationHeader::Port port = static_cast<uint16_t>(clientWorkerApi_->GetWorkPort());
     bool enableStreamDataVerification;
     uint64_t streamNo;

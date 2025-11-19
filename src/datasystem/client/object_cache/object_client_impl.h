@@ -1133,7 +1133,7 @@ private:
                               std::vector<std::shared_ptr<Buffer>> &bufferList,
                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
 
-    std::string ipAddress_;
+    HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
     int32_t timeoutMs_;

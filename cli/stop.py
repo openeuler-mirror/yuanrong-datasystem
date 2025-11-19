@@ -15,6 +15,7 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -131,8 +132,8 @@ class Command(BaseCommand):
         """
         util.is_valid_address_port(address)
         target_arg = f"-worker_address={address}"
-
-        cmd = ["pgrep", "-f", "--", target_arg]
+        target_arg = re.escape(target_arg)
+        cmd = ["pgrep", "-fl", "--", target_arg]
         try:
             output = subprocess.check_output(
                 cmd,
@@ -144,7 +145,12 @@ class Command(BaseCommand):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"No matching process found for {target_arg}") from e
 
-        pids = [int(pid) for pid in output.strip().split('\n') if pid]
+        pids = []
+        for line in output.strip().splitlines():
+            current_pid, pid_name = line.split(' ')
+            if pid_name != "dscli":
+                pids.append(int(current_pid))
+
         if not pids:
             raise RuntimeError(f"No matching process found for {target_arg}")
         if len(pids) > 1:

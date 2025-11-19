@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from datasystem.cli.common.constant import ClusterConfig
 
-DANGER = re.compile(r'''[;&|`$()<>{}[\]!*?\n\t\r\x0b\x0c'"\\]''')
+DANGER = re.compile(r'''[;&|`$()<>{}!*?\n\t\r\x0b\x0c'"\\]''')
 UNSAFE = ["/bin", "/sbin", "/lib", "/lib64", "/",
           "/boot", "/dev", "/etc", "/sys", "/proc"]
 
@@ -51,6 +51,28 @@ def valid_safe_path(path: str):
     return norm_path
 
 
+def is_valid_ip(addr: str) -> bool:
+    """
+    Validate the addr is valid IP address. Checks both IPv4 and IPv6
+    Returns True if it was valid and is an IPv6 address
+
+    Args:
+        addr: IP address
+
+    Raises:
+        ValueError: If input contains potential command-injection characters.
+    """
+    try:
+        ipaddress.IPv4Address(addr)
+        return False
+    except ipaddress.AddressValueError:
+        try:
+            ipaddress.IPv6Address(addr)
+            return True
+        except ipaddress.AddressValueError as e2:
+            raise ValueError(f"Invalid address {addr}") from e2
+
+
 def is_valid_ipv4(addr: str):
     """
     Validate the addr is valid IPV4 address.
@@ -65,6 +87,22 @@ def is_valid_ipv4(addr: str):
         ipaddress.IPv4Address(addr)
     except ipaddress.AddressValueError as e:
         raise ValueError(f"Invalid address {addr}") from e
+
+
+def is_valid_ipv6(addr: str):
+    """
+    Validate the addr is valid IPV6 address.
+
+    Args:
+        addr: IP address
+
+    Raises:
+        ValueError: If input contains potential command-injection characters.
+    """
+    try:
+        ipaddress.IPv6Address(addr)
+    except ipaddress.AddressValueError as e:
+        raise ValueError(f"Invalid IPv6 address {addr}") from e
 
 
 def is_valid_port(port):
@@ -84,7 +122,11 @@ def is_valid_port(port):
 
 def is_valid_address_port(addr_port: str):
     """
-    Validate the addr_port is valid IPV4 address with port.
+    Validate the addr_port is valid IP address with port.
+    Allowed input formats:
+    ipv4_format:port
+    [ipv6_format]:port
+    Note that ipv6_format internally contains multiple ':' characters
 
     Args:
         addr_port: IP address with port
@@ -93,11 +135,20 @@ def is_valid_address_port(addr_port: str):
         ValueError: If input contains potential command-injection characters.
     """
     try:
-        addr, port = addr_port.split(':')
+        port_delim_pos = addr_port.rfind(":")
+        addr, port = addr_port[:port_delim_pos], addr_port[port_delim_pos + 1:]
     except ValueError as e:
         raise ValueError(f"Invalid address:port {addr_port}") from e
 
-    is_valid_ipv4(addr)
+    if addr[0] == '[':
+        if addr[-1] == ']':
+            addr = addr[1:-1]
+            is_valid_ipv6(addr)
+        else:
+            raise ValueError(f"Invalid address:port {addr_port}") from e
+    else:
+        is_valid_ipv4(addr)
+
     is_valid_port(port)
 
 

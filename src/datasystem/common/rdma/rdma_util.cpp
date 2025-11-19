@@ -103,6 +103,16 @@ Status GetDevNameFromDestIp(const std::string &ipAddr, std::string &devName)
     return Status::OK();
 }
 
+void *GetInterfaceInAddr(struct ifaddrs *ifa)
+{
+    // AF_INET version (IPv4)
+    if (ifa->ifa_addr->sa_family == AF_INET) {
+        return &((reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr))->sin_addr);
+    }
+    // AF_INET6 version (IPv6)
+    return &((reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr))->sin6_addr);
+}
+
 int GetDevNameFromLocalIp(const std::string &ipAddr, std::string &devName)
 {
     struct ifaddrs *ifaddr, *ifa;
@@ -121,13 +131,12 @@ int GetDevNameFromLocalIp(const std::string &ipAddr, std::string &devName)
 
         family = ifa->ifa_addr->sa_family;
 
-        if (family == AF_INET && (expectedFlags & ifa->ifa_flags) == expectedFlags) {
+        if ((family == AF_INET || family == AF_INET6) && (expectedFlags & ifa->ifa_flags) == expectedFlags) {
             // Record device name in case the exact matching one is missing
             devName = std::string(ifa->ifa_name);
-            std::string inetRes(IPV4_MAX_LENGTH, 0);
-            if (0
-                == strcmp(ipAddr.c_str(), inet_ntop(AF_INET, &(((struct sockaddr_in *)ifa->ifa_addr)->sin_addr),
-                                                    const_cast<char *>(inetRes.c_str()), inetRes.size()))) {
+            std::string inetRes(INET6_ADDRSTRLEN, 0);
+            if (0 == strcmp(ipAddr.c_str(), inet_ntop(ifa->ifa_addr->sa_family, GetInterfaceInAddr(ifa),
+                                                      const_cast<char *>(inetRes.c_str()), inetRes.size()))) {
                 VLOG(RDMA_LOG_LEVEL) << FormatString("find success devname=%s\n", ifa->ifa_name);
                 found = true;
             }

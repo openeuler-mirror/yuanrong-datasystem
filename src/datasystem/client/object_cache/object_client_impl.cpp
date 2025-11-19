@@ -132,7 +132,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     clientStateManager_ = std::make_unique<ClientStateManager>();
     ConnectOptions connectOptions = connectOptions1;
     ReadOptFromEnv(connectOptions);
-    ipAddress_ = connectOptions.host + ":" + std::to_string(connectOptions.port);
+    ipAddress_ = HostPort(connectOptions.host, connectOptions.port);
     timeoutMs_ = connectOptions.connectTimeoutMs;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
@@ -210,15 +210,13 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         return rc;
     }
 
-    LOG(INFO) << "Start to init worker client at address:" << ipAddress_;
+    LOG(INFO) << "Start to init worker client at address: " << ipAddress_.ToString();
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
-    HostPort hostPort;
-    RETURN_IF_NOT_OK(hostPort.ParseString(ipAddress_));
     CHECK_FAIL_RETURN_STATUS(timeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
     workerApi_[LOCAL_WORKER] =
-        std::make_shared<ClientWorkerApi>(hostPort, cred_, heartbeatType, signature_.get(), tenantId_,
+        std::make_shared<ClientWorkerApi>(ipAddress_, cred_, heartbeatType, signature_.get(), tenantId_,
                                           enableCrossNodeConnection_, enableExclusiveConnection_);
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(timeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
@@ -435,7 +433,7 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWor
             continue;
         }
         LOG(INFO) << FormatString("[Switch] Switch worker to %s", standbyWorker.ToString());
-        if (ipAddress_ == standbyWorker.ToString()) {
+        if (ipAddress_ == standbyWorker) {
             if (TrySwitchBackToLocalWorker()) {
                 result = true;
                 break;

@@ -19,6 +19,8 @@
 #include <limits>
 #include <unordered_map>
 
+#include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
@@ -90,17 +92,37 @@ Status ZmqSocketRef::GetOption(int option, void *val, size_t *len) const
 Status ZmqSocketRef::Bind(const std::string &endPoint)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(sock_ != nullptr, K_INVALID, "Null reference pointer");
-    int rc = zmq_bind(sock_, endPoint.data());
+    int rc;
+    if (RpcChannel::IsTcpipEndPointIPv6(endPoint)) {
+        int optV6 = 1;
+        VLOG(RPC_LOG_LEVEL) << "ZmqSocketRef Bind is setting the ipv6 socket option for endpoint: " << endPoint;
+        rc = zmq_setsockopt(sock_, ZMQ_IPV6, &optV6, sizeof(optV6));
+        if (rc == -1) {
+            return ZmqErrnoToStatus(errno, FormatString("ZMQ Bind failed to set IPv6 for endPoint: %s", endPoint));
+        }
+    }
+    rc = zmq_bind(sock_, endPoint.data());
     if (rc == -1) {
         return ZmqErrnoToStatus(errno, FormatString("ZMQ bind to %s unsuccessful", endPoint));
     }
     return Status::OK();
 }
 
-Status ZmqSocketRef::Connect(const std::string &endPoint)
+Status ZmqSocketRef::Connect(const std::string &endPoint, bool isIPv6)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(sock_ != nullptr, K_INVALID, "Null reference pointer");
-    int rc = zmq_connect(sock_, endPoint.data());
+    int rc;
+    // Check the endpoint name for IPv6 format
+    if (isIPv6) {
+        int optV6 = 1;
+        VLOG(RPC_LOG_LEVEL) << "ZmqSocketRef Connect is setting the ipv6 socket option for endpoint: " << endPoint;
+        rc = zmq_setsockopt(sock_, ZMQ_IPV6, &optV6, sizeof(optV6));
+        if (rc == -1) {
+            return ZmqErrnoToStatus(errno, FormatString("ZMQ connect failed to set IPv6 for endPoint: %s", endPoint));
+        }
+    }
+    
+    rc = zmq_connect(sock_, endPoint.data());
     if (rc == -1) {
         return ZmqErrnoToStatus(errno, FormatString("ZMQ connect to %s unsuccessful", endPoint));
     }

@@ -35,6 +35,7 @@ namespace datasystem {
 namespace st {
 namespace {
 const char *HOST_IP = "127.0.0.1";
+const char *HOST_IPV6 = "::1";
 constexpr int WORKER_NUM = 3;
 constexpr int64_t NON_SHM_SIZE = 499 * 1024;
 constexpr int64_t SHM_SIZE = 500 * 1024;
@@ -418,7 +419,7 @@ TEST_F(ObjectClientTest, LEVEL1_InvalidateBufferAndRePublishSuccess)
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
     std::shared_ptr<ObjectClient> client;
-    const int32_t timeoutMs = 1'000;
+    const int32_t timeoutMs = 1000;
     InitTestClient(0, client, timeoutMs);
     int dataSize = SHM_SIZE;
     CreateParam param{};
@@ -2244,7 +2245,7 @@ TEST_F(ObjectClientTest, TestMisuseGenerateKey)
     // case 2: cleint not init
     std::shared_ptr<ObjectClient> client2;
     ConnectOptions connectOptions;
-    auto timeoutMs = 60'000;
+    auto timeoutMs = 60000;
     InitConnectOpt(0, connectOptions, timeoutMs);
     client2 = std::make_shared<ObjectClient>(connectOptions);
     DS_ASSERT_NOT_OK(client2->GenerateObjectKey(validId, objectKey));
@@ -2348,6 +2349,105 @@ TEST_F(ObjectClientTest2, TestStoreError)
     EXPECT_EQ(client->GDecreaseRef({ objectKey }, failedObjectKeys).GetCode(), StatusCode::K_KVSTORE_ERROR);
     failedObjectKeys.clear();
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
+    ASSERT_TRUE(failedObjectKeys.empty());
+}
+
+class ObjectClientTestIPv6 : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 2;
+        opts.numEtcd = 1;
+        opts.enableDistributedMaster = "false";
+        opts.disableRocksDB = false;
+
+        opts.workerConfigs.emplace_back(HOST_IPV6, GetFreePort());
+        opts.workerConfigs.emplace_back(HOST_IPV6, GetFreePort());
+
+        // etcd setup IPv6 addrs
+        opts.etcdIpAddrs.clear();
+        opts.etcdIpAddrs.emplace_back(
+            std::make_pair(HostPort(HOST_IPV6, GetFreePort()), HostPort(HOST_IPV6, GetFreePort())));
+
+        std::string workers;
+        for (const auto &worker : opts.workerConfigs) {
+            workers += worker.ToString() + " ";
+        }
+        std::string etcdPairs;
+        for (const auto &etcdPair : opts.etcdIpAddrs) {
+            etcdPairs += etcdPair.first.ToString() + "," + etcdPair.second.ToString() + " ";
+        }
+        LOG(INFO) << "ObjClientTestIPv6 cluster configs.\nWorkers: " << workers << "\netcdPairs:\n" << etcdPairs;
+    }
+};
+
+TEST_F(ObjectClientTestIPv6, IPv6_PutGet)
+{
+    // Simple put and get test, ensuring rpcs are sent okay given worker started with IPv6 format
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+    std::string objectKey = NewObjectKey();
+    std::string data = GenRandomString(NON_SHM_SIZE);
+
+    std::vector<std::string> failedObjectKeys;
+    DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
+    DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), NON_SHM_SIZE,
+                             CreateParam{}));
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(client->Get({ objectKey }, 0, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    ASSERT_EQ(data,
+              std::string(reinterpret_cast<const char *>((*buffers[0]).ImmutableData()), (*buffers[0]).GetSize()));
+    DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
+    ASSERT_EQ(failedObjectKeys.size(), size_t(0));
+}
+
+TEST_F(ObjectClientTestIPv6, IPv6_PutGetRemote)
+{
+    // This is a basically a copy of the EndToEndRemoteGet from the ObjectClientTest version of the testcase.
+    std::string objectKey = NewObjectKey();
+    std::shared_ptr<Buffer> buffer;
+    std::shared_ptr<ObjectClient> client;
+    std::shared_ptr<ObjectClient> client1;
+    int64_t size = NON_SHM_SIZE;
+    InitTestClient(0, client);
+    InitTestClient(1, client1);
+    std::string data = GenRandomString(size);
+
+    DS_ASSERT_OK(client->Create(objectKey, size, CreateParam{}, buffer));
+    ASSERT_NE(buffer, nullptr);
+    ASSERT_EQ(size, buffer.get()->GetSize());
+    std::vector<std::string> objectKeys{ objectKey };
+    std::vector<std::string> failedObjectKeys;
+    DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
+    buffer->WLatch();
+    buffer->MemoryCopy(data.data(), size);
+    buffer->Seal();
+    buffer->UnWLatch();
+
+    std::vector<Optional<Buffer>> buffers;
+    std::vector<Optional<Buffer>> buffer1;
+    DS_ASSERT_OK(client->Get(objectKeys, 0, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    ASSERT_EQ(buffers.size(), objectKeys.size());
+    ASSERT_EQ(buffers[0]->GetSize(), size);
+    buffers[0]->RLatch();
+    AssertBufferEqual(*buffers[0], data);
+    buffers[0]->UnRLatch();
+
+    DS_ASSERT_OK(client1->Get(objectKeys, 0, buffer1));
+    ASSERT_TRUE(NotExistsNone(buffer1));
+    DS_ASSERT_OK(client1->GIncreaseRef(objectKeys, failedObjectKeys));
+    ASSERT_TRUE(failedObjectKeys.empty());
+    ASSERT_EQ(buffer1.size(), objectKeys.size());
+    ASSERT_EQ(buffer1[0]->GetSize(), size);
+    buffer1[0]->RLatch();
+    AssertBufferEqual(*buffer1[0], data);
+    buffer1[0]->UnRLatch();
+    DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
+    ASSERT_TRUE(failedObjectKeys.empty());
+
+    DS_ASSERT_OK(client->GDecreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 }
 }  // namespace st

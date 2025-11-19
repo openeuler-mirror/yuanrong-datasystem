@@ -56,7 +56,7 @@ DS_DECLARE_string(etcd_key);
 DS_DECLARE_string(etcd_passphrase_path);
 
 namespace datasystem {
-static constexpr int SEND_RPC_TIMEOUT_MS_DEFAULT = 50'000;
+static constexpr int SEND_RPC_TIMEOUT_MS_DEFAULT = 50000;
 struct RouterClientCurveKit {
     std::string etcdCa;
     SensitiveValue etcdCert;
@@ -139,7 +139,7 @@ public:
         std::unique_ptr<typename T::Stub> rpcStub = T::NewStub(channel);
         // Rpc create.
         auto session = std::make_unique<GrpcSession>(addresses, std::move(rpcStub));
-        LOG(INFO) << "Create rpc session, dst address is " << addresses;
+        LOG(INFO) << "Create rpc session. Prefix: " << prefix << ", dst address: " << addresses;
         return session;
     }
 
@@ -177,7 +177,7 @@ public:
         std::unique_ptr<typename T::Stub> rpcStub = T::NewStub(channel);
         // Rpc create.
         rpcSession = std::make_unique<GrpcSession>(addresses, std::move(rpcStub));
-        LOG(INFO) << "Create rpc session with client certificate, dst address is " << addresses;
+        LOG(INFO) << "Create rpc session with client certificate. Prefix: " << prefix << ", dst address: " << addresses;
         return Status::OK();
     }
 
@@ -253,7 +253,7 @@ public:
         if (IsTermSignalReceived() && isKeepAliveTimeoutHandler_ && isKeepAliveTimeoutHandler_()) {
             RETURN_STATUS(K_RETRY_IF_LEAVING, "During worker exit, avoid accessing etcd if etcd fails.");
         }
-        int defaultTimeoutMs = 10'000;  // 10s
+        int defaultTimeoutMs = 10000;  // 10s
         return RetryOnError(
             timeoutMs, std::move(func), []() { return Status::OK(); }, { K_RPC_UNAVAILABLE }, defaultTimeoutMs);
     }
@@ -340,14 +340,21 @@ public:
         char delimiter = ',';
         std::stringstream sstream(addresses);
         std::string word;
+        int numIPv6 = 0;
+        // Apparently addresses can contain more than one address since this is a loop.
+        // If at least one of the address is in the IPv6 format, return v6 prefix.
         while (std::getline(sstream, word, delimiter)) {
-            if (Validator::ValidateHostPortIPv4("GrpcAddress", word)) {
+            if (Validator::ValidateHostPortString("GrpcAddress", word)) {
+                // Host is valid. Check if it was a IPv6.
+                if (Validator::IsValidIPv6HostPortString("GrpcAddress", word)) {
+                    ++numIPv6;
+                }
                 continue;
             } else {
                 return "";
             }
         }
-        return "ipv4:///";
+        return (numIPv6 == 0) ? "ipv4:///" : "ipv6:///";
     }
 
     /**

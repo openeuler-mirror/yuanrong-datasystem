@@ -218,6 +218,14 @@ public:
         return hostPort_.Port();
     }
 
+    int GetWorkHostPortINETFamily() const
+    {
+        if (hostPort_.IsIPv6()) {
+            return AF_INET6;
+        }
+        return AF_INET;
+    }
+
     /**
      * @brief Set the isUseStandbyWorker
      * @param[in] isUseStandbyWorker

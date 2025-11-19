@@ -195,7 +195,7 @@ TEST_F(ClientManagerTest, TestRunCallbackByUDSHeartbeat)
     sockaddr_un addr{};
     DS_ASSERT_OK(sockFd.CreateUnixSocket());
     DS_ASSERT_OK(UnixSockFd::SetUpSockPath(sockPath, addr));
-    DS_ASSERT_OK(sockFd.Bind(addr, RPC_SOCK_MODE));
+    DS_ASSERT_OK(sockFd.BindUds(addr, RPC_SOCK_MODE));
     int socketFd = sockFd.GetFd();
 
     // Manager a client and register a callback
