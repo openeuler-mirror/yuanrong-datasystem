@@ -1923,8 +1923,11 @@ Status ObjectClientImpl::Set(const StringView &val, const SetParam &setParam, st
 Status ObjectClientImpl::CheckMultiSetInputParamValidationNtx(const std::vector<std::string> &keys,
                                                               const std::vector<StringView> &vals,
                                                               std::vector<std::string> &outFailedKeys,
-                                                              std::map<std::string, StringView> &kv)
+                                                              std::vector<std::string> &deduplicateKeys,
+                                                              std::vector<StringView> &deduplicateVals)
 {
+    std::unordered_set<std::string_view> keySet;
+    keySet.reserve(keys.size());
     CHECK_FAIL_RETURN_STATUS(!keys.empty(), K_INVALID, "The keys should not be empty.");
     CHECK_FAIL_RETURN_STATUS(keys.size() == vals.size(), K_INVALID, "The number of key and value is not the same.");
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -1932,11 +1935,21 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidationNtx(const std::vector<
         RETURN_IF_NOT_OK(CheckValidObjectKey(keys[i]));
         CHECK_FAIL_RETURN_STATUS(vals[i].data() != nullptr, K_INVALID,
                                  FormatString("The value associated with key %s should not be empty.", keys[i]));
-        if (kv.find(keys[i]) == kv.end()) {
-            kv[keys[i]] = vals[i];
-        } else {
+        auto [it, inserted] = keySet.emplace(keys[i]);
+        (void)it;
+        if (!inserted) {
             LOG(ERROR) << "The input parameter contains duplicate key " << keys[i];
             outFailedKeys.emplace_back(keys[i]);
+        }
+    }
+    if (!outFailedKeys.empty()) {
+        for (size_t i = 0; i < keys.size(); ++i) {
+            if (keySet.find(keys[i]) == keySet.end()) {
+                continue;
+            }
+            deduplicateKeys.emplace_back(keys[i]);
+            deduplicateVals.emplace_back(vals[i]);
+            keySet.erase(keys[i]);
         }
     }
     return Status::OK();
@@ -2050,8 +2063,10 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &param, std::vector<std::string> &outFailedKeys)
 {
-    std::map<std::string, StringView> kv;
-    RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, kv));
+    RETURN_IF_NOT_OK(IsClientReady());
+    std::vector<std::string> deduplicateKeys;
+    std::vector<StringView> deduplicateVals;
+    RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
     std::shared_ptr<ClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -2060,16 +2075,8 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     creatParam.writeMode = param.writeMode;
     creatParam.consistencyType = ConsistencyType::CAUSAL;
     creatParam.cacheType = param.cacheType;
-    std::vector<std::string> filteredKeys;
-    std::vector<StringView> filteredValues;
-    filteredKeys.reserve(kv.size());
-    filteredValues.reserve(kv.size());
-    for (const auto &key : keys) {
-        if (kv.find(key) != kv.end()) {
-            filteredKeys.emplace_back(key);
-            filteredValues.emplace_back(kv[key]);
-        }
-    }
+    const std::vector<std::string> &filteredKeys = deduplicateKeys.empty() ? keys : deduplicateKeys;
+    const std::vector<StringView> &filteredValues = deduplicateVals.empty() ? vals : deduplicateVals;
     PerfPoint point(PerfKey::CLIENT_MSET_MULTICREATE);
     std::vector<uint64_t> dataSizeList;
     uint64_t dataSizeSum = 0;

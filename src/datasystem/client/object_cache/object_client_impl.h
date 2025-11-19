@@ -1009,14 +1009,15 @@ private:
      * @param[in] vals The values for the keys.
      * @param[in] existence Whether set if some key exists.
      * @param[out] outFailedKeys out failed keys.
-     * @param[out] kvs key and values for set.
+     * @param[out] deduplicateKeys the deduplicate key .
+     * @param[out] deduplicateVals the deduplicate vals .
      * @return K_OK on success; the error code otherwise.
      */
     Status CheckMultiSetInputParamValidationNtx(const std::vector<std::string> &keys,
                                                 const std::vector<StringView> &vals,
                                                 std::vector<std::string> &outFailedKeys,
-                                                std::map<std::string, StringView> &kv);
-
+                                                std::vector<std::string> &deduplicateKeys,
+                                                std::vector<StringView> &deduplicateVals);
     /**
      * @brief Check the validation of the input parameter of the multiple set.
      * @param[in] keys The keys to be set.

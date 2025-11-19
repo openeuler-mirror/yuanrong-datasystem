@@ -194,12 +194,18 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
             exists[i] = rsp.exists(i);
         }
     }
-    for (const auto& res : rsp.results()) {
-        if (!res.shm_id().empty()) {
-            useShmTransfer = true;
-            break;
+    auto checkUseShm = [&rsp, &skipCheckExistence]() {
+        if (skipCheckExistence) {
+            return true;
         }
-    }
+        for (const auto& res : rsp.results()) {
+            if (!res.shm_id().empty()) {
+                return true;
+            }
+        }
+        return false;
+    };
+    useShmTransfer = checkUseShm();
     if (!useShmTransfer) {
         return Status::OK();
     }
