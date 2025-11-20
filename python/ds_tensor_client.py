@@ -26,7 +26,7 @@ from datasystem.hetero_client import (
     Future
 )
 from datasystem.lib import libds_client_py as ds
-from datasystem.kv_client import SetParam
+from datasystem.kv_client import SetParam, WriteMode
 from datasystem.util import Validator as validator
 
 try:
@@ -819,7 +819,9 @@ class DsTensorClient:
         validator.check_args_types(args)
         self._check_tensors_is_contiguous(layer_tensors)
         dev_blob_list = self._page_attn_blockwise_dbls(layer_tensors, block_ids, self._device_id)
-        return self._hetero_client.async_mset_d2h(keys, dev_blob_list)
+        set_param = SetParam()
+        set_param.write_mode = WriteMode.NONE_L2_CACHE_EVICT
+        return self._hetero_client.async_mset_d2h(keys, dev_blob_list, set_param)
 
     def mget_page_attn_blockwise_h2d(
         self,
