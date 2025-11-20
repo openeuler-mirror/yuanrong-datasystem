@@ -36,7 +36,7 @@ namespace object_cache {
 
 WorkerOcServiceGlobalReferenceImpl::WorkerOcServiceGlobalReferenceImpl(
     WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-    std::shared_ptr<ObjectGlobalRefTable> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
+    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
     HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
       etcdCM_(etcdCM),

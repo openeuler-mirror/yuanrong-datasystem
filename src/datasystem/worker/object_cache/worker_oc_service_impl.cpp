@@ -143,7 +143,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     initOkFuture_ = initOk_.get_future();
     workerMasterApiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddress_, akSkManager_, masterOCService);
     memoryRefTable_ = std::make_shared<SharedMemoryRefTable>();
-    globalRefTable_ = std::make_shared<ObjectGlobalRefTable>();
+    globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
     asyncRollbackManager_ = std::make_shared<AsyncRollbackManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);

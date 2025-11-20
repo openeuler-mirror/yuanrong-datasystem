@@ -89,7 +89,7 @@ protected:
     std::vector<std::string> objKeys_;
 
     using MemRefTable = datasystem::object_cache::SharedMemoryRefTable;
-    using GlobalRefTable = datasystem::object_cache::ObjectGlobalRefTable;
+    using GlobalRefTable = datasystem::object_cache::ObjectGlobalRefTable<ImmutableString>;
     using SafeObjType = datasystem::SafeObject<datasystem::ObjectInterface>;
     using ObjectTable = datasystem::SafeTable<std::string, datasystem::ObjectInterface>;
 

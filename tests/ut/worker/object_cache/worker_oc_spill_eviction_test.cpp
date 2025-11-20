@@ -71,7 +71,7 @@ public:
         FLAGS_v = 1;
 
         objectTable_ = std::make_shared<ObjectTable>();
-        gRefTable_ = std::make_shared<ObjectGlobalRefTable>();
+        gRefTable_ = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
         akSkManager_ = std::make_shared<AkSkManager>(0);
         DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, workerAddr_, workerAddr_);
@@ -137,7 +137,7 @@ protected:
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::shared_ptr<AkSkManager> akSkManager_;
-    std::shared_ptr<ObjectGlobalRefTable> gRefTable_;
+    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> gRefTable_;
 };
 
 TEST_F(SpillEvictionTest, DISABLED_TestSpillEvictableObject)

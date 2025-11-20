@@ -366,7 +366,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotExistInObjTable)
 {
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     std::string objectKey1 = "test";
@@ -411,7 +411,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjWriteThroughHashMap)
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());
-    DS_EXPECT_OK(evictionManager.Init(std::make_shared<ObjectGlobalRefTable>(), akSkManager_));
+    DS_EXPECT_OK(evictionManager.Init(std::make_shared<ObjectGlobalRefTable<ImmutableString>>(), akSkManager_));
 
     // Put HashMap objects
     std::shared_ptr<SafeObjType> entry;
@@ -475,7 +475,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotPrimaryCopy)
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put
@@ -525,7 +525,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopy)
     FLAGS_spill_directory = "./spill_TestEvictObjPrimaryCopy";
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put
@@ -584,7 +584,7 @@ TEST_F(EvictionManagerAndMasterTest, LEVEL1_TestEvictObjWithLock)
     FLAGS_spill_directory = "./spill_TestEvictObjWithLock";
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
     // Put
     auto masterClient = CreateClient(0);
@@ -676,7 +676,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillDisableWithoutL2Cache)
     FLAGS_spill_directory = "";
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put
@@ -724,7 +724,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillDisableWithL2Cache)
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put
@@ -777,7 +777,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_WriteBackDelayTest)
     std::shared_ptr<WorkerOcEvictionManager> evictionManager =
         std::make_shared<WorkerOcEvictionManager>(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager->SetClusterManager(cm_.get());
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager->Init(globalRefTable, akSkManager_));
 
     std::shared_ptr<PersistenceApi> api = std::make_shared<PersistenceApi>();
@@ -831,7 +831,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillSizeLimit)
     FLAGS_spill_size_limit = limit;
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put
@@ -877,7 +877,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopyAlreadySpilled)
 {
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put
@@ -923,7 +923,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjConcurrently1111)
     FLAGS_spill_directory = "spill_TestEvictObjConcurrently";
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_);
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     // Put

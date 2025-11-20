@@ -273,7 +273,7 @@ void OCMetadataManager::Shutdown()
 
 Status OCMetadataManager::InitGlobalRef()
 {
-    globalRefTable_ = std::make_unique<object_cache::ObjectGlobalRefTable>();
+    globalRefTable_ = std::make_unique<object_cache::ObjectGlobalRefTable<ImmutableString>>();
     // Recovery GLOBAL_REF_TABLE from the Rocksdb.
     RETURN_IF_NOT_OK(LoadRefFromRocks(
         GLOBAL_REF_TABLE, [this](const std::string &key, const std::string &objKey, bool isRemoteClient) {

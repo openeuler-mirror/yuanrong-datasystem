@@ -1065,7 +1065,7 @@ public:
     /**
      * @brief Return a pointer to global reference table.
      */
-    object_cache::ObjectGlobalRefTable *GetGlobalRefTable()
+    object_cache::ObjectGlobalRefTable<ImmutableString> *GetGlobalRefTable()
     {
         return globalRefTable_.get();
     }
@@ -1759,7 +1759,9 @@ private:
     std::unique_ptr<object_cache::WorkerLocalWorkerOCApi> localApi_;
 
     std::shared_ptr<ObjectMetaStore> objectStore_{ nullptr };                        // Metadata store for object.
-    std::unique_ptr<object_cache::ObjectGlobalRefTable> globalRefTable_{ nullptr };  // object global reference.
+    std::unique_ptr<object_cache::ObjectGlobalRefTable<ImmutableString>> globalRefTable_{
+        nullptr
+    };                                                                               // object global reference.
     std::unique_ptr<OCNestedManager> nestedRefManager_{ nullptr };                   // object nested reference manager.
 
     TbbRemoteClientIdRefTable clientIdRefTable_;     // remote client id to master ip table

@@ -607,7 +607,7 @@ public:
     /**
      * @brief Return a pointer to global reference table.
      */
-    ObjectGlobalRefTable *GetGlobalRefTable()
+    ObjectGlobalRefTable<ImmutableString> *GetGlobalRefTable()
     {
         return globalRefTable_.get();
     }
@@ -1106,7 +1106,7 @@ private:
     std::atomic<bool> setValue_ = false;
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::shared_ptr<SharedMemoryRefTable> memoryRefTable_;
-    std::shared_ptr<ObjectGlobalRefTable> globalRefTable_;
+    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> globalRefTable_;
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };

@@ -112,11 +112,12 @@ private:
     bool isUniqueCnt_;
 };
 
-using TbbClientRefTable =
-    tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<ObjectRefInfo<std::string>>>;  // std::string -> ObjectKey
-using TbbObjRefTable = tbb::concurrent_hash_map<ImmutableString, std::unordered_set<ImmutableString>>;
-using TbbFirstRemoteClientTable = tbb::concurrent_hash_map<ImmutableString, std::nullptr_t>;
+template <typename KeyType>
 class ObjectGlobalRefTable {
+    using TbbRefTable = tbb::concurrent_hash_map<KeyType, std::shared_ptr<ObjectRefInfo<std::string>>>;
+    using TbbObjRefTable = tbb::concurrent_hash_map<ImmutableString, std::unordered_set<KeyType>>;
+    using TbbFirstRemoteClientTable = tbb::concurrent_hash_map<KeyType, std::nullptr_t>;
+
 public:
     explicit ObjectGlobalRefTable() = default;
 
@@ -124,80 +125,229 @@ public:
 
     /**
      * @brief Increase the global reference count and construct object-address mapping.
-     * @param[in] clientId Uuid of client.
+     * @param[in] refId The ref key, clientId(in worker side) or address (in master side).
      * @param[in] objectKeys Client references' ids.
      * @param[out] failedIncIds Failed increase ids.
      * @param[out] firstIncIds The first time to increase ids.
      * @param[in] isRemoteClient Identifies whether the reference counting request is in-cloud or out-of-cloud.
      * @return Status of the call.
      */
-    Status GIncreaseRef(const std::string &clientId, const std::vector<std::string> &objectKeys,
-        std::vector<std::string> &failedIncIds, std::vector<std::string> &firstIncIds, bool isRemoteClient = false);
+    Status GIncreaseRef(const KeyType &refId, const std::vector<std::string> &objectKeys,
+                        std::vector<std::string> &failedIncIds, std::vector<std::string> &firstIncIds,
+                        bool isRemoteClient = false)
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        typename TbbRefTable::const_accessor clientAccessor;
+        while (!clientRefTable_.find(clientAccessor, refId)) {
+            typename TbbRefTable::accessor accessor;
+            auto clientInfo = std::make_shared<ObjectRefInfo<std::string>>();  // std::string -> ObjectKey
+            clientRefTable_.emplace(accessor, refId, std::move(clientInfo));
+            // In the off-cloud reference counting scenario, if remoteClient appears for the first time, record it to
+            // remoteClientIdTable_.
+            if (isRemoteClient) {
+                (void)remoteClientIdTable_.insert({ refId, nullptr });
+            }
+        }
+        std::vector<std::string> successVec;
+        Status rc = Status::OK();
+        for (const auto &objectKey : objectKeys) {
+            if (!clientAccessor->second->AddRef(objectKey)) {
+                LOG(WARNING) << FormatString("GIncreaseRef is being processed, but the object key(%s) duplicate.",
+                                             objectKey);
+                continue;
+            }
+            if (saveToKvStore_) {
+                rc = saveToKvStore_(refId, objectKey, isRemoteClient);
+                if (rc.IsError()) {
+                    (void)clientAccessor->second->RemoveRef(objectKey);
+                    failedIncIds.emplace_back(objectKey);
+                    LOG(ERROR) << "Save global reference to kv store failed. status:" << rc.ToString();
+                }
+            }
+            if (rc.IsOk()) {
+                successVec.emplace_back(objectKey);
+            }
+        }
+        std::sort(successVec.begin(), successVec.end());
+
+        for (const auto &objectKey : successVec) {
+            typename TbbObjRefTable::accessor objAccessor;
+            if (!objectRefTable_.find(objAccessor, objectKey)) {
+                (void)objectRefTable_.insert(objAccessor, objectKey);
+            }
+            if (objAccessor->second.empty()) {
+                firstIncIds.emplace_back(objectKey);
+            }
+            objAccessor->second.emplace(refId);
+        }
+        return rc;
+    }
 
     /**
      * @brief Decrease the global reference count and construct object-address mapping.
-     * @param[in] clientId Uuid of client.
+     * @param[in] refId The ref key, clientId(in worker side) or address (in master side).
      * @param[in] objectKeys Client references' ids.
      * @param[out] failDecIds Fail decrease ids.
      * @param[out] finishDecIds The last time to decrease ids.
      * @param[in] isRemoteClient Identifies whether the reference counting request is in-cloud or out-of-cloud.
      * @return Status of the call.
      */
-    Status GDecreaseRef(const std::string &clientId, const std::vector<std::string> &objectKeys,
-        std::vector<std::string> &failedDecIds, std::vector<std::string> &finishDecIds, bool isRemoteClient = false);
+    Status GDecreaseRef(const KeyType &refId, const std::vector<std::string> &objectKeys,
+                        std::vector<std::string> &failedDecIds, std::vector<std::string> &finishDecIds,
+                        bool isRemoteClient = false)
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        std::vector<std::string> successVec;
+        Status rc = Status::OK();
+        {
+            typename TbbRefTable::const_accessor clientAccessor;
+            if (!clientRefTable_.find(clientAccessor, refId)) {
+                LOG(WARNING) << FormatString("GDecreaseRef is being processed, but the client id(%s) does not exist.",
+                                             refId);
+                return Status::OK();
+            }
+            for (const auto &objectKey : objectKeys) {
+                if (!clientAccessor->second->RemoveRef(objectKey)) {
+                    LOG(WARNING) << FormatString(
+                        "GDecreaseRef is being processed, but the object key(%s) does not exist.", objectKey);
+                    continue;
+                }
+                successVec.emplace_back(objectKey);
+                if (removeFromKvStore_) {
+                    rc = removeFromKvStore_(refId, objectKey, isRemoteClient);
+                    if (rc.IsError()) {
+                        (void)clientAccessor->second->AddRef(objectKey);
+                        failedDecIds.emplace_back(objectKey);
+                        LOG(ERROR) << "Remove global reference from kv store failed. status:" << rc.ToString();
+                    }
+                }
+            }
+        }
+        std::sort(successVec.begin(), successVec.end());
+
+        RETURN_IF_NOT_OK(TryEraseClientId(refId, isRemoteClient));
+        for (const auto &objectKey : successVec) {
+            typename TbbObjRefTable::accessor objAccessor;
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectRefTable_.find(objAccessor, objectKey),
+                                                 StatusCode::K_RUNTIME_ERROR,
+                                                 FormatString("Fail to find objectKey: %s", objectKey));
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objAccessor->second.erase(refId), StatusCode::K_RUNTIME_ERROR,
+                                                 FormatString("Fail to erase refId: %s", refId));
+            if (objAccessor->second.empty()) {
+                finishDecIds.emplace_back(objectKey);
+                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectRefTable_.erase(objAccessor), StatusCode::K_RUNTIME_ERROR,
+                                                     FormatString("Fail to erase objectKey: %s", objAccessor->first));
+            }
+        }
+        return rc;
+    }
 
     /**
      * @brief Get the mapping of object-address.
      * @param[out] refTable The relationship of object and address.
      */
-    void GetAllRef(std::unordered_map<std::string, std::unordered_set<std::string>> &refTable) const;
+    void GetAllRef(std::unordered_map<std::string, std::unordered_set<KeyType>> &refTable) const
+    {
+        std::lock_guard<std::shared_timed_mutex> lck(mutex_);
+        for (const auto &kv : objectRefTable_) {
+            std::unordered_set<KeyType> set(kv.second.begin(), kv.second.end());
+            refTable.emplace(kv.first, std::move(set));
+        }
+    }
 
     /**
      * @brief Get a copy of global reference table with client as the key and objects as the value.
      * @param[out] refTable The relationship of client and objects.
      */
-    void GetAllClientRef(std::unordered_map<std::string, std::vector<std::string>> &refTable) const;
+    void GetAllClientRef(std::unordered_map<KeyType, std::vector<std::string>> &refTable) const
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        for (const auto &kv : clientRefTable_) {
+            std::vector<std::string> objKeys;
+            kv.second->GetRefIds(objKeys);
+            refTable.emplace(kv.first, objKeys);
+        }
+    };
 
     /**
      * @brief Get a copy of the remoteClientIdSet_ set of the global reference table.
      * @param[out] remoteClientIds The value specifies which meta is ot-cloud reference counting.
      */
-    void GetRemoteClientIds(std::unordered_set<std::string> &remoteClientIds) const;
+    void GetRemoteClientIds(std::unordered_set<KeyType> &remoteClientIds) const
+    {
+        remoteClientIds.clear();
+        for (typename TbbFirstRemoteClientTable::const_iterator it = remoteClientIdTable_.begin();
+             it != remoteClientIdTable_.end(); ++it) {
+            (void)remoteClientIds.insert(it->first);
+        }
+    };
 
     /**
      * @brief Get all object keys by this client id
-     * @param[in] clientId Uuid of client.
+     * @param[in] refId The ref key, clientId(in worker side) or address (in master side).
      * @param[out] objectKeys The object keys.
      */
-    void GetClientRefIds(const std::string &clientId, std::vector<std::string> &objectKeys) const;
+    void GetClientRefIds(const KeyType &refId, std::vector<std::string> &objectKeys) const
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        typename TbbRefTable::const_accessor accessor;
+        if (clientRefTable_.find(accessor, refId)) {
+            accessor->second->GetRefIds(objectKeys);
+        }
+    };
 
     /**
-     * @brief Check whether the clientId exists in the key of the clientRefTable_ table.
-     * @param[in] clientId Uuid of client.
+     * @brief Check whether the refId exists in the key of the clientRefTable_ table.
+     * @param[in] refId The ref key, clientId(in worker side) or address (in master side).
      * @return false if it exists, true if it doesn't
      */
-    bool IsNotExistRemoteClientId(const std::string &clientId) const;
+    bool IsNotExistRemoteClientId(const KeyType &refId) const
+    {
+        typename TbbFirstRemoteClientTable::const_accessor accessor;
+        auto exists = remoteClientIdTable_.find(accessor, refId);
+        return !exists;
+    }
 
     /**
      * @brief Get the Ref Worker Count for object key.
      * @param[in] objectKey The list of object key.
      * @return The reference count.
      */
-    uint32_t GetRefWorkerCount(const std::string &objectKey) const;
+    uint32_t GetRefWorkerCount(const std::string &objectKey) const
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        typename TbbObjRefTable::accessor accessor;
+        if (objectRefTable_.find(accessor, objectKey)) {
+            return accessor->second.size();
+        }
+        return 0;
+    }
 
     /**
      * @brief Get the Ref Worker Count for each object key.
      * @param[in] objectKeys The list of object key.
      * @param[out] refCounts The reference count.
      */
-    void GetRefWorkerCounts(const std::vector<std::string> &objectKeys, std::vector<uint32_t> &refCounts) const;
+    void GetRefWorkerCounts(const std::vector<std::string> &objectKeys, std::vector<uint32_t> &refCounts) const
+    {
+        for (const auto &objectKey : objectKeys) {
+            refCounts.emplace_back(GetRefWorkerCount(objectKey));
+        }
+    }
 
     /**
      * @brief Get all client ids by object key.
      * @param[in] objectKey The object key.
-     * @param[out] clientIds The list of clientId.
+     * @param[out] refIds The list of refId.
      */
-    void GetObjRefIds(const std::string &objectKey, std::vector<std::string> &clientIds) const;
+    void GetObjRefIds(const std::string &objectKey, std::vector<KeyType> &refIds) const
+    {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        typename TbbObjRefTable::accessor accessor;
+        if (objectRefTable_.find(accessor, objectKey)) {
+            refIds.insert(refIds.end(), accessor->second.begin(), accessor->second.end());
+        }
+    };
 
     /**
      * @brief Register Persistence Functions.
@@ -229,15 +379,34 @@ public:
 
 private:
     /**
-     * @brief Try to erase the clientId from clientRefTable And remoteClientIdSet_.
-     * @param[in] clientId Uuid of client.
+     * @brief Try to erase the refId from clientRefTable And remoteClientIdSet_.
+     * @param[in] refId The ref key, clientId(in worker side) or address (in master side).
      * @return Status of the call.
      */
-    Status TryEraseClientId(const std::string &clientId, bool isRemoteClient);
+    Status TryEraseClientId(const KeyType &refId, bool isRemoteClient)
+    {
+        typename TbbRefTable::accessor clientAccessor;
+        bool isRemoteClientIdRefEmpty = false;
+        if (!clientRefTable_.find(clientAccessor, refId)) {
+            LOG(INFO) << FormatString("GDecreaseRef is being processed, but the client id(%s) does not exist.", refId);
+            isRemoteClientIdRefEmpty = true;
+        } else if (clientAccessor->second->CheckIsRefIdsEmpty()) {
+            // erase refId from clientRefTable_.
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+                clientRefTable_.erase(clientAccessor), StatusCode::K_RUNTIME_ERROR,
+                FormatString("Fail to erase refId %s from clientRefTable_", clientAccessor->first));
+            isRemoteClientIdRefEmpty = true;
+        }
+        // erase remoteClientId from remoteClientIdTable_.
+        if (isRemoteClient && isRemoteClientIdRefEmpty) {
+            (void)remoteClientIdTable_.erase(refId);
+        }
+        return Status::OK();
+    };
 
-    // The map is client id and the objects referenced by this client.
-    TbbClientRefTable clientRefTable_;
-    // The map is object key and the address referenced by this object.
+    // The map is [client id(in worker side) or address(in master side)] -> ObjectInfo
+    TbbRefTable clientRefTable_;
+    // The map is object key -> [client id(in worker side) or address(in master side)]
     TbbObjRefTable objectRefTable_;
     // The table of remote client id.
     // Use concurrent_hash_map as a set to achieve thread security. The key is remoteClientId, and the value is nullptr.
