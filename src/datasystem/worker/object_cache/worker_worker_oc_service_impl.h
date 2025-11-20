@@ -126,7 +126,7 @@ private:
      * @param[out] outPayload Payload buffers.
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The new request id to wait for if not blocking.
-     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @return Status of the call.
      */
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
@@ -141,7 +141,7 @@ private:
      * @param[out] payload Out payloads.
      * @param[out] keys The request id to wait for if not blocking.
      * @param[out] parallelRes Parallel result.
-     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @return Status of the call.
      */
     void GetObjectRemoteBatchWrite(uint32_t subIndex, const GetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
@@ -156,29 +156,29 @@ private:
      * @param[out] info Aggregated info.
      * @return Status of the call.
      */
-    Status PrepareAggreagteMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info);
+    Status PrepareAggregateMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to allocate the aggregate memory.
      * @param[in] parallelIndex Parallel index of the parallel list.
      * @param[in] info Aggregated info.
-     * @param[out] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @param[out] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @return Status of the call.
      */
-    Status AllocateAggreagteMemory(uint64_t parallelIndex, AggregateInfo &info,
+    Status AllocateAggregateMemory(uint64_t parallelIndex, AggregateInfo &info,
                                    std::shared_ptr<AggregateMemory> &batchPtr);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to send the aggregate memory.
      * @param[in] subIndex Sub slot index of the parallel list.
      * @param[in] info Aggregated info.
-     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @param[out] parallelRes Parallel result.
      * @param[in] req Remote get request.
      * @return Status of the call.
      */
-    Status AggreaedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
-                              std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
+    Status AggregaedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
+                               std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
 
     /**
      * @brief Helper function pre-process and then trigger GetObjectRemoteImpl.
@@ -187,7 +187,7 @@ private:
      * @param[out] payload Out payloads.
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The request id to wait for if not blocking.
-     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggreagte path.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @return Status of the call.
      */
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,

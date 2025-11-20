@@ -144,12 +144,13 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
     }
 }
 
-Status WorkerWorkerOCServiceImpl::AllocateAggreagteMemory(uint64_t parallelIndex, AggregateInfo &info,
+Status WorkerWorkerOCServiceImpl::AllocateAggregateMemory(uint64_t parallelIndex, AggregateInfo &info,
                                                           std::shared_ptr<AggregateMemory> &batchPtr)
 {
     if (!info.canBatchHandler) {
         return Status::OK();
     }
+    PerfPoint totalTime(PerfKey::WORKER_AGGREGATE_MEM_ALLOC);
     batchPtr = std::make_shared<AggregateMemory>();
     batchPtr->batchShmUnit = std::make_shared<ShmUnit>();
     Status rc = batchPtr->batchShmUnit->AllocateMemory("", info.batchSizes[parallelIndex], false, ServiceType::OBJECT,
@@ -167,7 +168,7 @@ Status WorkerWorkerOCServiceImpl::AllocateAggreagteMemory(uint64_t parallelIndex
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::PrepareAggreagteMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info)
+Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info)
 {
     uint64_t reqSize = req.requests_size();
 
@@ -213,10 +214,10 @@ Status WorkerWorkerOCServiceImpl::PrepareAggreagteMemory(BatchGetObjectRemoteReq
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::AggreaedMemorySend(uint64_t subIndex, AggregateInfo &info,
-                                                     std::shared_ptr<AggregateMemory> aggregatedMem,
-                                                     std::vector<ParallelRes> &parallelRes,
-                                                     BatchGetObjectRemoteReqPb &req)
+Status WorkerWorkerOCServiceImpl::AggregaedMemorySend(uint64_t subIndex, AggregateInfo &info,
+                                                      std::shared_ptr<AggregateMemory> aggregatedMem,
+                                                      std::vector<ParallelRes> &parallelRes,
+                                                      BatchGetObjectRemoteReqPb &req)
 {
     if (!info.canBatchHandler) {
         return Status::OK();
@@ -235,7 +236,7 @@ Status WorkerWorkerOCServiceImpl::AggreaedMemorySend(uint64_t subIndex, Aggregat
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         UrmaWritePayload(subReq->urma_info(), localSegAddress, localSegSize, localObjectAddress, 0,
                          info.batchSizes[subIndex], ocClientWorkerSvc_->GetMetadataSize(), false, subKeys),
-        "Failed in aggreaed memory urma write");
+        "Failed in aggregate memory urma write");
 
     ShmGuard shmGuard(aggregatedMem->batchShmUnit, info.batchSizes[subIndex], 0);
     RETURN_IF_NOT_OK(shmGuard.TransferTo(subPayload, 0, info.batchSizes[subIndex]));
@@ -383,6 +384,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         // Support send payload exceed 2GB
         if (IsUrmaEnabled() && req.has_urma_info()) {
             if (batchPtr) {
+                PerfPoint aggregateCopy(PerfKey::WORKER_AGGREGATE_MEM_COPY);
                 batchPtr->batchCursor += entry->GetMetadataSize();
                 CHECK_FAIL_RETURN_STATUS(entry->GetMetadataSize() == ocClientWorkerSvc_->GetMetadataSize(),
                                          K_RUNTIME_ERROR,
@@ -414,6 +416,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         }
     }
 
+    PerfPoint rspPoint(PerfKey::WORKER_REMOTE_GET_RESP);
     rsp.mutable_error()->set_error_code(StatusCode::K_OK);  // No size change
     rsp.set_data_size(static_cast<int64_t>(entry->GetDataSize()));
     rsp.set_create_time(static_cast<int64_t>(entry->GetCreateTime()));
@@ -468,18 +471,19 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         std::vector<ParallelRes> parallelRes;
 
         AggregateInfo info;
-        CHECK_FAIL_RETURN_STATUS(PrepareAggreagteMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");
+        CHECK_FAIL_RETURN_STATUS(PrepareAggregateMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");
         uint64_t parallelSize = info.canBatchHandler ? info.batchReqSize.size() : req.requests_size();
 
         parallelRes.resize(parallelSize);
         limited.execute([&] {
             tbb::parallel_for(
                 tbb::blocked_range<uint64_t>(0, parallelSize), [&](const tbb::blocked_range<uint64_t> &r) {
+                    PerfPoint totalTime(PerfKey::WORKER_PARALLEL_BATCH_ASYNC_SEND);
                     for (uint64_t i = r.begin(); i != r.end(); ++i) {
                         uint64_t startPos = info.canBatchHandler ? info.batchStartIndex[i] : i;
                         uint64_t endPos = info.canBatchHandler ? startPos + info.batchReqSize[i] : startPos + 1;
                         std::shared_ptr<AggregateMemory> batchPtr = nullptr;
-                        auto rc = AllocateAggreagteMemory(i, info, batchPtr);
+                        auto rc = AllocateAggregateMemory(i, info, batchPtr);
                         if (rc.IsError()) {
                             LOG(ERROR) << FormatString("[parallel %d] Failed to allocate mem size: %d", i,
                                                        info.batchSizes[i]);
@@ -489,21 +493,23 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
                             auto *subReq = req.mutable_requests(j);
                             GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, parallelRes, batchPtr);
                         }
-                        LOG_IF_ERROR(AggreaedMemorySend(i, info, batchPtr, parallelRes, req),
+                        LOG_IF_ERROR(AggregaedMemorySend(i, info, batchPtr, parallelRes, req),
                                      "Send aggregated mem failed");
                     }
                 });
         });
 
         for (ParallelRes &loc : parallelRes) {
-            for (auto &resp : loc.respPbs)
+            for (auto &resp : loc.respPbs) {
                 rsp.add_responses()->Swap(&resp);
+            }
 
             payload.insert(payload.end(), std::make_move_iterator(loc.pays.begin()),
                            std::make_move_iterator(loc.pays.end()));
 
-            for (auto &[idx, kp] : loc.kps)
+            for (auto &[idx, kp] : loc.kps) {
                 keys.emplace(idx, std::move(kp));
+            }
         }
     } else {
         for (int i = 0; i < req.requests_size(); i++) {
@@ -514,6 +520,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     }
     pointImpl.Record();
     // Wait for urma events if the events are created and not already waited.
+
     for (auto &pair : keys) {
         int index = pair.first;
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
