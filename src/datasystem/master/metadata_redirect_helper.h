@@ -150,6 +150,7 @@ protected:
         std::string newMetaAddr;
         if (!redirect || !FLAGS_enable_redirect) {
             VLOG(1) << "receive redirect object: " << id;
+            redirect = false;
             return;
         }
         std::string localAddr;
@@ -191,6 +192,7 @@ protected:
     void FillRedirectResponseInfos(Rsp &rsp, std::vector<std::string> &ids, bool redirect)
     {
         if (!redirect || !FLAGS_enable_redirect) {
+            redirect = false;
             return;
         }
         std::string localAddr;

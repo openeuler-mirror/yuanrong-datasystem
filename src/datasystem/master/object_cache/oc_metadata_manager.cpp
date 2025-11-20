@@ -2949,6 +2949,7 @@ void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedire
                                         bool &isMoving)
 {
     if (!FLAGS_enable_redirect) {
+        needRedirect = false;
         return;
     }
     HostPort masterAddr;
