@@ -125,6 +125,12 @@ Status ShmOwner::DistributeMemory(uint64_t shmSize, ShmUnit &shmUnit)
 
 uint64_t ShmOwner::AllocatePosition(uint64_t shmSize)
 {
-    return cursor_.fetch_add(shmSize, std::memory_order_acq_rel);
+    return cursor_.fetch_add(Align4BitsCeiling(shmSize), std::memory_order_acq_rel);
+}
+
+uint64_t Align4BitsCeiling(uint64_t size)
+{
+    const uint64_t alignmentMask = 3;
+    return (size + alignmentMask) & ~(alignmentMask);
 }
 }  // namespace datasystem

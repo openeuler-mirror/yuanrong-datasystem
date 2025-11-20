@@ -261,7 +261,7 @@ Status AggregateAllocate(
                 currentKeyCount = 0;
             }
             // Record the size and num, and also map from object key to ShmOwners index.
-            currentBatchSize += shmSize;
+            currentBatchSize += Align4BitsCeiling(shmSize);
             currentKeyCount++;
             shmIndexMapping[objectIndex] = aggreatedSizes.size();
         };

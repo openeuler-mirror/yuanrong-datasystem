@@ -133,6 +133,13 @@ private:
 
     std::atomic<uint64_t> cursor_{ 0 };
 };
+
+/**
+ * @brief Helper function to align size to 4 bits ceiling.
+ * @param[in] size The shared memory size to align.
+ * @return Aligned size.
+ */
+uint64_t Align4BitsCeiling(uint64_t size);
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_SHARED_MEMORY_SHM_UNIT_H
