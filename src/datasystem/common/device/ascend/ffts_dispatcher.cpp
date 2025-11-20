@@ -189,7 +189,6 @@ HcclResult FftsDispatcher::ConstructFftsSqe(rtFftsPlusSqe_t &fftsPlusSqe, uint16
     // Identifies the communication task and optimizes the FFTS+ scheduling performance. (The RTS requires that the
     // AIV/AIC task be 0x5B. Otherwise, the task is 0x5A.)
     // 0x5A: identifies the communication task and optimizes the FFTS+ scheduling performance.
-    const uint8_t TASK_TYPE_AIV_AIC = 0x5B;
     const uint8_t TASK_TYPE_OTHER = 0x5A;
     fftsPlusSqe.subType = TASK_TYPE_OTHER;
     return HCCL_SUCCESS;
