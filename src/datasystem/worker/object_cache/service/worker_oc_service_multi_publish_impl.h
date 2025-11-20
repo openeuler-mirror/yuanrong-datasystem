@@ -23,6 +23,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -59,12 +60,12 @@ public:
     Status MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads);
 
 private:
-    using ObjGroupMap = std::unordered_map<std::string, std::vector<std::pair<std::string, size_t>>>;
+    using ObjGroupMap = std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>>;
 
     struct CreateMeta2PCRes {
         Status rc;
         master::CreateMultiMetaRspPb rsp;
-        std::shared_ptr<worker::WorkerMasterOCApi> api;
+        MetaAddrInfo metaAddrInfo;
     };
 
     /**
@@ -224,35 +225,33 @@ private:
 
     /**
      * @brief Create multimeta request to master in parallel.
-     * @param[in] apis The worker master apis.
+     * @param[in] masterAddrs The master addrs.
      * @param[in] reqs The CreateMultiMeta requests.
      * @param[out] respRes The response list of create.
      * @return Status of the call.
      */
-    void CreateMultiMetaParallel(const std::vector<std::shared_ptr<worker::WorkerMasterOCApi>> &apis,
-                                   std::vector<master::CreateMultiMetaReqPb> &reqs,
-                                   std::vector<CreateMeta2PCRes> &respRes);
+    void CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
+                                 std::vector<master::CreateMultiMetaReqPb> &reqs,
+                                 std::vector<CreateMeta2PCRes> &respRes);
 
     /**
      * @brief Create multimeta request to master in parallel.
      * @param[in] objGroup The group of objects.
-     * @param[in] apis The worker master apis.
+     * @param[in] addrs The master addrs.
      * @param[in] reqs The CreateMultiMeta requests.
      * @return Status of the call.
      */
-    Status CreateMultiMetaParallel(const ObjGroupMap &objGroup,
-                                   const std::vector<std::shared_ptr<worker::WorkerMasterOCApi>> &apis,
+    Status CreateMultiMetaParallel(const ObjGroupMap &objGroup, const std::vector<MetaAddrInfo> &addrs,
                                    std::vector<master::CreateMultiMetaReqPb> &reqs);
 
     /**
      * @brief Create multimeta request to master in serial.
      * @param[in] objGroup The group of objects.
-     * @param[in] apis The worker master apis.
+     * @param[in] addrs The master addrs.
      * @param[in] reqs The CreateMultiMeta requests.
      * @return Status of the call.
      */
-    Status CreateMultiMetaSerial(const ObjGroupMap &objGroup,
-                                 const std::vector<std::shared_ptr<worker::WorkerMasterOCApi>> &apis,
+    Status CreateMultiMetaSerial(const ObjGroupMap &objGroup, const std::vector<MetaAddrInfo> &addrs,
                                  std::vector<master::CreateMultiMetaReqPb> &reqs);
 
     /**
@@ -288,21 +287,20 @@ private:
 
     /**
      * @brief Rollback metadata request to master.
-     * @param[in] apis The worker master apis.
+     * @param[in] addrs The master addrs.
      * @param[in] objGroup The group of objects.
      */
-    void RollbackMultiMetaReq(std::vector<std::shared_ptr<worker::WorkerMasterOCApi>> &apis,
-                              const ObjGroupMap &objGroup);
+    void RollbackMultiMetaReq(std::vector<MetaAddrInfo> &addrs, const ObjGroupMap &objGroup);
 
     /**
      * @brief Retry rollback metadata request when meta moving.
-     * @param[in] api The worker master api.
+     * @param[in] metaAddrInfo The master addr.
      * @param[in] req The RollbackMultiMeta request.
      * @param[out] rsp The responese info of RollbackMultiMeta.
      * @return Status of the call.
      */
-    Status RetryRollbackMultiMetaWhenMoving(std::shared_ptr<worker::WorkerMasterOCApi> api,
-                                            master::RollbackMultiMetaReqPb &req, master::RollbackMultiMetaRspPb &rsp);
+    Status RetryRollbackMultiMetaWhenMoving(const MetaAddrInfo &metaAddrInfo, master::RollbackMultiMetaReqPb &req,
+                                            master::RollbackMultiMetaRspPb &rsp);
 
     /**
      * @brief Retry create multimeta request when meta moving.

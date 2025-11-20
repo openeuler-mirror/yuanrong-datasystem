@@ -46,5 +46,22 @@ bool HasWorkerId(const std::string &objKey);
  * @return The workerId carried in objectKey. If not carried, returns ""
  */
 std::string SplitWorkerIdFromObjecId(const std::string &objKey);
+
+inline const std::string &ExtractObjectId(const std::string &s)
+{
+    return s;
+}
+
+template <typename T>
+inline const std::string &ExtractObjectId(const std::pair<std::string, T> &p)
+{
+    return p.first;
+}
+
+template <typename T>
+inline std::string ExtractObjectId(std::pair<std::string, T> &&p)
+{
+    return std::move(p.first);
+}
 }  // namespace datasystem
 #endif

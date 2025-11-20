@@ -19,6 +19,9 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 
+#include <cstddef>
+#include <optional>
+#include <set>
 #include <utility>
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -33,6 +36,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
@@ -401,7 +405,7 @@ void WorkerOcServiceMultiPublishImpl::FillMultiMetaReqPhaseOne(
     CreateMultiMetaReqPb &req)
 {
     for (const auto &obj : objectKeys) {
-        auto entry = entries[obj.second];
+        const auto &entry = entries[obj.second];
         ObjectBaseInfoPb metadata;
         metadata.set_object_key(obj.first);
         metadata.set_data_size((*entry)->GetDataSize());
@@ -425,16 +429,21 @@ void WorkerOcServiceMultiPublishImpl::FillMultiMetaReqPhaseOne(
     configPb->set_cache_type(pubReq.cache_type());
 }
 
-Status WorkerOcServiceMultiPublishImpl::RetryRollbackMultiMetaWhenMoving(std::shared_ptr<WorkerMasterOCApi> api,
+Status WorkerOcServiceMultiPublishImpl::RetryRollbackMultiMetaWhenMoving(const MetaAddrInfo &metaAddrInfo,
                                                                          RollbackMultiMetaReqPb &req,
                                                                          RollbackMultiMetaRspPb &rsp)
 {
-    LOG(INFO) << "RollbackMultiMetaReq to " << api->GetHostPort() << " objects: " << VectorToString(req.object_keys());
+    LOG(INFO) << "RollbackMultiMetaReq to " << metaAddrInfo.GetAddress()
+              << " objects: " << VectorToString(req.object_keys());
     while (true) {
+        const auto &addr = metaAddrInfo.GetAddressAndSaveDbName();
+        std::shared_ptr<WorkerMasterOCApi> api;
+        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(addr, api));
         RETURN_IF_NOT_OK(api->RollbackMultiMeta(req, rsp));
         if (rsp.info().empty()) {
             return Status::OK();
-        } else if (rsp.meta_is_moving()) {
+        }
+        if (rsp.meta_is_moving()) {
             rsp.Clear();
             std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_INTERNAL_MS_META_MOVING));
             continue;
@@ -478,16 +487,16 @@ Status WorkerOcServiceMultiPublishImpl::RetryRollbackMultiMetaWhenMoving(std::sh
     return Status::OK();
 }
 
-void WorkerOcServiceMultiPublishImpl::RollbackMultiMetaReq(std::vector<std::shared_ptr<WorkerMasterOCApi>> &apis,
+void WorkerOcServiceMultiPublishImpl::RollbackMultiMetaReq(std::vector<MetaAddrInfo> &addrs,
                                                            const ObjGroupMap &objGroup)
 {
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
     auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<std::vector<std::string>>> futures;
     Timer timer;
-    for (auto &api : apis) {
-        const auto &objs = objGroup.at(api->GetHostPort());
-        futures.emplace_back(threadPool_->Submit([this, &api, &objs, timeout, traceId, timer] {
+    for (auto &addr : addrs) {
+        const auto &objs = objGroup.at(addr);
+        futures.emplace_back(threadPool_->Submit([this, &addr, &objs, timeout, &traceId, &timer] {
             int64_t elapsed = timer.ElapsedMilliSecond();
             LOG_IF(WARNING, elapsed > THREAD_WAIT_TIME_MS) << FormatString(
                 "Create meta threads statistics: %s, elapsed ms: %lld", threadPool_->GetStatistics(), elapsed);
@@ -505,7 +514,7 @@ void WorkerOcServiceMultiPublishImpl::RollbackMultiMetaReq(std::vector<std::shar
             reqTimeoutDuration.Init(timeout - elapsed);
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             RollbackMultiMetaRspPb rsp;
-            Status rc = RetryRollbackMultiMetaWhenMoving(api, req, rsp);
+            Status rc = RetryRollbackMultiMetaWhenMoving(addr, req, rsp);
             if (rc.IsError()) {
                 LOG(WARNING) << "RollbackMultiMeta failed, rc: " << rc.ToString();
                 res = { req.object_keys().begin(), req.object_keys().end() };
@@ -534,7 +543,8 @@ Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMetaWhenMoving(std::shar
         RETURN_IF_NOT_OK(api->CreateMultiMeta(req, rsp, false));
         if (rsp.info().empty()) {
             return Status::OK();
-        } else if (rsp.meta_is_moving()) {
+        }
+        if (rsp.meta_is_moving()) {
             rsp.Clear();
             std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_INTERNAL_MS_META_MOVING));
             continue;
@@ -552,7 +562,8 @@ Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMetaPhaseTwoWhenMoving(s
         RETURN_IF_NOT_OK(api->CreateMultiMetaPhaseTwo(req, rsp));
         if (rsp.info().empty()) {
             return Status::OK();
-        } else if (rsp.meta_is_moving()) {
+        }
+        if (rsp.meta_is_moving()) {
             rsp.Clear();
             std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_INTERNAL_MS_META_MOVING));
             continue;
@@ -562,30 +573,36 @@ Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMetaPhaseTwoWhenMoving(s
     return Status::OK();
 }
 
-void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(
-    const std::vector<std::shared_ptr<worker::WorkerMasterOCApi>> &apis,
-    std::vector<master::CreateMultiMetaReqPb> &reqs, std::vector<CreateMeta2PCRes> &respRes)
+void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
+                                                              std::vector<master::CreateMultiMetaReqPb> &reqs,
+                                                              std::vector<CreateMeta2PCRes> &respRes)
 {
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
     auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMeta2PCRes>> futures;
     Timer timer;
-    for (size_t i = 0; i < apis.size(); i++) {
-        auto &api = apis[i];
+    for (size_t i = 0; i < masterAddrs.size(); i++) {
+        auto &masterAddrInfo = masterAddrs[i];
         auto &req = reqs[i];
-        futures.emplace_back(threadPool_->Submit([this, &api, &req, timeout, traceId, timer] {
+        futures.emplace_back(threadPool_->Submit([this, &masterAddrInfo, &req, timeout, &traceId, &timer] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            const auto &masterAddr = masterAddrInfo.GetAddressAndSaveDbName();
+            std::shared_ptr<WorkerMasterOCApi> api;
+            auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
+            if (rc.IsError()) {
+                return CreateMeta2PCRes{ rc, {}, masterAddrInfo };
+            }
             int64_t elapsed = timer.ElapsedMilliSecond();
             LOG_IF(WARNING, elapsed > THREAD_WAIT_TIME_MS) << FormatString(
                 "Create meta threads statistics: %s, elapsed ms: %lld", threadPool_->GetStatistics(), elapsed);
             if (elapsed >= timeout) {
-                return CreateMeta2PCRes{ Status{ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" }, {}, api };
+                return CreateMeta2PCRes{ Status{ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" }, {}, masterAddrInfo };
             }
             reqTimeoutDuration.Init(std::min(timeout - elapsed, MSET_TRANSACTION_TIMEOUT_MS));
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             CreateMultiMetaRspPb rsp;
             PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
-            Status rc = RetryCreateMultiMetaWhenMoving(api, req, rsp);
-            return CreateMeta2PCRes{ rc, rsp, api };
+            rc = RetryCreateMultiMetaWhenMoving(api, req, rsp);
+            return CreateMeta2PCRes{ rc, rsp, masterAddrInfo };
         }));
     }
 
@@ -594,22 +611,22 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(
     }
 }
 
-Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(
-    const ObjGroupMap &objGroup, const std::vector<std::shared_ptr<WorkerMasterOCApi>> &apis,
-    std::vector<CreateMultiMetaReqPb> &reqs)
+Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const ObjGroupMap &objGroup,
+                                                                const std::vector<MetaAddrInfo> &addrs,
+                                                                std::vector<CreateMultiMetaReqPb> &reqs)
 {
     INJECT_POINT("worker.CreateMultiMetaParallel.begin");
     std::vector<CreateMeta2PCRes> respRes;
     respRes.reserve(reqs.size());
-    CreateMultiMetaParallel(apis, reqs, respRes);
+    CreateMultiMetaParallel(addrs, reqs, respRes);
     Status lastRc;
-    std::vector<std::shared_ptr<WorkerMasterOCApi>> preCommitted;
+    std::vector<MetaAddrInfo> preCommitted;
     for (auto &meta : respRes) {
         if (meta.rc.IsError()) {
             lastRc = lastRc.GetCode() == K_OC_KEY_ALREADY_EXIST ? lastRc : meta.rc;
             continue;
         }
-        preCommitted.emplace_back(meta.api);
+        preCommitted.emplace_back(meta.metaAddrInfo);
     }
     if (lastRc.IsError()) {
         RollbackMultiMetaReq(preCommitted, objGroup);
@@ -617,25 +634,32 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(
     return lastRc;
 }
 
-Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaSerial(
-    const ObjGroupMap &objGroup, const std::vector<std::shared_ptr<WorkerMasterOCApi>> &apis,
-    std::vector<CreateMultiMetaReqPb> &reqs)
+Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaSerial(const ObjGroupMap &objGroup,
+                                                              const std::vector<MetaAddrInfo> &addrs,
+                                                              std::vector<CreateMultiMetaReqPb> &reqs)
 {
     int64_t timeoutMs = std::min(reqTimeoutDuration.CalcRealRemainingTime(), MSET_TRANSACTION_TIMEOUT_MS);
     return RetryOnErrorRepent(
         timeoutMs,
         [&](int32_t) {
-            std::vector<std::shared_ptr<WorkerMasterOCApi>> preCommitted;
-            for (size_t i = 0; i < apis.size(); i++) {
+            std::vector<MetaAddrInfo> preCommitted;
+            for (size_t i = 0; i < addrs.size(); i++) {
                 PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
                 CreateMultiMetaRspPb rsp;
-                Status rc = RetryCreateMultiMetaWhenMoving(apis[i], reqs[i], rsp);
+                const auto &masterAddr = addrs[i].GetAddressAndSaveDbName();
+                std::shared_ptr<WorkerMasterOCApi> api;
+                auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
+                if (rc.IsError()) {
+                    RollbackMultiMetaReq(preCommitted, objGroup);
+                    return rc;
+                }
+                rc = RetryCreateMultiMetaWhenMoving(api, reqs[i], rsp);
                 point.Record();
                 if (rc.IsError()) {
                     RollbackMultiMetaReq(preCommitted, objGroup);
                     return rc;
                 }
-                preCommitted.emplace_back(apis[i]);
+                preCommitted.emplace_back(addrs[i]);
             }
             return Status::OK();
         },
@@ -648,16 +672,17 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseOne(
     const ObjGroupMap &objGroup, const std::vector<std::shared_ptr<SafeObjType>> &entries,
     const MultiPublishReqPb &pubReq)
 {
-    std::vector<std::shared_ptr<WorkerMasterOCApi>> apis(objGroup.size());
+    std::vector<MetaAddrInfo> addrs;
+    addrs.reserve(objGroup.size());
     std::vector<CreateMultiMetaReqPb> reqs(objGroup.size());
     int idx = 0;
     for (const auto &[masterAddr, objectKeys] : objGroup) {
-        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApiByAddr(masterAddr, etcdCM_, apis[idx]));
+        addrs.emplace_back(masterAddr);
         FillMultiMetaReqPhaseOne(objectKeys, entries, pubReq, reqs[idx]);
         idx++;
     }
 
-    Status rc = CreateMultiMetaParallel(objGroup, apis, reqs);
+    Status rc = CreateMultiMetaParallel(objGroup, addrs, reqs);
     int conflictCnt = 0;
     const int conflictTolerance = 2;
     auto isConflictFunc = [&conflictCnt](const Status &rc) {
@@ -675,11 +700,11 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseOne(
         int64_t maxWaitInterval = std::min(sleepUpperMs, std::max(0L, reqTimeoutDuration.CalcRealRemainingTime()));
         uint64_t waitTime = RandomData().GetRandomUint64(0, maxWaitInterval * MILLITOMICR);
         std::this_thread::sleep_for(std::chrono::microseconds(waitTime));
-        rc = CreateMultiMetaParallel(objGroup, apis, reqs);
+        rc = CreateMultiMetaParallel(objGroup, addrs, reqs);
     }
     if (isConflictFunc(rc)) {
         LOG(WARNING) << "Metadata creation conflicts, change from parallel to serial.";
-        rc = CreateMultiMetaSerial(objGroup, apis, reqs);
+        rc = CreateMultiMetaSerial(objGroup, addrs, reqs);
     }
     return rc;
 }
@@ -687,16 +712,16 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseOne(
 Status WorkerOcServiceMultiPublishImpl::Process2PCResults(std::vector<std::future<CreateMeta2PCRes>> &futures,
                                                           const ObjGroupMap &objGroup, std::vector<uint64_t> &versions)
 {
-    std::vector<std::shared_ptr<WorkerMasterOCApi>> needRollBack;
+    std::vector<MetaAddrInfo> needRollBack;
     Status lastRc;
     for (auto &future : futures) {
         auto res = future.get();
-        needRollBack.emplace_back(res.api);
+        needRollBack.emplace_back(res.metaAddrInfo);
         if (res.rc.IsError()) {
             lastRc = lastRc.GetCode() == K_OC_KEY_ALREADY_EXIST ? lastRc : res.rc;
             continue;
         }
-        const auto &objs = objGroup.at(res.api->GetHostPort());
+        const auto &objs = objGroup.at(res.metaAddrInfo);
         for (size_t i = 0; i < objs.size(); i++) {
             if (objs[i].second > versions.size()) {
                 continue;
@@ -714,41 +739,38 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseTwo(const ObjGroupMa
                                                                 const MultiPublishReqPb &pubReq,
                                                                 std::vector<uint64_t> &versions)
 {
-    std::vector<std::shared_ptr<WorkerMasterOCApi>> apis(objGroup.size());
-    std::vector<std::vector<std::string>> objs(objGroup.size());
-    int idx = 0;
-    for (const auto &[masterAddr, ids] : objGroup) {
-        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApiByAddr(masterAddr, etcdCM_, apis[idx]));
-        for (const auto &id : ids) {
-            objs[idx].emplace_back(id.first);
-        }
-        idx++;
-    }
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
     auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMeta2PCRes>> futures;
     Timer timer;
-    for (size_t i = 0; i < apis.size(); i++) {
-        futures.emplace_back(threadPool_->Submit([this, &pubReq, i, &apis, &objs, timeout, traceId, timer] {
+    for (const auto &kv : objGroup) {
+        futures.emplace_back(threadPool_->Submit([this, &pubReq, timeout, &traceId, timer, kv] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            const auto &masterAddrInfo = kv.first;
             int64_t elapsed = timer.ElapsedMilliSecond();
             LOG_IF(WARNING, elapsed > THREAD_WAIT_TIME_MS) << FormatString(
                 "Create meta threads statistics: %s, elapsed ms: %lld", threadPool_->GetStatistics(), elapsed);
             if (elapsed >= timeout) {
-                return CreateMeta2PCRes{ Status{ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" }, {}, apis[i] };
+                return CreateMeta2PCRes{ Status{ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" }, {}, masterAddrInfo };
+            }
+            const auto &masterAddr = masterAddrInfo.GetAddressAndSaveDbName();
+            std::shared_ptr<WorkerMasterOCApi> api;
+            auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
+            if (rc.IsError()) {
+                return CreateMeta2PCRes{ rc, {}, masterAddrInfo };
             }
             reqTimeoutDuration.Init(std::min(timeout - elapsed, MSET_TRANSACTION_TIMEOUT_MS));
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             CreateMultiMetaPhaseTwoReqPb req;
-            for (const auto &obj : objs[i]) {
-                req.add_object_keys(obj);
+            for (const auto &obj : kv.second) {
+                req.add_object_keys(obj.first);
             }
             req.set_address(localAddress_.ToString());
             req.set_write_mode(pubReq.write_mode());
             req.set_redirect(true);
             CreateMultiMetaRspPb rsp;
             PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_PHASE_TWO);
-            Status rc = RetryCreateMultiMetaPhaseTwoWhenMoving(apis[i], req, rsp);
-            return CreateMeta2PCRes{ rc, rsp, apis[i] };
+            rc = RetryCreateMultiMetaPhaseTwoWhenMoving(api, req, rsp);
+            return CreateMeta2PCRes{ rc, rsp, masterAddrInfo };
         }));
     }
     return Process2PCResults(futures, objGroup, versions);
@@ -760,17 +782,16 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMaster(
 {
     CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack(objectKeys), K_OC_KEY_ALREADY_EXIST,
                              "The object is being rolled back.");
+
+    std::optional<std::set<size_t>> targetIndexs;
     ObjGroupMap objGroup;
-    std::stringstream str;
-    for (size_t i = 0; i < objectKeys.size(); i++) {
-        std::shared_ptr<WorkerMasterOCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(objectKeys[i], etcdCM_, api),
-                                         "Getting master api failed. ObjectKey = " + objectKeys[i]);
-        auto addr = api->GetHostPort();
-        str << " " << (objGroup[addr].empty() ? addr : "");
-        objGroup[addr].emplace_back(objectKeys[i], i);
-    }
-    LOG(INFO) << FormatString("Create meta to masters [%s]", str.str());
+    std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
+    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, targetIndexs, objGroup, objKeysUndecidedMaster);
+    // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
+    // refuse to process all objects, which is very inefficient.
+    CHECK_FAIL_RETURN_STATUS(
+        objKeysUndecidedMaster.empty(), K_RPC_UNAVAILABLE,
+        "Getting master api failed. ObjectKey: " + *objKeysUndecidedMaster.begin()->second.begin());
     RETURN_IF_NOT_OK(CreateMultiMetaPhaseOne(objGroup, entries, pubReq));
     INJECT_POINT("worker.CreateMultiMetaPhaseTwo.delay");
     LOG(INFO) << FormatString("Create meta to  masters phase two");
@@ -787,24 +808,23 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
 {
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
     ObjGroupMap objGroup;
-    std::unordered_map<std::string, std::shared_ptr<WorkerMasterOCApi>> workerAddrToApi;
-    for (size_t i = 0; i < objectKeys.size(); i++) {
-        std::shared_ptr<WorkerMasterOCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(objectKeys[i], etcdCM_, api),
-                                         "Getting master api failed. ObjectKey = " + objectKeys[i]);
-        auto addr = api->GetHostPort();
-        objGroup[addr].emplace_back(objectKeys[i], i);
-        workerAddrToApi[addr] = api;
-    }
+    std::optional<std::set<size_t>> targetIndexs;
+    std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
+    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, targetIndexs, objGroup, objKeysUndecidedMaster);
+    // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
+    // refuse to process all objects, which is very inefficient.
+    CHECK_FAIL_RETURN_STATUS(
+        objKeysUndecidedMaster.empty(), K_RPC_UNAVAILABLE,
+        "Getting master api failed. ObjectKey: " + *objKeysUndecidedMaster.begin()->second.begin());
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_CONSTRUCT_REQ);
 
-    std::vector<std::shared_ptr<WorkerMasterOCApi>> apis(objGroup.size());
+    std::vector<MetaAddrInfo> addrs;
+    addrs.reserve(objGroup.size());
     std::vector<CreateMultiMetaReqPb> createReqs(objGroup.size());
-
     int idx = 0;
     for (const auto &[masterAddr, objInfos] : objGroup) {
         auto &req = createReqs[idx];
-        apis[idx] = workerAddrToApi[masterAddr];
+        addrs.emplace_back(masterAddr);
         ConstructCreateReq(objInfos, entries, pubReq, req);
         idx++;
     }
@@ -812,8 +832,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_PARALLEL);
     std::vector<CreateMeta2PCRes> respRes;
     respRes.reserve(createReqs.size());
-    CreateMultiMetaParallel(apis, createReqs, respRes);
-
+    CreateMultiMetaParallel(addrs, createReqs, respRes);
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_FILL_RSP);
     CHECK_FAIL_RETURN_STATUS(respRes.size() == createReqs.size(), K_RUNTIME_ERROR,
                              "The object size and the versions is not equal");
@@ -824,7 +843,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
             totalResp.add_failed_object_keys(failedId);
         }
         LOG_IF_ERROR(respRes[index].rc, "Get error with createMeta");
-        for (const auto &obj : objGroup.at(respRes[index].api->GetHostPort())) {
+        for (const auto &obj : objGroup.at(respRes[index].metaAddrInfo)) {
             versions[obj.second] = resp.version();
         }
         if (resp.has_last_rc() && static_cast<StatusCode>(resp.last_rc().error_code()) != StatusCode::K_OK) {
