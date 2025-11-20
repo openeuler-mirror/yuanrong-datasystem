@@ -1268,7 +1268,7 @@ Status WorkerOCServer::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapS
     return objCacheClientWorkerSvc_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id);
 }
 
-Status WorkerOCServer::ProcessServerReboot(const std::string &clientId, const std::string &tenantId,
+Status WorkerOCServer::ProcessServerReboot(const ClientKey &clientId, const std::string &tenantId,
                                            const std::string &reqToken,
                                            const google::protobuf::RepeatedPtrField<google::protobuf::Any> &msg)
 {
@@ -1276,7 +1276,7 @@ Status WorkerOCServer::ProcessServerReboot(const std::string &clientId, const st
     return objCacheClientWorkerSvc_->RecoveryClient(clientId, tenantId, reqToken, msg);
 }
 
-void WorkerOCServer::AfterClientLostHandler(const std::string &clientId)
+void WorkerOCServer::AfterClientLostHandler(const ClientKey &clientId)
 {
     INJECT_POINT_NO_RETURN("worker.AfterClientLostHandler");
     auto traceId = Trace::Instance().GetTraceID();
@@ -1294,7 +1294,7 @@ void WorkerOCServer::AfterClientLostHandler(const std::string &clientId)
     ClientManager::Instance().RemoveClient(clientId);
 }
 
-Status WorkerOCServer::AddClient(const std::string &clientId, bool shmEnabled, int32_t socketFd,
+Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
                                  const std::string &tenantId, bool enableCrossNode, const std::string &podName,
                                  uint32_t &lockId)
 {

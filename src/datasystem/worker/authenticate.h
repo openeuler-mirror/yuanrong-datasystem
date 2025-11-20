@@ -89,7 +89,7 @@ Status AuthenticateRequest(std::shared_ptr<AkSkManager> akSkManager, const ReqTy
 
 template <typename ReqType>
 Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, std::string &tenantId,
-                    const std::string &clientId)
+                    const ClientKey &clientId)
 {
     if (FLAGS_skip_authenticate) {
         return CheckTenantId(req.tenant_id());
@@ -108,7 +108,7 @@ Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req
 }
 
 template <typename ReqType>
-Status AuthenticateMessage(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, const std::string &clientId,
+Status AuthenticateMessage(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req, const ClientKey &clientId,
                            std::string &tenantId)
 {
     if (FLAGS_skip_authenticate) {
@@ -134,8 +134,8 @@ Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req
         return CheckTenantId(req.tenant_id());
     }
     return !g_ReqAk.empty() && !g_ReqSignature.empty() && !g_SerializedMessage.Empty()
-               ? AuthenticateMessage(akSkManager, req, req.client_id(), tenantId)
-               : Authenticate(akSkManager, req, tenantId, req.client_id());
+               ? AuthenticateMessage(akSkManager, req, ClientKey::Intern(req.client_id()), tenantId)
+               : Authenticate(akSkManager, req, tenantId, ClientKey::Intern(req.client_id()));
 }
 }  // namespace worker
 }  // namespace datasystem

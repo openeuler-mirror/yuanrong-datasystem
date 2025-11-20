@@ -26,17 +26,18 @@
 #include <linux/memfd.h>
 #endif
 #include <poll.h>
-#include <utility>
-
 #include <re2/re2.h>
+
+#include <utility>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
-#include "datasystem/common/rpc/rpc_constants.h"
-#include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/file_util.h"
@@ -135,13 +136,14 @@ Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRs
     LOG(INFO) << "Start to query client fd, localAddress: " << localAddress_.ToString();
     std::string tenantId;
     std::string authTenantId = req.tenant_id();
+    auto clientId = ClientKey::Intern(req.client_id());
     if (authTenantId.empty()) {
         bool exist;
-        authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(req.client_id(), exist);
+        authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                      "Authenticate failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ClientManager::Instance().GetClientSocketFd(req.client_id(), socketFd),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ClientManager::Instance().GetClientSocketFd(clientId, socketFd),
                                      "worker get client socketfd failed");
 
     std::vector<int> workerFds = { req.worker_fds().cbegin(), req.worker_fds().cend() };
@@ -151,7 +153,7 @@ Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRs
     LOG(INFO) << "Start to send client fd. worker fds: " << VectorToString(workerFds) << ", socket fd: " << socketFd
               << ", request id: " << req.request_id();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SockSendFd(socketFd, workerFds, req.request_id()), "worker socketfd send failed");
-    ClientManager::Instance().SetClientId2WorkerFdMap(req.client_id(), std::move(workerFds));
+    ClientManager::Instance().SetClientId2WorkerFdMap(clientId, std::move(workerFds));
     LOG(INFO) << "Finish to send client fd. worker fds: " << VectorToString(workerFds) << ", socket fd: " << socketFd;
     return Status::OK();
 }
@@ -160,12 +162,12 @@ Status WorkerServiceImpl::DisconnectClient(const DisconnectClientReqPb &req, Dis
 {
     std::string tenantId;
     bool exist;
-    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(req.client_id(), exist);
+    auto clientId = ClientKey::Intern(req.client_id());
+    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                      "Authenticate failed");
-    LOG(INFO) << FormatString("disconnect client: %s", req.client_id());
+    LOG(INFO) << FormatString("disconnect client: %s", clientId);
     (void)rsp;
-    auto clientId = req.client_id();
     worker_->AfterClientLostHandler(clientId);
     return Status::OK();
 }
@@ -204,7 +206,7 @@ const std::string WorkerServiceImpl::GetStandbyWorker()
 Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, RegisterClientRspPb &rsp)
 {
     bool remainClient = !req.client_id().empty();
-    std::string clientId = remainClient ? req.client_id() : GetStringUuid();
+    auto clientId = ClientKey::Intern(remainClient ? req.client_id() : GetStringUuid());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
@@ -298,25 +300,26 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     INJECT_POINT("worker.Heartbeat.begin");
     std::string tenantId;
     bool exist;
-    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(req.client_id(), exist);
+    auto clientId = ClientKey::Intern(req.client_id());
+    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
     // When exist is false, it indicates a restart scenario, skip iam and authenticate.
     if (exist) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                          "Authenticate failed");
     }
-    VLOG(HEARTBEAT_LEVEL) << "Receive a heartbeat from client " << req.client_id();
+    VLOG(HEARTBEAT_LEVEL) << "Receive a heartbeat from client " << clientId;
     INJECT_POINT("Worker.Heartbeat.startToHeartbeat");
     rsp.set_worker_start_id(workerStartId_);
-    Status status = ClientManager::Instance().UpdateLastHeartbeat(req.client_id(), req.removable());
+    Status status = ClientManager::Instance().UpdateLastHeartbeat(clientId, req.removable());
     std::vector<int> releasedFds;
     for (auto i : req.released_worker_fds()) {
         releasedFds.emplace_back(i);
     }
     LOG_IF(INFO, !releasedFds.empty()) << FormatString("[TENANT RELEASER]Receive cleint[%s] has released fds[%s]",
-                                                       req.client_id(), VectorToString(releasedFds));
+                                                       clientId, VectorToString(releasedFds));
     if (exist) {
         // We only allow authenticated requests to modify data.
-        ClientManager::Instance().DelClientId2WorkerFdMap(req.client_id(), releasedFds);
+        ClientManager::Instance().DelClientId2WorkerFdMap(clientId, releasedFds);
     }
     // If the client has been removed, UpdateLastHeartbeat will return RuntimeError. Otherwise, OK is returned.
     rsp.set_client_removed(status.IsError());
@@ -331,15 +334,14 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     }
 
     auto expiredFds = memory::Allocator::Instance()->GetAllExpiredFds();
-    auto fdsMmapedByClient = ClientManager::Instance().GetWorkerFdByClientId(req.client_id());
+    auto fdsMmapedByClient = ClientManager::Instance().GetWorkerFdByClientId(clientId);
     std::set<int> intersection;
     std::set_intersection(expiredFds.begin(), expiredFds.end(), fdsMmapedByClient.begin(), fdsMmapedByClient.end(),
                           std::inserter(intersection, intersection.begin()));
     for (auto fd : intersection) {
         rsp.add_expired_worker_fds(fd);
     }
-    VLOG(HEARTBEAT_LEVEL) << "Response heartbeat message to client " << req.client_id()
-                          << ", response: " << rsp.DebugString();
+    VLOG(HEARTBEAT_LEVEL) << "Response heartbeat message to client " << clientId << ", response: " << rsp.DebugString();
     return Status::OK();
 }
 

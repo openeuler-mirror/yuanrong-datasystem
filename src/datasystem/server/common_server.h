@@ -19,7 +19,6 @@
  */
 #ifndef DATASYSTEM_SERVER_COMMON_SERVER_H
 #define DATASYSTEM_SERVER_COMMON_SERVER_H
-
 #include <memory>
 #include <unordered_map>
 
@@ -27,6 +26,7 @@
 #include <google/protobuf/repeated_field.h>
 
 #include "datasystem/common/eventloop/event_loop.h"
+#include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/rpc/rpc_channel.h"
@@ -76,9 +76,8 @@ public:
      * @param[out] lockId The lock id.
      * @return Status of the call.
      */
-    virtual Status AddClient(const std::string &clientId, bool shmEnabled, int32_t socketFd,
-                             const std::string &tenantId, bool enableCrossNode, const std::string &podName,
-                             uint32_t &lockId);
+    virtual Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
+                             bool enableCrossNode, const std::string &podName, uint32_t &lockId);
 
     /**
      * @brief After restart crashed server, we need to do some recovery job according to the message from the client.
@@ -88,7 +87,7 @@ public:
      * @param[in] msg The message from the client.
      * @return Status of the call.
      */
-    virtual Status ProcessServerReboot(const std::string &clientId, const std::string &tenantId,
+    virtual Status ProcessServerReboot(const ClientKey &clientId, const std::string &tenantId,
                                        const std::string &reqToken,
                                        const google::protobuf::RepeatedPtrField<google::protobuf::Any> &msg) = 0;
 
@@ -96,7 +95,7 @@ public:
      * @brief General method of cleaning the data of a client while the client disconnecting.
      * @param[in] clientId The client id of the corresponding client with the socket fd.
      */
-    virtual void AfterClientLostHandler(const std::string &clientId) = 0;
+    virtual void AfterClientLostHandler(const ClientKey &clientId) = 0;
 
     /**
      * @brief Obtains the threadpool usage of RpcServoce.

@@ -71,7 +71,7 @@ WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> ob
 {
 }
 
-Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> &gRefTable,
+Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable,
                                      std::shared_ptr<AkSkManager> akSkManager)
 {
     RETURN_IF_EXCEPTION_OCCURS(memEvictTaskThreadPool_ =

@@ -58,7 +58,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      *         K_DUPLICATED: the object already exists, no need to create.
      */
-    Status CreateImpl(const std::string &tenantId, const std::string &clientId, const std::string &rawObjectKey,
+    Status CreateImpl(const std::string &tenantId, const ClientKey &clientId, const std::string &rawObjectKey,
                       size_t dataSize, CreateRspPb &resp, CacheType cacheType = CacheType::MEMORY);
 
     /**

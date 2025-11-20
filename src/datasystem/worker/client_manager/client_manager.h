@@ -23,17 +23,17 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <set>
 #include <vector>
-
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
@@ -44,7 +44,7 @@ namespace datasystem {
 namespace worker {
 constexpr int INVALID_SOCKET_FD = -1;
 
-using TbbClientInfoTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<ClientInfo>>;
+using TbbClientInfoTable = tbb::concurrent_hash_map<ClientKey, std::shared_ptr<ClientInfo>>;
 class ClientManager {
 public:
     /**
@@ -68,7 +68,7 @@ public:
      * @param[in] tenantId The tenant id
      * @return Status of the call.
      */
-    Status AddClient(const std::string &clientId, int socketFd, bool uniqueCount = true,
+    Status AddClient(const ClientKey &clientId, int socketFd, bool uniqueCount = true,
                      const std::string &tenantId = "");
 
     /**
@@ -82,14 +82,14 @@ public:
      * @param[out] lockId Lock id for client.
      * @return Status of the call.
      */
-    Status AddClient(const std::string &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
+    Status AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
                      bool enableCrossNode, const std::string &podName, uint32_t &lockId);
 
     /**
      * @brief Remove client information.
      * @param[in] clientId Uuid of the client.
      */
-    void RemoveClient(const std::string &clientId);
+    void RemoveClient(const ClientKey &clientId);
 
     /**
      * @brief Register a lost handler to process client lost.
@@ -97,7 +97,7 @@ public:
      * @param[in] socketFd The unix domain socket Fd.
      * @return Status of the call.
      */
-    Status RegisterLostHandler(const std::string &clientId, std::function<void()> lostHandle, HeartbeatType type);
+    Status RegisterLostHandler(const ClientKey &clientId, std::function<void()> lostHandle, HeartbeatType type);
 
     /**
      * @brief Update the client rpc heart time.
@@ -105,7 +105,7 @@ public:
      * @param[in] removable Indicate the client is removable or not.
      * @return Status of the call.
      */
-    Status UpdateLastHeartbeat(const std::string &clientId, bool removable = false);
+    Status UpdateLastHeartbeat(const ClientKey &clientId, bool removable = false);
 
     /**
      * @brief Get socket fd from client.
@@ -113,7 +113,7 @@ public:
      * @param[out] socketFd Socket fd of the client.
      * @return Status of the call.
      */
-    Status GetClientSocketFd(const std::string &clientId, int &socketFd) const;
+    Status GetClientSocketFd(const ClientKey &clientId, int &socketFd) const;
 
     /**
      * @brief Add shared memory unit to the client table.
@@ -121,7 +121,7 @@ public:
      * @param[in] shmUnit Shared memory unit to be added.
      * @return Status of the call.
      */
-    Status AddShmUnit(const std::string &clientId, const std::shared_ptr<ShmUnit> &shmUnit);
+    Status AddShmUnit(const ClientKey &clientId, const std::shared_ptr<ShmUnit> &shmUnit);
 
     /**
      * @brief Remove shared memory unit from the client table.
@@ -129,7 +129,7 @@ public:
      * @param[in] shmUnit Shared memory unit to be removed.
      * @return Status of the call.
      */
-    Status RemoveShmUnit(const std::string &clientId, const std::shared_ptr<ShmUnit> &shmUnit);
+    Status RemoveShmUnit(const ClientKey &clientId, const std::shared_ptr<ShmUnit> &shmUnit);
 
     /**
      * @brief Remove shared memory unit from the client table.
@@ -143,14 +143,14 @@ public:
      * @param[in] clientId Uuid of client.
      * @return Pointer of the ClientInfo.
      */
-    std::shared_ptr<ClientInfo> GetClientInfo(const std::string &clientId);
+    std::shared_ptr<ClientInfo> GetClientInfo(const ClientKey &clientId);
 
     /**
      * @brief Check the UUID Validity.
      * @param[in] clientId The uuid of client connected with worker.
      * @return Status of the call.
      */
-    Status CheckClientId(const std::string &clientId) const;
+    Status CheckClientId(const ClientKey &clientId) const;
 
     /**
      * @brief Get the active client count.
@@ -167,21 +167,21 @@ public:
      * @param[in] fds All FDs obtained by the client.
      * @param[in] clientId The client ID.
      */
-    void SetClientId2WorkerFdMap(const std::string &clientId, const std::vector<int> &fds);
+    void SetClientId2WorkerFdMap(const ClientKey &clientId, const std::vector<int> &fds);
 
     /**
      * @brief Check whether client has expired worker fds.
      * @param[in] clientId The client ID.
      * @return The expired worker fds.
      */
-    std::set<int> GetWorkerFdByClientId(const std::string &clientId);
+    std::set<int> GetWorkerFdByClientId(const ClientKey &clientId);
 
     /**
      * @brief This function is invoked when some expired worker fds is released by client.
      * @param[in] clientId The client ID.
      * @param[in] fds The fds have been released.
      */
-    void DelClientId2WorkerFdMap(const std::string &clientId, const std::vector<int> &fds);
+    void DelClientId2WorkerFdMap(const ClientKey &clientId, const std::vector<int> &fds);
 
     /**
      * @brief Check whether worker fds has been released by client.
@@ -195,7 +195,7 @@ public:
      * @param[in] clientId The client ID.
      * @return The tenant id.
      */
-    std::string GetAuthTenantIdByClientId(const std::string &clientId, bool &clientExist);
+    std::string GetAuthTenantIdByClientId(const ClientKey &clientId, bool &clientExist);
 
     /**
      * @brief Check if exists clients on the same node with current worker by heartbeat type.

@@ -145,7 +145,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     initOkFuture_ = initOk_.get_future();
     workerMasterApiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddress_, akSkManager_, masterOCService);
     memoryRefTable_ = std::make_shared<SharedMemoryRefTable>();
-    globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
+    globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
     asyncRollbackManager_ = std::make_shared<AsyncRollbackManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
@@ -353,7 +353,8 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
-    RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads));
+    auto clientId = ClientKey::Intern(req.client_id());
+    RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads, clientId));
     if (req.auto_release_memory_ref()) {
         std::set<std::string> failedSet{ resp.failed_object_keys().begin(), resp.failed_object_keys().end() };
         std::vector<ShmKey> shmIds;
@@ -365,7 +366,7 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
             shmIds.emplace_back(ShmKey::Intern(info.shm_id()));
         }
         VLOG(1) << "auto release ref " << VectorToString(shmIds);
-        return DecreaseMemoryRef(req.client_id(), shmIds);
+        return DecreaseMemoryRef(clientId, shmIds);
     }
     return Status::OK();
 }
@@ -1035,7 +1036,7 @@ Status WorkerOCServiceImpl::FillObjData(master::PushMetaToMasterReqPb &req, cons
 void WorkerOCServiceImpl::FillRefData(const MetaAddrInfo &targetMetaAddrInfo, std::vector<std::string> &objectKeys)
 {
     LOG(INFO) << "Filling Ref data for db name:" << targetMetaAddrInfo.ToString();
-    std::unordered_map<std::string, std::unordered_set<std::string>> refTable;
+    std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     globalRefTable_->GetAllRef(refTable);
     if (!refTable.empty()) {
         std::vector<std::string> ids;
@@ -1204,7 +1205,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
         }
     }
     // reconciliation global references with master.
-    std::unordered_map<std::string, std::unordered_set<std::string>> refTable;
+    std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     std::vector<std::string> needDelGrefIds;
     globalRefTable_->GetAllRef(refTable);
     for (const auto &id : req.gref_object_keys()) {
@@ -1292,7 +1293,7 @@ Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterR
     return getProc_->Get(serverApi);
 }
 
-Status WorkerOCServiceImpl::RefreshMeta(const std::string &clientId)
+Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)
 {
     LOG(INFO) << "[RefreshMeta] clear memory reference count for client:" << clientId;
     std::shared_ptr<ClientInfo> clientInfo;
@@ -1336,7 +1337,7 @@ Status WorkerOCServiceImpl::RefreshMeta(const std::string &clientId)
     return rc;
 }
 
-Status WorkerOCServiceImpl::ClearDeviceMetaData(const std::string &clientId)
+Status WorkerOCServiceImpl::ClearDeviceMetaData(const ClientKey &clientId)
 {
     if (gcThreadPool_ != nullptr) {
         auto traceId = Trace::Instance().GetTraceID();
@@ -1360,7 +1361,7 @@ Status WorkerOCServiceImpl::ClearDeviceMetaData(const std::string &clientId)
     return Status::OK();
 }
 
-void WorkerOCServiceImpl::AsyncClearClientRef(const std::string &clientId, uint64_t retryTimes)
+void WorkerOCServiceImpl::AsyncClearClientRef(const ClientKey &clientId, uint64_t retryTimes)
 {
     std::vector<std::string> objectKeys;
     globalRefTable_->GetClientRefIds(clientId, objectKeys);
@@ -1467,7 +1468,7 @@ void WorkerOCServiceImpl::DecreaseHandlerForShmQueue(uint8_t *element)
     std::string byteShmId((char *)element + sizeof(uint32_t), UUID_SIZE);
     auto shmId = ShmKey::Intern(BytesUuidToString(byteShmId));
     std::string byteClientId((char *)element + sizeof(uint32_t) + UUID_SIZE, UUID_SIZE);
-    std::string clientId = BytesUuidToString(byteClientId);
+    auto clientId = ClientKey::Intern(BytesUuidToString(byteClientId));
     // to do clear all client ref with the shmId;
     VLOG(1) << FormatString("Worker get dec [clientId <-> shmId] : [%s<->%s]", clientId, shmId);
     // continue and wake up client process.
@@ -1565,7 +1566,7 @@ Status WorkerOCServiceImpl::StartDecreaseReferenceProcess()
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::DecreaseMemoryRef(const std::string &clientId, const std::vector<ShmKey> &shmIds)
+Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds)
 {
     workerOperationTimeCost.Clear();
     Timer timer;
@@ -1597,7 +1598,7 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     shmIds.reserve(req.object_keys().size());
     std::transform(req.object_keys().begin(), req.object_keys().end(), std::back_inserter(shmIds),
                    [](const auto &key) { return ShmKey::Intern(key); });
-    auto rc = DecreaseMemoryRef(req.client_id(), shmIds);
+    auto rc = DecreaseMemoryRef(ClientKey::Intern(req.client_id()), shmIds);
     if (rc.IsError()) {
         resp.mutable_error()->set_error_code(rc.GetCode());
         resp.mutable_error()->set_error_msg(rc.GetMsg());
@@ -1729,7 +1730,7 @@ Status WorkerOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
     return gRefProc_->QueryGlobalRefNum(req, rsp);
 }
 
-Status WorkerOCServiceImpl::RecoveryClient(const std::string &clientId, const std::string &tenantId,
+Status WorkerOCServiceImpl::RecoveryClient(const ClientKey &clientId, const std::string &tenantId,
                                            const std::string &reqToken,
                                            const google::protobuf::RepeatedPtrField<google::protobuf::Any> &req)
 {
@@ -2016,10 +2017,11 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
                                                 std::vector<RpcMessage> payloads)
 {
     std::string tenantId;
+    auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     std::vector<ShmKey> shmUnits = { ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(
-        WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, req.client_id(), shmUnits, memoryRefTable_));
+        WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
@@ -2028,7 +2030,7 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, objectKey);
 
     LOG(INFO) << FormatString("DeviceObj[%s, Sz: %zu] is being publishing by client[%s]", objectKey, req.data_size(),
-                              req.client_id());
+                              clientId);
     (void)resp;
     return workerDevOcManager_->PublishDeviceObject(namespaceUri, req, payloads);
 }
@@ -2046,7 +2048,7 @@ Status WorkerOCServiceImpl::GetDeviceObject(
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.device_object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
 
-    const std::string &clientId = req.client_id();
+    auto clientId = ClientKey::Intern(req.client_id());
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.device_object_keys());
     LOG(INFO) << "GetDeviceObject start from client:" << clientId << ", objects: " << VectorToString(objectKeys);
     int64_t subTimeout = req.sub_timeout();
@@ -2081,7 +2083,7 @@ Status WorkerOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRsp
     std::string tenantId;
     CHECK_FAIL_RETURN_STATUS(req.dev_obj_meta_size() > 0 && req.dev_obj_meta(0).locations_size() > 0, K_INVALID,
                              "The device meta and locations cannot be empty.");
-    const std::string &clientId = req.dev_obj_meta(0).locations().begin()->client_id();
+    const auto clientId = ClientKey::Intern(req.dev_obj_meta(0).locations().begin()->client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
@@ -2109,7 +2111,7 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     SubscribeReceiveEventReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    std::string clientId = req.src_client_id();
+    auto clientId = ClientKey::Intern(req.src_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     Timer timer;
@@ -2148,7 +2150,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     std::string tenantId;
     CHECK_FAIL_RETURN_STATUS(req.dev_obj_meta_size() > 0 && req.dev_obj_meta(0).locations_size() > 0, K_INVALID,
                              "The device meta and locations cannot be empty.");
-    const std::string &clientId = req.dev_obj_meta(0).locations().begin()->client_id();
+    const auto clientId = ClientKey::Intern(req.dev_obj_meta(0).locations().begin()->client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
@@ -2190,7 +2192,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
 Status WorkerOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
     std::string tenantId;
-    std::string clientId = req.dst_client_id();
+    auto clientId = ClientKey::Intern(req.dst_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
@@ -2209,7 +2211,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     RecvRootInfoReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    std::string clientId = req.src_client_id();
+    auto clientId = ClientKey::Intern(req.src_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     Timer timer;
@@ -2238,7 +2240,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
 Status WorkerOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecvFinishRspPb &resp)
 {
     std::string tenantId;
-    std::string clientId = req.dst_client_id();
+    auto clientId = ClientKey::Intern(req.dst_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =

@@ -21,12 +21,14 @@
 #define DATASYSTEM_UTILS_REQUEST_TABLE_H
 
 #include <tbb/concurrent_hash_map.h>
+
 #include <cstdint>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
+#include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
 namespace datasystem {
@@ -144,7 +146,7 @@ public:
 
             // If this request is done, prepare to respond.
             if (req->numSatisfiedObjects_ == req->numWaitingObjects_) {
-                VLOG(1) << "All object data ready for clientId: " + req->clientId_;
+                VLOG(1) << "All object data ready for clientId: " << req->clientId_;
                 completedRequests.emplace_back(req);
             } else {
                 // For SubRecvEvent request, return immediately as long as there is an object is ready.
@@ -214,7 +216,7 @@ public:
     using Param = EntryParam;
 
     UnaryRequest(std::vector<std::string> objectKeys,
-                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, std::string clientId,
+                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
                  std::shared_ptr<AccessRecorder> accessRecorderPoint)
         : UnaryRequest(std::move(objectKeys), serverApi, clientId, -1, {}, accessRecorderPoint)
     {
@@ -222,7 +224,7 @@ public:
 
     // for device
     UnaryRequest(std::vector<std::string> objectKeys,
-                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, std::string clientId,
+                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
                  int32_t deviceId, const Req &requestInfo)
         : UnaryRequest(std::move(objectKeys), serverApi, clientId, deviceId, requestInfo,
                        (std::shared_ptr<AccessRecorder>)nullptr)
@@ -230,7 +232,7 @@ public:
     }
 
     UnaryRequest(std::vector<std::string> objectKeys,
-                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, std::string clientId,
+                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
                  int32_t deviceId, const Req &requestInfo, std::string workerIP)
         : UnaryRequest(std::move(objectKeys), serverApi, clientId, deviceId, requestInfo)
     {
@@ -244,7 +246,7 @@ public:
     }
 
     UnaryRequest(std::vector<std::string> objectKeys,
-                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, std::string clientId,
+                 std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
                  int32_t deviceId, const Req &requestInfo, std::shared_ptr<AccessRecorder> accessRecorderPoint)
         : requestInfo_(requestInfo),
           clientId_(std::move(clientId)),
@@ -302,7 +304,7 @@ public:
     Req requestInfo_;
 
     // The client id.
-    std::string clientId_;
+    ClientKey clientId_;
 
     // The device id.
     int32_t deviceId_;

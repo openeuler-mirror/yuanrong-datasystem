@@ -26,8 +26,8 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
@@ -45,7 +45,7 @@ Status SharedMemoryRefTable::GetShmUnit(const ShmKey &shmId, std::shared_ptr<Shm
     return Status::OK();
 }
 
-void SharedMemoryRefTable::AddShmUnit(const std::string &clientId, std::shared_ptr<ShmUnit> &shmUnit)
+void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit)
 {
     const auto &shmId = shmUnit->GetId();
     TbbMemoryClientRefTable::accessor clientAccessor;
@@ -59,7 +59,7 @@ void SharedMemoryRefTable::AddShmUnit(const std::string &clientId, std::shared_p
         shmUnit->IncrementRefCount();
     }
     if (!shmRefTable_.find(objectAccessor, shmId)) {
-        shmRefTable_.emplace(objectAccessor, shmId, std::make_pair(shmUnit, std::unordered_set<ImmutableString>()));
+        shmRefTable_.emplace(objectAccessor, shmId, std::make_pair(shmUnit, std::unordered_set<ClientKey>()));
     }
 
     objectAccessor->second.second.emplace(clientId);
@@ -72,7 +72,7 @@ void SharedMemoryRefTable::AddShmUnit(const std::string &clientId, std::shared_p
     VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
 }
 
-void SharedMemoryRefTable::AddShmUnits(const std::string &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
+void SharedMemoryRefTable::AddShmUnits(const ClientKey &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
     if (!clientRefTable_.find(clientAccessor, clientId)) {
@@ -90,7 +90,7 @@ void SharedMemoryRefTable::AddShmUnits(const std::string &clientId, std::vector<
         }
         if (!shmRefTable_.find(objectAccessor, shmId)) {
             shmRefTable_.emplace(objectAccessor, shmId,
-                                 std::make_pair(shmUnit, std::unordered_set<ImmutableString>{ clientId }));
+                                 std::make_pair(shmUnit, std::unordered_set<ClientKey>{ clientId }));
         } else {
             objectAccessor->second.second.emplace(clientId);
         }
@@ -104,7 +104,7 @@ void SharedMemoryRefTable::AddShmUnits(const std::string &clientId, std::vector<
     }
 }
 
-Status SharedMemoryRefTable::RemoveShmUnit(const std::string &clientId, const ShmKey &shmId)
+Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmKey &shmId)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
     TbbMemoryObjectRefTable::accessor shmAccessor;
@@ -126,7 +126,7 @@ Status SharedMemoryRefTable::RemoveShmUnit(const std::string &clientId, const Sh
     return Status::OK();
 }
 
-void SharedMemoryRefTable::RemoveShmUnitDetail(const std::string &clientId,
+void SharedMemoryRefTable::RemoveShmUnitDetail(const ClientKey &clientId,
                                                TbbMemoryObjectRefTable::accessor &shmAccessor,
                                                TbbMemoryClientRefTable::accessor &clientAccessor)
 {
@@ -162,7 +162,7 @@ void SharedMemoryRefTable::RemoveShmUnitDetail(const std::string &clientId,
 }
 
 #ifdef WITH_TESTS
-bool SharedMemoryRefTable::Contains(const std::string &clientId, const ShmKey &shmId) const
+bool SharedMemoryRefTable::Contains(const ClientKey &clientId, const ShmKey &shmId) const
 {
     TbbMemoryClientRefTable::accessor accessor;
     if (clientRefTable_.find(accessor, clientId)) {
@@ -171,8 +171,8 @@ bool SharedMemoryRefTable::Contains(const std::string &clientId, const ShmKey &s
     return false;
 }
 #endif
-
-void SharedMemoryRefTable::GetClientRefIds(const std::string &clientId, std::vector<ShmKey> &shmIds) const
+ 
+void SharedMemoryRefTable::GetClientRefIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds) const
 {
     TbbMemoryClientRefTable::accessor accessor;
     if (clientRefTable_.find(accessor, clientId)) {
@@ -180,7 +180,7 @@ void SharedMemoryRefTable::GetClientRefIds(const std::string &clientId, std::vec
     }
 }
 
-Status SharedMemoryRefTable::RemoveClient(const std::string &clientId)
+Status SharedMemoryRefTable::RemoveClient(const ClientKey &clientId)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
     if (!clientRefTable_.find(clientAccessor, clientId)) {

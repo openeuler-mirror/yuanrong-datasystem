@@ -85,7 +85,7 @@ public:
 protected:
     std::unordered_map<std::string, std::unordered_set<std::string>> refClientSets_;
 
-    std::vector<std::string> clientIds_;
+    std::vector<ClientKey> clientIds_;
     std::vector<std::string> objKeys_;
 
     using MemRefTable = datasystem::object_cache::SharedMemoryRefTable;
@@ -187,7 +187,7 @@ void ObjRefTableTest::VerifyMemRefTableMatches()
         ASSERT_EQ((*entry)->GetShmUnit()->GetRefCount(), static_cast<int>(clientSet.size()));
         entry->RUnlock();
         for (const auto &client : clientSet) {
-            ASSERT_TRUE(memRefTable_.Contains(client, ShmKey::Intern(objKey)));
+            ASSERT_TRUE(memRefTable_.Contains(ClientKey::Intern(client), ShmKey::Intern(objKey)));
             objects[client].emplace(ShmKey::Intern(objKey));
         }
     }
@@ -197,7 +197,7 @@ void ObjRefTableTest::VerifyMemRefTableMatches()
         const auto &clientId = clientObjects.first;
         const auto &objectSet = clientObjects.second;
         std::vector<ShmKey> objKeys;
-        memRefTable_.GetClientRefIds(clientId, objKeys);
+        memRefTable_.GetClientRefIds(ClientKey::Intern(clientId), objKeys);
         ASSERT_EQ(objKeys.size(), objectSet.size());
         for (const auto &objKey : objKeys) {
             ASSERT_TRUE(objectSet.count(objKey) > 0);
@@ -323,7 +323,7 @@ void ObjRefTableTest::VerifyGlobalRefTableMatches()
         const auto &objectSet = clientObjects.second;
 
         std::vector<std::string> objKeys;
-        gRefTable_.GetClientRefIds(clientId, objKeys);
+        gRefTable_.GetClientRefIds(ClientKey::Intern(clientId), objKeys);
         ASSERT_EQ(objKeys.size(), objectSet.size());
         for (const auto &objKey : objKeys) {
             ASSERT_TRUE(objectSet.count(objKey) > 0);
@@ -597,7 +597,10 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntOneIdMultiThread2)
 TEST_F(ObjRefTableTest, MemRefTableUniqAddRmTest)
 {
     // ClientIds and ObjKeys.
-    clientIds_ = this->GenRandomStrs(idSz_, numOfClients_ * 2);
+    auto tmp = this->GenRandomStrs(idSz_, numOfClients_ * 2);
+    for (auto it = tmp.begin(); it != tmp.end(); it++) {
+        clientIds_.emplace_back(ClientKey::Intern(*it));
+    }
     objKeys_ = this->GenRandomStrs(idSz_, numOfObjs_ * 2);
 
     // Add Ops.
@@ -620,7 +623,10 @@ TEST_F(ObjRefTableTest, MemRefTableUniqAddRmTest)
 TEST_F(ObjRefTableTest, GlobalRefTableAddRmTest)
 {
     // ClientIds and ObjKeys.
-    clientIds_ = this->GenRandomStrs(idSz_, numOfClients_ * 2);
+    auto tmp = this->GenRandomStrs(idSz_, numOfClients_ * 2);
+    for (auto it = tmp.begin(); it != tmp.end(); it++) {
+        clientIds_.emplace_back(ClientKey::Intern(*it));
+    }
     objKeys_ = this->GenRandomStrs(idSz_, numOfObjs_ * 2);
 
     // Batch add and remove ops.
@@ -637,7 +643,7 @@ TEST_F(ObjRefTableTest, GlobalRefTableAddRmTest)
 TEST_F(ObjRefTableTest, RemoveClientAndDecreaseShmUnit)
 {
     std::vector<ShmKey> shmIds;
-    auto clientId = GetStringUuid();
+    auto clientId = ClientKey::Intern(GetStringUuid());
     for (int i = 0; i < 3000; i++) { // id num is 3000
         std::shared_ptr<SafeObjType> entry;
         bool isInsert;

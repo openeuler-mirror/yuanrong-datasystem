@@ -137,7 +137,7 @@ Status MasterDevOcManager::PutP2PMetaImpl(const PutP2PMetaReqPb &req, PutP2PMeta
     }
 
     // Record the client request from which worker for future cleanup the client metadata When worker is scaled down.
-    auto workerAddr = req.worker_address();
+    auto &workerAddr = req.worker_address();
     auto clientId = req.dev_obj_meta().begin()->locations().begin()->client_id();
     return deviceMetaOpRecordTable_->AddValue(RecordType::WORKER2CLIENT, workerAddr, clientId);
 }
@@ -166,8 +166,9 @@ Status MasterDevOcManager::ProcessGetP2PMetaRequest(
                 auto dstClientId = locs.begin()->client_id();
                 auto dstDeviceId = locs.begin()->device_id();
                 auto dstWorkerIP = locs.begin()->worker_ip();
-                auto request = std::make_shared<GetP2PMetaRequest>(std::vector<std::string>{ objectKey }, serverApi,
-                                                                   dstClientId, dstDeviceId, req, dstWorkerIP);
+                auto request =
+                    std::make_shared<GetP2PMetaRequest>(std::vector<std::string>{ objectKey }, serverApi,
+                                                        ClientKey::Intern(dstClientId), dstDeviceId, req, dstWorkerIP);
                 (void)objectGetP2PMetaReqSubscriptionTable_->AddGetP2PMetaRequest(objectKey, request);
                 Timer timer;
                 int64_t subTimeout = req.sub_timeout();
@@ -196,8 +197,8 @@ Status MasterDevOcManager::ProcessGetP2PMetaRequest(
     }
 
     // Record the client request from which worker for future cleanup the client metadata When worker is scaled down.
-    auto workerAddr = req.worker_address();
-    auto clientId = req.dev_obj_meta().begin()->locations().begin()->client_id();
+    auto &workerAddr = req.worker_address();
+    auto &clientId = req.dev_obj_meta().begin()->locations().begin()->client_id();
     return deviceMetaOpRecordTable_->AddValue(RecordType::WORKER2CLIENT, workerAddr, clientId);
 }
 
@@ -296,7 +297,7 @@ Status MasterDevOcManager::ProcessSubscribeReceiveEventRequest(
     auto srcNpuId = ConcatClientAndDeviceId(srcClientId, srcDeviceId);
 
     auto request = std::make_shared<SubscribeReceiveEventRequest>(std::vector<std::string>{ srcNpuId }, serverApi,
-                                                                  srcClientId, srcDeviceId, req);
+                                                                  ClientKey::Intern(srcClientId), srcDeviceId, req);
     // Step 1: To avoid missing subscription notifications, we subscribe and then check the key value table.
     RETURN_IF_NOT_OK(npuEventsSubscriptionTable_->AddSubscribeReceiveEventRequest(srcNpuId, request));
     LOG_IF_ERROR(deviceMetaOpRecordTable_->AddValue(RecordType::NPUID, srcClientId, srcNpuId),
@@ -371,8 +372,9 @@ Status MasterDevOcManager::ProcessRecvRootInfoRequest(
     auto srcClientId = req.src_client_id();
     auto dstClientId = req.dst_client_id();
     auto hcclPeerId = GetHcclPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
-    auto request = std::make_shared<RecvRootInfoRequest>(std::vector<std::string>{ hcclPeerId }, serverApi,
-                                                         req.dst_client_id(), req.dst_device_id(), req);
+    auto request =
+        std::make_shared<RecvRootInfoRequest>(std::vector<std::string>{ hcclPeerId }, serverApi,
+                                              ClientKey::Intern(req.dst_client_id()), req.dst_device_id(), req);
 
     bool isExistRootInfo = rootInfoTable_->IsExistRootInfo(hcclPeerId);
     if (isExistRootInfo) {
@@ -593,8 +595,8 @@ Status MasterDevOcManager::ProcessGetDataInfoRequest(
 {
     const std::string &objectKey = req.object_key();
     const std::string &clientId = req.client_id();
-    auto request =
-        std::make_shared<GetDataInfosRequest>(std::vector<std::string>{ objectKey }, serverApi, clientId, -1, req);
+    auto request = std::make_shared<GetDataInfosRequest>(std::vector<std::string>{ objectKey }, serverApi,
+                                                         ClientKey::Intern(clientId), -1, req);
 
     // Step 1: To avoid missing subscription notifications,
     // we firstly subscribe and then check the key value table.

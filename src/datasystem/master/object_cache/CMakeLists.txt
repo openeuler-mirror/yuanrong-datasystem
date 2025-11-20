@@ -27,6 +27,7 @@ set(MASTER_OC_DEPEND_LIBS
         common_ref
         common_event_loop
         common_immutable_string
+        string_ref
         common_persistence_api
         common_signal
         master_object_cache_store

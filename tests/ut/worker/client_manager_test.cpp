@@ -17,8 +17,11 @@
 /**
  * Description: Test ClientManager class
  */
+#include "datasystem/worker/client_manager/client_manager.h"
+
 #include <gtest/gtest.h>
 #include <sys/socket.h>
+
 #include <atomic>
 #include <chrono>
 #include <string>
@@ -29,7 +32,6 @@
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/worker/client_manager/client_manager.h"
 
 DS_DECLARE_uint32(max_client_num);
 
@@ -46,7 +48,7 @@ class ClientManagerTest : public CommonTest {
 TEST_F(ClientInfoTest, TestInvalid)
 {
     int socketFd = 1;
-    std::string clientId = "client1";
+    auto clientId = ClientKey::Intern("client1");
     bool uniqueCount = false;
     ClientInfo clientInfo(socketFd, clientId, uniqueCount);
     std::shared_ptr<ShmUnit> shmUnit;
@@ -57,7 +59,7 @@ TEST_F(ClientManagerTest, TestAddShmUnitUniqueCount)
 {
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
-    std::string clientId = GetBytesUuid();
+    auto clientId = ClientKey::Intern(GetBytesUuid());
     int socketFd = 1;
     DS_ASSERT_OK(clientMgr.AddClient(clientId, socketFd, true));
     int getSocketFd;
@@ -78,7 +80,7 @@ TEST_F(ClientManagerTest, TestAddShmUnit)
 {
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
-    std::string clientId = GetBytesUuid();
+    auto clientId = ClientKey::Intern(GetBytesUuid());
     int socketFd = 1;
     DS_ASSERT_OK(clientMgr.AddClient(clientId, socketFd, false));
     int getSocketFd;
@@ -120,7 +122,7 @@ TEST_F(ClientManagerTest, TestSessionQuantityChange)
 {
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
-    std::string clientId = GetBytesUuid();
+    auto clientId = ClientKey::Intern(GetBytesUuid());
     int socketFd = 1;
     DS_ASSERT_OK(clientMgr.AddClient(clientId, socketFd));
     auto clientInfoPtr = clientMgr.GetClientInfo(clientId);
@@ -153,19 +155,19 @@ TEST_F(ClientManagerTest, TestCheckClientId)
 {
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
-    std::string clientId = GetBytesUuid();
+    auto clientId = ClientKey::Intern(GetBytesUuid());
     int socketFd = 1;
     DS_ASSERT_OK(clientMgr.AddClient(clientId, socketFd));
     std::vector<std::string> clientIds;
     DS_ASSERT_OK(clientMgr.CheckClientId(clientId));
-    DS_ASSERT_NOT_OK(clientMgr.CheckClientId("123344"));
+    DS_ASSERT_NOT_OK(clientMgr.CheckClientId(ClientKey::Intern("123344")));
 }
 
 TEST_F(ClientManagerTest, TestRemoveShmUnitOfAllClient)
 {
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
-    std::string clientId = GetBytesUuid();
+    auto clientId = ClientKey::Intern(GetBytesUuid());
     int socketFd = 1;
     DS_ASSERT_OK(clientMgr.AddClient(clientId, socketFd, true));
     int getSocketFd;
@@ -185,8 +187,7 @@ TEST_F(ClientManagerTest, TestRunCallbackByUDSHeartbeat)
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
     uint32_t lockId;
-    std::string clientId = "clientId";
-
+    auto clientId = ClientKey::Intern("clientId");
     // Create a socket
     std::string sockPath = "/tmp/" + GetStringUuid();
     unlink(sockPath.data());
@@ -224,7 +225,7 @@ TEST_F(ClientManagerTest, DISABLED_TestRunCallbackByRPCHeartbeat)
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
     uint32_t lockId;
-    std::string clientId = "clientId";
+    auto clientId = ClientKey::Intern("clientId");
 
     // Manager a client and register a callback
     ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", "", "", lockId));
@@ -247,7 +248,7 @@ TEST_F(ClientManagerTest, TestAddClientFailed)
     FLAGS_max_client_num = 10; // max client num is 10.
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
-    std::string clientId = GetBytesUuid();
+    auto clientId = ClientKey::Intern(GetBytesUuid());
     uint32_t lockId;
     DS_ASSERT_OK(clientMgr.AddClient(clientId, true, -1, "", true, "", lockId));
     for (int i = 0; i < 20; i++) { // retry num is 20
@@ -263,11 +264,11 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
     size_t count = 100;
     uint32_t lockId;
     for (size_t i = 0; i < count; ++i) {
-        auto clientId = "client_id" + std::to_string(i);
+        auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
         ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", true, "", lockId));
     }
     for (size_t i = 0; i < count; ++i) {
-        auto clientId = "client_id" + std::to_string(i);
+        auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
         ASSERT_FALSE(clientMgr.AddClient(clientId, true, -1, "", true, "", lockId));
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count);
@@ -277,7 +278,7 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
     int loop = 3;
     for (int k = 0; k < loop; ++k) {
         for (size_t i = 0; i < removableCount; ++i) {
-            auto clientId = "client_id" + std::to_string(i);
+            auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
             ASSERT_TRUE(clientMgr.UpdateLastHeartbeat(clientId, true));
         }
         ASSERT_EQ(clientMgr.GetClientCount(), count - removableCount);
@@ -286,21 +287,21 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
     // Set not removable tag, count increase from 70 -> 100
     for (int k = 0; k < loop; ++k) {
         for (size_t i = 0; i < removableCount; ++i) {
-            auto clientId = "client_id" + std::to_string(i);
+            auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
             ASSERT_TRUE(clientMgr.UpdateLastHeartbeat(clientId, false));
         }
         ASSERT_EQ(clientMgr.GetClientCount(), count);
     }
 
     for (size_t i = 0; i < removableCount; ++i) {
-        auto clientId = "client_id" + std::to_string(i);
+        auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
         ASSERT_TRUE(clientMgr.UpdateLastHeartbeat(clientId, true));
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count - removableCount);
 
     // Remove removable client, count is still 70.
     for (size_t i = 0; i < removableCount; ++i) {
-        auto clientId = "client_id" + std::to_string(i);
+        auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
         clientMgr.RemoveClient(clientId);
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count - removableCount);
@@ -308,7 +309,7 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
     // Remove not removable client, count decrease 70 -> 40.
     size_t decrCount = removableCount * 2;
     for (size_t i = removableCount; i < decrCount; ++i) {
-        auto clientId = "client_id" + std::to_string(i);
+        auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
         clientMgr.RemoveClient(clientId);
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count - decrCount);

@@ -174,7 +174,7 @@ Status WorkerOcServiceCrudCommonApi::CheckIfL2CacheNeededAndWritable(const L2Sto
     return Status::OK();
 }
 
-bool WorkerOcServiceCrudCommonApi::ClientShmEnabled(const std::string &clientId)
+bool WorkerOcServiceCrudCommonApi::ClientShmEnabled(const ClientKey &clientId)
 {
     auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId);
     return clientInfo != nullptr && clientInfo->ShmEnabled();
@@ -214,7 +214,7 @@ Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const bool &shmEnable
     return Status::OK();
 }
 
-Status WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(const std::string &tenantId, const std::string &clientId,
+Status WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(const std::string &tenantId, const ClientKey &clientId,
                                                             std::vector<ShmKey> &shmUnitIds,
                                                             std::shared_ptr<SharedMemoryRefTable> memoryRefTable)
 {

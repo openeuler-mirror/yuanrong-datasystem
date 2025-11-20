@@ -77,8 +77,7 @@ Status ClientManager::Init()
     return heartbeatEventLoop_->Init();
 }
 
-Status ClientManager::AddClient(const std::string &clientId, int socketFd, bool uniqueCount,
-                                const std::string &tenantId)
+Status ClientManager::AddClient(const ClientKey &clientId, int socketFd, bool uniqueCount, const std::string &tenantId)
 {
     LOG(INFO) << "Add client info, socketFd:" << socketFd << ", clientId:" << clientId << ", tenantId:" << tenantId;
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -88,7 +87,7 @@ Status ClientManager::AddClient(const std::string &clientId, int socketFd, bool 
                : Status(StatusCode::K_RUNTIME_ERROR, FormatString("Failed to insert client %s to table", clientId));
 }
 
-Status ClientManager::AddClient(const std::string &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
+Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
                                 bool enableCrossNode, const std::string &podName, uint32_t &lockId)
 {
     RETURN_IF_NOT_OK(GetLockId(lockId));
@@ -106,7 +105,7 @@ Status ClientManager::AddClient(const std::string &clientId, bool shmEnabled, in
     return status;
 }
 
-void ClientManager::RemoveClient(const std::string &clientId)
+void ClientManager::RemoveClient(const ClientKey &clientId)
 {
     LOG(INFO) << "Remove client: " << clientId;
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -137,7 +136,7 @@ void ClientManager::RemoveClient(const std::string &clientId)
     }
 }
 
-Status ClientManager::RegisterLostHandler(const std::string &clientId, std::function<void()> lostHandle,
+Status ClientManager::RegisterLostHandler(const ClientKey &clientId, std::function<void()> lostHandle,
                                           HeartbeatType type)
 {
     RETURN_IF_NOT_OK(CheckClientId(clientId));
@@ -153,7 +152,7 @@ Status ClientManager::RegisterLostHandler(const std::string &clientId, std::func
     return Status::OK();
 }
 
-Status ClientManager::UpdateLastHeartbeat(const std::string &clientId, bool removable)
+Status ClientManager::UpdateLastHeartbeat(const ClientKey &clientId, bool removable)
 {
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     TbbClientInfoTable::accessor accessor;
@@ -173,7 +172,7 @@ Status ClientManager::UpdateLastHeartbeat(const std::string &clientId, bool remo
     return Status::OK();
 }
 
-Status ClientManager::GetClientSocketFd(const std::string &clientId, int &socketFd) const
+Status ClientManager::GetClientSocketFd(const ClientKey &clientId, int &socketFd) const
 {
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     TbbClientInfoTable::const_accessor accessor;
@@ -183,7 +182,7 @@ Status ClientManager::GetClientSocketFd(const std::string &clientId, int &socket
     return Status::OK();
 }
 
-Status ClientManager::AddShmUnit(const std::string &clientId, const std::shared_ptr<ShmUnit> &shmUnit)
+Status ClientManager::AddShmUnit(const ClientKey &clientId, const std::shared_ptr<ShmUnit> &shmUnit)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(shmUnit);
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -194,7 +193,7 @@ Status ClientManager::AddShmUnit(const std::string &clientId, const std::shared_
     return Status::OK();
 }
 
-Status ClientManager::RemoveShmUnit(const std::string &clientId, const std::shared_ptr<ShmUnit> &shmUnit)
+Status ClientManager::RemoveShmUnit(const ClientKey &clientId, const std::shared_ptr<ShmUnit> &shmUnit)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(shmUnit);
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -218,10 +217,10 @@ Status ClientManager::RemoveShmUnit(const std::shared_ptr<ShmUnit> &shmUnit)
     return Status::OK();
 }
 
-std::shared_ptr<ClientInfo> ClientManager::GetClientInfo(const std::string &clientId)
+std::shared_ptr<ClientInfo> ClientManager::GetClientInfo(const ClientKey &clientId)
 {
     INJECT_POINT("client_manager.GetClientInfo", []() {
-        auto info = std::make_shared<ClientInfo>(0, "", false, true, "");
+        auto info = std::make_shared<ClientInfo>(0, ClientKey::Intern(""), false, true, "");
         return info;
     });
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -232,7 +231,7 @@ std::shared_ptr<ClientInfo> ClientManager::GetClientInfo(const std::string &clie
     return nullptr;
 }
 
-std::string ClientManager::GetAuthTenantIdByClientId(const std::string &clientId, bool &clientExist)
+std::string ClientManager::GetAuthTenantIdByClientId(const ClientKey &clientId, bool &clientExist)
 {
     auto clientInfo = GetClientInfo(clientId);
     if (clientInfo == nullptr) {
@@ -244,7 +243,7 @@ std::string ClientManager::GetAuthTenantIdByClientId(const std::string &clientId
     return clientInfo->GetTenantId();
 }
 
-Status ClientManager::CheckClientId(const std::string &clientId) const
+Status ClientManager::CheckClientId(const ClientKey &clientId) const
 {
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     CHECK_FAIL_RETURN_STATUS(tbbClientTable_.count(clientId) > 0, StatusCode::K_RUNTIME_ERROR,
@@ -313,7 +312,7 @@ void ClientManager::CheckClientHealth()
     }
 }
 
-std::set<int> ClientManager::GetWorkerFdByClientId(const std::string &clientId)
+std::set<int> ClientManager::GetWorkerFdByClientId(const ClientKey &clientId)
 {
     std::shared_lock<std::shared_timed_mutex> lck(clientId2WorkerFdsMapMutex_);
     auto iter = clientId2WorkerFdsMap_.find(clientId);
@@ -323,7 +322,7 @@ std::set<int> ClientManager::GetWorkerFdByClientId(const std::string &clientId)
     return {};
 }
 
-void ClientManager::DelClientId2WorkerFdMap(const std::string &clientId, const std::vector<int> &fds)
+void ClientManager::DelClientId2WorkerFdMap(const ClientKey &clientId, const std::vector<int> &fds)
 {
     std::lock_guard<std::shared_timed_mutex> lck(clientId2WorkerFdsMapMutex_);
     auto iter = clientId2WorkerFdsMap_.find(clientId);
@@ -350,7 +349,7 @@ bool ClientManager::IsAllWorkerFdsReleased(const std::vector<int> &workerFds)
     return true;
 }
 
-void ClientManager::SetClientId2WorkerFdMap(const std::string &clientId, const std::vector<int> &fds)
+void ClientManager::SetClientId2WorkerFdMap(const ClientKey &clientId, const std::vector<int> &fds)
 {
     std::lock_guard<std::shared_timed_mutex> lck(clientId2WorkerFdsMapMutex_);
     clientId2WorkerFdsMap_[clientId].insert(fds.begin(), fds.end());

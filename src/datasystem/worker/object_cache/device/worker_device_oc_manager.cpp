@@ -59,8 +59,9 @@ Status WorkerDeviceOcManager::PublishDeviceObject(const std::string &devObjectKe
         devObj->SetOffset(req.offset());
         devObj->stateInfo.SetDataFormat(DataFormat::HETERO);
         entry->SetRealObject(std::move(devObj));
-        workerOcImpl_->publishProc_->AttachShmUnitToObject(WorkerOcServiceCreateImpl::ClientShmEnabled(req.client_id()),
-                                                           req.dev_object_key(), ShmKey::Intern(req.shm_id()),
+        workerOcImpl_->publishProc_->AttachShmUnitToObject(
+            WorkerOcServiceCreateImpl::ClientShmEnabled(ClientKey::Intern(req.client_id())), req.dev_object_key(),
+            ShmKey::Intern(req.shm_id()),
                                                            req.data_size(), *entry);
     } else {
         CHECK_FAIL_RETURN_STATUS(!(*entry)->IsHetero(), K_INVALID,
@@ -122,7 +123,7 @@ void WorkerDeviceOcManager::SetEmptyDeviceObject(SafeObjType &entry)
 Status WorkerDeviceOcManager::ProcessGetDeviceObjectRequest(
     const std::vector<std::string> &objectKeys,
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetDeviceObjectRspPb, GetDeviceObjectReqPb>> serverApi,
-    int64_t subTimeout, const std::string &clientId)
+    int64_t subTimeout, const ClientKey &clientId)
 {
     std::vector<std::string> objectsNeedGetRemote;
     auto request = std::make_shared<GetDeviceObjectRequest>(objectKeys, std::move(serverApi), clientId, nullptr);

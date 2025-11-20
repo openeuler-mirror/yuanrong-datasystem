@@ -108,7 +108,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                  [&serverApi]() { return serverApi->SendStatus(Status(K_TRY_AGAIN, "test get retry")); });
     GetReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    const std::string &clientId = req.client_id();
+    auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "Get start from client:" << clientId << " server api read elapsed ms: " << timer.ElapsedMilliSecond();
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -123,7 +123,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                                          "SubTimeout is out of range.");
 
     PerfPoint p(PerfKey::WORKER_GET_REQUEST_INIT);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(request->Init(tenantId, req, memoryRefTable_, serverApi, threadPool_),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(request->Init(tenantId, req, memoryRefTable_, serverApi, threadPool_, clientId),
                                      "GetRequest Init failed");
     p.Record();
 
@@ -2238,7 +2238,7 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
 {
     workerOperationTimeCost.Clear();
     Timer timer;
-    const std::string &clientId = req.client_id();
+    auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "QuerySize start from client:" << clientId;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -2286,7 +2286,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     workerOperationTimeCost.Clear();
     Timer timer;
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
-    const std::string &clientId = req.client_id();
+    auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "Exist start from client:" << clientId;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -2331,7 +2331,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 Status WorkerOcServiceGetImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp)
 {
     Timer timer;
-    const std::string &clientId = req.client_id();
+    auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "GetMetaInfo start from client:" << clientId;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");

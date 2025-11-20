@@ -16,6 +16,7 @@ set(DS_ST_DEPEND_LIBS
         common_encrypt
         common_ak_sk
         common_immutable_string
+        string_ref
         worker_hash_ring
         worker_client_manager
         cluster_manager

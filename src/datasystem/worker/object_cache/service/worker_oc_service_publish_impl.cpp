@@ -91,7 +91,9 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, Ob
 
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
 
-    return AttachShmUnitToObject(ClientShmEnabled(req.client_id()), objectKey, ShmKey::Intern(req.shm_id()),
+    return AttachShmUnitToObject(ClientShmEnabled(ClientKey::Intern(req.client_id())), objectKey,
+                                 ShmKey::Intern(req.shm_id()),
+
                                  req.data_size(), safeObj);
 }
 
@@ -347,8 +349,8 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     std::vector<ShmKey> shmUnits = { ShmKey::Intern(req.shm_id()) };
-    RETURN_IF_NOT_OK(
-        WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, req.client_id(), shmUnits, memoryRefTable_));
+    RETURN_IF_NOT_OK(WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, ClientKey::Intern(req.client_id()),
+                                                                          shmUnits, memoryRefTable_));
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key());
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
     auto nestedObjectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.nested_keys());
