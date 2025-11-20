@@ -2063,7 +2063,6 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &param, std::vector<std::string> &outFailedKeys)
 {
-    RETURN_IF_NOT_OK(IsClientReady());
     std::vector<std::string> deduplicateKeys;
     std::vector<StringView> deduplicateVals;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
@@ -2120,7 +2119,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
         LOG(WARNING) << "Cannot set all the objects from worker, status:" << recvRc.ToString()
                      << " failed id:" << VectorToString(outFailedKeys);
     }
-    if (keys.size() > outFailedKeys.size()) {
+    if (filteredKeys.size() > outFailedKeys.size()) {
         return Status::OK();
     }
     return recvRc.IsOk() ? Status(K_RUNTIME_ERROR, "Cannot get objects from worker") : recvRc;

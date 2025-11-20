@@ -107,18 +107,30 @@ private:
     /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.
      * @param[in] req The rpc request protobuf.
-     * @param[in] successIndex success index of object list
-     * @param[in] failedIndex failed index of object list
      * @param[in] objectKeys Object key list.
      * @param[out] entries The object entries.
      * @param[in] payloads Payloads for non-shared-memory cases.
      * @param[out] lastRc status of last failed object
+     * @param[out] failedKeys The failed object keys.
      * @return Status of the call.
      */
-    Status MultiPublishObjectNtx(const MultiPublishReqPb &req, std::vector<size_t> &successIndex,
-                                 std::vector<size_t> &failedIndex, std::vector<std::string> &objectKeys,
+    Status MultiPublishObjectNtx(const MultiPublishReqPb &req, std::vector<std::string> &objectKeys,
                                  std::vector<std::shared_ptr<SafeObjType>> &entries, std::vector<RpcMessage> &payloads,
-                                 Status &lastRc);
+                                 Status &lastRc, std::unordered_set<std::string> &failedKeys);
+
+    /**
+     * @brief Get the objects that need send to master.
+     * @param[in] objectKeys The object keys.
+     * @param[in] entries The object entries.
+     * @param[in] failedKeys The failed object keys.
+     * @param[in] outKeys The out keys.
+     * @param[in] outEntries The out entries.
+     * @return true If use outKeys and outEntries.
+     */
+    bool GetObjectsNeedToMaster(const std::vector<std::string> &objectKeys,
+                                const std::vector<std::shared_ptr<SafeObjType>> &entries,
+                                const std::unordered_set<std::string> &failedKeys, std::vector<std::string> &outKeys,
+                                std::vector<std::shared_ptr<SafeObjType>> &outEntries);
 
     /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.
@@ -176,7 +188,6 @@ private:
     /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.
      * @param[in] objectKeys Object key list.
-     * @param[in] successIndex success index of object list
      * @param[in] entries The object entries.
      * @param[in] pubReq The request of multipublish.
      * @param[out] resp responese info of CreateMultiMeta
@@ -184,7 +195,6 @@ private:
      * @return Status of the call.
      */
     Status CreateMultiMetaToDistributedMasterNtx(const std::vector<std::string> &objectKeys,
-                                                 std::vector<size_t> &successIndex,
                                                  const std::vector<std::shared_ptr<SafeObjType>> &entries,
                                                  const MultiPublishReqPb &pubReq, master::CreateMultiMetaRspPb &resp,
                                                  std::vector<uint64_t> &versions);
@@ -317,27 +327,28 @@ private:
     /**
      * @brief Fill the entry and save object to L2 cache if success to create meta.
      * @param[in] objectKeys Object key list.
-     * @param[in] entries The object entries.
+     * @param[in] objectEntries The object entries.
      * @param[in] versions The versions of objects.
+     * @param[in] failedKeys The failed object keys.
      * @return K_OK on success; the error code otherwise.
      */
-    void UpdateObjectAfterCreatingMeta(std::vector<std::string> &objectKeys,
-                                       std::vector<std::shared_ptr<SafeObjType>> entries,
-                                       const std::vector<uint64_t> &versions, std::vector<size_t> &successIndex);
+    void UpdateObjectAfterCreatingMeta(const std::vector<std::string> &objectKeys,
+                                       const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
+                                       const std::vector<uint64_t> &versions,
+                                       const std::unordered_set<std::string> &failedKeys = {});
 
     /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.
      * @param[in] req The rpc request protobuf.
-     * @param[in] successIndex success index of object list
-     * @param[in] failedIndex failed index of object list
      * @param[in] objectKeys Object key list.
-     * @param[out] entries The object entries.
+     * @param[in] failedKeys The failed object keys.
+     * @param[out] objectEntries The object entries.
      * @param[out] lastRc status of last failed object
      * @return Status of the call.
      */
-    Status SendToMasterAndUpdateObject(const MultiPublishReqPb &req, std::vector<size_t> &successIndex,
-                                       std::vector<size_t> &failedIndex, std::vector<std::string> &objectKeys,
-                                       std::vector<std::shared_ptr<SafeObjType>> &entries, Status &lastRc);
+    Status SendToMasterAndUpdateObject(const MultiPublishReqPb &req, std::vector<std::string> &objectKeys,
+                                       std::unordered_set<std::string> &failedKeys,
+                                       std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc);
 
     /**
      * @brief Batch lock for multiple set via object keys.
@@ -370,13 +381,13 @@ private:
      * @brief Release memory and resource if failing to publish.
      * @param[in] objectKeys Object key list.
      * @param[in] ifInserts If the object insert to objectTable_.
-     * @param[out] entries The object entries.
-     * @param[in] failedIndex the failed object index of objectKey list.
+     * @param[in] entries The object entries.
+     * @param[in] failedKeys The failed object keys.
      * @param[out] resp MultiPublishRspPb info.
      */
     void BatchRollBackEntries(const std::vector<std::string> &objectKeys, const std::vector<bool> &ifInserts,
-                              std::vector<std::shared_ptr<SafeObjType>> &entries, std::vector<size_t> &failedIndex,
-                              MultiPublishRspPb &resp);
+                              std::vector<std::shared_ptr<SafeObjType>> &entries,
+                              const std::unordered_set<std::string> &failedKeys, MultiPublishRspPb &resp);
 
     /**
      * @brief Release memory and resource if failing to publish.
@@ -392,14 +403,9 @@ private:
      * @param[in] existence object enable existence or not.
      * @param[out] isInserts If the entry is newly inserted.
      * @param[out] entries Locked entry list
-     * @param[out] successIndex success index of object list
-     * @param[out] failedIndex failed index of object list
-     * @param[out] lastRc last fail status
      */
     Status BatchLockForSetNtx(const std::vector<std::string> &objectKeys, const ExistenceOptPb &existence,
-                              std::vector<bool> &isInserts, std::vector<std::shared_ptr<SafeObjType>> &entries,
-                              std::vector<size_t> &successIndex, std::vector<size_t> &failedIndex, Status &lastRc);
-
+                               std::vector<bool> &isInserts, std::vector<std::shared_ptr<SafeObjType>> &entries);
     /**
      * @brief Verify the validity of the object release.
      * @param[in] req Publish request meta.
@@ -423,13 +429,12 @@ private:
      * @brief Verify objects in a transaction.
      * @param[in] req The rpc request protobuf.
      * @param[in] objectKeys Object key list.
-     * @param[in] successIndex success index of object list
-     * @param[in] failedIndex failed index of object list
-     * @param[out] entries The object entries.
+     * @param[in] entries The object entries.
+     * @param[out] failedKeys The failed object keys.
      */
     void VerifyObjectsNtx(const MultiPublishReqPb &req, const std::vector<std::string> &objectKeys,
-                          std::vector<size_t> &successIndex, std::vector<size_t> &failedIndex,
-                          std::vector<std::shared_ptr<SafeObjType>> &entries);
+                          std::vector<std::shared_ptr<SafeObjType>> &entries,
+                          std::unordered_set<std::string> &failedKeys);
 
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
