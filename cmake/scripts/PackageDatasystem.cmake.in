@@ -32,9 +32,15 @@ foreach(SO_FILE ${SO_FILES})
     endif()
 endforeach()
 
-# Run python setup.py bdist_whell to generate origin wheel file.
-execute_process(COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel
-        WORKING_DIRECTORY ${DATASYSTEM_SETUP_PATH})
+# Run python setup.py bdist_wheel to generate origin wheel file.
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel
+    WORKING_DIRECTORY ${DATASYSTEM_SETUP_PATH}
+    RESULT_VARIABLE result
+)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "build wheel failed with exit code ${result}")
+endif()
 file(GLOB ORIGIN_WHEEL "dist/dist/*.whl")
 
 

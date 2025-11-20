@@ -218,7 +218,7 @@ install_file_pattern(
 if (BUILD_WITH_URMA)
     install_file_pattern(
         PATH_PATTERN ${URMA_LIB_PATH}
-        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}/urma
+        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}
         PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
     )
 endif()
@@ -226,7 +226,7 @@ endif()
 if (BUILD_WITH_RDMA)
     install_file_pattern(
         PATH_PATTERN ${UCX_LIB_PATH}
-        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}/rdma
+        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}
         PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
     )
 endif()
