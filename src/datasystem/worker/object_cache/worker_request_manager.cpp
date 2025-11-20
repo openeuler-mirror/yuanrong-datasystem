@@ -251,7 +251,7 @@ bool GetRequest::Registered() const
 Status GetRequest::ReturnToClient(const Status &rc)
 {
     INJECT_POINT("worker.Get.beforeReturn");
-    PerfPoint point(PerfKey::WORKER_RETURN_FROM_GET_REQUEST);
+    PerfPoint point(PerfKey::WORKER_RETURN_TO_CLIENT_PRE);
     bool expected = false;
     RETURN_OK_IF_TRUE(!isReturn_.compare_exchange_strong(expected, true));
     VLOG(1) << "Begin to ReturnToClient, client id: " << clientId_;
@@ -283,7 +283,9 @@ Status GetRequest::ReturnToClient(const Status &rc)
     }
     GetRspPb resp;
     std::vector<RpcMessage> payloads;
+    point.RecordAndReset(PerfKey::WORKER_RETURN_TO_CLIENT_CONSTRUCT_RESPONSE);
     auto constructRc = ConstructResponse(totalSize, resp, payloads, needDeleteObjects);
+    point.RecordAndReset(PerfKey::WORKER_RETURN_TO_CLIENT_OTHER);
     if (constructRc.IsError() && lastRc.GetCode() != K_OUT_OF_MEMORY) {
         lastRc = constructRc;
     }

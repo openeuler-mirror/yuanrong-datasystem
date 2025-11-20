@@ -76,7 +76,7 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "in the master, so that the metadata before the restart can be re-obtained when the master restarts.");
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 DS_DEFINE_bool(enable_redirect, "true",
-                 "enable query meta redirect when scale up or voluntary scale down, default is false");
+               "enable query meta redirect when scale up or voluntary scale down, default is false");
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
@@ -1074,6 +1074,7 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
 std::string OCMetadataManager::SelectObjectLocation(const std::string &objectKey, const std::string &sourceWorker,
                                                     const std::unordered_set<ImmutableString> &locations)
 {
+    PerfPoint point(PerfKey::MASTER_SELECT_LOCATION);
     static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
     if (!locations.empty()) {
         INJECT_POINT("master.select_location", [](std::string addr) { return addr; });
@@ -1106,10 +1107,12 @@ Status OCMetadataManager::GetObjectMetaType(const std::string &objectKey, Object
 
 Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads)
 {
+    PerfPoint point(PerfKey::MASTER_QUERY_META_FILL_REDIRECT);
     std::vector<std::string> notRedirectObjectKeys = { req.ids().begin(), req.ids().end() };
     const auto &address = req.address();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!address.empty(), StatusCode::K_RUNTIME_ERROR, "Address is empty");
     FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    point.RecordAndReset(PerfKey::MASTER_QUERY_META_BATCH_LOCK);
     std::set<std::string> sortedObjectKeys = { notRedirectObjectKeys.begin(), notRedirectObjectKeys.end() };
     std::vector<TbbLockTable::accessor> pLocks(sortedObjectKeys.size());
     int pos = 0;
@@ -1119,15 +1122,19 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     }
 
     Raii eraseLocks([this, &pLocks]() {
+        PerfPoint point(PerfKey::MASTER_QUERY_META_BATCH_UNLOCK);
         for (auto &l : pLocks) {
             processLocks_.erase(l);
             l.release();
         }
     });
     INJECT_POINT("OCMetadataManager.QueryMeta,wait");
+    point.RecordAndReset(PerfKey::MASTER_QUERY_META_FROM_META_TABLE);
     std::vector<std::string> tmpNotExistObjectKeys;
     RETURN_IF_NOT_OK(QueryMetaFromMetaTable(req, notRedirectObjectKeys, rsp, payloads, tmpNotExistObjectKeys));
+    point.RecordAndReset(PerfKey::MASTER_QUERY_META_FILL_REDIRECT_AGAIN);
     FillRedirectResponseInfos(rsp, tmpNotExistObjectKeys, req.redirect());
+    point.RecordAndReset(PerfKey::MASTER_QUERY_META_SET_RSP);
     std::list<std::string> notExistObjectKeys = { tmpNotExistObjectKeys.begin(), tmpNotExistObjectKeys.end() };
     std::vector<uint64_t> deletingVersions;
     if (FLAGS_oc_io_from_l2cache_need_metadata) {
@@ -1138,6 +1145,7 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     *rsp.mutable_not_exist_ids() = { notExistObjectKeys.begin(), notExistObjectKeys.end() };
     *rsp.mutable_deleting_versions() = { deletingVersions.begin(), deletingVersions.end() };
     INJECT_POINT("master.slow_query_meta");
+    point.RecordAndReset(PerfKey::MASTER_QUERY_META_SUBSCRIBE);
     return TryToSubscribeCache(req.sub_timeout(), req, notExistObjectKeys);
 }
 

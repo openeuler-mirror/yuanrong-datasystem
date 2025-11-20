@@ -80,8 +80,8 @@ public:
 
     Status InitExclusiveConnection(const std::string &exclusiveSockPath, int64_t timeoutMs)
     {
-        RETURN_IF_NOT_OK(gExclusiveConnMgr.CreateExclusiveConnection(exclusiveId_.value(), timeoutMs,
-                                                                     exclusiveSockPath));
+        RETURN_IF_NOT_OK(
+            gExclusiveConnMgr.CreateExclusiveConnection(exclusiveId_.value(), timeoutMs, exclusiveSockPath));
         return Status::OK();
     }
 
@@ -280,6 +280,7 @@ private:
                                                 meta_.client_id(), meta_.svc_name(), meta_.method_index());
             SetMetaAuthInfo();
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_REQUEST_SIZE_AFTER_SERIALIZE, outMsg_.back().Size());
             RETURN_OK_IF_TRUE(HasSendPayloadOp());
             return SendAll(ZmqSendFlags::NONE);
         } else {
@@ -321,6 +322,7 @@ private:
             ZmqMessage msg;
             RETURN_IF_NOT_OK(AckRequest(inMsg_, msg));
             RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, pb));
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_RESPONSE_SIZE_BEFORE_DESERIALIZE, msg.Size());
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " got message\n"
                                 << LogHelper::IgnoreSensitive(pb) << std::endl;
             // If we receive payload, check if the payload is banked at the server or come separately.

@@ -95,12 +95,12 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
 
 Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> &serverApi)
 {
+    PerfPoint point(PerfKey::WORKER_GET_OBJECT);
     workerOperationTimeCost.Clear();
     Timer timer;
     auto request = std::make_shared<GetRequest>(AccessRecorderKey::DS_POSIX_GET);
     INJECT_POINT("WorkerOCServiceImpl.Get.Retry",
                  [&serverApi]() { return serverApi->SendStatus(Status(K_TRY_AGAIN, "test get retry")); });
-    PerfPoint point(PerfKey::WORKER_GET_OBJECT);
     GetReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     const std::string &clientId = req.client_id();
@@ -117,13 +117,15 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
 
+    PerfPoint p(PerfKey::WORKER_GET_REQUEST_INIT);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(request->Init(tenantId, req, memoryRefTable_, serverApi),
                                      "GetRequest Init failed");
+    p.Record();
 
     timer.Reset();
-    std::string traceID = Trace::Instance().GetTraceID();
-    auto cost = workerOperationTimeCost;
     if (serverApi->EnableMsgQ()) {
+        std::string traceID = Trace::Instance().GetTraceID();
+        auto cost = workerOperationTimeCost;
         threadPool_->Execute([=]() mutable {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             workerOperationTimeCost = cost;
@@ -150,13 +152,12 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             }
         });
     } else {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        workerOperationTimeCost = cost;
-        reqTimeoutDuration.Init(timeout);
         LOG_IF_ERROR(ProcessGetObjectRequest(subTimeout, request), "Process Get failed");
         workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
+        LOG(INFO) << FormatString("Process Get done, clientId: %s, objectKeys: %s. The operations of worker Get %s",
+                                  clientId, VectorToString(request->GetRawObjectKeys()),
+                                  workerOperationTimeCost.GetInfo());
     }
-
     return Status::OK();
 }
 
@@ -247,13 +248,13 @@ Status WorkerOcServiceGetImpl::GetDataFromL2CacheForPrimaryCopy(const std::strin
 
 Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::shared_ptr<GetRequest> &request)
 {
+    PerfPoint all(PerfKey::WORKER_PROCESS_GET_OBJECT);
     (void)subTimeout;
     INJECT_POINT("worker.Get.asyncGetStart", [](int timeout) {
         reqTimeoutDuration.Init(timeout);
         return Status::OK();
     });
-    PerfPoint point(PerfKey::WORKER_PROCESS_GET_OBJECT);
-
+    PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL);
     // Try get from local.
     std::set<ReadKey> remoteObjectKeys;
     RETURN_IF_NOT_OK(TryGetObjectFromLocal(request, remoteObjectKeys));
@@ -261,15 +262,17 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
 
     // Register request for subscribe
     if (subTimeout > 0) {
+        point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FOR_REGISTER);
         request->Register(&workerRequestManager_);
     }
 
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_REMOTE);
     // Try get from remote worker or L2 cache.
     RETURN_IF_NOT_OK(TryGetObjectFromRemote(subTimeout, request, std::move(remoteObjectKeys)));
     RETURN_OK_IF_TRUE(request->AlreadyReturn());
-
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     if (request->GetNotReadyCount() == 0 || subTimeout == 0 || remainingTimeMs <= 0) {
+        point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_RETURN);
         LOG(INFO) << "The satisfied objects num: " << request->GetReadyCount()
                   << ", the waiting objects num: " << request->GetNotReadyCount()
                   << ", the sub timeout: " << subTimeout;
@@ -278,6 +281,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
         return rc;
     }
 
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_ADD_TIMER);
     auto timer = std::make_unique<TimerQueue::TimerImpl>();
     auto traceID = Trace::Instance().GetTraceID();
     auto weakThis = weak_from_this();
@@ -319,9 +323,9 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
 {
     Status lastRc;
     auto &uniqueObjectMap = request->GetObjects();
-
+    PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_CHECK_ROLLBACK);
     asyncRollbackManager_->UpdateIsRollback(uniqueObjectMap);
-
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
     for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
         if (objectInfo.isRollBack) {
             objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
@@ -339,6 +343,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
         static std::set<StatusCode> bypassCode{ K_OUT_OF_MEMORY, K_OUT_OF_RANGE };
         lastRc = CheckAndResetStatus(lastRc, bypassCode);
     }
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_UPDATE_REQ);
     return request->UpdateAfterLocalGet(std::move(lastRc), remoteObjectKeys.size());
 }
 
@@ -517,27 +522,40 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
                                                              std::set<ReadKey> &needRetryIds,
                                                              const std::shared_ptr<GetRequest> &request)
 {
+    PerfPoint all(PerfKey::WORKER_PROCESS_NOT_EXISTS_ALL);
+    PerfPoint point(PerfKey::WORKER_PROCESS_NOT_EXISTS_ADD_IN_REMOTE_GET);
     LOG(INFO) << "Begin to process " << objectsNeedGetRemote.size() << " objects that doesn't exist in local: ["
               << VectorToString(objectsNeedGetRemote) << "]";
     AddInRemoteGetObjects(objectsNeedGetRemote);
-    Raii raii([this, &objectsNeedGetRemote]() { RemoveInRemoteGetObjects(objectsNeedGetRemote); });
+    Raii raii([this, &objectsNeedGetRemote]() {
+        PerfPoint point(PerfKey::WORKER_PROCESS_NOT_EXISTS_DEL_IN_REMOTE_GET);
+        RemoveInRemoteGetObjects(objectsNeedGetRemote);
+    });
 
     INJECT_POINT("worker.after_add_remote_get_objects");
 
     // Batch lock objects that need to query from master because location would be published to master in QueryMeta
     // request, to ensure the concurrent timing of the location (e.g. remove location when object was deleted by spill
     // manager), we need to lock here.
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_BATCH_LOCK);
     Status lastRc;
     std::map<ReadKey, LockedEntity> lockedEntries;
     lastRc = BatchLockForGet(objectsNeedGetRemote, lockedEntries, failedIds);
-    Raii unlockRaii([this, &failedIds, &lockedEntries]() { BatchUnlockForGet(failedIds, lockedEntries); });
+    Raii unlockRaii([this, &failedIds, &lockedEntries]() {
+        PerfPoint point(PerfKey::WORKER_PROCESS_NOT_EXISTS_BATCH_UNLOCK);
+        BatchUnlockForGet(failedIds, lockedEntries);
+    });
 
     // If a local publish or remote get finished before we lock the object, we will get a valid object here.
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_ATTEMPTE_LOCAL_GET);
     AttemptGetObjectsLocally(request, lockedEntries);
+
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_COPY_IDS);
     std::vector<std::string> needRemoteGetObjects;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::back_inserter(needRemoteGetObjects),
                    [](const auto &kv) { return kv.first.objectKey; });
 
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_QUERY_META);
     QueryMetadataFromMasterResult queryMetaResult;
     std::vector<master::QueryMetaInfoPb> &queryMetas = queryMetaResult.queryMetas;
     std::vector<RpcMessage> &payloads = queryMetaResult.payloads;
@@ -559,6 +577,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     INJECT_POINT("worker.after_query_meta");
 
     if (FLAGS_oc_io_from_l2cache_need_metadata) {
+        point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_NEEDMETA_UNLOCK);
         // Unlock the not found objects as soon as possible.
         if (queryMetas.empty()) {
             // In the scenario where keys that do not exist are obtained, these keys need to be deleted from
@@ -567,7 +586,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         }
         BatchUnlockForGet(absentObjectKeys, lockedEntries);
     }
-
+    point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
     LOG(INFO) << FormatString("Query meta success: target num %d, success num %d", objectsNeedGetRemote.size(),
                               queryMetas.size());
     lastRc = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
@@ -575,11 +594,13 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
     // a fair change to complete within the given timeout.
     if (!FLAGS_oc_io_from_l2cache_need_metadata) {
+        point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_GET_WITHOUT_META);
         Status rc = GetObjectsWithoutMeta(absentObjectKeys, lockedEntries, failedIds);
         if (rc.IsError()) {
             lastRc = rc;
         }
     }
+    point.Record();
 
     VLOG(1) << "Get object data from remote node finish, lastRc:" << lastRc.ToString();
     return lastRc;
@@ -714,7 +735,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 
 template <typename Req>
 Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb,
-                                               bool &shmUnitAllocated, std::shared_ptr<ShmOwner> shmOwner)
+                                                       bool &shmUnitAllocated, std::shared_ptr<ShmOwner> shmOwner)
 {
     // If URMA is enabled, or if shmOwner is not nullptr, memory distribution/allocation needs to be processed.
     if (!IsUrmaEnabled() && shmOwner == nullptr) {
@@ -1161,6 +1182,7 @@ Status WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(
 Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
                                                        QueryMetadataFromMasterResult &result, bool queryEtcdMeta)
 {
+    PerfPoint point(PerfKey::WORKER_QUERY_META_PRE);
     std::vector<master::QueryMetaInfoPb> &queryMetas = result.queryMetas;
     std::vector<RpcMessage> &payloads = result.payloads;
     std::map<std::string, uint64_t> &absentObjectKeysWithVersion = result.absentObjectKeysWithVersion;
@@ -1168,6 +1190,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // 1. Get map of objectKeys grouped by master
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
+    point.RecordAndReset(PerfKey::WORKER_QUERY_META_ROUTER);
     etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
     // 2. Send requests for each master
     std::vector<std::future<void>> futures;
@@ -1177,6 +1200,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     std::vector<BatchQueryMetaResult> batchQueryResults;
     batchQueryResults.resize(objKeysGrpByMaster.size());
     size_t idx = 0;
+    point.RecordAndReset(PerfKey::WORKER_QUERY_META_BATCH_BY_ADDR);
     for (auto &item : objKeysGrpByMaster) {
         BatchQueryMetaResult &res = batchQueryResults[idx++];
         auto func = [&res, realTimeoutMs, subTimeout, item, traceID, timer, this]() {
@@ -1207,6 +1231,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     for (auto &f : futures) {
         f.wait();
     }
+    point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_RESULT);
     // 3. Statistics the metadata results just queried.
     ObjectKeysQueryMetaFailed objectKeysQueryMetaFailed;
     auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
@@ -1243,11 +1268,13 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // 4. Handle objKeys needed to try to get metadata in other AZ
     std::unordered_set<std::string> objectKeysMayInOtherAz;
     if (FLAGS_cross_az_get_meta_from_worker) {
+        point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_CROSS_AZ);
         LOG_IF_ERROR(ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(subTimeout, objKeysUndecidedMaster,
                                                                      objectKeysQueryMetaFailed, objectKeysMayInOtherAz,
                                                                      queryMetas, payloads),
                      "Handle objKeys needed to try to get metadata in other AZ failed");
     }
+    point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_NOT_FOUND);
     // 5. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
     bool multiReplicaEnabled = etcdCM_->MultiReplicaEnabled();
     bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata && !multiReplicaEnabled;
@@ -1268,6 +1295,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
         uint64_t deletingVersion = it != deletingObjectsWithVersion.end() ? it->second : 0;
         absentObjectKeysWithVersion.emplace(id, deletingVersion);
     }
+    point.RecordAndReset(PerfKey::WORKER_QUERY_META_OTHER);
     return Status::OK();
 }
 
@@ -1485,8 +1513,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
         auto traceId = Trace::Instance().GetTraceID();
         futures.emplace_back(remoteGetThreadPool_->Submit([=, &lockedEntries, &commonMutex, &abortAllTasks, &request,
-                                                           &payloads, &lastRc, &successIds, &needRetryIds,
-                                                           &failedIds, &traceId]() {
+                                                           &payloads, &lastRc, &successIds, &needRetryIds, &failedIds,
+                                                           &traceId]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);

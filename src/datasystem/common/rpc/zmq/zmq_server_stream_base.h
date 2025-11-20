@@ -359,6 +359,7 @@ public:
             ZmqMessage rcMsg = StatusToZmqMessage(Status::OK());
             outMsg_.push_back(std::move(rcMsg));
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_RESPONSE_SIZE_AFTER_SERIALIZE, outMsg_.back().Size());
             RETURN_OK_IF_TRUE(HasRecvPayloadOp());
             if (enableMsgQ_) {
                 return SendAll(ZmqSendFlags::NONE);
@@ -372,7 +373,7 @@ public:
     virtual Status ConstructWriteMsg(const W &pb, ZmqMsgFrames &outMsg)
     {
         CHECK_FAIL_RETURN_STATUS(!enableMsgQ_, StatusCode::K_RUNTIME_ERROR,
-                                "Invoke ConstructWriteMsg() only if enableMsgQ_ flag is off.");
+                                 "Invoke ConstructWriteMsg() only if enableMsgQ_ flag is off.");
         bool expected = false;
         if (writeOnce_.compare_exchange_strong(expected, true)) {
             VLOG(RPC_LOG_LEVEL) << "Server uses unary socket sending rc " << Status::OK() << " message "
@@ -460,10 +461,11 @@ public:
     {
         bool expected = false;
         if (readOnce_.compare_exchange_strong(expected, true)) {
-            VLOG(RPC_LOG_LEVEL) << "Server uses unary socket reading" << std::endl;
+            VLOG(RPC_LOG_LEVEL) << "Server uses unary socket reading";
             ZmqMessage protoMsg = std::move(inMsg_.front());
             inMsg_.pop_front();
             RETURN_IF_NOT_OK(ParseFromZmqMessage(protoMsg, pb));
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_REQUEST_SIZE_BEFORE_DESERIALIZE, protoMsg.Size());
             g_SerializedMessage = std::move(protoMsg);
             g_ReqAk = meta_.access_key();
             g_ReqSignature = meta_.signature();

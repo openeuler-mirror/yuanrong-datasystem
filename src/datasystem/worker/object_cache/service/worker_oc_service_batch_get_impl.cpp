@@ -107,6 +107,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                                                              std::unordered_set<std::string> &failedIds,
                                                              std::set<ReadKey> &needRetryIds)
 {
+    PerfPoint point(PerfKey::WORKER_GET_BATCH_GROUPBY_DATA_NODE);
     RETURN_RUNTIME_ERROR_IF_NULL(workerBatchRemoteGetThreadPool_);
     Status lastRc = Status::OK();
     std::vector<std::string> successIds;
@@ -141,10 +142,11 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         }
     }
 
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_HANDLE_DATA_IN_META);
     // For the ones that already got their payload from queried meta, fallback to existing logic.
     lastRc =
         GetObjectsFromAnywhereSerially(payloadIndexMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
-
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_BEFORE_RUN);
     // And then deal with the requests that can be batched.
     std::vector<std::future<Status>> futures;
     std::list<ObjectMetaPb *> failedMetas;
@@ -154,18 +156,19 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
     size_t index = 0;
     auto traceId = Trace::Instance().GetTraceID();
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_RUN);
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &metaList = queryMeta->second;
 
-        auto func = [this, &lastRc, address, &metaList, &request, &lockedEntries, &tempSuccessIds,
-                     &tempNeedRetryIds, &tempFailedIds, &tempFailedMetas, index, traceId] {
+        auto func = [this, &lastRc, address, &metaList, &request, &lockedEntries, &tempSuccessIds, &tempNeedRetryIds,
+                     &tempFailedIds, &tempFailedMetas, index, traceId] {
             for (auto &metaPair : metaList) {
                 auto &metas = metaPair.first;
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, request, lockedEntries,
-                                                        tempSuccessIds[index], tempNeedRetryIds[index],
-                                                        tempFailedIds[index], tempFailedMetas[index]);
+                lastRc = BatchGetObjectFromRemoteOnLock(address, metas, request, lockedEntries, tempSuccessIds[index],
+                                                        tempNeedRetryIds[index], tempFailedIds[index],
+                                                        tempFailedMetas[index]);
             }
             return lastRc;
         };
@@ -180,6 +183,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
             LOG(ERROR) << "BatchGetObjectFromRemoteOnLock failed";
         }
     }
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_AFTER_RUN);
 
     for (uint64_t i = 0; i < groupedQueryMetas.size(); ++i) {
         if (!tempSuccessIds[i].empty()) {
@@ -211,6 +215,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                    << VectorToString(successIds) << "], meta data num: " << queryMetas.size()
                    << " lastRc: " << lastRc.ToString();
     }
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_OTHER);
     return lastRc;
 }
 
@@ -305,10 +310,13 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
     // Second round of error handling, as retrive payload might fail, and it might fallback to
     // PullObjectDataFromRemoteWorker.
     if (subRc.IsOk()) {
+        PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_ADD_EVICTION);
         evictionManager_->Add(objectKey);
         entry->stateInfo.SetNeedToDelete(true);
+        point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_SYNC_META);
         ConsistencyType type = ConsistencyType(meta->config().consistency_type());
         subRc = ProcessObjectEntryAndSyncMetadata(IsUpdateLocation(type), objectKV);
+        point.Record();
     }
     // Handle error as in GetObjectFromRemoteOnLock code path, move on to the next request.
     if (subRc.GetCode() == K_OUT_OF_MEMORY || IsRpcTimeoutOrTryAgain(subRc)) {
@@ -328,10 +336,12 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     std::vector<ReadKey> &needRetryIds, std::unordered_set<std::string> &failedIds,
     std::list<ObjectMetaPb *> &failedMetas, bool &dataSizeChange)
 {
+    PerfPoint all(PerfKey::WORKER_HANDLE_BATCH_GET_RESPONSE);
     Status lastRc = status;
     uint64_t payloadIndex = 0;
     auto metaIter = metas.begin();
     for (int i = 0; metaIter != metas.end(); i++) {
+        PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_PRE);
         auto &objectKey = (*metaIter)->object_key();
         auto iter = lockedEntries.find(ReadKey(objectKey));
         if (iter == lockedEntries.cend()) {
@@ -344,24 +354,24 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         bool tryGetFromElsewhere = true;
         bool dataSizeChanged = false;
         if (subRc.IsOk()) {
-            PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_RESP);
+            point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_PAYLOAD);
             auto &subResp = rspPb.responses(i);
             subRc = HandleBatchSubResponse(subResp, *metaIter, objectKV, payloads, payloadIndex, tryGetFromElsewhere,
                                            dataSizeChanged);
-            point.Record();
         }
         if (tryGetFromElsewhere) {
-            PerfPoint point1(PerfKey::WORKER_HANDLE_BATCH_SUB_RESP_PT_2);
+            point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_RESP_PT_2);
             HandleBatchSubResponsePart2(subRc, address, *metaIter, objectKV, checkConnectStatus, tryGetFromElsewhere);
-            point1.Record();
         }
         if (subRc.IsError() && tryGetFromElsewhere) {
+            point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_OTHER_AZ);
             HostPort hostAddr;
             hostAddr.ParseString(address);
             // Note that rc can change upon TryGetObjectFromOtherAZ.
             TryGetObjectFromOtherAZ(**metaIter, hostAddr, objectKV, subRc);
         }
         if (subRc.IsError() && tryGetFromElsewhere) {
+            point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_L2);
             Timer timer;
             bool ifWorkerConnected = checkConnectStatus.IsOk();
             TryGetFromL2CacheWhenNotFoundInWorker(**metaIter, address, ifWorkerConnected, objectKV, subRc);
@@ -375,8 +385,10 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
                                                      objectKey));
         }
         if (subRc.IsOk()) {
+            point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_UPDATA_REQUEST);
             subRc = UpdateRequestForSuccess(objectKV, request);
         }
+        point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_STATUS);
         if (!dataSizeChanged) {
             if (subRc.IsError()) {
                 failedMetas.emplace_back(*metaIter);
@@ -388,6 +400,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         BatchGetObjectHandleIndividualStatus(subRc, readKey, successIds, needRetryIds, failedIds);
         lastRc = subRc;
+        point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_OTHER);
     }
     return lastRc;
 }
@@ -407,6 +420,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
         BatchGetObjectRemoteRspPb rspPb;
         std::vector<RpcMessage> payloads;
         auto constructAndSend = [&]() {
+            PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND_PRE);
             // If address is empty, we fallback to get non-batched object from L2 Cache.
             CHECK_FAIL_RETURN_STATUS(!address.empty(), K_RUNTIME_ERROR,
                                      FormatString("Fail to get objects from remote worker, no object copy exists."));
@@ -421,9 +435,11 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
                                      FormatString("Fail to get objects from remote worker, no object copy exists."));
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
+            point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, metas, lockedEntries, successIds, needRetryIds, failedIds, reqPb));
             INJECT_POINT("worker.remote_get_failed");
+            point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, akSkManager_, workerStub),
                                              "Create remote worker api failed.");
@@ -432,9 +448,11 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             // data failed.
             int64_t timeoutMs =
                 reqTimeoutDuration.CalcRealRemainingTime() / (etcdCM_->CheckIfOtherAzNodeConnected(hostAddr) ? 4 : 1);
+            point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
             RETURN_IF_NOT_OK(RetryOnErrorRepent(
                 timeoutMs,
                 [&workerStub, &reqPb, &rspPb, &clientApi, &payloads](int32_t) {
+                    PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemote(&clientApi));
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb));
                     RETURN_IF_NOT_OK(clientApi->Read(rspPb));
@@ -448,9 +466,10 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                   StatusCode::K_RPC_UNAVAILABLE }));
             return Status::OK();
         };
-        PerfPoint point(PerfKey::WORKER_CONSTRUCT_AND_SEND);
+        PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);
         Status rc = constructAndSend();
         point.Record();
+        point.RecordAndReset(PerfKey::WORKER_BATCH_GET_HANDLE_RESPONSE);
         lastRc = ProcessBatchResponse(address, checkConnectStatus, metas, request, lockedEntries, rc, rspPb, payloads,
                                       successIds, needRetryIds, failedIds, failedMetas, dataSizeChange);
     } while (dataSizeChange);
