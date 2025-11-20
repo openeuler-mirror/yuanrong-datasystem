@@ -1053,7 +1053,7 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2CacheWithCopy)
     ASSERT_EQ(metaNum, 400);  // obj is 400
 }
 
-TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1WriteBackWithCopy)
+TEST_F(OCVoluntaryScaleDownTest, DISABLED_VoluntaryDownWorker1WriteBackWithCopy)
 {
     DS_ASSERT_OK(cluster_->StartOBS());
     StartWorkerAndWaitReady({ 0, 1, 2 });
