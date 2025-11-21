@@ -191,7 +191,8 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
             return Status::OK();
         }
         uint64_t needSize = dataSize + metadataSize;
-        if (batchCap + needSize > FLAGS_oc_worker_aggregate_merge_size || batchReqSize >= batchLimitKeys) {
+        uint64_t ceilingSize = Align4BitsCeiling(needSize);
+        if (batchCap + ceilingSize > FLAGS_oc_worker_aggregate_merge_size || batchReqSize >= batchLimitKeys) {
             info.batchStartIndex.emplace_back(batchStartIndex);
             info.batchSizes.emplace_back(batchCap);
             info.batchReqSize.emplace_back(batchReqSize);
@@ -202,7 +203,7 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
         }
 
         batchReqSize++;
-        batchCap += needSize;
+        batchCap += ceilingSize;
     }
 
     if (batchReqSize > 0) {
@@ -385,17 +386,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         if (IsUrmaEnabled() && req.has_urma_info()) {
             if (batchPtr) {
                 PerfPoint aggregateCopy(PerfKey::WORKER_AGGREGATE_MEM_COPY);
-                batchPtr->batchCursor += entry->GetMetadataSize();
+                uint64_t dataPos = batchPtr->batchCursor + entry->GetMetadataSize();
                 CHECK_FAIL_RETURN_STATUS(entry->GetMetadataSize() == ocClientWorkerSvc_->GetMetadataSize(),
                                          K_RUNTIME_ERROR,
                                          FormatString("Metadata size mismatch, actual = %zu, expected = %zu",
                                                       entry->GetMetadataSize(), ocClientWorkerSvc_->GetMetadataSize()));
-                uint8_t *destPtr = static_cast<uint8_t *>(batchPtr->batchShmUnit->GetPointer()) + batchPtr->batchCursor;
+                uint8_t *destPtr = static_cast<uint8_t *>(batchPtr->batchShmUnit->GetPointer()) + dataPos;
                 uint8_t *srcPtr = static_cast<uint8_t *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize();
                 auto ret = memcpy_s(destPtr, entry->GetDataSize(), srcPtr, entry->GetDataSize());
                 CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
                                          FormatString("Copy root info failed, the memcpy_s return: %d", ret));
-                batchPtr->batchCursor += entry->GetDataSize();
+                batchPtr->batchCursor += Align4BitsCeiling(entry->GetDataSize() + entry->GetMetadataSize());
             } else {
                 // later add a check on data size and read size.
                 auto shmUnit = entry->GetShmUnit();

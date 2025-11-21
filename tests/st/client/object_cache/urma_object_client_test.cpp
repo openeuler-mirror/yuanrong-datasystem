@@ -113,7 +113,7 @@ TEST_F(UrmaObjectClientTest, UrmaPutGetDeleteShmTest)
 }
 
 // bus error happen in aarch64
-TEST_F(UrmaObjectClientTest, DISABLED_TestBatchRemoteGet1)
+TEST_F(UrmaObjectClientTest, TestBatchRemoteGet1)
 {
     // Test that the batch get path in urma case is working as expected.
     std::shared_ptr<KVClient> client1;

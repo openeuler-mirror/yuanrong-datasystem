@@ -110,7 +110,7 @@ private:
 
     struct AggregateMemory {
         std::shared_ptr<ShmUnit> batchShmUnit = nullptr;
-        int64_t batchCursor = 0;
+        uint64_t batchCursor = 0;
     };
 
     struct ParallelRes {

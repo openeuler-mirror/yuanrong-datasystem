@@ -255,13 +255,14 @@ Status AggregateAllocate(
             }
 
             // Seal the last batch and start the new batch.
-            if (currentKeyCount >= batchLimitKeys || (currentBatchSize + shmSize) > batchLimitTotalSize) {
+            uint64_t ceilingSize = Align4BitsCeiling(shmSize);
+            if (currentKeyCount >= batchLimitKeys || (currentBatchSize + ceilingSize) > batchLimitTotalSize) {
                 aggreatedSizes.emplace_back(currentBatchSize);
                 currentBatchSize = 0;
                 currentKeyCount = 0;
             }
             // Record the size and num, and also map from object key to ShmOwners index.
-            currentBatchSize += Align4BitsCeiling(shmSize);
+            currentBatchSize += ceilingSize;
             currentKeyCount++;
             shmIndexMapping[objectIndex] = aggreatedSizes.size();
         };
