@@ -618,3 +618,33 @@ class TestDsTensorClient(unittest.TestCase):
 
         for p in processes:
             p.join()
+
+    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    def test_sub_timeout_ms_error(self):
+        """
+        Test dev_mget_into_tensor with sub_timeout_ms errors.
+        """
+        device_id = 7
+        acl.init()
+        acl.rt.set_device(device_id)
+        ms.set_context(device_target="Ascend", device_id=device_id)
+
+        client = self.init_test_tensor_client(device_id)
+
+        key1 = self.random_str(10)
+        key_send_tensor_npu1 = [ms.Tensor(np.random.rand(1, 1024), dtype=ms.float32) + 0]
+
+        failed_keys = client.dev_mset([key1], key_send_tensor_npu1)
+        assert len(failed_keys) == 0
+
+        recv_tensor = ms.Tensor(np.zeros((1, 1024)), dtype=ms.float32) + 0
+
+        data_size_byte = (int)(1024) * recv_tensor.itemsize
+        copy_ranges = [CopyRange(src_offset=0, dst_offset=0, length=data_size_byte)]
+
+        sub_timeout_cases = [True, "1"]
+
+        for sub_timeout in sub_timeout_cases:
+            with self.assertRaises(TypeError):
+                client.dev_mget_into_tensor([key1], recv_tensor, copy_ranges, sub_timeout)
+        acl.finalize()

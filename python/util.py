@@ -52,7 +52,8 @@ class Validator:
             arg_types = arguments[2:]
             valid = False
             for arg_type in arg_types:
-                if isinstance(arg_value, arg_type):
+                # Use strict type checking with type() is instead of isinstance()
+                if type(arg_value) is arg_type:
                     valid = True
                     break
             if valid is False:
