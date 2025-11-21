@@ -88,6 +88,7 @@ DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(rocksdb_write_mode);
+DS_DECLARE_bool(enable_data_replication);
 
 namespace datasystem {
 namespace master {
@@ -1154,7 +1155,8 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             info.set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
             TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
             bool updateLocation =
-                (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM;
+                (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM
+                && FLAGS_enable_data_replication;
             if (updateLocation && accessor->second.locations.insert(address).second) {
                 RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
             }

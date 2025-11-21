@@ -44,7 +44,8 @@ std::function<Status(const std::string &, uint64_t)> WorkerRequestManager::delet
 
 Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
                         std::shared_ptr<SharedMemoryRefTable> shmRefTable,
-                        std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api)
+                        std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api,
+                        std::shared_ptr<ThreadPool> threadPool)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
@@ -89,7 +90,7 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
         }
         VLOG(1) << "objectKey " << objectKey << " add to GetRequest success";
     }
-
+    threadPool_ = std::move(threadPool);
     return Status::OK();
 }
 
@@ -273,7 +274,10 @@ Status GetRequest::ReturnToClient(const Status &rc)
         recorder_.Record(code, std::to_string(totalSize), reqParam, lastRc.GetMsg());
     });
     std::map<std::string, uint64_t> needDeleteObjects;
-    Raii deleteRaii([&needDeleteObjects] { WorkerRequestManager::DeleteObjects(needDeleteObjects); });
+    Raii deleteRaii([this, &needDeleteObjects] {
+        threadPool_->Submit(
+            [keysWithVersion = std::move(needDeleteObjects)] { WorkerRequestManager::DeleteObjects(keysWithVersion); });
+    });
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         LOG(ERROR) << "ReturnFromGetRequest timeout when get object: " << VectorToString(rawObjectKeys_);
@@ -474,7 +478,7 @@ void WorkerRequestManager::SetDeleteObjectsFunc(std::function<Status(const std::
     deleteFunc_ = std::move(deleteFunc);
 }
 
-void WorkerRequestManager::DeleteObjects(std::map<std::string, uint64_t> &objects)
+void WorkerRequestManager::DeleteObjects(const std::map<std::string, uint64_t> &objects)
 {
     if (deleteFunc_ == nullptr) {
         LOG(ERROR) << "WorkerRequestManager deleteFunc not set.";

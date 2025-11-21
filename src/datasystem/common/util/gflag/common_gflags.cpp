@@ -41,6 +41,8 @@ DS_DEFINE_bool(auto_del_dead_node, true, "Decide whether to remove the node from
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
                "default is disable.");
+DS_DEFINE_bool(enable_data_replication, true,
+               "Enable nodes with data replicas to update metadata information, default is true");
 
 namespace {
 bool ValidateEnableUrma(const char *flagName, bool value)

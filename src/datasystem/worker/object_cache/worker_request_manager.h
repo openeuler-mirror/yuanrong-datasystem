@@ -108,10 +108,12 @@ public:
      * @param[in] req The GetReqPb instance.
      * @param[in] shmRefTable The instance of SharedMemoryRefTable.
      * @param[in] api The instance of server api.
+     * @param[in] threadPool The thread pool for GET requests.
      * @return Status of this call.
      */
     Status Init(const std::string &tenantId, const GetReqPb &req, std::shared_ptr<SharedMemoryRefTable> shmRefTable,
-                std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api);
+                std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api,
+                std::shared_ptr<ThreadPool> threadPool);
 
     /**
      * @brief Update GetRequst according to local get result, return to client if all data has been obtained
@@ -217,6 +219,7 @@ private:
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
     bool noQueryL2Cache_ = false;
     bool enableReturnObjectIndex_ = false;
+    std::shared_ptr<ThreadPool> threadPool_;
 };
 
 class WorkerRequestManager {
@@ -256,7 +259,7 @@ public:
      * @brief Delete objects according to object key and version.
      * @param[in] objects The object info.
      */
-    static void DeleteObjects(std::map<std::string, uint64_t> &objects);
+    static void DeleteObjects(const std::map<std::string, uint64_t> &objects);
 
 private:
     static std::function<Status(const std::string &, uint64_t)> deleteFunc_;

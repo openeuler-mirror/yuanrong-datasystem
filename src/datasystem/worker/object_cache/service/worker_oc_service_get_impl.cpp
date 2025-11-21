@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "datasystem/common/device/device_helper.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/l2_storage.h"
@@ -62,8 +63,7 @@ DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(authorization_enable);
-DS_DEFINE_bool(enable_update_location, "true",
-               "Enable nodes with data replicas to update metadata information, default is true");
+DS_DECLARE_bool(enable_data_replication);
 
 using namespace datasystem::worker;
 using namespace datasystem::master;
@@ -123,7 +123,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                                          "SubTimeout is out of range.");
 
     PerfPoint p(PerfKey::WORKER_GET_REQUEST_INIT);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(request->Init(tenantId, req, memoryRefTable_, serverApi),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(request->Init(tenantId, req, memoryRefTable_, serverApi, threadPool_),
                                      "GetRequest Init failed");
     p.Record();
 
@@ -769,19 +769,18 @@ Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(bool updateLoca
         return Status::OK();
     }
     entry->stateInfo.SetNeedToDelete(false);
-
-    // If we can't connect to the master (could be multiple reasons like cross_az_get_meta_from_worker=false or the
-    // master is indeed faulty), then we can't update the location to the master so just set the delete flag and return
     const auto &objectKey = objectKV.GetObjKey();
-    HostPort masterHostAddress;
-    if (GetMetaAddress(objectKey, masterHostAddress).IsError()) {
-        LOG(WARNING) << "Can't connect with master " << masterHostAddress.ToString()
-                     << ". Data will be automatically deleted after it is returned.";
-        entry->stateInfo.SetNeedToDelete(true);
-        return Status::OK();
-    }
-
     if (updateLocation) {
+        HostPort masterHostAddress;
+        // If we can't connect to the master (could be multiple reasons like cross_az_get_meta_from_worker=false or the
+        // master is indeed faulty), then we can't update the location to the master so just set the delete flag and
+        // return
+        if (GetMetaAddress(objectKey, masterHostAddress).IsError()) {
+            LOG(WARNING) << "Can't connect with master " << masterHostAddress.ToString()
+                         << ". Data will be automatically deleted after it is returned.";
+            entry->stateInfo.SetNeedToDelete(true);
+            return Status::OK();
+        }
         VLOG(1) << "Sync meta data to master as an object data copy provider.";
         RETURN_IF_NOT_OK(UpdateLocation(objectKey, objectKV));
     }
@@ -798,7 +797,9 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA_FROM_WORKER);
     RETURN_IF_NOT_OK(GetObjectFromRemoteWorkerWithoutDump(address, primaryAddress, dataSize, objectKV));
-    RETURN_IF_NOT_OK(ProcessObjectEntryAndSyncMetadata(updateLocation, objectKV));
+    if (FLAGS_enable_data_replication) {
+        RETURN_IF_NOT_OK(ProcessObjectEntryAndSyncMetadata(updateLocation, objectKV));
+    }
     return Status::OK();
 }
 
@@ -1941,7 +1942,11 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
         if (IsUpdateLocation(consistencyType)) {
             RETURN_IF_NOT_OK(UpdateLocation(objectKey, objectKV));
         }
-        evictionManager_->Add(objectKey);
+        if (FLAGS_enable_data_replication) {
+            evictionManager_->Add(objectKey);
+        } else {
+            objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
+        }
     }
     point.Record();
     return UpdateRequestForSuccess(objectKV, request);
@@ -2021,7 +2026,7 @@ Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPor
 
 bool WorkerOcServiceGetImpl::IsUpdateLocation(ConsistencyType consistencyType)
 {
-    if (consistencyType == ConsistencyType::PRAM || !FLAGS_enable_update_location) {
+    if (consistencyType == ConsistencyType::PRAM || !FLAGS_enable_data_replication) {
         // In PRAM consistency scenarios, location information is inserted immediately after QueryMeta,
         // reducing one RPC request and improves performance.
         return false;
@@ -2117,12 +2122,18 @@ void WorkerOcServiceGetImpl::BatchUnlockForGet(const std::map<std::string, uint6
 
 bool WorkerOcServiceGetImpl::IsInRemoteGetObject(const std::string &objectKey)
 {
+    if (!FLAGS_enable_data_replication) {
+        return false;
+    }
     std::shared_lock<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
     return inRemoteGetIds_.find(objectKey) != inRemoteGetIds_.end();
 }
 
 void WorkerOcServiceGetImpl::AddInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote)
 {
+    if (!FLAGS_enable_data_replication) {
+        return;
+    }
     std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
     for (const auto &id : objectsNeedGetRemote) {
         inRemoteGetIds_.insert(id.objectKey);
@@ -2131,6 +2142,9 @@ void WorkerOcServiceGetImpl::AddInRemoteGetObjects(const std::set<ReadKey> &obje
 
 void WorkerOcServiceGetImpl::RemoveInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote)
 {
+    if (!FLAGS_enable_data_replication) {
+        return;
+    }
     std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
     for (const auto &id : objectsNeedGetRemote) {
         inRemoteGetIds_.erase(id.objectKey);
@@ -2139,6 +2153,9 @@ void WorkerOcServiceGetImpl::RemoveInRemoteGetObjects(const std::set<ReadKey> &o
 
 void WorkerOcServiceGetImpl::RemoveInRemoteGetObject(const std::string &objectKey)
 {
+    if (!FLAGS_enable_data_replication) {
+        return;
+    }
     std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
     inRemoteGetIds_.erase(objectKey);
 }
