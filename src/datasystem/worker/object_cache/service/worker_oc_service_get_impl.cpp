@@ -62,6 +62,8 @@ DS_DECLARE_bool(cross_az_get_data_from_worker);
 DS_DECLARE_bool(cross_az_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(authorization_enable);
+DS_DEFINE_bool(enable_update_location, "true",
+               "Enable nodes with data replicas to update metadata information, default is true");
 
 using namespace datasystem::worker;
 using namespace datasystem::master;
@@ -1558,7 +1560,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
     std::vector<std::future<Status>> futures;
     std::atomic<bool> abortAllTasks{ false };
     std::mutex commonMutex;
-
+    auto traceId = Trace::Instance().GetTraceID();
     for (size_t i = 0; i < queryMetas.size(); ++i) {
         if (abortAllTasks.load()) {
             break;
@@ -1577,7 +1579,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
 
         Timer timer;
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-        auto traceId = Trace::Instance().GetTraceID();
         futures.emplace_back(remoteGetThreadPool_->Submit([=, &lockedEntries, &commonMutex, &abortAllTasks, &request,
                                                            &payloads, &lastRc, &successIds, &needRetryIds, &failedIds,
                                                            &traceId]() {
@@ -2020,16 +2021,16 @@ Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPor
 
 bool WorkerOcServiceGetImpl::IsUpdateLocation(ConsistencyType consistencyType)
 {
-    if (consistencyType == ConsistencyType::PRAM) {
+    if (consistencyType == ConsistencyType::PRAM || !FLAGS_enable_update_location) {
         // In PRAM consistency scenarios, location information is inserted immediately after QueryMeta,
         // reducing one RPC request and improves performance.
         return false;
-    } else {
-        // In Causal consistency scenarios, CacheInvalidation is updated synchronously.
-        // Therefore, to avoid the remote get execution of the worker who does not hold data, the master location
-        // information is updated only when the worker obtains the copied data success.
-        return true;
     }
+
+    // In Causal consistency scenarios, CacheInvalidation is updated synchronously.
+    // Therefore, to avoid the remote get execution of the worker who does not hold data, the master location
+    // information is updated only when the worker obtains the copied data success.
+    return true;
 }
 
 bool WorkerOcServiceGetImpl::IsNearDeathObject(const std::string &location, const ObjectMetaPb &meta)

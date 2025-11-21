@@ -77,7 +77,7 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "in the master, so that the metadata before the restart can be re-obtained when the master restarts.");
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 DS_DEFINE_bool(enable_redirect, "true",
-               "enable query meta redirect when scale up or voluntary scale down, default is false");
+               "Enable query meta redirect when scale up or voluntary scale down, default is true");
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
