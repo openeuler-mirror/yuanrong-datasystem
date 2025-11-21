@@ -41,6 +41,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/urma_manager_wrapper.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -4135,6 +4136,10 @@ void OCMetadataManager::TryGetObjectData(const std::string &objectKey, const Tbb
                                          uint64_t &payloadSize, QueryMetaInfoPb &queryMeta,
                                          std::vector<RpcMessage> &payloads)
 {
+    // don't try to query data if enable UB.
+    if (IsUrmaEnabled()) {
+        return;
+    }
     INJECT_POINT("ocMetaManager.noNeedGetFromLocal", []() { return; });
     constexpr uint64_t maxPayloadSize = 512 * 1024ul;
     if (localApi_ == nullptr) {

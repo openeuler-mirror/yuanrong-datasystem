@@ -39,7 +39,7 @@ static constexpr int RPC_SOCKET_BACKLOG = 1024;        // Backlog for unix socke
 static constexpr int RPC_NO_FILE_FD = -1;              // Initial value of file descriptor.
 static constexpr mode_t RPC_SOCK_MODE = 01660;         // Default unix socket permission mode.
 static constexpr int ONE_THOUSAND = 1000;              // One thousand.
-static constexpr int STUB_FRONTEND_TIMEOUT = 3000;     // Timeout for UnixSockFd and ZmqStub::InitFrontend.
+static constexpr int STUB_FRONTEND_TIMEOUT = 30000;     // Timeout for UnixSockFd and ZmqStub::InitFrontend.
 static constexpr int CACHE_UDS_SOCK_FD_TIMEOUT_MS = RPC_TIMEOUT + 10'000;  // Timeout for caching UnixSockFd
 static constexpr int RPC_EIGHT = 8;                    // constant 8
 }  // namespace datasystem
