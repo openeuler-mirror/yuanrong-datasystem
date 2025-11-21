@@ -329,7 +329,9 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_CHECK_ROLLBACK);
     asyncRollbackManager_->UpdateIsRollback(uniqueObjectMap);
     point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
-    auto func = [this](const std::string &objectKey, GetObjInfo &objectInfo, std::set<ReadKey> &remoteObjectKeys) {
+    std::vector<std::string> needEvictKeys;
+    auto func = [this](const std::string &objectKey, GetObjInfo &objectInfo, std::set<ReadKey> &remoteObjectKeys,
+                       std::vector<std::string> &needEvictKeys) {
         Status status;
         if (objectInfo.isRollBack) {
             objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
@@ -340,6 +342,9 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
                 objectInfo.rc = status;
                 LOG(ERROR) << "PreProcessGetObject failed:" << status.GetMsg();
             }
+            if (objectInfo.params != nullptr) {
+                needEvictKeys.emplace_back(objectKey);
+            }
         }
         return status;
     };
@@ -347,7 +352,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     const size_t objectKeyCount = uniqueObjectMap.size();
     if (objectKeyCount <= parallelLimit) {
         for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
-            auto rc = func(objectKey, objectInfo, remoteObjectKeys);
+            auto rc = func(objectKey, objectInfo, remoteObjectKeys, needEvictKeys);
             lastRc = rc.IsError() ? rc : lastRc;
         }
     } else {
@@ -359,18 +364,21 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
         }
         // protect remoteObjectKeys and lastRc
         std::mutex mutex;
-        auto batchHandler = [&parallelTaskList, &func, &remoteObjectKeys, &mutex, &lastRc](size_t start, size_t end) {
+        auto batchHandler = [&parallelTaskList, &func, &remoteObjectKeys, &mutex, &lastRc, &needEvictKeys](size_t start,
+                                                                                                       size_t end) {
             Status status;
             std::set<ReadKey> remoteKeys;
+            std::vector<std::string> evictKeys;
             for (size_t i = start; i < end; i++) {
                 const auto &objectKey = *parallelTaskList[i].first;
                 auto &objectInfo = *parallelTaskList[i].second;
-                auto rc = func(objectKey, objectInfo, remoteKeys);
+                auto rc = func(objectKey, objectInfo, remoteKeys, evictKeys);
                 status = rc.IsError() ? rc : status;
             }
             {
                 std::lock_guard<std::mutex> locker(mutex);
                 remoteObjectKeys.insert(remoteKeys.begin(), remoteKeys.end());
+                needEvictKeys.insert(needEvictKeys.end(), evictKeys.begin(), evictKeys.end());
                 lastRc = status.IsError() ? status : lastRc;
             }
         };
@@ -381,8 +389,29 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
         static std::set<StatusCode> bypassCode{ K_OUT_OF_MEMORY, K_OUT_OF_RANGE };
         lastRc = CheckAndResetStatus(lastRc, bypassCode);
     }
+    SubmitAsyncAddEvictTask(std::move(needEvictKeys));
     point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_UPDATE_REQ);
     return request->UpdateAfterLocalGet(std::move(lastRc), remoteObjectKeys.size());
+}
+
+void WorkerOcServiceGetImpl::SubmitAsyncAddEvictTask(std::vector<std::string> objectIds)
+{
+    if (objectIds.empty()) {
+        return;
+    }
+    PerfPoint point(PerfKey::ASYNC_EVICT_TASK_ADD);
+    static const size_t isAsyncThreshold = 64;
+    if (objectIds.size() > isAsyncThreshold) {
+        threadPool_->Execute([ids = std::move(objectIds), this] () {
+            for (const auto &id : ids) {
+                evictionManager_->Add(id);
+            }
+        });
+    } else {
+        for (const auto &id : objectIds) {
+            evictionManager_->Add(id);
+        }
+    }
 }
 
 Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::shared_ptr<GetRequest> &request,
@@ -541,7 +570,6 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, Get
                 RETURN_STATUS(K_NOT_FOUND, FormatString("[ObjectKey %s] not exist in memory.", readKey));
             }
             info.params = GetObjEntryParams::Create(readKey.objectKey, *entry);
-            evictionManager_->Add(readKey.objectKey);
             return Status::OK();
         }
         // case 2: object exist in local node,and it is the expired version.

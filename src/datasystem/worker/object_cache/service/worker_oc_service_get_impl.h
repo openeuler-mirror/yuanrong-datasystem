@@ -413,6 +413,12 @@ private:
                                            std::vector<RpcMessage> &payloads);
 
     /**
+     * @brief submit async add evict task
+     * @param[in] objectIds object ids need evict.
+     */
+    void SubmitAsyncAddEvictTask(std::vector<std::string> objectIds);
+
+    /**
      * @brief Get objects from anywhere, can be serial or batched.
      * @param[in] queryMetas QueryMeta result requested from master.
      * @param[in] readKeys read key info, contain offset, size, objKey.
@@ -631,7 +637,7 @@ private:
      */
     void HandleBatchSubResponsePart2(Status &subRc, const std::string &address, ObjectMetaPb *meta,
                                      ReadObjectKV &objectKV, const Status &checkConnectStatus,
-                                     bool &tryGetFromElsewhere);
+                                     bool &tryGetFromElsewhere, std::vector<std::string> &needEvictIds);
 
     /**
      * @brief Helper function process the response from batch get.

@@ -293,7 +293,8 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
 
 void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const std::string &address, ObjectMetaPb *meta,
                                                          ReadObjectKV &objectKV, const Status &checkConnectStatus,
-                                                         bool &tryGetFromElsewhere)
+                                                         bool &tryGetFromElsewhere,
+                                                         std::vector<std::string> &needEvictIds)
 {
     auto &objectKey = objectKV.GetObjKey();
     auto &entry = objectKV.GetObjEntry();
@@ -311,7 +312,7 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
     // PullObjectDataFromRemoteWorker.
     if (subRc.IsOk()) {
         PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_ADD_EVICTION);
-        evictionManager_->Add(objectKey);
+        needEvictIds.emplace_back(objectKey);
         entry->stateInfo.SetNeedToDelete(true);
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_SYNC_META);
         ConsistencyType type = ConsistencyType(meta->config().consistency_type());
@@ -340,6 +341,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     Status lastRc = status;
     uint64_t payloadIndex = 0;
     auto metaIter = metas.begin();
+    std::vector<std::string> needEvictObjs;
     for (int i = 0; metaIter != metas.end(); i++) {
         PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_PRE);
         auto &objectKey = (*metaIter)->object_key();
@@ -361,8 +363,9 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         if (tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_RESP_PT_2);
-            HandleBatchSubResponsePart2(subRc, address, *metaIter, objectKV, checkConnectStatus, tryGetFromElsewhere);
         }
+        HandleBatchSubResponsePart2(subRc, address, *metaIter, objectKV, checkConnectStatus, tryGetFromElsewhere,
+                                    needEvictObjs);
         if (subRc.IsError() && tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_OTHER_AZ);
             HostPort hostAddr;
@@ -402,6 +405,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         lastRc = subRc;
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_OTHER);
     }
+    SubmitAsyncAddEvictTask(std::move(needEvictObjs));
     return lastRc;
 }
 
