@@ -705,6 +705,7 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
 
 Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
 {
+    PerfPoint point(PerfKey::MASTER_CREATE_MULTI_META);
     std::vector<std::string> objectKeys;
     for (const auto &info : req.metas()) {
         objectKeys.emplace_back(info.object_key());
@@ -808,6 +809,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
     if (req.address().empty()) {
         return Status(K_INVALID, "CreateMeta: Cannot CreateMeta with server address.");
     }
+    PerfPoint point(PerfKey::MASTER_CREATE_MULTI_META_CONSTRUCT);
     std::vector<std::string> objsFirst;
     objsFirst.reserve(req.metas_size());
     int64_t version = static_cast<int64_t>(GetSystemClockTimeStampUs());
@@ -819,6 +821,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
         meta.locations.emplace(req.address());
         ConstructMetaInfo(req, info, version, meta.meta);
     }
+    point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_IMPL);
     for (int i = 0; i < req.metas_size(); i++) {
         const auto &objectKey = req.metas(i).object_key();
         if (objectKey.empty()) {
@@ -840,6 +843,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
             lastRc = status;
         }
     }
+    point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_ASYN_EXEC);
     ExecuteAsyncTask([this, objsFirst]() {
         for (const auto &objKey : objsFirst) {
             std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
@@ -853,6 +857,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
             UpdateSubscribeCache(objKey, metaCache);
         }
     });
+    point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_POST_PROCESS);
     RollBackMultiMetaWhenCreateFailed(rollBackIds, req.address());
     rsp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     rsp.mutable_last_rc()->set_error_code(lastRc.GetCode());

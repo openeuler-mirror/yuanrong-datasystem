@@ -902,9 +902,11 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
 
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     std::vector<MultiCreateParam> multiCreateParamList;
+    PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_CONSTRUCT_PARAM);
     uint64_t dataSizeSum = 0;
     RETURN_IF_NOT_OK(
         ConstructMultiCreateParam(objectKeyList, dataSizeList, bufferList, multiCreateParamList, dataSizeSum));
+    point.Record();
     // If failed with create, need to rollback.
     auto version = 0u;
     auto useShmTransfer = false;
@@ -947,6 +949,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
         bufferList.clear();
     });
     Status injectRC = Status::OK();
+    point.Reset(PerfKey::CLIENT_MULTI_CREATE_RSP_HANDLE);
     for (auto &createParam : multiCreateParamList) {
         if (!skipCheckExistence && exists[createParam.index]) {
             continue;
@@ -970,6 +973,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
             return Status::OK();
         });
         RETURN_IF_NOT_OK(injectRC);
+        PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_BUFFER_CREATE);
         std::shared_ptr<Buffer> newBuffer;
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer));
         bufferList[createParam.index] = std::move(newBuffer);
@@ -2063,6 +2067,7 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &param, std::vector<std::string> &outFailedKeys)
 {
+    PerfPoint point(PerfKey::CLIENT_MSET_INPUT_CHECK);
     std::vector<std::string> deduplicateKeys;
     std::vector<StringView> deduplicateVals;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
@@ -2076,7 +2081,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     creatParam.cacheType = param.cacheType;
     const std::vector<std::string> &filteredKeys = deduplicateKeys.empty() ? keys : deduplicateKeys;
     const std::vector<StringView> &filteredValues = deduplicateVals.empty() ? vals : deduplicateVals;
-    PerfPoint point(PerfKey::CLIENT_MSET_MULTICREATE);
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MULTICREATE);
     std::vector<uint64_t> dataSizeList;
     uint64_t dataSizeSum = 0;
     dataSizeList.reserve(filteredValues.size());
@@ -2096,12 +2101,13 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
     RETURN_IF_NOT_OK(
         MemoryCopyParallel(isParallel, filteredKeys, filteredValues, creatParam, bufferList, bufferInfoList));
-    point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLSIH);
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);
     MultiPublishRspPb rsp;
     PublishParam publishParam{
         .isTx = false, .isReplica = false, .existence = param.existence, .ttlSecond = param.ttlSecond
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
+    point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
     asyncReleasePool_->Execute([this, buffers = std::move(bufferList)]() mutable {
         std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
         if (!IsClientReady()) {

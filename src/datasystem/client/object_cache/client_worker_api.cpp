@@ -170,6 +170,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
 
+    PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_IPC);
     MultiCreateRspPb rsp;
     RETURN_IF_NOT_OK(RetryOnError(
         timeoutMs_,
@@ -209,6 +210,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
     if (!useShmTransfer) {
         return Status::OK();
     }
+    point.RecordAndReset(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
     for (auto i = 0ul; i < createParams.size(); i++) {
         if (!skipCheckExistence && exists[i]) {
             continue;
@@ -406,6 +408,7 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
                                      const PublishParam &param, MultiPublishRspPb &rsp,
                                      const std::vector<std::vector<uint64_t>> &blobSizes)
 {
+    PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_CONSTRUCT);
     MultiPublishReqPb req;
     req.set_client_id(GetClientId());
     req.set_ttl_second(param.ttlSecond);
@@ -433,7 +436,7 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
         req.mutable_object_info()->Add(std::move(objectInfoPb));
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
+    point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         RetryOnError(
             timeoutMs_,

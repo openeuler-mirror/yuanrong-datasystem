@@ -79,12 +79,15 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
 Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
                                                          std::vector<RpcMessage> &payloads)
 {
+    PerfPoint pointAll(PerfKey::WORKER_MULTI_PUBLISH_TOTAL);
+    PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_INPUT_CHECK);
     // Add namespace for objectKey.
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_info_size()),
                                          StatusCode::K_INVALID, "invalid object info size");
     std::vector<ShmKey> shmUnits;
+    shmUnits.reserve(req.object_info_size());
     for (const auto &info : req.object_info()) {
         if (!info.shm_id().empty()) {
             shmUnits.emplace_back(ShmKey::Intern(info.shm_id()));
@@ -119,8 +122,10 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     std::vector<bool> ifInserts(namespaceUri.size(), false);
     std::vector<std::shared_ptr<SafeObjType>> entries(namespaceUri.size(), nullptr);
     if (req.istx()) {
+        point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_TX);
         return MultiPublishTx(namespaceUri, entries, ifInserts, req, payloads);
     }
+    point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX);
     return MultiPublishNtx(namespaceUri, entries, ifInserts, req, resp, payloads);
 }
 
@@ -191,8 +196,10 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
                                                         std::vector<bool> &ifInserts, const MultiPublishReqPb &req,
                                                         MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads)
 {
+    PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_NTX_BATCH_LOCK);
     ExistenceOptPb existenceOpt = static_cast<::datasystem::ExistenceOptPb>(req.existence());
     RETURN_IF_NOT_OK(BatchLockForSetNtx(namespaceUri, existenceOpt, ifInserts, entries));
+    point.Record();
     Raii unlockRaii([&entries]() {
         for (const auto &entry : entries) {
             if (entry != nullptr) {
@@ -203,7 +210,9 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
     std::unordered_set<std::string> failedKeys;
     VerifyObjectsNtx(req, namespaceUri, entries, failedKeys);
     Status lastRc;
+    point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_IMPL);
     Status rc = MultiPublishObjectNtx(req, namespaceUri, entries, payloads, lastRc, failedKeys);
+    point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_POST_PROCESS);
     if (rc.IsError()) {
         BatchRollBackEntries(namespaceUri, ifInserts, entries);
         return rc;
@@ -275,9 +284,11 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                                                               std::vector<RpcMessage> &payloads, Status &lastRc,
                                                               std::unordered_set<std::string> &failedKeys)
 {
+    PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_NTX_SAVE_ENTRY);
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
     const bool shmEnabled = ClientShmEnabled(req.client_id());
     for (size_t i = 0; i < entries.size(); i++) {
+        PerfPoint pointIn(PerfKey::WORKER_MULTI_PUBLISH_NTX_SET_ENTRY);
         if (entries[i] == nullptr) {
             continue;
         }
@@ -296,8 +307,10 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                               GetMetadataSize(), *entries[i]);
         }
 
+        pointIn.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_ATTACH_TO_ENTRY);
         lastRc = AttachShmUnitToObject(shmEnabled, objectKeys[i], ShmKey::Intern(req.object_info(i).shm_id()),
                                        req.object_info(i).data_size(), *entries[i]);
+        pointIn.Record();
         if (lastRc.IsError()) {
             LOG(ERROR) << "objKey: " << objectKeys[i] << " AttachShmUnitToObject failed, status: " << lastRc.ToString();
             failedKeys.emplace(objectKeys[i]);
@@ -316,6 +329,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
             failedKeys.emplace(objectKeys[i]);
             continue;
         }
+        pointIn.Reset(PerfKey::WORKER_MULTI_PUBLISH_NTX_SAVE_PATLOAD);
         std::vector<RpcMessage> payload(1);
         payload[0] = std::move(payloads[i]);
         ObjectKV objectKV(objectKeys[i], *entries[i]);
@@ -327,6 +341,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
             continue;
         }
     }
+    point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_SEND_TO_MASTER);
     RETURN_IF_NOT_OK(SendToMasterAndUpdateObject(req, objectKeys, failedKeys, entries, lastRc));
     return Status::OK();
 }
@@ -770,6 +785,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &entries,
     const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions)
 {
+    PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
     ObjGroupMap objGroup;
     std::unordered_map<std::string, std::shared_ptr<WorkerMasterOCApi>> workerAddrToApi;
     for (size_t i = 0; i < objectKeys.size(); i++) {
@@ -780,6 +796,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
         objGroup[addr].emplace_back(objectKeys[i], i);
         workerAddrToApi[addr] = api;
     }
+    point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_CONSTRUCT_REQ);
 
     std::vector<std::shared_ptr<WorkerMasterOCApi>> apis(objGroup.size());
     std::vector<CreateMultiMetaReqPb> createReqs(objGroup.size());
@@ -792,10 +809,12 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
         idx++;
     }
 
+    point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_PARALLEL);
     std::vector<CreateMeta2PCRes> respRes;
     respRes.reserve(createReqs.size());
     CreateMultiMetaParallel(apis, createReqs, respRes);
 
+    point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_FILL_RSP);
     CHECK_FAIL_RETURN_STATUS(respRes.size() == createReqs.size(), K_RUNTIME_ERROR,
                              "The object size and the versions is not equal");
 
@@ -983,8 +1002,10 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
     const auto &keys = isUse ? tmpKeys : objectKeys;
     const auto &entries = isUse ? tmpEntries : objectEntries;
 
+    PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_NTX);
     std::vector<uint64_t> versions(objectKeys.size());
     RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMasterNtx(keys, entries, req, rsp, versions));
+    point.Record();
 
     failedKeys.insert(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
 
@@ -992,6 +1013,7 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
         Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
         lastRc = recvRc.IsOk() ? lastRc : recvRc;
     }
+    point.Reset(PerfKey::WORKER_UPDATE_OBJECT_AFTER_CREATE_META);
     UpdateObjectAfterCreatingMeta(keys, entries, versions, failedKeys);
 
     return Status::OK();

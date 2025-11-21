@@ -128,6 +128,7 @@ Status WorkerOcServiceCreateImpl::AggregateAllocateHelper(const MultiCreateReqPb
 Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, const std::string &tenantId,
                                                   MultiCreateRspPb &resp)
 {
+    PerfPoint point(PerfKey::WORKER_MULTI_CREATE_AGGREGATE_ALLOC);
     int objectSize = req.object_key_size();
     std::vector<uint32_t> shmIndexMapping(req.object_key_size(), std::numeric_limits<uint32_t>::max());
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
@@ -135,6 +136,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
     std::vector<CreateRspPb> subRsp(objectSize);
     std::vector<Status> results(objectSize);
 
+    point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_GET_SHM_UNITS);
     auto createMeta = [&] (int start, int end) {
         std::vector<std::shared_ptr<ShmUnit>> shmUnits(end - start + 1);
         for (int i = start, j = 0; i < end; i++, j++) {
@@ -143,6 +145,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             }
             const auto &objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key(i));
 
+            PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ALLOC_FOR_OBJECT);
             std::shared_ptr<ShmOwner> shmOwner = nullptr;
             if (shmIndexMapping.size() > static_cast<size_t>(i) && shmOwners.size() > shmIndexMapping[i]) {
                 shmOwner = shmOwners[shmIndexMapping[i]];
@@ -159,11 +162,13 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             }
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(results[i], "worker allocate memory failed");
 
+            point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_GENERATE_SHM_UUID);
             std::string shmUnitId;
             IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
             shmUnit->id = ShmKey::Intern(shmUnitId);
             shmUnits[j] = shmUnit;
 
+            point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_FILL_SUB_RSP);
             // Construct CreateRespPb.
             CreateRspPb subResp;
             subRsp[i].set_store_fd(shmUnit->GetFd());
@@ -172,6 +177,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             subRsp[i].set_shm_id(shmUnit->GetId());
             subRsp[i].set_metadata_size(metadataSize);
         }
+        PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ADD_SHM_UNITS);
         memoryRefTable_->AddShmUnits(req.client_id(), shmUnits);
         return Status::OK();
     };
@@ -185,6 +191,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
         createMeta(0, objectSize);
     }
 
+    point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_FILL_ALL_RSP);
     resp.mutable_results()->Reserve(objectSize);
     for (int i = 0; i < objectSize; i++) {
         RETURN_IF_NOT_OK(results[i]);
@@ -216,6 +223,8 @@ void WorkerOcServiceCreateImpl::CheckExistence(const MultiCreateReqPb &req, cons
 
 Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp)
 {
+    PerfPoint pointAll(PerfKey::WORKER_MULTI_CREATE_TOTAL);
+    PerfPoint point(PerfKey::WORKER_MULTI_CREATE_INPUT_CHECK);
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -227,6 +236,7 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
     if (!req.skip_check_existence()) {
         CheckExistence(req, tenantId, resp);
     }
+    point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_IMPL);
     Status rc = MultiCreateImpl(req, tenantId, resp);
     if (rc.IsError()) {
         // Rollback all memory if failed.
