@@ -85,15 +85,15 @@ struct SendResult {
     int64_t tag = -1;
     std::string address;
     Status status;
-}; // Result bundle for a single DeleteObject notification
+};  // Result bundle for a single DeleteObject notification
 
 Status OCNotifyWorkerManager::Init()
 {
     LOG(INFO) << "init OCNotifyWorkerManager" << this;
     thread_ = std::make_unique<Thread>(&OCNotifyWorkerManager::ProcessAsyncNotifyOp, this);
     thread_->set_name("ProcessAsyncNotifyOp");
-    deleteThreadPool_ = std::make_unique<datasystem::ThreadPool>(minDeleteThreadSize, maxDeleteThreadSize,
-                                                                    "NotifyDeleteSend");
+    deleteThreadPool_ =
+        std::make_unique<datasystem::ThreadPool>(minDeleteThreadSize, maxDeleteThreadSize, "NotifyDeleteSend");
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(subscriberPrefix_ + "OCNotifyWorkerManager",
                                                          [this](HostPort &node) { EraseMasterWorkerApi(node); });
     RemoveDeadWorkerEvent::GetInstance().AddSubscriber(
@@ -227,8 +227,7 @@ void OCNotifyWorkerManager::ProcessObjsNeedDeleteAllCopyMeta(
         TraceGuard traceGuard = Trace::Instance().SetSubTraceID(GetStringUuid().substr(0, SHORT_TRACEID_SIZE));
         auto objs = objsNeedDeleteAllCopyMetaPerMaster.second.second;
         std::unordered_map<std::string, int64_t> objMap(objs.begin(), objs.end());
-        LOG(INFO) << "Async notify delete all copy meta, objs: "
-                  << MapToString(objMap)
+        LOG(INFO) << "Async notify delete all copy meta, objs: " << MapToString(objMap)
                   << "; masterAddr: " << masterAddr.ToString();
         std::unordered_set<std::string> failedObjs;
         std::unordered_set<std::string> objsWithoutMeta;
@@ -374,7 +373,7 @@ Status OCNotifyWorkerManager::ProcessAsyncDeleteNotifyOpImpl()
         std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
         status = GetMasterWorkerApi(workerId, masterWorkerApi);
         if (status.IsError()) {
-            LOG(WARNING) << "GetMasterWorkerApi failed, error:" <<status.ToString();
+            LOG(WARNING) << "GetMasterWorkerApi failed, error:" << status.ToString();
             continue;
         }
         auto request = std::make_unique<DeleteObjectReqPb>();
@@ -465,8 +464,8 @@ void OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(
         }
 
         auto op = ParseNotifyWorkerOpFromL2Cache(info.second);
-        if (!TESTFLAG(op.type, NotifyWorkerOpType::CACHE_INVALID)
-            && !TESTFLAG(op.type, NotifyWorkerOpType::REMOVE_META) && !TESTFLAG(op.type, NotifyWorkerOpType::DELETE)) {
+        if (!TESTFLAG(op.type, NotifyWorkerOpType::CACHE_INVALID) && !TESTFLAG(op.type, NotifyWorkerOpType::REMOVE_META)
+            && !TESTFLAG(op.type, NotifyWorkerOpType::DELETE)) {
             continue;
         }
 
@@ -578,7 +577,7 @@ bool OCNotifyWorkerManager::CheckExistAsyncWorkerOp(const std::string &workerId,
     TbbNotifyWorkerOpTable::const_accessor accessor;
     if (notifyWorkerOpTable_.find(accessor, workerId)) {
         auto iter = accessor->second.find(objectKey);
-        if (iter != accessor->second.end() && TESTFLAG(iter->second.type, op)) {
+        if (iter != accessor->second.end() && TESTANYFLAG(iter->second.type, op)) {
             return true;
         }
     }
@@ -769,9 +768,9 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
     std::string traceID = Trace::Instance().GetTraceID();
     std::vector<std::future<SendResult>> futures;
     futures.reserve(replicas2Obj.size());
-    std::atomic<bool> needAbort{false};
+    std::atomic<bool> needAbort{ false };
     for (const auto &item : replicas2Obj) {
-        const auto &address   = item.first;
+        const auto &address = item.first;
         const auto &objectItem = item.second;
         if (objectItem.empty()) {
             continue;
@@ -787,28 +786,26 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
             LOG(WARNING) << "Aborting remaining tasks due to timeout.";
             break;
         }
-        futures.emplace_back(
-            deleteThreadPool_->Submit([=, &needAbort, &timer]() -> SendResult {
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-                int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-                if (elapsed >= realTimeoutMs) {
-                    LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", realTimeoutMs:" << realTimeoutMs
-                            << ", NotifyDeleteSend threads Statistics: " << deleteThreadPool_->GetStatistics();
-                    needAbort.store(true);
-                    return {nullptr, -1, address, Status(StatusCode::K_RUNTIME_ERROR, "Rpc timeout")};
-                }
-                timeoutDuration.Init(realTimeoutMs - elapsed);
-                std::shared_ptr<MasterWorkerOCApi> api;
-                Status st = GetMasterWorkerApi(address, api);
-                int64_t tag = -1;
-                if (st.IsOk()) {
-                    auto req = std::make_unique<DeleteObjectReqPb>();
-                    SetDeleteObjectReq(req, isAsync, sourceWorker, objectItem);
-                    st = api->DeleteNotificationSend(std::move(req), tag);
-                }
-                return {api, tag, address, st};
-            })
-        );
+        futures.emplace_back(deleteThreadPool_->Submit([=, &needAbort, &timer]() -> SendResult {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+            if (elapsed >= realTimeoutMs) {
+                LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", realTimeoutMs:" << realTimeoutMs
+                           << ", NotifyDeleteSend threads Statistics: " << deleteThreadPool_->GetStatistics();
+                needAbort.store(true);
+                return { nullptr, -1, address, Status(StatusCode::K_RUNTIME_ERROR, "Rpc timeout") };
+            }
+            timeoutDuration.Init(realTimeoutMs - elapsed);
+            std::shared_ptr<MasterWorkerOCApi> api;
+            Status st = GetMasterWorkerApi(address, api);
+            int64_t tag = -1;
+            if (st.IsOk()) {
+                auto req = std::make_unique<DeleteObjectReqPb>();
+                SetDeleteObjectReq(req, isAsync, sourceWorker, objectItem);
+                st = api->DeleteNotificationSend(std::move(req), tag);
+            }
+            return { api, tag, address, st };
+        }));
     }
     Status lastErr;
     SendResult res;
@@ -885,7 +882,7 @@ Status OCNotifyWorkerManager::AsyncNotifyWorkerDelete(
         const auto &objVersion = std::get<3>(item);
         LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
                                   static_cast<uint32_t>(NotifyWorkerOpType::DELETE), objectKey, address);
-        NotifyWorkerOp op = {.type = NotifyWorkerOpType::DELETE};
+        NotifyWorkerOp op = { .type = NotifyWorkerOpType::DELETE };
         op.delObjectVersion = objVersion;
         Status status = InsertAsyncWorkerOp(address, objectKey, { NotifyWorkerOpType::DELETE }, true,
                                             OCMetadataManager::WriteMode2MetaType(writeMode));

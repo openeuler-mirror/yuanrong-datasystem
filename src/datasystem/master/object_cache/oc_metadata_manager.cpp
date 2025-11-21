@@ -1082,17 +1082,26 @@ std::string OCMetadataManager::SelectObjectLocation(const std::string &objectKey
 {
     PerfPoint point(PerfKey::MASTER_SELECT_LOCATION);
     static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
-    if (!locations.empty()) {
-        INJECT_POINT("master.select_location", [](std::string addr) { return addr; });
-        std::vector<std::string> locationsVec = { locations.begin(), locations.end() };
-        std::shuffle(locationsVec.begin(), locationsVec.end(), gen);
-        for (const auto &addr : locationsVec) {
-            if (sourceWorker != addr
-                && !notifyWorkerManager_->CheckExistAsyncWorkerOp(addr, objectKey, NotifyWorkerOpType::CACHE_INVALID)
-                && !notifyWorkerManager_->CheckExistAsyncWorkerOp(addr, objectKey,
-                                                                  NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
-                return addr;  // Return the valid address.
-            }
+    if (locations.empty()) {
+        return "";
+    }
+    INJECT_POINT("master.select_location", [](std::string addr) { return addr; });
+    if (locations.size() == 1) {
+        const std::string &addr = *locations.begin();
+        if (sourceWorker != addr
+            && !notifyWorkerManager_->CheckExistAsyncWorkerOp(
+                addr, objectKey, NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+            return addr;  // Return the valid address.
+        }
+        return "";
+    }
+    std::vector<std::string> locationsVec = { locations.begin(), locations.end() };
+    std::shuffle(locationsVec.begin(), locationsVec.end(), gen);
+    for (const auto &addr : locationsVec) {
+        if (sourceWorker != addr
+            && !notifyWorkerManager_->CheckExistAsyncWorkerOp(
+                addr, objectKey, NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+            return addr;  // Return the valid address.
         }
     }
     return "";
@@ -4153,9 +4162,8 @@ void OCMetadataManager::TryGetObjectData(const std::string &objectKey, const Tbb
     if (iter == accessor->second.locations.end()) {
         return;
     }
-    if (notifyWorkerManager_->CheckExistAsyncWorkerOp(masterAddress_, objectKey, NotifyWorkerOpType::CACHE_INVALID)
-        || notifyWorkerManager_->CheckExistAsyncWorkerOp(masterAddress_, objectKey,
-                                                         NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+    if (notifyWorkerManager_->CheckExistAsyncWorkerOp(
+            masterAddress_, objectKey, NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
         return;
     }
     GetObjectRemoteReqPb req;

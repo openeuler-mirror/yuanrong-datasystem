@@ -35,9 +35,14 @@
 // to enable these overrides for all enums. std::enable_if and the macro ENABLE_BITMASK_ENUM_OPS toggle the enablement
 // of the operator overloads.
 
-#define ENABLE_BITMASK_ENUM_OPS(T) constexpr bool bitmask_ops(T) { return true; }
+#define ENABLE_BITMASK_ENUM_OPS(T) \
+    constexpr bool bitmask_ops(T)  \
+    {                              \
+        return true;               \
+    }
 
 #define TESTFLAG(lhs, rhs) (((lhs) & (rhs)) == (rhs))
+#define TESTANYFLAG(lhs, rhs) (((lhs) & (rhs)) > 0)
 #define SETFLAG(target, source) (target) |= (source)
 #define CLEARFLAG(target, source) (target) &= ~(source)
 #define INITFLAG(target, source) (target) = (source)
@@ -55,62 +60,69 @@ inline uint32_t ClearUint32EvenBits(uint32_t bitmap)
 }
 
 namespace datasystem {
-template<typename T>
+template <typename T>
 constexpr bool bitmask_ops(T)
 {
     return false;
 }
 
-template<typename T>
+template <typename T>
 typename std::enable_if<bitmask_ops(T()), T>::type operator|(T lhs, T rhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     return static_cast<T>(static_cast<enum_under_type>(lhs) | static_cast<enum_under_type>(rhs));
 }
 
-template<typename T>
+template <typename T>
 typename std::enable_if<bitmask_ops(T()), T>::type operator&(T lhs, T rhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     return static_cast<T>(static_cast<enum_under_type>(lhs) & static_cast<enum_under_type>(rhs));
 }
 
-template<typename T>
+template <typename T>
 typename std::enable_if<bitmask_ops(T()), T>::type operator^(T lhs, T rhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     return static_cast<T>(static_cast<enum_under_type>(lhs) ^ static_cast<enum_under_type>(rhs));
 }
 
-template<typename T>
+template <typename T>
 typename std::enable_if<bitmask_ops(T()), T>::type operator~(T lhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     return static_cast<T>(~static_cast<enum_under_type>(lhs));
 }
 
-template<typename T>
-typename std::enable_if<bitmask_ops(T()), T&>::type operator|=(T& lhs, T rhs)
+template <typename T>
+typename std::enable_if<bitmask_ops(T()), T &>::type operator|=(T &lhs, T rhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     lhs = static_cast<T>(static_cast<enum_under_type>(lhs) | static_cast<enum_under_type>(rhs));
     return lhs;
 }
 
-template<typename T>
-typename std::enable_if<bitmask_ops(T()), T&>::type operator&=(T& lhs, T rhs)
+template <typename T>
+typename std::enable_if<bitmask_ops(T()), T &>::type operator&=(T &lhs, T rhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     lhs = static_cast<T>(static_cast<enum_under_type>(lhs) & static_cast<enum_under_type>(rhs));
     return lhs;
 }
 
-template<typename T>
-typename std::enable_if<bitmask_ops(T()), T&>::type operator^=(T& lhs, T rhs)
+template <typename T>
+typename std::enable_if<bitmask_ops(T()), T &>::type operator^=(T &lhs, T rhs)
 {
     using enum_under_type = typename std::underlying_type<T>::type;
     lhs = static_cast<T>(static_cast<enum_under_type>(lhs) ^ static_cast<enum_under_type>(rhs));
     return lhs;
+}
+
+template <typename T>
+typename std::enable_if<bitmask_ops(T()), bool>::type operator>(const T &lhs, int rhs)
+{
+    using enum_under_type = typename std::underlying_type<T>::type;
+    return static_cast<enum_under_type>(lhs) > static_cast<enum_under_type>(rhs);
 }
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_UTIL_BITMASK_ENUM_H
