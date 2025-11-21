@@ -196,7 +196,6 @@ struct ObjectMeta {
 using TbbMetaTable = tbb::concurrent_hash_map<ImmutableString, ObjectMeta>;
 using TbbSubMetaTable = tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<SubscribeMeta>>;
 using TbbReqIdTable = tbb::concurrent_hash_map<ImmutableString, std::set<ImmutableString>>;
-using TbbLockTable = tbb::concurrent_hash_map<ImmutableString, bool>;
 using TbbRemoteClientIdRefTable = tbb::concurrent_hash_map<ImmutableString, std::unordered_set<ImmutableString>>;
 
 class OCMetadataManager : public MetadataRedirectHelper, public std::enable_shared_from_this<OCMetadataManager> {
@@ -1780,7 +1779,6 @@ private:
     std::unique_ptr<ExpiredObjectManager> expiredObjectManager_{ nullptr };
     std::shared_ptr<MasterDevOcManager> masterDevOcManager_{ nullptr };
     std::unique_ptr<ThreadPool> asyncTaskPool_{ nullptr };
-    TbbLockTable processLocks_;
 
     // All async task in master should execute in asyncPool_ for centralized control.
     // Each manager keep its main processes in its own life cycle to avoid asyncPool_ starvation.

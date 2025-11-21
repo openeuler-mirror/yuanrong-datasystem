@@ -172,7 +172,6 @@ void OCMetadataManager::StartMetaMonitor()
             ss << "metaTable:" << metaTable_.size();
             ss << ", request2SubMeta:" << request2SubMeta_.size();
             ss << ", objKey2ReqId:" << objKey2ReqId_.size();
-            ss << ", processLocks:" << processLocks_.size();
             ss << ", migratingObjectKeys:" << migratingItems_.size();
             ss << ", clientIdRefTable:" << clientIdRefTable_.size();
             ss << ", clientRefTable:" << globalRefTable_->GetClientRefCount();
@@ -579,10 +578,6 @@ Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const s
     Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
     INJECT_POINT("master.CreateMeta.delay");
 
-    TbbLockTable::accessor pLock;
-    Raii eraseLock([this, &pLock]() { (void)processLocks_.erase(pLock); });
-    (void)processLocks_.insert(pLock, objectKey);
-
     // Case 1: not first time create meta.
     Timer timer;
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
@@ -924,16 +919,6 @@ Status OCMetadataManager::CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTwoR
     }
     Raii raii([this, &objectKeys]() { RemoveHeavyOp(objectKeys); });
 
-    std::vector<TbbLockTable::accessor> pLocks(objectKeys.size());
-    for (size_t i = 0; i < objectKeys.size(); i++) {
-        (void)processLocks_.insert(pLocks[i], objectKeys[i]);
-    }
-    Raii eraseLocks([this, &pLocks]() {
-        for (auto &pLock : pLocks) {
-            (void)processLocks_.erase(pLock);
-        }
-    });
-
     auto type = WriteMode2MetaType(req.write_mode());
     uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
     auto status = PublishMultiMeta(objectKeys, req.address(), type, version, rsp);
@@ -1024,10 +1009,6 @@ Status OCMetadataManager::CreateMeta(const ObjectMetaPb &newMeta, const std::str
         RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_DEADLOCK, "retry");
     }
     Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
-
-    TbbLockTable::accessor pLock;
-    Raii eraseLock([this, &pLock]() { (void)processLocks_.erase(pLock); });
-    (void)processLocks_.insert(pLock, objectKey);
 
     // Condition 1: Create meta for hash format.
     if (newMeta.config().data_format() == (uint64_t)DataFormat::HASH_MAP) {
@@ -1127,22 +1108,7 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     const auto &address = req.address();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!address.empty(), StatusCode::K_RUNTIME_ERROR, "Address is empty");
     FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
-    point.RecordAndReset(PerfKey::MASTER_QUERY_META_BATCH_LOCK);
     std::set<std::string> sortedObjectKeys = { notRedirectObjectKeys.begin(), notRedirectObjectKeys.end() };
-    std::vector<TbbLockTable::accessor> pLocks(sortedObjectKeys.size());
-    int pos = 0;
-    for (const auto &objectKey : sortedObjectKeys) {
-        (void)processLocks_.insert(pLocks[pos], objectKey);
-        pos++;
-    }
-
-    Raii eraseLocks([this, &pLocks]() {
-        PerfPoint point(PerfKey::MASTER_QUERY_META_BATCH_UNLOCK);
-        for (auto &l : pLocks) {
-            processLocks_.erase(l);
-            l.release();
-        }
-    });
     INJECT_POINT("OCMetadataManager.QueryMeta,wait");
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_FROM_META_TABLE);
     std::vector<std::string> tmpNotExistObjectKeys;
@@ -1202,25 +1168,34 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
 Status OCMetadataManager::TryToSubscribeCache(int64_t timeout, const QueryMetaReqPb &reqPb,
                                               std::list<std::string> &objectKeys)
 {
-    if (timeout != 0 && !objectKeys.empty()) {
-        LOG(INFO) << "Try to subscribe, sub_timeout: " << timeout;
-        auto subMeta = std::make_shared<SubscribeMeta>(reqPb.request_id(), std::move(objectKeys), reqPb.address(),
-                                                       reqPb.is_from_other_az());
-        TimerQueue::TimerImpl timer;
-        auto traceID = Trace::Instance().GetTraceID();
-        auto weakThis = weak_from_this();
-        auto func = [weakThis, timeout, reqId = reqPb.request_id(), traceID]() {
-            auto ocMetamanager = weakThis.lock();
-            if (ocMetamanager == nullptr) {
-                return;
-            }
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            LOG(ERROR) << FormatString("The sub request timeout, request id: %s, timeout: %s", reqId, timeout);
-            ocMetamanager->RemoveSubscribeCache(reqId);
-        };
-        RETURN_IF_NOT_OK(TimerQueue::GetInstance()->AddTimer(timeout, func, timer));
-        subMeta->timer_ = std::make_unique<TimerQueue::TimerImpl>(timer);
-        RETURN_IF_NOT_OK(AddSubscribeCache(std::move(subMeta)));
+    RETURN_OK_IF_TRUE(timeout == 0 || objectKeys.empty());
+    LOG(INFO) << "Try to subscribe, sub_timeout: " << timeout;
+    auto subMeta =
+        std::make_shared<SubscribeMeta>(reqPb.request_id(), objectKeys, reqPb.address(), reqPb.is_from_other_az());
+    TimerQueue::TimerImpl timer;
+    auto traceID = Trace::Instance().GetTraceID();
+    auto weakThis = weak_from_this();
+    auto func = [weakThis, timeout, reqId = reqPb.request_id(), traceID]() {
+        auto ocMetamanager = weakThis.lock();
+        if (ocMetamanager == nullptr) {
+            return;
+        }
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        LOG(ERROR) << FormatString("The sub request timeout, request id: %s, timeout: %s", reqId, timeout);
+        ocMetamanager->RemoveSubscribeCache(reqId);
+    };
+    RETURN_IF_NOT_OK(TimerQueue::GetInstance()->AddTimer(timeout, func, timer));
+    subMeta->timer_ = std::make_unique<TimerQueue::TimerImpl>(timer);
+    RETURN_IF_NOT_OK(AddSubscribeCache(subMeta));
+    for (const auto &objKey : objectKeys) {
+        std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
+        TbbMetaTable::const_accessor accessor;
+        if (!metaTable_.find(accessor, objKey)) {
+            continue;
+        }
+        ObjectMeta metaCache = accessor->second;
+        accessor.release();
+        UpdateSubscribeCache(objKey, metaCache);
     }
     return Status::OK();
 }
@@ -4468,19 +4443,6 @@ Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
     std::vector<std::string> notRedirectObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
     FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
     std::set<std::string> sortedObjectKeys = { notRedirectObjectKeys.begin(), notRedirectObjectKeys.end() };
-    std::vector<TbbLockTable::accessor> pLocks(sortedObjectKeys.size());
-    int pos = 0;
-    for (const auto &objectKey : sortedObjectKeys) {
-        (void)processLocks_.insert(pLocks[pos], objectKey);
-        pos++;
-    }
-
-    Raii eraseLocks([this, &pLocks]() {
-        for (auto &l : pLocks) {
-            processLocks_.erase(l);
-            l.release();
-        }
-    });
     auto &objectKeys = req.object_keys();
     Status lastRc;
     std::vector<std::string> notExistObjectKeys;
