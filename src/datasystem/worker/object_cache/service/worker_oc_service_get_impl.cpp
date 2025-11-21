@@ -20,6 +20,8 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
 #include <cstdint>
+#include <iterator>
+#include <mutex>
 #include <tuple>
 #include <utility>
 
@@ -29,6 +31,7 @@
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
@@ -326,18 +329,53 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_CHECK_ROLLBACK);
     asyncRollbackManager_->UpdateIsRollback(uniqueObjectMap);
     point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
-    for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
+    auto func = [this](const std::string &objectKey, GetObjInfo &objectInfo, std::set<ReadKey> &remoteObjectKeys) {
+        Status status;
         if (objectInfo.isRollBack) {
             objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
         } else {
             ReadKey readKey(objectKey, objectInfo.offsetInfo);
-            Status status = PreProcessGetObject(readKey, objectInfo, remoteObjectKeys);
+            status = PreProcessGetObject(readKey, objectInfo, remoteObjectKeys);
             if (status.IsError()) {
                 objectInfo.rc = status;
-                lastRc = status;
                 LOG(ERROR) << "PreProcessGetObject failed:" << status.GetMsg();
             }
         }
+        return status;
+    };
+    const size_t parallelLimit = 128;
+    const size_t objectKeyCount = uniqueObjectMap.size();
+    if (objectKeyCount <= parallelLimit) {
+        for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
+            auto rc = func(objectKey, objectInfo, remoteObjectKeys);
+            lastRc = rc.IsError() ? rc : lastRc;
+        }
+    } else {
+        const int parallism = 4;
+        std::vector<std::pair<const std::string *, GetObjInfo *>> parallelTaskList;
+        parallelTaskList.reserve(objectKeyCount);
+        for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
+            parallelTaskList.emplace_back(std::make_pair(&objectKey, &objectInfo));
+        }
+        // protect remoteObjectKeys and lastRc
+        std::mutex mutex;
+        auto batchHandler = [&parallelTaskList, &func, &remoteObjectKeys, &mutex, &lastRc](size_t start, size_t end) {
+            Status status;
+            std::set<ReadKey> remoteKeys;
+            for (size_t i = start; i < end; i++) {
+                const auto &objectKey = *parallelTaskList[i].first;
+                auto &objectInfo = *parallelTaskList[i].second;
+                auto rc = func(objectKey, objectInfo, remoteKeys);
+                status = rc.IsError() ? rc : status;
+            }
+            {
+                std::lock_guard<std::mutex> locker(mutex);
+                remoteObjectKeys.insert(remoteKeys.begin(), remoteKeys.end());
+                lastRc = status.IsError() ? status : lastRc;
+            }
+        };
+        LOG_IF_ERROR(Parallel::ParallelFor<size_t>(0, objectKeyCount, batchHandler, 0, parallism),
+                     "ParallelFor local get failed");
     }
     if (lastRc.IsError()) {
         static std::set<StatusCode> bypassCode{ K_OUT_OF_MEMORY, K_OUT_OF_RANGE };
