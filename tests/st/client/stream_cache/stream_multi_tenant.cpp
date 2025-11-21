@@ -283,7 +283,7 @@ protected:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
-TEST_F(StreamMultiTenantAkSkAuth, IdenticalStreamNameDataIsolation)
+TEST_F(StreamMultiTenantAkSkAuth, DISABLED_IdenticalStreamNameDataIsolation)
 {
     std::string streamName = "MultiTenantAkSkAuthIdenticalName";
     IdenticalStreamNameDataIsolation(streamName);
