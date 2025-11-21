@@ -1800,10 +1800,13 @@ void ObjectClientImpl::GDecreaseRefRollback(const std::vector<std::string> &roll
 
 Status ObjectClientImpl::CheckValidObjectKey(const std::string &key)
 {
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key), K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key),
+        K_INVALID,
         FormatString("The key contains illegal char(s), allowed regex format: %s "
-        "or the length of key must be no more than 255, current key length is %d.",
-            Validator::objKeyFormat, key.size()));
+                     "or the length of key must be no more than 255. Current key: %s, length: %d.",
+            Validator::objKeyFormat,
+            FormatStringForLog(key),
+            key.size()));
     return Status::OK();
 }
 

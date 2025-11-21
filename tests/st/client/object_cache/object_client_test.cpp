@@ -1696,6 +1696,19 @@ TEST_F(ObjectClientTest, QueryMetaAndCreateMetaConcurrently)
     fut2.get();
 }
 
+TEST_F(ObjectClientTest, TestInvalidKey)
+{
+    uint64_t size = 1024;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client1);
+    std::string data = GenRandomString(size);
+    std::string objectKey = "192.168.0.0";
+
+    auto rc = client1->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), data.size(), CreateParam{});
+    DS_ASSERT_NOT_OK(rc);
+    ASSERT_TRUE(rc.GetMsg().find(objectKey) != std::string::npos);
+}
+
 TEST_F(ObjectClientTest, DISABLED_ConnectAndDisconnectConcurrently)
 {
     ThreadPool threadPool(5);

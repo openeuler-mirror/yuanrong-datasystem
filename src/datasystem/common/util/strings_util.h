@@ -449,5 +449,23 @@ inline std::string GetTruncatedStr(const std::string &input, size_t retainDigits
 
     return std::string(input.length() - retainDigits, '*') + input.substr(input.length() - retainDigits);
 }
+
+/**
+ * Formats a string for logging output.
+ *
+ * @param str The original string to format,
+ * @param maxDisplayLength Maximum characters to display before truncation (default: 255)
+ * @return Formatted string.
+ */
+inline std::string FormatStringForLog(const std::string &str, size_t maxDisplayLength = 255)
+{
+    // Check if truncation is needed
+    if (str.size() <= maxDisplayLength) {
+        return str;
+    }
+
+    // Simple truncation: take the beginning portion and add ellipsis with size info
+    return FormatString("%s... [total: %zu]", str.substr(0, maxDisplayLength).c_str(), str.size());
+}
 }  // namespace datasystem
 #endif
