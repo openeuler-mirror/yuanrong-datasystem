@@ -3,11 +3,14 @@ set(RDMA_UTIL_SRCS
 
 add_library(common_rdma_util STATIC ${RDMA_UTIL_SRCS})
 
-set(URMA_SRCS
-    urma_manager_wrapper.cpp)
+set(URMA_SRCS "")
+set(RDMA_SRCS "")
+set(FAST_TRANSPORT_SRCS
+    fast_transport_manager_wrapper.cpp)
 set(URMA_DEPEND_LIBS
     common_rdma_util)
-
+set(RDMA_DEPEND_LIBS
+    common_rdma_util)
 if (BUILD_WITH_URMA)
     list(APPEND URMA_SRCS urma_manager.cpp urma_info.cpp)
     list(APPEND URMA_DEPEND_LIBS ${URMA_LIBRARY})
@@ -24,9 +27,7 @@ endif()
 if (BUILD_WITH_RDMA)
     list(APPEND RDMA_SRCS ucp_manager.cpp)
     list(APPEND RDMA_DEPEND_LIBS ${UCX_LIBRARIES})
-
-    # TODO: STUB RDMA_STUB_SRCS
 endif()
 
-add_library(common_rdma STATIC ${URMA_SRCS} ${RDMA_SRCS})
+add_library(common_rdma STATIC ${FAST_TRANSPORT_SRCS} ${URMA_SRCS} ${RDMA_SRCS})
 target_link_libraries(common_rdma PRIVATE ${URMA_DEPEND_LIBS} ${RDMA_DEPEND_LIBS})

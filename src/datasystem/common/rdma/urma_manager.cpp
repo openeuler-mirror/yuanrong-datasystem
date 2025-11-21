@@ -24,7 +24,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -919,7 +919,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     if (blocking) {
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        RETURN_IF_NOT_OK(WaitUrmaEvent(keys, remainingTime, errorHandler));
+        RETURN_IF_NOT_OK(WaitFastTransportEvent(keys, remainingTime, errorHandler));
         keys.clear();
     }
     return Status::OK();

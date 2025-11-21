@@ -31,7 +31,7 @@
 #include <unistd.h>
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/shared_memory/mmap/allocation.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -80,8 +80,8 @@ Status MemMmap::Initialize(uint64_t size, bool populate, bool hugepage)
     type_ = "memory";
     Status rc = SetupFileMapping(size, flags, true);
     if (rc.IsOk()) {
-        // If urma is enabled, register the memory.
-        RETURN_IF_NOT_OK(RegisterUrmaMemory(pointer_, mmapSize_));
+        // If urma or rdma is enabled, register the memory.
+        RETURN_IF_NOT_OK(RegisterFastTransportMemory(pointer_, mmapSize_));
     }
     return rc;
 }
@@ -128,8 +128,8 @@ bool MemMmap::Commit(void *addr, size_t offset, size_t length)
 
 bool MemMmap::Decommit(void *addr, size_t offset, size_t length)
 {
-    if (IsUrmaEnabled()) {
-        // if urma is enabled memory is pinned
+    if (IsFastTransportEnabled()) {
+        // if urma/rdma is enabled memory is pinned
         // Decommit is a noop
         return false;
     }

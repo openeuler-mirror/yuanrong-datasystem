@@ -29,6 +29,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
@@ -54,13 +55,75 @@ custom_unique_ptr<T> MakeCustomUnique(T *p, std::function<void(T *)> custom_dele
     }
 }
 
+class Event {
+public:
+    /**
+     * @brief Create a new Event object.
+     */
+    explicit Event(uint64_t requestId) : requestId_(requestId), ready_(false)
+    {
+    }
+
+    /**
+     * @brief Wait on event until timeout or someone notify
+     * @param[in] timeout time in milliseconds to wait
+     * @return Status of the call.
+     */
+    Status waitFor(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(eventMutex_);
+        bool gotNotification = cv.wait_for(lock, timeout, [this] { return ready_; });
+        if (!gotNotification && !ready_) {
+            // Return timeout
+            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
+                                    FormatString("timedout waiting for request: %d", requestId_));
+        }
+        return Status::OK();
+    }
+
+    /**
+     * @brief Notify all threads that are waiting for the event
+     */
+    void notifyAll()
+    {
+        std::unique_lock<std::mutex> lock(eventMutex_);
+        ready_ = true;
+        cv.notify_all();
+    }
+
+    /**
+     * @brief Sets the event status as failed
+     */
+    void setFailed()
+    {
+        failed_ = true;
+    }
+
+    /**
+     * @brief Checks the event status
+     */
+    bool isFailed()
+    {
+        return failed_;
+    }
+
+private:
+    std::condition_variable cv;
+    mutable std::mutex eventMutex_;
+    uint64_t requestId_;
+    bool ready_{ false };
+    bool failed_{ false };
+};
+
+using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
+
 class UcpSegment {
 public:
     /**
      * @brief Create a new UcpSegment object.
      */
-    UcpSegment();
-    ~UcpSegment();
+    UcpSegment(){};
+    ~UcpSegment(){};
 
     /**
      * @brief Sets UcpSegment object
@@ -86,80 +149,48 @@ public:
      */
     UcpEndpoint(){};
 
-    ~UcpEndpoint();
-
-    /**
-     * @brief Get remote UcpSegment or import remote UcpSegment from the device
-     * @param[in] UrmaImportSegmentPb Pb with remote segment info
-     * @param[out] constAccessor Accessor in segment table
-     * @return Status of the call.
-     */
-    Status GetOrImportRemoteUcpSeg(const RdmaImportSegmentPb &RdmaInfo, UcpSegmentMap::ConstAccessor &constAccessor);
+    ~UcpEndpoint(){};
 };
 
 using UcpEndpointMap = LockMap<std::string, UcpEndpoint>;
 
-class Event {
+class UcpWorker {
 public:
     /**
-     * @brief Create a new Event object.
+     * @brief Create a new UcpWorker object.
      */
-    explicit Event(uint64_t requestId) : requestId_(requestId), ready_(false)
-    {
-    }
+    UcpWorker(){};
+
+    ~UcpWorker();
 
     /**
-     * @brief Wait on event until timeout or someone notify
-     * @param[in] timeout time in milliseconds to wait
+     * @brief Get remote UcpSegment or import remote UcpSegment from the device
+     * @param[in] remoteEndpoint remote ucp endpoint
+     * @param[in] localSegAddress Starting address of the segment (e.g. Arena
+     * start address)
+     * @param[in] localSegSize Total size of the segment (e.g. Arena size)
+     * @param[in] localObjectAddress Object address
+     * @param[in] readOffset Offset in the object to read
+     * @param[in] readSize Size of the object
+     * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of
+     * object)
+     * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish.
      * @return Status of the call.
      */
-    Status WaitFor(std::chrono::milliseconds timeout)
-    {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        bool gotNotification = cv.wait_for(lock, timeout, [this] { return ready_; });
-        if (!gotNotification && !ready_) {
-            // Return timeout
-            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
-                                    FormatString("timedout waiting for request: %d", requestId_));
-        }
-        return Status::OK();
-    }
+    Status PutPayloadToRemoteEndpoint(custom_unique_ptr<UcpEndpoint> &remoteEndpoint, const uint64_t &localSegAddress,
+                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                      const uint64_t &readOffset, const uint64_t &readSize,
+                                      const uint64_t &metaDataSize, bool blocking);
 
     /**
-     * @brief Notify all threads that are waiting for the event
+     * @brief bind remote endpoint to the ucp worker, stored in remoteEndpointVec_
+     * @param[in] remoteEndpoint ucp endpoint ptr
+     * @return Status of the call.
      */
-    void NotifyAll()
-    {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        ready_ = true;
-        cv.notify_all();
-    }
-
-    /**
-     * @brief Sets the event status as failed
-     */
-    void set_failed()
-    {
-        failed_ = true;
-    }
-
-    /**
-     * @brief Checks the event status
-     */
-    bool is_failed()
-    {
-        return failed_;
-    }
+    Status BindRemoteEndpoint(custom_unique_ptr<UcpEndpoint> remoteEndpoint);
 
 private:
-    std::condition_variable cv;
-    mutable std::mutex eventMutex_;
-    uint64_t requestId_;
-    bool ready_{ false };
-    bool failed_{ false };
-};
-
-class UcpWorker {
+    std::vector<custom_unique_ptr<UcpEndpoint>> remoteEndpointVec_;
 };
 
 class UcpManager {
@@ -177,6 +208,15 @@ public:
      * @return Status of the call.
      */
     Status Init();
+
+    /**
+     * @brief Check if Ucp Rdma worker flag is set
+     * @return True if flag is set, else false
+     */
+    static bool IsUcpEnabled()
+    {
+        return FLAGS_enable_rdma;
+    };
 
     /**
      * @brief Check we should register whole arena upfront
@@ -202,41 +242,34 @@ public:
     Status RegisterSegment(const uint64_t &segAddress, const uint64_t &segSize);
 
     /**
-     * @brief Gets the segment if present or
-     * Registers the segment if address is not already registered
-     * @param[in] segAddress Starting address of the segment
-     * @param[in] segSize Size of the segment
-     * @param[out] segVA virtual address of the segment
-     * @param[out] segLen Size of the segment (==segSize)
-     * @param[out] segFlag Flags set for the segment
-     * @param[out] segTokenId Token provided for the segment
-     * @return Status of the call.
+     * @brief Fill in ucp info for object data owner to ucp put
+     * @param[in] segAddress Starting address of the segment.
+     * @param[in] dataOffset The memory offset of the object
+     * @param[in] srcIpAddr The ip address of remote data owner
+     * @param[out] ucpInfo Ucp info that needs to be sent to remote data owner
+     * @return Status of the call
      */
-    Status GetSegmentInfo(const uint64_t &segAddress, const uint64_t &segSize, uint64_t &segVA, uint64_t &segLen,
-                          uint32_t &segFlag, uint32_t &segTokenId);
+    Status FillUcpInfoImpl(uint64_t segAddress, uint64_t dataOffset, const std::string &srcIpAddr,
+                           UcpRemoteInfoPb &ucpInfo);
 
     /**
-     * @brief Does a RDMA write to remote worker memory location
-     * 1. Registers the segment if address is not already registered
-     * 2. Imports remote segment
-     * 3. does a Ucp write
-     * @param[in] RdmaImportSegmentPb Protobuf contians remote worker RDMA info
-     * @param[in] localSegAddress Starting address of the segment (e.g. Arena
-     * start address)
-     * @param[in] localSegSize Total size of the segment (e.g. Arena size)
+     * @brief UCP RDMA write object data to remote worker memory location
+     * 1. Choose a UcpWorker to build/reuse the UcpEndpoint
+     * 2. Prepare the obj data, including address offsets and data chunks
+     * 3. does a ucp put
+     * @param[in] ucpInfo Protobuf contians remote worker UCP RDMA info.
      * @param[in] localObjectAddress Object address
      * @param[in] readOffset Offset in the object to read
      * @param[in] readSize Size of the object
      * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of
      * object)
-     * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish.
-     * @param[out] keys The new request id to wait for if not blocking.
-     * @return Status of the call.
+     * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish
+     * @param[out] keys The new request id to wait for if not blocking
+     * @return Status of the call
      */
-    Status ImportSegAndPutPayload(const RdmaImportSegmentPb &urmaInfo, const uint64_t &localSegAddress,
-                                  const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                  const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                  bool blocking, std::vector<uint64_t> &keys);
+    Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
+                         const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
+                         std::vector<uint64_t> &keys);
 
     /**
      * @brief Remove Remote Endpoint and all associated segments
@@ -253,14 +286,6 @@ public:
      * @return Status of the call.
      */
     Status WaitToFinish(uint64_t requestId, int64_t timeoutMs);
-
-    /**
-     * @brief Handshake for RDMA purposes.
-     * @param[in] req RDMA handshake request.
-     * @param[out] rsp RDMA handshake response.
-     * @return Status of the call.
-     */
-    Status UcpHandshake(const RdmaHandshakeReqPb &req, RdmaHandshakeRspPb &rsp);
 
 private:
     UcpManager();

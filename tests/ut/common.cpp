@@ -22,7 +22,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_bool(alsologtostderr);
