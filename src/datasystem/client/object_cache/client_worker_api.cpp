@@ -55,10 +55,10 @@ static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
 
 ClientWorkerApi::ClientWorkerApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
-                                 Signature *signature, std::string tenantId,
-                                 bool enableCrossNodeConnection, bool enableExclusiveConnection)
-    : ClientWorkerCommonApi(hostPort, cred, heartbeatType, signature, std::move(tenantId),
-                            enableCrossNodeConnection, enableExclusiveConnection)
+                                 Signature *signature, std::string tenantId, bool enableCrossNodeConnection,
+                                 bool enableExclusiveConnection)
+    : ClientWorkerCommonApi(hostPort, cred, heartbeatType, signature, std::move(tenantId), enableCrossNodeConnection,
+                            enableExclusiveConnection)
 {
     if (enableExclusiveConnection) {
         // Assign a value and then bump the counter. This id is a client-side-only identifier, a bit like a
@@ -82,7 +82,7 @@ Status ClientWorkerApi::Init(int32_t timeoutMs)
         timeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(timeoutMs));
     }
     stub_ = std::make_unique<WorkerOCService_Stub>(channel, timeoutMs);
-    if (enableExclusiveConnection_ && exclusiveId_.has_value()) {
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && GetShmEnabled()) {
         // Note: exclusiveConnSockPath_ will be initialized during client register call driven from base class Init()
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
     }
@@ -190,7 +190,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
                      createParams.size(), rsp.results().size()));
     if (!skipCheckExistence) {
         CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rsp.exists_size()) == createParams.size(), K_INVALID,
-                                "The size of rspExists is not consistent with createParams");
+                                 "The size of rspExists is not consistent with createParams");
         for (int i = 0; i < rsp.exists_size(); i++) {
             exists[i] = rsp.exists(i);
         }
@@ -199,7 +199,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
         if (skipCheckExistence) {
             return true;
         }
-        for (const auto& res : rsp.results()) {
+        for (const auto &res : rsp.results()) {
             if (!res.shm_id().empty()) {
                 return true;
             }
@@ -859,8 +859,7 @@ void ClientWorkerApi::FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bu
     metaPb->set_src_offset(bufferInfo->srcOffset);
 }
 
-Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                   const std::vector<Blob> &blobs)
+Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs)
 {
     PutP2PMetaReqPb req;
     PutP2PMetaRspPb resp;
