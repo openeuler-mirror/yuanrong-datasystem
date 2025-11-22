@@ -142,6 +142,8 @@ public:
      */
     Status Exist(const ExistReqPb &req, ExistRspPb &rsp);
 
+    Status Prefetch(const PrefetchReqPb &req, PrefetchRspPb &rsp);
+
     /**
      * @brief Get device meta info of the keys.
      * @param[in] req The exist request protobuf.
@@ -930,7 +932,7 @@ private:
      * @param[in] key The object key to check.
      * @return true if the object exists locally and is valid; false otherwise.
      */
-    bool IsLocalObject(const std::string &key);
+    bool IsLocalObject(const std::string &key, ObmmMetaPb *pb = nullptr);
 
     /**
      * @brief Check if object can tolerance does not exist node or not.

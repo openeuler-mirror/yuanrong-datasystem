@@ -130,6 +130,7 @@ void Buffer::Reset()
 
 void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 {
+    PerfPoint point(PerfKey::BUFFER_RELEASE);
     // At the condition of "non-shared memory Create or Put", free memory after destructor.
     if (bufferInfo_ != nullptr) {
         if (!isShm_ && bufferInfo_->payloadPointer == nullptr && bufferInfo_->pointer) {

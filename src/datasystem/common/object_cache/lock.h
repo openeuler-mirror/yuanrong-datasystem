@@ -298,11 +298,14 @@ public:
 private:
     void UpdateRecorder(bool add)
     {
+        (void)add;
+#if 0
         if (add) {
             __atomic_or_fetch(recorder_, addMask_, __ATOMIC_SEQ_CST);
         } else {
             __atomic_and_fetch(recorder_, subMask_, __ATOMIC_SEQ_CST);
         }
+#endif
     }
 
     void *pointer_;

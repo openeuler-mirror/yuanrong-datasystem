@@ -478,4 +478,12 @@ Status KVClient::Expire(const std::vector<std::string> &keys, uint32_t ttlSecond
     accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
     return rc;
 }
+
+Status KVClient::Prefetch(const std::vector<std::string> &keys)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    PerfPoint point(PerfKey::KV_CLIENT_PREFETCH_OBJECT);
+    return impl_->Prefetch(keys);
+}
+
 }  // namespace datasystem

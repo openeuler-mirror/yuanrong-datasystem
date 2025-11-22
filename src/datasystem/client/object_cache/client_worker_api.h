@@ -370,6 +370,8 @@ public:
     virtual Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
                           std::vector<std::string> &failedKeys) = 0;
 
+    Status Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable);
+
     /**
      * @brief Get device meta info of the keys.
      * @param[in] keys The keys to be queried. Constraint: The number of keys cannot exceed 10000.

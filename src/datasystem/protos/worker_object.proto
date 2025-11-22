@@ -274,6 +274,10 @@ message ObjectBaseInfoPb {
   string object_key = 1;
   uint64 data_size = 2;
   DeviceMetaInfoPb device_info = 3;
+  int64 mem_id = 4;
+  uint64 mmap_size = 5;
+  uint64 offset = 6;
+  string shm_id = 7;
 }
 
 message ObjectMetaPb {
@@ -287,6 +291,10 @@ message ObjectMetaPb {
   uint32 ttl_second = 7;
   ExistenceOptPb existence = 8;
   DeviceMetaInfoPb device_info = 9;
+  int64 mem_id = 10;
+  uint64 mmap_size = 11;
+  uint64 offset = 12;
+  string shm_id = 13;
 }
 
 

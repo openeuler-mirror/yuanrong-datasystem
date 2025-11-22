@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "client/object_cache/oc_client_common.h"
@@ -78,9 +79,9 @@ public:
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.numOBS = 1;
+        opts.numOBS = 0;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "false";
+        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());
@@ -88,7 +89,7 @@ public:
         for (auto addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000";
+        opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=1 -log_monitor=true -max_client_num=2000";
     }
 
     void SetUp() override
@@ -111,10 +112,10 @@ public:
     void InitClients()
     {
         InitTestKVClient(0, client_);
-        InitTestKVClient(0, client1_);
-        InitTestKVClient(0, client2_);
-        InitTestKVClient(0, client3_);
-        InitTestKVClient(0, client4_);
+        InitTestKVClient(1, client1_);
+        // InitTestKVClient(0, client2_);
+        // InitTestKVClient(0, client3_);
+        // InitTestKVClient(0, client4_);
     }
 
     std::shared_ptr<KVClient> client_;
@@ -141,6 +142,86 @@ TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
     std::shared_ptr<KVClient> client = std::make_shared<KVClient>();
     DS_ASSERT_OK(client->Init());
 }
+
+TEST_F(KVCacheClientTest, TestObmm)
+{
+    FLAGS_v = 1;
+    LOG(INFO) << "Init first";
+    int num = 10;
+    std::vector<std::string> keys(num);
+    std::vector<StringView> values(num);
+    std::vector<std::string> tmpData(num);
+    std::vector<std::string> outFailedKeys;
+    for (int i = 0; i < num; ++i) {
+        std::string data(1024 * 1024UL, (char)('a' + i));
+        tmpData[i] = std::move(data);
+    }
+    
+    for (int i = 0; i < num; ++i) {
+        keys[i] = "marck" + std::to_string(i);
+        values[i] = StringView(tmpData[i]);
+    }
+    DS_ASSERT_OK(client_->MSet(keys, values, outFailedKeys));
+
+    std::vector<std::string> vals;
+    DS_ASSERT_OK(client1_->Get(keys, vals, 0));
+    for (int i = 0; i < num; ++i) {
+        ASSERT_EQ(vals[i], tmpData[i]);
+    }
+}
+
+TEST_F(KVCacheClientTest, TestObmm1)
+{
+    LOG(INFO) << "Init first";
+    int num = 1024;
+    std::vector<std::string> keys(num);
+    std::vector<StringView> values(num);
+    std::vector<std::string> tmpData(num);
+    std::vector<std::string> outFailedKeys;
+    for (int i = 0; i < num; ++i) {
+        std::string data(2 * 1024UL, (char)('a' + i));
+        tmpData[i] = std::move(data);
+    }
+    
+    for (int i = 0; i < num; ++i) {
+        keys[i] = "marck" + std::to_string(i);
+        values[i] = StringView(tmpData[i]);
+    }
+    DS_ASSERT_OK(client_->MSet(keys, values, outFailedKeys));
+
+    std::vector<std::string> vals;
+    DS_ASSERT_OK(client1_->Get(keys, vals, 0));
+    for (int i = 0; i < num; ++i) {
+        ASSERT_EQ(vals[i], tmpData[i]);
+    }
+}
+
+TEST_F(KVCacheClientTest, TestObmm2)
+{
+    LOG(INFO) << "Init first";
+    int num = 1024;
+    std::vector<std::string> keys(num);
+    std::vector<StringView> values(num);
+    std::vector<std::string> tmpData(num);
+    std::vector<std::string> outFailedKeys;
+    for (int i = 0; i < num; ++i) {
+        std::string data(256, (char)('a' + i));
+        tmpData[i] = std::move(data);
+    }
+    
+    for (int i = 0; i < num; ++i) {
+        keys[i] = "marck" + std::to_string(i);
+        values[i] = StringView(tmpData[i]);
+    }
+    DS_ASSERT_OK(client_->MSet(keys, values, outFailedKeys));
+
+    std::vector<std::string> vals;
+    DS_ASSERT_OK(client1_->Get(keys, vals, 0));
+    for (int i = 0; i < num; ++i) {
+        ASSERT_EQ(vals[i], tmpData[i]);
+    }
+}
+
 
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvFailedWithNotEnoughParam)
 {

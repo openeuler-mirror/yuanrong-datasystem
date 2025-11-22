@@ -15,7 +15,8 @@ set(SHARED_MEM_SRCS
         mmap/base_mmap.cpp
         mmap/disk_mmap.cpp
         mmap/dev_mmap.cpp
-        mmap/mem_mmap.cpp)
+        mmap/mem_mmap.cpp
+        mmap/obmm_mmap.cpp)
 
 set(SHARED_MEM_DEPEND_LIBS
         ${JEMALLOC_PIC_LIBRARY}

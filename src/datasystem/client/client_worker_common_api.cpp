@@ -455,18 +455,18 @@ void ClientWorkerRemoteCommonApi::RecvFdAfterNotify(const std::vector<int> &work
 Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
                                                 const std::string &tenantId)
 {
+    (void)tenantId;
     if (!shmEnabled_ || socketFd_ == INVALID_SOCKET_FD) {
         return { K_RUNTIME_ERROR, "Current client can not support uds, so query client fd failed." };
     }
     PerfPoint point(PerfKey::RPC_WORKER_GET_CLIENT_FDS);
-    GetClientFdReqPb req;
-    GetClientFdRspPb rsp;
-    req.set_client_id(clientId_);
-    auto requestId = ++recvClientFdState_.requestId;  // 0 is used for compatibility with old versions.
-    req.set_request_id(requestId);
-    for (auto workerFd : workerFds) {
-        req.add_worker_fds(static_cast<google::protobuf::int32>(workerFd));
+    for (int memId : workerFds) {
+        std::string tmpfs = "/dev/obmm_shmdev" + std::to_string(memId);
+        int fd = open(tmpfs.c_str(), O_RDWR | O_SYNC);
+        CHECK_FAIL_RETURN_STATUS(fd >= 0, StatusCode::K_RUNTIME_ERROR, "open " + tmpfs + " failed: " + StrErr(errno));
+        clientFds.emplace_back(fd);
     }
+#if 0
     recvClientFdState_.recvPageWaitPost->Set();
 
     VLOG(1) << "Start to query page fd, socket fd: " << socketFd_
@@ -494,6 +494,7 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
                                                       VectorToString(workerFds), socketFd_, status.ToString()));
     VLOG(1) << FormatString("Receive fd[%s] from socket[%d] success, res: %s ", VectorToString(workerFds), socketFd_,
                             VectorToString(clientFds));
+#endif
     point.Record();
     return Status::OK();
 }

@@ -1269,11 +1269,16 @@ Status WorkerOCServer::Shutdown()
 
 Status WorkerOCServer::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id)
 {
-    if (!EnableOCService()) {
-        fd = -1;
-        return Status::OK();
-    }
-    return objCacheClientWorkerSvc_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id);
+    (void)lockId;
+    (void)mmapSize;
+    (void)offset;
+    (void)id;
+    // if (!EnableOCService()) {
+        
+    // }
+    fd = -1;
+    return Status::OK();
+    // return objCacheClientWorkerSvc_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id);
 }
 
 Status WorkerOCServer::ProcessServerReboot(const ClientKey &clientId, const std::string &tenantId,

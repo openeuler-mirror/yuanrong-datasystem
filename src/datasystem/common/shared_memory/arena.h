@@ -293,6 +293,9 @@ public:
     Status CheckWorkerFdTenant(const std::string &tenantId, const std::vector<int> &workerFds);
 
 private:
+
+    std::vector<int64_t> GetMemIds();
+
     /**
      * @brief To align the size to an integer multiple of a page.
      * @param[in] size mmap size .
@@ -439,7 +442,7 @@ public:
      * @param[in] devMemFuncRegister The register func for allocator.
      * @return K_OK if success, the error otherwise.
      */
-    Status Init(DevMemFuncRegister devMemFuncRegister);
+    Status Init(DevMemFuncRegister devMemFuncRegister, int64_t memId);
 
     /**
      * @brief Get mmap entry info via pointer, it will traverses 'mmapEntryTable_' to find the
