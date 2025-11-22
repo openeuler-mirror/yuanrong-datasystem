@@ -259,6 +259,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
         reqTimeoutDuration.Init(timeout);
         return Status::OK();
     });
+    INJECT_POINT("worker.Get.delay");
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL);
     // Try get from local.
     std::set<ReadKey> remoteObjectKeys;

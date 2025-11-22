@@ -345,6 +345,7 @@ public:
     Status SendAll(ZmqSendFlags flags) override
     {
         PerfPoint::RecordElapsed(PerfKey::ZMQ_APP_WORKLOAD, GetLapTime(meta_, "ZMQ_APP_WORKLOAD"));
+        RETURN_OK_IF_TRUE(mQue_ == nullptr);
         return ZmqService::SendAll(outMsg_, meta_,
                                    [this, &flags](ZmqMetaMsgFrames &e) { return mQue_->SendMsg(e, flags); });
     }
