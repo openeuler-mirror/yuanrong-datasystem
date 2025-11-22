@@ -166,6 +166,12 @@ private:
         bool insert;
     };
 
+    struct GetObjectInfo {
+        const ReadKey *readKey;
+        LockedEntity *entry = nullptr;
+        master::QueryMetaInfoPb *queryMeta = nullptr;
+    };
+
     /**
      * @brief Get map of objectKeys grouped by master.
      * @param[in] objectKeys The vector of objectkeys.
@@ -288,15 +294,12 @@ private:
 
     /**
      * @brief Helper function to allocate aggregated memory for objects at Batch Get.
-     * @param[in] metas The batched object meta info contains data size.
-     * @param[in] lockedEntries The object lock entries.
+     * @param[in] infos The batched object meta info contains data size and entry info.
      * @param[out] shmOwners The allocated shared memory chunks.
      * @param[out] shmIndexMapping The object key to shmOwners index mapping.
      * @return Status of the call.
      */
-    Status AggregateAllocateHelper(const std::list<ObjectMetaPb *> &metas,
-                                   std::map<ReadKey, LockedEntity> &lockedEntries,
-                                   std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+    Status AggregateAllocateHelper(std::list<GetObjectInfo> &infos, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
                                    std::vector<uint32_t> &shmIndexMapping);
 
     /**
@@ -532,7 +535,7 @@ private:
     /**
      * @brief Get batch of object data from remote cache (remote worker or redis) within the lock.
      * @param[in] address The remote worker address.
-     * @param[in] metas The batched object meta info contains remote address and data size.
+     * @param[in] metas The batched object meta info contains remote address and data size and data info.
      * @param[in] readKeys The read key info, contain offset, size, objKey.
      * @param[in] request Get request instance.
      * @param[in] lockedEntries Object lock entries.
@@ -542,12 +545,11 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
-    Status BatchGetObjectFromRemoteOnLock(const std::string &address, std::list<ObjectMetaPb *> &metas,
+    Status BatchGetObjectFromRemoteOnLock(const std::string &address, std::list<GetObjectInfo> &infos,
                                           const std::shared_ptr<GetRequest> &request,
-                                          std::map<ReadKey, LockedEntity> &lockedEntries,
                                           std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                           std::unordered_set<std::string> &failedIds,
-                                          std::list<ObjectMetaPb *> &failedMetas);
+                                          std::list<GetObjectInfo> &failedMetas);
 
     /**
      * @brief Helper function to split query meta  based off address and threshold.
@@ -557,8 +559,8 @@ private:
      * @return Status of the call.
      */
     void GroupQueryMeta(
-        master::QueryMetaInfoPb &queryMeta,
-        std::unordered_map<std::string, std::list<std::pair<std::list<ObjectMetaPb *>, uint64_t>>> &groupedQueryMetas);
+        GetObjectInfo &info,
+        std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas);
 
     /**
      * @brief Helper function to handle individual status returned from the batch get request.
@@ -587,27 +589,24 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
-    Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<ObjectMetaPb *> &metas,
+    Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<GetObjectInfo> &metas,
                                           const std::shared_ptr<GetRequest> &request,
-                                          std::map<ReadKey, LockedEntity> &lockedEntries,
                                           std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                           std::unordered_set<std::string> &failedIds,
-                                          std::list<ObjectMetaPb *> &failedMetas);
+                                          std::list<GetObjectInfo> &failedMetas);
 
     /**
      * @brief Helper function to construct batch get request.
      * @param[in] address The remote worker address.
-     * @param[in] metas The batched object meta info contains remote address and data size.
+     * @param[in] infos The batched object meta info contains remote address and data size and oject lock entries.
      * @param[in] readKeys The read key info, contain offset, size, objKey.
-     * @param[in] lockedEntries Object lock entries.
      * @param[out] successIds Succeeded get object keys.
      * @param[out] needRetryIds Need retry get id list.
      * @param[out] failedIds Failed get object keys.
      * @param[out] reqPb The request to initialize and construct.
      * @return Status of the call.
      */
-    Status ConstructBatchGetRequest(const std::string &address, std::list<ObjectMetaPb *> &metas,
-                                    std::map<ReadKey, LockedEntity> &lockedEntries,
+    Status ConstructBatchGetRequest(const std::string &address, std::list<GetObjectInfo> &metas,
                                     std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                     std::unordered_set<std::string> &failedIds, BatchGetObjectRemoteReqPb &reqPb);
 
@@ -643,10 +642,9 @@ private:
      * @brief Helper function process the response from batch get.
      * @param[in] address The remote worker address.
      * @param[in] checkConnectStatus The worker is connect status
-     * @param[in] metas The batched object meta info contains remote address and data size.
+     * @param[in] infos The batched object meta info contains remote address and data size and oject lock entries.
      * @param[in] readKeys The read key info, contain offset, size, objKey.
      * @param[in] request Get request instance.
-     * @param[in] lockedEntries Object lock entries.
      * @param[in] status The status to handle.
      * @param[in] rspPb The response to handle.
      * @param[in] payloads The payloads that comes together with response.
@@ -656,12 +654,11 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
-    Status ProcessBatchResponse(const std::string &address, Status &checkConnectStatus,
-                                std::list<ObjectMetaPb *> &metas, const std::shared_ptr<GetRequest> &request,
-                                std::map<ReadKey, LockedEntity> &lockedEntries, const Status &status,
+    Status ProcessBatchResponse(const std::string &address, Status &checkConnectStatus, std::list<GetObjectInfo> &infos,
+                                const std::shared_ptr<GetRequest> &request, const Status &status,
                                 BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads,
                                 std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-                                std::unordered_set<std::string> &failedIds, std::list<ObjectMetaPb *> &failedMetas,
+                                std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas,
                                 bool &dataSizeChange);
 
     /**

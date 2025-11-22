@@ -859,8 +859,7 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadOb
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &address, std::list<ObjectMetaPb *> &metas,
-                                                        std::map<ReadKey, LockedEntity> &lockedEntries,
+Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &address, std::list<GetObjectInfo> &infos,
                                                         std::vector<std::string> &successIds,
                                                         std::vector<ReadKey> &needRetryIds,
                                                         std::unordered_set<std::string> &failedIds,
@@ -872,29 +871,29 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
     Status lastRc = Status::OK();
     // Pre-allocate an aggregated chunk of shared memory as ShmOwner, to reduce the number of allocation calls.
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
-    std::vector<uint32_t> shmIndexMapping(metas.size(), std::numeric_limits<uint32_t>::max());
-    RETURN_IF_NOT_OK(AggregateAllocateHelper(metas, lockedEntries, shmOwners, shmIndexMapping));
+    std::vector<uint32_t> shmIndexMapping(infos.size(), std::numeric_limits<uint32_t>::max());
+    RETURN_IF_NOT_OK(AggregateAllocateHelper(infos, shmOwners, shmIndexMapping));
 
     bool requestReady = false;
     uint32_t objectIndex = 0;
-    for (auto metaIter = metas.begin(); metaIter != metas.end(); objectIndex++) {
-        auto &meta = *metaIter;
-        const auto &objectKey = meta->object_key();
-        auto iter = lockedEntries.find(ReadKey(objectKey));
-        if (iter == lockedEntries.cend()) {
+    for (auto infoIter = infos.begin(); infoIter != infos.end(); objectIndex++) {
+        const auto &meta = infoIter->queryMeta->meta();
+        const auto &objectKey = meta.object_key();
+        auto lockEntry = infoIter->entry;
+        if (lockEntry == nullptr) {
             LOG(WARNING) << "ObjectKey " << objectKey << " not exsits in lockedEntries";
             continue;
         }
         // Checked availability when metas are grouped, so it should be safe to just access the entry here.
-        auto &entry = iter->second.safeObj;
+        auto &entry = lockEntry->safeObj;
         // Re-set object entry in the case of looped for data size change.
-        SetObjectEntryAccordingToMeta(*meta, GetMetadataSize(), *entry);
-        const auto &readKey = iter->first;
-        ReadObjectKV objectKV(readKey, *entry);
+        SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
+        const auto &readKey = infoIter->readKey;
+        ReadObjectKV objectKV(*readKey, *entry);
         Status status = objectKV.CheckReadOffset();
         if (status.IsError()) {
-            BatchGetObjectHandleIndividualStatus(status, readKey, successIds, needRetryIds, failedIds);
-            metaIter = metas.erase(metaIter);
+            BatchGetObjectHandleIndividualStatus(status, *readKey, successIds, needRetryIds, failedIds);
+            infoIter = infos.erase(infoIter);
             lastRc = status;
             continue;
         }
@@ -903,7 +902,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         subReq.set_version((*entry)->GetCreateTime());
         subReq.set_read_offset(objectKV.GetReadOffset());
         subReq.set_read_size(objectKV.GetReadSize());
-        subReq.set_data_size(meta->data_size());
+        subReq.set_data_size(meta.data_size());
         // Prepare the protobuf with urma info for data transfer if applicable.
         // BatchGetObjectHandleIndividualStatus will free ShmUnit upon error, so no need to actually record it here.
         bool shmUnitAllocated = false;
@@ -911,10 +910,10 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         if (shmIndexMapping.size() > objectIndex && shmOwners.size() > shmIndexMapping[objectIndex]) {
             shmOwner = shmOwners[shmIndexMapping[objectIndex]];
         }
-        status = PrepareGetRequestHelper(meta->data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
+        status = PrepareGetRequestHelper(meta.data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
         if (status.IsError()) {
-            BatchGetObjectHandleIndividualStatus(status, readKey, successIds, needRetryIds, failedIds);
-            metaIter = metas.erase(metaIter);
+            BatchGetObjectHandleIndividualStatus(status, *readKey, successIds, needRetryIds, failedIds);
+            infoIter = infos.erase(infoIter);
             lastRc = status;
             continue;
         }
@@ -923,7 +922,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
             objectKV.GetObjEntry()->stateInfo.SetIncompleted(true);
         }
         requestReady = true;
-        metaIter++;
+        infoIter++;
     }
     CHECK_FAIL_RETURN_STATUS(
         requestReady, lastRc.GetCode(),
