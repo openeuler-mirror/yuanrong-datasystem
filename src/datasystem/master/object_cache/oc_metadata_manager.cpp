@@ -40,6 +40,7 @@
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/urma_manager_wrapper.h"
 #include "datasystem/common/rpc/timeout_duration.h"
@@ -1139,25 +1140,69 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     masterOperationTimeCost.Append("QueryMeta get lock", timer.ElapsedMilliSecond());
     uint64_t payloadSize = 0;
-    for (auto it = objectKeys.begin(); it != objectKeys.end(); ++it) {
-        std::string objectKey = *it;
+    std::vector<QueryMetaInfoPb> infos;
+    infos.reserve(objectKeys.size());
+    auto func = [this, &address, &payloadSize, &payloads](const std::string &objectKey,
+                                                          std::vector<QueryMetaInfoPb> &infos,
+                                                          std::vector<std::string> &notExistObjectKeys) {
         TbbMetaTable::accessor accessor;
         if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
-            auto *queryMeta = rsp.add_query_metas();
-            queryMeta->mutable_meta()->CopyFrom(accessor->second.meta);
-            queryMeta->mutable_meta()->set_object_key(objectKey);
-            queryMeta->set_address(SelectObjectLocation(objectKey, address, accessor->second.locations));
-            queryMeta->set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
-            TryGetObjectData(objectKey, accessor, payloadSize, *queryMeta, payloads);
+            QueryMetaInfoPb info;
+            info.mutable_meta()->CopyFrom(accessor->second.meta);
+            info.mutable_meta()->set_object_key(objectKey);
+            info.set_address(SelectObjectLocation(objectKey, address, accessor->second.locations));
+            info.set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
+            TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
             bool updateLocation =
                 (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM;
             if (updateLocation && accessor->second.locations.insert(address).second) {
                 RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
             }
             accessor.release();
-            continue;
+            infos.emplace_back(std::move(info));
+            return Status::OK();
         }
         notExistObjectKeys.emplace_back(objectKey);
+        return Status::OK();
+    };
+
+    const size_t parallelLimit = 128;
+    const size_t objectKeyCount = objectKeys.size();
+    if (objectKeyCount <= parallelLimit || !IsUrmaEnabled()) {
+        for (const auto &objectKey : objectKeys) {
+            func(objectKey, infos, notExistObjectKeys);
+        }
+    } else {
+        // protect infos/notExistObjectKeys/lastRc
+        std::mutex mutex;
+        Status lastRc;
+        auto batchHandler = [&](size_t start, size_t end) {
+            std::vector<QueryMetaInfoPb> batchInfos;
+            std::vector<std::string> batchNotExists;
+            Status rc;
+            for (size_t i = start; i < end; i++) {
+                const auto &objectKey = objectKeys[i];
+                rc = func(objectKey, batchInfos, batchNotExists);
+                if (rc.IsError()) {
+                    break;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> locker(mutex);
+                infos.insert(infos.end(), std::make_move_iterator(batchInfos.begin()),
+                             std::make_move_iterator(batchInfos.end()));
+                notExistObjectKeys.insert(notExistObjectKeys.end(), std::make_move_iterator(batchNotExists.begin()),
+                                          std::make_move_iterator(batchNotExists.end()));
+                lastRc = rc.IsError() ? rc : lastRc;
+            }
+        };
+        const int parallism = 4;
+        LOG_IF_ERROR(Parallel::ParallelFor<size_t>(0, objectKeyCount, batchHandler, 0, parallism),
+                     "ParallelFor QueryMetaFromMetaTable failed");
+        RETURN_IF_NOT_OK(lastRc);
+    }
+    for (auto &info : infos) {
+        rsp.add_query_metas()->Swap(&info);
     }
     RETURN_OK_IF_TRUE(notExistObjectKeys.empty());
     LOG(INFO) << "Can not found some objects, size: " << notExistObjectKeys.size()
