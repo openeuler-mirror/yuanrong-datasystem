@@ -397,6 +397,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                 CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
                                          FormatString("Copy root info failed, the memcpy_s return: %d", ret));
                 batchPtr->batchCursor += Align4BitsCeiling(entry->GetDataSize() + entry->GetMetadataSize());
+                keys.emplace_back(dataPos);
             } else {
                 // later add a check on data size and read size.
                 auto shmUnit = entry->GetShmUnit();
@@ -495,7 +496,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
                             GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, parallelRes, batchPtr);
                         }
                         LOG_IF_ERROR(AggregaedMemorySend(i, info, batchPtr, parallelRes, req),
-                                     "Send aggregated mem failed");
+                                     FormatString("AggMem %ld Send failed, posRange[%ld - %ld]", i, startPos, endPos));
                     }
                 });
         });
