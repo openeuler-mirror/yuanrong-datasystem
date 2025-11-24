@@ -288,7 +288,10 @@ public:
                                                 meta_.client_id());
             ZmqMessage rcMsg = StatusToZmqMessage(rc);
             outMsg_.push_back(std::move(rcMsg));
-            return SendAll(ZmqSendFlags::NONE);
+            if (enableMsgQ_) {
+                return SendAll(ZmqSendFlags::NONE);
+            }
+            return Status::OK();
         } else {
             // Already sent something to the client, this socket is immediately marked as reusable for other clients.
             // So we just log error here and return Status::OK to make sure this socket won't return this error to
@@ -332,7 +335,7 @@ public:
 
     void SetRequestComplete()
     {
-        if (!enableMsgQ_) {
+        if (!enableMsgQ_ && !requestComplete_) {
             // Signal that the request is done.
             std::unique_lock<std::mutex> lock(requestCompleteMtx_);
             requestComplete_ = true;
@@ -340,6 +343,8 @@ public:
             requestCompleteCond_.notify_one();
         }
         // no-op if message queues were used. This call only relevent for exclusive connection mode.
+        // no-op if the requestComplete_ was already true. Its atomic so flag checks won't race. The mutex is only used
+        // for causing parent to sleep and child to wake it up.
     }
 
     Status SendAll(ZmqSendFlags flags) override
@@ -436,7 +441,10 @@ public:
         VLOG(RPC_LOG_LEVEL) << FormatString(
             "Server uses unary socket to send %zu payload bytes to Service %s Method %d to client %s", bufSz,
             meta_.svc_name(), meta_.method_index(), meta_.client_id());
-        return SendAll(ZmqSendFlags::NONE);
+        if (enableMsgQ_) {
+            return SendAll(ZmqSendFlags::NONE);
+        }
+        return Status::OK();
     }
 
     virtual Status SendPayload(const std::vector<MemView> &payload)

@@ -306,8 +306,6 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
                 return;
             }
             LOG_IF_ERROR(request->ReturnToClient(), "ReturnToClient failed");
-            // For exclusive connections: inform parent that async child has finished
-            request->GetServerApi()->SetRequestComplete();
         },
         *timer));
 

@@ -283,7 +283,9 @@ Status GetRequest::ReturnToClient(const Status &rc)
         LOG(ERROR) << "ReturnFromGetRequest timeout when get object: " << VectorToString(rawObjectKeys_);
         UnRegister();
         auto rc = lastRc.IsOk() ? Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout") : lastRc;
-        return serverApi_->SendStatus(rc);
+        Status sendStatusRc = serverApi_->SendStatus(rc);
+        this->GetServerApi()->SetRequestComplete();
+        return sendStatusRc;
     }
     GetRspPb resp;
     std::vector<RpcMessage> payloads;
@@ -311,6 +313,7 @@ Status GetRequest::ReturnToClient(const Status &rc)
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi_->Write(resp), "Write reply to client stream failed.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi_->SendPayload(payloads), "SendPayload to client stream failed");
+    this->GetServerApi()->SetRequestComplete();
     return Status::OK();
 }
 

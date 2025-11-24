@@ -65,7 +65,7 @@ public:
         ASSERT_TRUE(workerIndex < cluster_->GetWorkerNum());
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
         connectOptions = { .host = workerAddress.Host(), .port = workerAddress.Port(), .connectTimeoutMs = timeoutMs };
-        connectOptions.enableExclusiveConnection = false;
+        connectOptions.enableExclusiveConnection = true;
         connectOptions.SetAkSkAuth(accessKey_, secretKey_, tenantId);
     }
 
@@ -304,7 +304,7 @@ TEST_F(ObjectClientWithTokenTest, TestConcurrentPublish)
     }
 }
 
-TEST_F(ObjectClientWithTokenTest, DISABLED_QueryMetaAndCreateMetaConcurrently)
+TEST_F(ObjectClientWithTokenTest, QueryMetaAndCreateMetaConcurrently)
 {
     uint64_t size = 1024 * 1024;
     std::shared_ptr<ObjectClient> client1;
