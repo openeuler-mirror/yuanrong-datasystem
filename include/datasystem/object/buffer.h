@@ -35,6 +35,9 @@ namespace object_cache {
 class ObjectClientImpl;
 class Lock;
 }  // namespace object_cache
+namespace kv_cache {
+class KVClient; // namespace kv_cache
+}
 struct ObjectBufferInfo;
 class ObjectClient;
 }  // namespace datasystem
@@ -123,6 +126,7 @@ public:
 
 private:
     friend class datasystem::object_cache::ObjectClientImpl;
+    friend class KVClient;
     friend class WorkerOCServiceImpl;
 
     Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl);

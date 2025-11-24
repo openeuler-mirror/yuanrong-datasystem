@@ -74,6 +74,7 @@ struct P2PPeer {
 
 struct FullParam : public CreateParam {
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;
+    uint32_t ttlSecond = 0;
 };
 
 using P2PPeerTable = tbb::concurrent_hash_map<std::string, P2PPeer>;
@@ -132,7 +133,7 @@ public:
     Status Publish(const std::vector<std::shared_ptr<DeviceBuffer>> &buffers, std::vector<std::string> &failList);
 
     /**
-     * @brief Invoke worker client to create an object.
+     * @brief Create the shared memory buffer of the data system.
      * @param[in] objectKey The ID of the object to create.
      * @param[in] dataSize The size in bytes of the space to be allocated for this object.
      * @param[in] param The param for create operation.
@@ -143,6 +144,43 @@ public:
      */
     Status Create(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
                   std::shared_ptr<Buffer> &buffer);
+
+    /**
+     * @brief Store the shared memory buffer created by the Create interface to the data system.
+     *
+     * @param[in] buffer The buffer to set.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status Set(const std::shared_ptr<Buffer> &buffer);
+
+    /**
+     * @brief Batch create shared-memory Buffers in datasystem.
+     *
+     * The returned Buffers can be filled directly with data; subsequently call MSet()
+     * to cache it. This interface avoids the need for temporary memory and reduces
+     * one extra memory copy.
+     *
+     * @param[in] keys The ID of the object to create. ID should not be empty and should only contains english
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+     * @param[in] size The size in bytes of object.
+     * @param[in] param The create parameters.
+     * @param[out] buffer The buffer for the object.
+     * @return K_OK on success; the error code otherwise.
+     *         K_RUNTIME_ERROR: client fd mmap failed.
+     *         K_DUPLICATED: the object already exists, no need to create.
+     */
+    Status MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
+                    const FullParam &param, std::vector<std::shared_ptr<Buffer>> &buffers);
+
+    /**
+     * @brief Batch setter for multiple buffers.
+     *
+     * This interface is used together with MCreate to cache a batch of
+     * shared-memory Buffers into the data system.
+     * @param[in] buffers The buffers to set.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status MSet(const std::vector<std::shared_ptr<Buffer>> &buffers);
 
     /**
      * @brief Decrease the object reference count by one and if no one holds its ref, release it.

@@ -102,6 +102,57 @@ public:
     /// \return Key of object, return empty string if set error.
     std::string Set(const StringView &val, const SetParam &param = {});
 
+    /// \brief Create the shared memory buffer of the data system.
+    ///
+    /// \param[in] key The ID of the object to create. ID should not be empty and should only contains english
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    /// \param[in] size The size in bytes of object.
+    /// \param[in] param The create parameters.
+    /// \param[out] buffer The buffer for the object.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    ///         K_INVALID: the key or val is empty.
+    ///         K_RUNTIME_ERROR: client fd mmap failed
+    Status Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer);
+
+    /// \brief Store the shared memory buffer created by the Create interface to the data system.
+    ///
+    /// \param[in] buffer The buffer to set.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    ///         K_RUNTIME_ERROR: client fd mmap failed
+    Status Set(const std::shared_ptr<Buffer> &buffer);
+
+    /// \brief Batch create shared-memory Buffers in datasystem.
+    ///
+    /// The returned Buffers can be filled directly with data; subsequently call MSet()
+    /// to cache it. This interface avoids the need for temporary memory and reduces
+    /// one extra memory copy.
+    ///
+    /// \param[in] keys The ID of the object to create. ID should not be empty and should only contains english
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    /// \param[in] size The size in bytes of object.
+    /// \param[in] param The create parameters.
+    /// \param[out] buffer The buffer for the object.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    ///         K_INVALID: the key or val is empty, or keys and sizes mismatch.
+    ///         K_RUNTIME_ERROR: client fd mmap failed
+    Status MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
+                   const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers);
+
+    /// \brief Batch setter for multiple buffers.
+    ///
+    /// This interface is used together with MCreate to cache a batch of
+    /// shared-memory Buffers into the data system.
+    ///
+    /// \param[in] buffers The buffers to set.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    ///         K_INVALID: buffers is empty.
+    ///         K_RUNTIME_ERROR: client fd mmap failed
+    Status MSet(const std::vector<std::shared_ptr<Buffer>> &buffers);
+
     /// \brief Transactional multi-key set interface, it guarantees all the keys are either successfully created or
     ///  none of them is created. The number of keys should be in the range of 1 to 8.
     ///
@@ -150,6 +201,30 @@ public:
     ///         K_NOT_FOUND: the key not found.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
     Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs = 0);
+
+    /// \brief Invoke worker client to get the buffer of a key.
+    ///
+    /// \param[in] key The key.
+    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
+    ///  number required. 0 means no waiting time allowed.
+    /// \param[out] buffer The value for the key. nullptr if get failed.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    ///         K_INVALID: the key is empty.
+    ///         K_NOT_FOUND: the key not found.
+    ///         K_RPC_UNAVAILABLE: disconnect from worker or master.
+    ///         K_RUNTIME_ERROR: Cannot get value from worker.
+    Status Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs = 0);
+
+    /// \brief Get multiple buffers
+    ///
+    /// \param[in] keys List of keys
+    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
+    ///  number required. 0 means no waiting time allowed.
+    /// \param[out] buffers The buffer list to get.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs = 0);
 
     /// \brief Invoke worker client to get the values of all the given keys.
     ///
@@ -216,7 +291,7 @@ public:
     /// \param[out] failedKeys The failed delete keys.
     ///
     /// \return K_OK on any key success; the error code otherwise.
-    ///         K_INVALID: the vector of keys is empty or include empty key.
+    ///         K_INVALID: the vector of keys is empty or include empty kfey.
     Status Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys);
 
     /**
@@ -273,7 +348,6 @@ public:
     ///         K_RPC_UNAVAILABLE: Network error.
     ///         K_RUNTIME_ERROR: Inner error happen.
     Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys);
-
 private:
     std::shared_ptr<object_cache::ObjectClientImpl> impl_;
 };

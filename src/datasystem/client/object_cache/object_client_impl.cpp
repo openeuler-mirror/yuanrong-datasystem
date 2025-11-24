@@ -67,6 +67,7 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
+#include "datasystem/object/buffer.h"
 
 const std::string LOG_FILENAME = "ds_client";
 const size_t MSET_MAX_KEY_COUNT = 8;
@@ -1118,11 +1119,14 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
         Validator::IsBatchSizeUnderLimit(nestedObjectKeys.size()), K_INVALID,
         FormatString("The nestedObjectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     const std::string &objectKey = bufferInfo->objectKey;
-    VLOG(1) << "Begin to publish object, object_key: " << objectKey;
+    const uint32_t ttlSecond = bufferInfo->ttlSecond;
+    VLOG(1) << "Begin to publish object, object_key: " << objectKey << " with ttlSecond = " << ttlSecond;
 
     bufferInfo->isSeal = false;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys),
-                                     FormatString("Publish object %s", objectKey));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false,
+                                        nestedObjectKeys, ttlSecond),
+        FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
     return Status::OK();
@@ -1395,6 +1399,7 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     bufferInfo->pointer = pointer;
     bufferInfo->dataSize = size;
     bufferInfo->metadataSize = metaSize;
+    bufferInfo->ttlSecond = param.ttlSecond;
     bufferInfo->objectMode.SetWriteMode(param.writeMode);
     bufferInfo->objectMode.SetConsistencyType(param.consistencyType);
     bufferInfo->objectMode.SetCacheType(param.cacheType);
@@ -1870,6 +1875,40 @@ void ObjectClientImpl::AddTbbLockForGlobalRefIds(const std::vector<std::string> 
                   });
 }
 
+Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
+{
+    RETURN_IF_NOT_OK(IsClientReady());
+    std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
+    PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
+    LOG(INFO) << "Start putting buffer";
+    return buffer->Publish();
+}
+
+Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
+{
+    CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "The buffer list must not be empty.");
+    RETURN_IF_NOT_OK(IsClientReady());
+    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    const size_t bufferCnt = buffers.size();
+    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList(bufferCnt);
+    for (size_t i = 0; i < bufferCnt; i++) {
+        auto &buffer = buffers[i];
+        CHECK_FAIL_RETURN_STATUS(buffers[i] != nullptr, K_INVALID, "The buffer should not be empty.");
+        RETURN_IF_NOT_OK(buffer->CheckDeprecated());
+        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED,
+                                "Client object is already sealed");
+        bufferInfoList[i] = buffer->bufferInfo_;
+    }
+    const uint32_t ttl = buffers.front()->bufferInfo_->ttlSecond;
+    PublishParam publishParam{
+        .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl
+    };
+    MultiPublishRspPb rsp;
+    return workerApi->MultiPublish(bufferInfoList, publishParam, rsp);
+}
+
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
     RETURN_IF_NOT_OK(IsClientReady());
@@ -2043,6 +2082,21 @@ Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence,
     }
     static const int parallism = 4;
     return Parallel::ParallelFor<size_t>(0, multiCreateParamList.size(), multicreate, 0, parallism);
+}
+
+Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
+const FullParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
+{
+    RETURN_IF_NOT_OK(IsClientReady());
+    CHECK_FAIL_RETURN_STATUS(keys.size() > 0, K_INVALID, "The keys should not be empty.");
+    CHECK_FAIL_RETURN_STATUS(keys.size() == sizes.size(), K_INVALID, "The number of key and value is not the same.");
+    for (size_t i = 0; i < keys.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
+        RETURN_IF_NOT_OK(CheckValidObjectKey(keys[i]));
+    }
+    LOG(INFO) << "Begin to create multiput object." << VectorToString(keys);
+    std::vector<bool> exist;
+    return MultiCreate(keys, sizes, param, true, buffers, exist);
 }
 
 Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,

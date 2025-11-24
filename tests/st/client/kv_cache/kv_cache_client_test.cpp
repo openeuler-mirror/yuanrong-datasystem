@@ -70,6 +70,8 @@ DS_DECLARE_bool(log_monitor);
 namespace datasystem {
 namespace st {
 constexpr int WAIT_ASYNC_NOTIFY_WORKER = 300;
+constexpr int64_t NON_SHM_SIZE = 50 * 1024;
+constexpr int64_t SHM_SIZE = 500 * 1024;
 class KVCacheClientTest : public OCClientCommon {
 public:
     std::vector<std::string> workerAddress_;
@@ -1236,6 +1238,116 @@ TEST_F(KVCacheClientTest, TestCreateMetaFailed)
     Status status = client->Set("key", "value");
     LOG(INFO) << "status code: " << status.GetCode();
     ASSERT_TRUE(status.GetCode() == K_RPC_UNAVAILABLE);
+}
+
+TEST_F(KVCacheClientTest, TestCreateAndSetBufferSuccess)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(1, client);
+    std::string key = "key";
+    std::shared_ptr<Buffer> buffer;
+    uint32_t ttl = 3;
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.ttlSecond = ttl;
+    DS_ASSERT_OK(client->Create(key, NON_SHM_SIZE, param, buffer));
+    ASSERT_NE(buffer, nullptr);
+    ASSERT_EQ(NON_SHM_SIZE, buffer->GetSize());
+    DS_ASSERT_OK(client->Set(buffer));
+    Optional<Buffer> getBuffer;
+    ASSERT_EQ(client->Get(key, getBuffer), Status::OK());
+    ASSERT_EQ(NON_SHM_SIZE, getBuffer->GetSize());
+
+    auto waitTime = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(waitTime));
+    DS_ASSERT_NOT_OK(client->Get(key, getBuffer));
+}
+
+TEST_F(KVCacheClientTest, TestMCreateAndMSetBufferSuccess)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(1, client);
+    std::string key1 = "key1";
+    std::string key2 = "key2";
+    std::vector<std::string> keys{ key1, key2 };
+    std::vector<uint64_t> sizes{ NON_SHM_SIZE, SHM_SIZE };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    uint32_t ttl = 3;
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.ttlSecond = ttl;
+    DS_ASSERT_OK(client->MCreate(keys, sizes, param, buffers));
+    ASSERT_EQ(buffers.size(), keys.size());
+    ASSERT_EQ(NON_SHM_SIZE, buffers[0]->GetSize());
+    ASSERT_EQ(SHM_SIZE, buffers[1]->GetSize());
+    DS_ASSERT_OK(client->MSet(buffers));
+    std::vector<Optional<Buffer>> getBuffers;
+    ASSERT_EQ(client->Get(keys, getBuffers), Status::OK());
+    ASSERT_EQ(getBuffers.size(), keys.size());
+
+    ASSERT_EQ(NON_SHM_SIZE, getBuffers[0]->GetSize());
+    ASSERT_EQ(SHM_SIZE, getBuffers[1]->GetSize());
+
+    auto waitTime = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(waitTime));
+    DS_ASSERT_NOT_OK(client->Get(keys, getBuffers));
+}
+
+TEST_F(KVCacheClientTest, TestMSetEmptyInputFailed)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(1, client);
+    std::vector<std::shared_ptr<Buffer>> emptyBuffers;
+    Status rc = client->MSet(emptyBuffers);
+    ASSERT_EQ(rc.GetCode(), K_INVALID);
+}
+
+TEST_F(KVCacheClientTest, TestMCreateKeysSizesMismatchError)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(1, client);
+    std::vector<std::string> keys{"key1", "key2", "key3"};
+    std::vector<uint64_t> sizes{NON_SHM_SIZE, SHM_SIZE};
+    std::vector<std::shared_ptr<Buffer>> buffers;
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    Status rc = client->MCreate(keys, sizes, param, buffers);
+    ASSERT_EQ(rc.GetCode(), K_INVALID);
+}
+
+TEST_F(KVCacheClientTest, TestShmAndNonShmBufferMixedSetSuccess)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(1, client);
+    std::string key1 = "key1";
+    std::string key2 = "key2";
+    std::vector<std::string> keys{ key1, key2 };
+    std::shared_ptr<Buffer> nonShmBufffer;
+    std::shared_ptr<Buffer> shmBufffer;
+
+    std::vector<uint64_t> sizes{ NON_SHM_SIZE, SHM_SIZE };
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    DS_ASSERT_OK(client->Create(key1, NON_SHM_SIZE, param, nonShmBufffer));
+    ASSERT_NE(nonShmBufffer, nullptr);
+    ASSERT_EQ(NON_SHM_SIZE, nonShmBufffer->GetSize());
+
+    DS_ASSERT_OK(client->Create(key2, SHM_SIZE, param, shmBufffer));
+    ASSERT_NE(shmBufffer, nullptr);
+    ASSERT_EQ(SHM_SIZE, shmBufffer->GetSize());
+
+    std::vector<std::shared_ptr<Buffer>> buffers{nonShmBufffer, shmBufffer};
+    DS_ASSERT_OK(client->MSet(buffers));
+    std::vector<Optional<Buffer>> getBuffers;
+    ASSERT_EQ(client->Get(keys, getBuffers), Status::OK());
+    ASSERT_EQ(getBuffers.size(), keys.size());
+
+    ASSERT_EQ(NON_SHM_SIZE, getBuffers[0]->GetSize());
+    ASSERT_EQ(SHM_SIZE, getBuffers[1]->GetSize());
 }
 
 TEST_F(KVCacheClientTest, ClientConnect)
