@@ -5,7 +5,6 @@ metadata:
   name: datasystem-configmap
 data:
   datasystem.config: |-
-    -loglevel_only_for_workers=
     -v={{ .Values.global.logLevel }}
     -log_async_queue_size={{ .Values.global.log.logAsyncQueueSize }}
     -log_compress={{ .Values.global.log.logCompress }}

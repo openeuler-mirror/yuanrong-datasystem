@@ -227,7 +227,6 @@ static Status WorkerMain(int argc, char **argv)
         "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
         "It builds the local cache capability based on the proximity computing memory space to cache hotspot data.");
     Flags flags;
-    flags.SetIsToHandle(WorkerFlagIsToHandle);
     flags.SetValidateSpecial(WorkerFlagValidateSpecial);
     GFlagsMap defaultGflagMap = flags.GetAllFlagsToMap();
     FLAGS_logfile_mode = 0640;  // 0640: default permission for log files.

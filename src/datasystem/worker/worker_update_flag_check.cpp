@@ -23,27 +23,6 @@ DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem {
-bool WorkerFlagIsToHandle(const std::unordered_map<std::string, std::string> &flagMap, const std::string &flagName)
-{
-    if (flagName == "loglevel_only_for_workers") {
-        return false;
-    }
-    if (flagName == "v" || flagName == "inject_actions") {
-        // If the loglevel_only_for_workers does not exist or is empty, the parameter takes effect for all workers.
-        // If the loglevel_only_for_workers exists and is not empty, the parameter takes effect only for the matched
-        // worker host.
-        auto rc = flagMap.find("loglevel_only_for_workers");
-        if (rc != flagMap.end() && !rc->second.empty()) {
-            std::string workerAdrressList = rc->second;
-            std::string host;
-            std::string port;
-            int expectedSz = 2;
-            (void)ParseToHostPortString(FLAGS_worker_address, host, port, expectedSz);
-            return workerAdrressList.find(host) != std::string::npos;
-        }
-    }
-    return true;
-}
 
 bool StrToUint32(const std::string &str, uint32_t &result)
 {

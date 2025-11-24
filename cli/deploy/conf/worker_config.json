@@ -35,11 +35,11 @@
         "value": "./datasystem/uds",
         "description": "The directory to store unix domain socket file. The UDS generates temporary files in this path. Max length: 80"
     },
-    "az_name": {
+    "cluster_name": {
         "value": "",
-        "description": "az_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, allowing different clusters to be distinguished by the az_name."
+        "description": "cluster_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, allowing different clusters to be distinguished by the cluster_name."
     },
-    "other_az_names": {
+    "other_cluster_names": {
         "value": "",
         "description": "Specify other az names using the same etcd. Split by ','"
     },
@@ -271,10 +271,6 @@
         "value": "./datasystem/config/datasystem.config",
         "description": "Configure the path of the worker monitoring configuration file. During the execution of the worker, it periodically monitors whether the configuration file is changed to update the flag parameter value."
     },
-    "loglevel_only_for_workers": {
-        "value": "",
-        "description": "The log level can be configured to take effect only for specified workers, such as (-loglevel_only_for_workers=192.168.0.1,192.168.0.2). If this parameter is left blank, the parameter takes effect for all workers."
-    },
     "enable_thp": {
         "value": "false",
         "description": "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) can enhance performance and reduce page table overhead, but it may also lead to increased memory usage"
@@ -478,6 +474,10 @@
     "urma_register_whole_arena": {
         "value": "true",
         "description": "Register the whole arena as segment during init, otherwise, register each object as a segment."
+    },
+    "urma_mode": {
+        "value": "UB",
+        "description": "Option to enable URMA over IB or UB, default UB to run with URMA over UB."
     },
     "logfile_mode": {
         "value": "416",

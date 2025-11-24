@@ -173,8 +173,7 @@ private:
                                                           "obs_access_key",    "obs_secret_key" };
 
     // Only the flag parameter in the flagNameTrustList can be dynamically modified.
-    const std::unordered_set<std::string> flagNameTrustList_{ "loglevel_only_for_workers",
-                                                              "v",
+    const std::unordered_set<std::string> flagNameTrustList_{ "v",
                                                               "log_async_queue_size",
                                                               "log_compress",
                                                               "max_log_file_num",
@@ -195,7 +194,7 @@ private:
 #ifdef WITH_TESTS
                                                               "inject_actions"
 #endif
-                                                              };
+    };
 
     // Setting the interval for checking the configuration file. (Default: 10s)
     const uint64_t TRIGGER_CONFIG_CHECK_NANO_INTERVAL = 10UL * 1000UL * 1000UL * 1000UL;

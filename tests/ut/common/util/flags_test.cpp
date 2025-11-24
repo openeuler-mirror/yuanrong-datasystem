@@ -78,19 +78,6 @@ TEST_F(FlagsTest, TestSplitArgument)
     EXPECT_NE(kv3.second, "Value");
 }
 
-TEST_F(FlagsTest, TestIsToHandle)
-{
-    Flags flag;
-    flag.SetIsToHandle(WorkerFlagIsToHandle);
-    std::unordered_map<std::string, std::string> flagMap;
-    EXPECT_FALSE(flag.IsToHandle(flagMap, "loglevel_only_for_workers"));
-    EXPECT_TRUE(flag.IsToHandle(flagMap, "v"));
-
-    FLAGS_worker_address = "127.0.0.1:8888";
-    flagMap.emplace(std::pair<std::string, std::string>("loglevel_only_for_workers", "128.0.0.1"));
-    EXPECT_FALSE(flag.IsToHandle(flagMap, "v"));
-}
-
 TEST_F(FlagsTest, TestUpdateFlagParameter)
 {
     Flags flag;
@@ -148,17 +135,6 @@ TEST_F(FlagsTest, TestProcessOptions)
     EXPECT_FALSE(FLAGS_log_compress);
     EXPECT_EQ(FLAGS_max_log_file_num, static_cast<uint32_t>(22));
     EXPECT_EQ(FLAGS_arena_per_tenant, static_cast<uint32_t>(30));
-}
-
-TEST_F(FlagsTest, TestWorkerFlagIsToHandle)
-{
-    std::unordered_map<std::string, std::string> flagMap;
-    EXPECT_FALSE(WorkerFlagIsToHandle(flagMap, "loglevel_only_for_workers"));
-    EXPECT_TRUE(WorkerFlagIsToHandle(flagMap, "v"));
-
-    FLAGS_worker_address = "127.0.0.1:8888";
-    flagMap.emplace(std::pair<std::string, std::string>("loglevel_only_for_workers", "128.0.0.1"));
-    EXPECT_FALSE(WorkerFlagIsToHandle(flagMap, "v"));
 }
 
 TEST_F(FlagsTest, TestWorkerFlagValidateSpecial)

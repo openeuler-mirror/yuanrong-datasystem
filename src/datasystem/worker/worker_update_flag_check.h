@@ -25,14 +25,6 @@
 
 namespace datasystem {
 
-/**
- * @brief Check whether the flag parameter needs to be processed.
- * @param[in] flagMap The flag parameter and value parsed from the configuration file
- * @param[in] flagName The flag parameter name to be judged
- * @return bool - If the flag parameter needs to be processed, true is returned. Otherwise, false is returned.
- */
-bool WorkerFlagIsToHandle(const std::unordered_map<std::string, std::string> &flagMap, const std::string &flagName);
-
 bool WorkerFlagValidateSpecial(const std::string &flagName, const std::string &newVal);
 
 /**
