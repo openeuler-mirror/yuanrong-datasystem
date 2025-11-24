@@ -7,10 +7,15 @@ C++
    :maxdepth: 1
 
    KVClient
+   HeteroClient
    ObjectClient
    Buffer
    struct-ConnectOptions
    struct-SetParam
+   struct-Blob
+   struct-DeviceBlobList
+   struct-MetaInfo
+   struct-AsyncResult
    struct-CreateParam
    struct-ObjMetaInfo
    enum-WriteMode
@@ -20,6 +25,7 @@ C++
    StringView
    Optional
    Status
+   Future
    enum-StatusCode
 
 KV接口
@@ -57,6 +63,54 @@ KV接口
       - 批量查询一组键（keys）是否存在。
     * - :cpp:func:`KVClient::Expire`
       - 批量为一组键（keys）更新过期生命周期。
+
+Hetero接口
+-----------------------------------
+
+.. list-table::
+    :widths: 30 70
+    :header-rows: 0
+
+    * - :cpp:func:`HeteroClient::HeteroClient`
+      - 构造Hetero缓存客户端实例。
+    * - :cpp:func:`HeteroClient::~HeteroClient`
+      - 析构Hetero缓存客户端实例，析构过程中会自动断开与 Worker 的连接，释放客户端持有的资源。
+    * - :cpp:func:`HeteroClient::Init`
+      - 建立与数据系统 Worker 之间的连接并完成初始化。
+    * - :cpp:func:`HeteroClient::ShutDown`
+      - 断开与数据系统 Worker 之间的连接。
+    * - :cpp:func:`HeteroClient::MSetD2H`
+      - 批量将数据从异构设备(Device)缓存到数据系统主机(Host)侧。
+    * - :cpp:func:`HeteroClient::MGetH2D`
+      - 批量从数据系统主机(Host)侧获取数据并直接写入到异构设备(Device)内存中。该接口与 :cpp:func:`MSetD2H` 配合使用。
+    * - :cpp:func:`HeteroClient::AsyncMSetD2H`
+      - 批量将数据从异构设备(Device)异步缓存到数据系统主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。
+    * - :cpp:func:`HeteroClient::AsyncMGetH2D`
+      - 批量将数据从系统主机(Host)异步获取到异构设备主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。与 :cpp:func:`AsyncMSetD2H` 配合使用。
+    * - :cpp:func:`HeteroClient::DevPublish`
+      - 将异构设备上的内存作为数据系统的异构对象发布。异构对象可通过 DevSubscribe 获取。DevPublish 和 DevSubscribe 必须同时使用。
+    * - :cpp:func:`HeteroClient::DevSubscribe`
+      - 批量获取异构设备内存上的数据。DevPublish 和 DevSubscribe 必须同时使用。通过 DevSubscribe 获取数据后，数据系统会自动删除该异构对象，并且不再管理与该对象对应的异构设备内存。
+    * - :cpp:func:`HeteroClient::DevMSet`
+      - 批量缓存异构设备（Device）数据到数据系统中，缓存成功后其他客户端可通过 key 访问对应的异构设备（Device）数据。
+    * - :cpp:func:`HeteroClient::DevMGet`
+      - 批量从异构设备获取数据并将其写入devBlobList。数据直接通过异构设备间通道传输。
+    * - :cpp:func:`HeteroClient::Delete`
+      - 批量删除指定key(通过MSetD2H/AsyncMSetD2H缓存进来的key)。key不存在时视为删除成功。
+    * - :cpp:func:`HeteroClient::AsyncDevDelete`
+      - 异步删除数据在异构设备的key(通过 :cpp:func:`DevMSet` 缓存的key)。执行此命令后，数据系统将不再管理与该key对应的设备内存。
+    * - :cpp:func:`HeteroClient::DevDelete`
+      - 批量删除数据在异构设备的key（由DevMset缓存的key）。执行此命令后，数据系统将不再管理与该key对应的设备内存。
+    * - :cpp:func:`HeteroClient::DevLocalDelete`
+      - 删除当前客户端连接存储在数据系统中的数据副本。
+    * - :cpp:func:`HeteroClient::HealthCheck`
+      - 检查连接的 Worker 是否健康。
+    * - :cpp:func:`HeteroClient::Exist`
+      - 批量查询一组key是否存在，并返回每个key的存在性状态。支持最多10000个key的查询。
+    * - :cpp:func:`HeteroClient::GetMetaInfo`
+      - 批量获取指定租户的key的数据大小和位置。
+    * - :cpp:func:`HeteroClient::GenerateKey`
+      - 生成一个唯一的key，提供给其他接口设置数据使用。
 
 Object接口
 -----------------------------------
