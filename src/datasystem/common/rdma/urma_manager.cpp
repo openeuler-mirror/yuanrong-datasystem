@@ -627,7 +627,9 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
 
     VLOG(1) << "[UrmaEventHandler] Started waiting for the request id: " << requestId;
+    PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     RETURN_IF_NOT_OK(event->wait_for(std::chrono::milliseconds(timeoutMs)));
+    waitPoint.Record();
     if (event->is_failed()) {
         return Status(K_URMA_ERROR, FormatString("Polling failed with an error for requestId: %d", requestId));
     }

@@ -122,9 +122,9 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
         disabledParrallel ? *(rsp.add_responses()) : parallelRes[paraIndex].respPbs.emplace_back();
 
     std::vector<RpcMessage> subPayload;
-    std::vector<uint64_t> subKeys;
+    std::vector<uint64_t> urmaEventKeys;
 
-    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, subKeys, batchPtr);
+    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, urmaEventKeys, batchPtr);
     if (status.IsError()) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
@@ -134,13 +134,13 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
     // If keys are empty, we 1) get payload from spill or 2) urma is not enabled.
     // In both cases we send payload as part of the response.
     // Otherwise we extend the lifecycle of payload only until urma_write is done.
-    if (subKeys.empty()) {
+    if (urmaEventKeys.empty()) {
         auto &localPayload = disabledParrallel ? payload : parallelRes[paraIndex].pays;
         localPayload.insert(localPayload.end(), std::make_move_iterator(subPayload.begin()),
                             std::make_move_iterator(subPayload.end()));
-    } else {
+    } else if (batchPtr == nullptr) {
         auto &localKps = disabledParrallel ? keys : parallelRes[paraIndex].kps;
-        localKps.emplace(paraIndex, std::make_pair(std::move(subKeys), std::move(subPayload)));
+        localKps.emplace(paraIndex, std::make_pair(std::move(urmaEventKeys), std::move(subPayload)));
     }
 }
 
