@@ -590,6 +590,17 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
         return future;
     }
 
+    for (const auto &blockList : devBlobList) {
+        if (blockList.srcOffset < 0) {
+            Status err = Status(K_INVALID,
+                __LINE__,
+                __FILE__,
+                FormatString("Invalid srcOffset: %d, which must be non-negative.", blockList.srcOffset));
+            asyncResource->promise.set_value({err, asyncResource->failList});
+            return future;
+        }
+    }
+
     auto traceID = Trace::Instance().GetTraceID();
     // copy objectKeys , devBlobList and asyncResource to avoid user destroy it
     asyncResource->rpcFuture =
@@ -669,6 +680,9 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     filterBufferList.reserve(objectKeys.size());
     filterDevBlobList.reserve(objectKeys.size());
     for (auto idx = 0u; idx < objectKeys.size(); idx++) {
+        CHECK_FAIL_RETURN_STATUS(devBlobList[idx].srcOffset >= 0,
+            K_INVALID,
+            FormatString("Invalid srcOffset: %d, which must be non-negative.", devBlobList[idx].srcOffset));
         if (exists[idx]) {
             continue;
         }
@@ -2638,6 +2652,9 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
     for (size_t i = 0; i < blob2dList.size(); i++) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ (uint32_t)blob2dList[i].deviceIdx }),
                                          "Check device failed.");
+        CHECK_FAIL_RETURN_STATUS(blob2dList[i].srcOffset >= 0,
+            K_INVALID,
+            FormatString("Invalid srcOffset: %d, which must be non-negative.", blob2dList[i].srcOffset));
         std::shared_ptr<DeviceBuffer> devBuff;
         RETURN_IF_NOT_OK(CreateDevBuffer(keys[i], blob2dList[i], createParam, devBuff));
         devBuff->bufferInfo_->autoRelease = false;

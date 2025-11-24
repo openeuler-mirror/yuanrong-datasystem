@@ -1947,5 +1947,61 @@ TEST_F(DevObjectHeteroTest, LEVEL1_WorkerLostHealthCheckTest)
     DS_ASSERT_OK(client->HealthCheck(state));
     ASSERT_EQ(state, ServerState::NORMAL);
 }
+
+TEST_F(DevObjectHeteroTest, TestInvalidSrcOffset)
+{
+    size_t blkSz = 1024;
+    size_t numOfObjs = 10;
+    auto blksPerObj = 2;
+
+    std::vector<std::string> inObjectKeys;
+    for (auto i = 0ul; i < numOfObjs; i++) {
+        inObjectKeys.emplace_back(GetStringUuid());
+    }
+
+    auto subChild1 = ForkForTest([&] {
+        int srcDevice = 6;
+        InitAcl(srcDevice);
+
+        std::shared_ptr<HeteroClient> client1;
+        InitTestHeteroClient(0, client1);
+
+        std::vector<DeviceBlobList> swapOutBlobList;
+        std::vector<DeviceBlobList> swapInBlobList;
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, srcDevice);
+        for (auto &blobList : swapOutBlobList) {
+            blobList.srcOffset = -1;
+        }
+        DS_ASSERT_TRUE(client1->MSetD2H(inObjectKeys, swapOutBlobList).GetCode(), StatusCode::K_INVALID);
+
+        std::this_thread::sleep_for(std::chrono::seconds(SHORT_WAIT_TIME));
+        client1.reset();
+        exit(0);
+    });
+
+    auto subChild2 = ForkForTest([&] {
+        int dstDevice = 7;
+        InitAcl(dstDevice);
+
+        std::shared_ptr<HeteroClient> client2;
+        InitTestHeteroClient(0, client2);
+
+        std::vector<DeviceBlobList> swapOutBlobList;
+        std::vector<DeviceBlobList> swapInBlobList;
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, dstDevice);
+        for (auto &blobList : swapInBlobList) {
+            blobList.srcOffset = -111;
+        }
+
+        std::vector<std::string> failedKeys2;
+        DS_ASSERT_TRUE(
+            client2->MGetH2D(inObjectKeys, swapInBlobList, failedKeys2, 5000).GetCode(), StatusCode::K_INVALID);
+
+        client2.reset();
+        exit(0);
+    });
+    DS_ASSERT_TRUE(WaitForChildFork(subChild1), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(subChild2), 0);
+}
 }  // namespace st
 }  // namespace datasystem

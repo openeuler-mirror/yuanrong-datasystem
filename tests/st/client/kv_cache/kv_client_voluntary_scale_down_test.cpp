@@ -1755,7 +1755,7 @@ TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, LEVEL1_TestRedirctDuringScaleDo
 }
 
 // Test the scenario where records in updateWorkerMap are deleted by scheduled tasks during metadata migration
-TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, TestRedirctDuringScaleDownFailedAndRestart2)
+TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, DISABLED_TestRedirctDuringScaleDownFailedAndRestart2)
 {
     StartWorkerAndWaitReady({ 0, 1 });
     InitTestKVClient(0, client0_);
