@@ -33,6 +33,7 @@ static constexpr int RPC_HWM = 1000;                   // Default max watermark 
 static constexpr int RPC_HWM_QUEUE = 330;              // Default max watermark for outBoundMsg queue size.
 static constexpr int RPC_LOG_LEVEL = 3;                // Normal output log level for Comm Framework.
 static constexpr int RPC_KEY_LOG_LEVEL = 1;            // Init or terminate output log level for Rpc modules.
+static constexpr int RPC_DEBUG_LOG_LEVEL = 4;          // deBug log level for RPC modules.
 static constexpr int RPC_HEAVY_SERVICE_HWM = 2048;     // Maximum outstanding rpc requests for a busy rpc service.
 static constexpr int RPC_LIGHT_SERVICE_HWM = 64;       // Maximum outstanding rpc requests for a light rpc service.
 static constexpr int RPC_SOCKET_BACKLOG = 1024;        // Backlog for unix socket listen queue.

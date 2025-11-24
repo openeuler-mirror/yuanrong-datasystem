@@ -388,6 +388,18 @@ private:
     Status UrmaUninit();
 
     /**
+     * @brief Register log for urma.
+     * @return Status of the call.
+     */
+    Status RegisterUrmaLog();
+
+    /**
+     * @brief UnRegister log for urma.
+     * @return Status of the call.
+     */
+    Status UnRegisterUrmaLog();
+
+    /**
      * @brief Gets Urma device object
      * @param[in] deviceName name of the interface in local machine
      * @param[out] urmaDevice Urma device object
@@ -587,6 +599,7 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };
+    urma_log_cb_t urmaLogCallback_;
 };
 
 }  // namespace datasystem

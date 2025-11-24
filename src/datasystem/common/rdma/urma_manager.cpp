@@ -157,6 +157,7 @@ Status UrmaManager::InitLocalUrmaInfo(const HostPort &hostport)
 Status UrmaManager::UrmaInit()
 {
     LOG(INFO) << "UrmaManager::UrmaInit()";
+    LOG_IF_ERROR(RegisterUrmaLog(), "Failed to register urma log to datasystem, may check log in /var/log/umdk/urma");
     urma_init_attr_t urmaInitAttribute = { 0 };
     urmaInitAttribute.uasid = 0;
     urma_status_t ret = urma_init(&urmaInitAttribute);
@@ -175,6 +176,44 @@ Status UrmaManager::UrmaUninit()
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma uninit, ret = %d", ret));
     }
     LOG(INFO) << "urma uninit success";
+    RETURN_IF_NOT_OK(UnRegisterUrmaLog());
+    return Status::OK();
+}
+
+Status UrmaManager::RegisterUrmaLog()
+{
+    urmaLogCallback_ = [](int level, char *message) {
+        if (level <= (int)URMA_VLOG_LEVEL_ERR) {
+            LOG(ERROR) << message;
+        } else if (level <= (int)URMA_VLOG_LEVEL_NOTICE) {
+            LOG(WARNING) << message;
+        } else if (level <= (int)URMA_VLOG_LEVEL_INFO) {
+            VLOG(RPC_LOG_LEVEL) << message;
+        } else {
+            VLOG(RPC_DEBUG_LOG_LEVEL) << message;
+        }
+    };
+
+    urma_status_t ret = urma_register_log_func(urmaLogCallback_);
+    if (ret != URMA_SUCCESS) {
+        urmaLogCallback_ = nullptr;
+        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma register log, ret = %d", ret));
+    }
+    LOG(INFO) << "urma register log success";
+    return Status::OK();
+}
+
+Status UrmaManager::UnRegisterUrmaLog()
+{
+    if (!urmaLogCallback_) {
+        return Status::OK();
+    }
+    urma_status_t ret = urma_unregister_log_func();
+    if (ret != URMA_SUCCESS) {
+        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma unRegister log, ret = %d", ret));
+    }
+    LOG(INFO) << "urma unRegister log success";
+    urmaLogCallback_ = nullptr;
     return Status::OK();
 }
 
