@@ -26,6 +26,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <utility>
@@ -33,6 +34,7 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/kv_store.h"
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
@@ -131,7 +133,8 @@ public:
      * hash(enable_distribute_master is true and etcd_address is valid);
      * @return Status of the call.
      */
-    Status GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid) const;
+    Status GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid,
+                                std::optional<RouteInfo> &routeInfo) const;
 
     /**
      * @brief Recovery migrate task when timeout node recovery.
@@ -431,7 +434,7 @@ public:
      * @param[out] newUuid The rehashed worker ID.
      * @return Status of the call.
      */
-    Status GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid);
+    Status GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid, std::optional<RouteInfo> &routeInfo);
 
     HashRingPb GetHashRingPb()
     {
@@ -665,7 +668,8 @@ protected:
      * @param[out] outWorkerAddr the outWorkerAddr is calc by consistent hash algorithm when enable consistent
      * @return Status of the call.
      */
-    Status GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWorkerAddr) const;
+    Status GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWorkerAddr,
+                                      std::optional<RouteInfo> &routeInfo) const;
 
     /**
      * @brief Get the address of standby worker.
@@ -776,6 +780,7 @@ protected:
     std::atomic<bool> voluntaryScaleDownDone_{ false };
     std::atomic<bool> allWorkersVoluntaryScaleDown_{ false };
     std::atomic<int64_t> baselineModRevisionOfRing_{ 0 };
+    int64_t currHashRingVersion_ = 0;
     std::atomic<bool> needForceJoin_{ false };
     std::atomic<bool> isUpdateNode_{ false };
     mutable std::shared_timed_mutex mutex_;  // protect the following variables

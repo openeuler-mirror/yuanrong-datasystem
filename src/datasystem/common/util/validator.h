@@ -23,6 +23,7 @@
 #include <sys/vfs.h>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -790,7 +791,8 @@ public:
         return false;
     }
 
-    static bool IsUuid(const std::string &value)
+    template<typename T>
+    static bool IsUuid(const T &value)
     {
         static const re2::RE2 re("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
         if (re2::RE2::FullMatch(value, re)) {

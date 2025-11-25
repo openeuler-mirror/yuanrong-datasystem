@@ -31,6 +31,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <sstream>
@@ -66,6 +67,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/hash_algorithm.h"
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
@@ -968,7 +970,8 @@ Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &
 {
     HostPort result;
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
-    RETURN_IF_NOT_OK(etcdCM_->GetMetaAddressNotCheckConnection(objKey, metaAddrInfo));
+    std::optional<RouteInfo> routeInfo;
+    RETURN_IF_NOT_OK(etcdCM_->GetMetaAddressNotCheckConnection(objKey, metaAddrInfo, routeInfo));
     return Status::OK();
 }
 

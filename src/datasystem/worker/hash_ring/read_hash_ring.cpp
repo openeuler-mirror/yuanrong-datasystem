@@ -26,7 +26,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/id_tool.h"
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
@@ -130,9 +130,10 @@ Status ReadHashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_
     return Status::OK();
 }
 
-Status ReadHashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid)
+Status ReadHashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid,
+                                          std::optional<RouteInfo> &routeInfo)
 {
-    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetUuidInCurrCluster(oldUuid, newUuid), " in az: " + azName_);
+    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetUuidInCurrCluster(oldUuid, newUuid, routeInfo), " in az: " + azName_);
     return Status::OK();
 }
 
@@ -150,9 +151,10 @@ Status ReadHashRing::GetWorkerAddrByUuidForMultiReplica(const std::string &worke
     return Status::OK();
 }
 
-Status ReadHashRing::GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid) const
+Status ReadHashRing::GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid,
+                                          std::optional<RouteInfo> &routeInfo) const
 {
-    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetPrimaryWorkerUuid(key, outWorkerUuid), " in az: " + azName_);
+    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetPrimaryWorkerUuid(key, outWorkerUuid, routeInfo), " in az: " + azName_);
     return Status::OK();
 }
 
@@ -190,7 +192,8 @@ Status ReadHashRing::GetMasterUuid(const std::string &objKey, std::string &maste
         RETURN_STATUS(K_NOT_READY, FormatString("Hash ring of %s not ready, get workerId failed", azName_));
     }
     if (TrySplitWorkerIdFromObjecId(objKey, masterUuid).IsError()) {
-        RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid));
+        std::optional<RouteInfo> routeInfo;
+        RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid, routeInfo));
     }
     return Status::OK();
 }

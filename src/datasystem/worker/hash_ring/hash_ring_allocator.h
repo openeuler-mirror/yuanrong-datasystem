@@ -24,13 +24,12 @@
 #include <map>
 #include <vector>
 
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/hash_ring.pb.h"
 
 namespace datasystem {
 namespace worker {
-using HashPosition = uint32_t;
-using Range = std::pair<uint32_t, uint32_t>;
 struct SimplePairHash {
 public:
     std::size_t operator()(const Range &range) const

@@ -22,6 +22,8 @@
 
 #include <string>
 
+#include "datasystem/common/util/meta_route_tool.h"
+
 namespace datasystem {
 
 /**

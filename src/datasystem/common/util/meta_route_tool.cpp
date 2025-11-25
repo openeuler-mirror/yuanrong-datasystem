@@ -15,15 +15,18 @@
  */
 
 /**
- * Description: Some tools for parsing ID.
+ * Description: Some tools for routing meta data.
  */
+
+#include "datasystem/common/util/meta_route_tool.h"
+
 #include "datasystem/common/iam/tenant_auth_manager.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/common/util/id_tool.h"
 
 DS_DECLARE_string(other_cluster_names);
 
@@ -51,14 +54,18 @@ bool HasWorkerId(const std::string &objKey)
     return res.size() > 1 && Validator::IsUuid(res[res.size() - 1]);
 }
 
-std::string SplitWorkerIdFromObjecId(const std::string &objKey)
+std::string_view SplitWorkerIdFromObjecId(const std::string &objKey)
 {
-    std::string objKeyWithoutTenantId;
+    std::string_view objKeyWithoutTenantId;
     TenantAuthManager::Instance()->NamespaceUriToObjectKey(objKey, objKeyWithoutTenantId);
-    auto res = Split(objKeyWithoutTenantId, ";");
-    if (res.size() > 1 && Validator::IsUuid(res[res.size() - 1])) {
-        return res[res.size() - 1];
+    auto pos = objKeyWithoutTenantId.rfind(';');
+    if (pos == std::string_view::npos) {
+        return {};
     }
-    return "";
+    std::string_view tail(objKeyWithoutTenantId.data() + pos + 1, objKeyWithoutTenantId.size() - pos - 1);
+    if (Validator::IsUuid(tail)) {
+        return tail;
+    }
+    return {};
 }
 }  // namespace datasystem

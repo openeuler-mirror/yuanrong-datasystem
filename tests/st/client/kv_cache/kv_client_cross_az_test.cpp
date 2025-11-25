@@ -1551,14 +1551,14 @@ public:
         }
 
         // <azName, <hashToken, workerAddr>>
-        std::unordered_map<std::string, std::map<worker::HashPosition, std::string>> currTokenMap;
+        std::unordered_map<std::string, std::map<HashPosition, std::string>> currTokenMap;
         for (const auto &azName : azNames_) {
             std::string value;
             auto ringPrefix = "/" + azName + ETCD_RING_PREFIX;
             DS_ASSERT_OK(db_->Get(ringPrefix, "", value));
             HashRingPb ring;
             ASSERT_TRUE(ring.ParseFromString(value));
-            std::map<worker::HashPosition, std::string> currTokenMapInThisAz;
+            std::map<HashPosition, std::string> currTokenMapInThisAz;
             for (const auto &kv : ring.workers()) {
                 ASSERT_EQ(kv.second.state(), WorkerPb::ACTIVE);
                 const auto &workerId = kv.first;

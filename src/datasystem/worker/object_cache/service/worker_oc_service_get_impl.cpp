@@ -52,7 +52,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
-#include "datasystem/common/util/id_tool.h"
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
@@ -2211,7 +2211,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
             lastRc = status;
             continue;
         }
-        for (auto &item : masterRsp.location_infos()) {
+        for (auto &item : *masterRsp.mutable_location_infos()) {
             result.emplace(item.object_key(), std::move(item));
         }
     }

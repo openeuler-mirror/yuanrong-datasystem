@@ -66,6 +66,7 @@ public:
     Status TenantTokenAuth(const SensitiveValue &token, std::string &tenantId);
 
     Status TenantAkAuth(const std::string &accessKey, const std::string &reqTenantId, std::string &tenantId);
+
     /**
      * @brief Convert the namespace URI to the original objectKey.
      * @param[in] namespaceUri A namespace URI of the object.
@@ -73,6 +74,14 @@ public:
      * @return Status of the call.
      */
     void NamespaceUriToObjectKey(const std::string &namespaceUri, std::string &objectKey);
+
+    /**
+     * @brief Convert the namespace URI to the original objectKey.
+     * @param[in] namespaceUri A namespace URI of the object.
+     * @param[out] objectKey The original object key that convert from namespace URI.
+     * @return Status of the call.
+     */
+    void NamespaceUriToObjectKey(const std::string &namespaceUri, std::string_view &objectKey);
 
     /**
      * @brief Construct namespace URI by token and object key.

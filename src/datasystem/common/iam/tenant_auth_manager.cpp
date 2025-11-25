@@ -20,6 +20,8 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 
 #include <cstring>
+#include <string_view>
+
 #include <nlohmann/json.hpp>
 
 #include "datasystem/common/log/log.h"
@@ -178,6 +180,17 @@ void TenantAuthManager::NamespaceUriToObjectKey(const std::string &namespaceUri,
         return;
     }
     objectKey = namespaceUri.substr(pos + 1);
+}
+
+void TenantAuthManager::NamespaceUriToObjectKey(const std::string &namespaceUri, std::string_view &objectKey)
+{
+    std::string_view v{ namespaceUri };
+    auto pos = v.find(K_SEPARATOR);
+    if (pos != std::string_view::npos) {
+        objectKey = v.substr(pos + 1);
+    } else {
+        objectKey = v;
+    }
 }
 
 Status TenantAuthManager::ConstructNamespaceUri(const std::string &token, const std::string &objectKey,
