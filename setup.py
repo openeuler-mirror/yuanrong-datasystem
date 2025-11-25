@@ -40,13 +40,31 @@ readme = '\n'.join(readme.split('\n')[1:])
 
 commit_id = os.getenv('COMMIT_ID', 'None').replace("\n", "")
 
+
+def recursive_package_files(directory):
+    """recursive package files"""
+    paths = []
+    lib_root_dir = os.path.dirname(os.path.abspath(__file__))
+    lib_root_dir = os.path.join(lib_root_dir, 'datasystem')
+    full_dir = os.path.join(lib_root_dir, directory)
+    for root, _, files in os.walk(full_dir):
+        for file_name in files:
+            rel_path = os.path.relpath(os.path.join(root, file_name), lib_root_dir)
+            paths.append(rel_path)
+    return paths
+
+
 package_datas = {
-    '': ['sdk_lib_list', 'datasystem_worker', '*.py',
-         'worker_config.json', 'cluster_config.json', '*so', '*so*',
-         'helm_chart/**/*', 'helm_chart/*', 'helm_chart/**/**/*',
-         'include/*', 'include/**/**/*', 'include/**/*', 'lib/**/**/*', 'lib/*', 'lib/urma/*',
-         'cpp_template/**/*', 'cpp_template/*', 'cpp_template/**/**/*', 'cpp_template/**/**/**/*']
+    '': (
+        ['sdk_lib_list', 'datasystem_worker', '*.py',
+        'worker_config.json', 'cluster_config.json'] +
+        recursive_package_files('include') +
+        recursive_package_files('helm_chart') +
+        recursive_package_files('lib') +
+        recursive_package_files('cpp_template')
+    )
 }
+
 
 requires = []
 
@@ -62,6 +80,27 @@ def build_depends():
 build_depends()
 
 
+def _process_single_file(ldd_path, file_path):
+    """Process a single file, extract dependencies"""
+    dependencies = set()
+    result = subprocess.run([ldd_path, str(file_path)],
+                          capture_output=True, text=True, check=True)
+    output = result.stdout
+    for line in output.splitlines():
+        line = line.strip()
+        if '=>' in line:
+            lib_name, lib_path = line.split('=>', 1)
+            lib_name = lib_name.strip()
+            lib_path = lib_path.strip().split()[0]
+            dependencies.add(lib_name)
+        else:
+            parts = line.split()
+            if parts:
+                lib_name = parts[0]
+                dependencies.add(lib_name)
+    return dependencies
+
+
 def get_dependencies(file_path):
     """
     get dependencieds of file
@@ -70,19 +109,27 @@ def get_dependencies(file_path):
     ldd_path = shutil.which("ldd")
     if ldd_path is None:
         raise FileNotFoundError("cant find ldd, get dependencies failed")
-    result = subprocess.run([ldd_path, file_path],
-                            capture_output=True, text=True, check=True)
-    output = result.stdout
-    for line in output.splitlines():
-        line = line.strip()
-        if '=>' in line:
-            lib_name, lib_path = line.split('=>', 1)
-            lib_name = lib_name.strip()
-            lib_path = lib_path.strip().split()[0]
-            dependencies.add((lib_name))
-        else:
-            lib_name = line.split()[0]
-            dependencies.add(lib_name)
+    path = Path(file_path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"File or directory does not exist: {file_path}")
+
+    if path.is_dir():
+        for so_file in path.rglob('*.so'):
+            try:
+                deps = _process_single_file(ldd_path, so_file)
+                dependencies.update(deps)
+            except subprocess.CalledProcessError:
+                continue
+            except Exception as e:
+                raise RuntimeError(f"Error processing {file_path}: {e}") from e
+
+    elif path.is_file():
+        dependencies.update(_process_single_file(ldd_path, path))
+
+    else:
+        raise FileNotFoundError(f"Path is not a regular file or directory: {file_path}")
+
     return dependencies
 
 
@@ -103,6 +150,16 @@ def get_all_dependencies():
 all_dependencies_for_datasystem = get_all_dependencies()
 
 
+def delete_unuse_so(directory: Path):
+    """delete unuse so"""
+    for item in directory.iterdir():
+        if item.is_file():
+            if item.name not in all_dependencies_for_datasystem and 'urma' not in item.name:
+                item.unlink()
+        elif item.is_dir():
+            delete_unuse_so(item)
+
+
 def update_permissions(path):
     """
     Update the permissions of files and directories within the specified path.
@@ -121,7 +178,11 @@ def update_permissions(path):
                          stat.S_IWRITE | stat.S_IEXEC)
         for filename in filenames:
             file_fullpath = os.path.join(dirpath, filename)
-            if not os.path.islink(file_fullpath):
+            if os.path.islink(file_fullpath):
+                continue
+            if filename.startswith("liburma"):
+                os.chmod(file_fullpath, stat.S_IREAD | stat.S_IEXEC)
+            else:
                 os.chmod(file_fullpath, stat.S_IREAD)
 
 
@@ -148,9 +209,7 @@ class BuildPy(build_py):
         os.system(f"strip --strip-all {worker_bin}")
         lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem', 'lib')
         lib_path = Path(lib_dir)
-        for item in lib_path.rglob('*'):
-            if item.name not in all_dependencies_for_datasystem:
-                item.unlink()
+        delete_unuse_so(lib_path)
 
 
 class CustomBdistWheel(_bdist_wheel):
