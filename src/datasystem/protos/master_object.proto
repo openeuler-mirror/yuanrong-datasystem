@@ -25,6 +25,8 @@ import "utils.proto";
 import "rpc_option.proto";
 import "p2p_subscribe.proto";
 
+option cc_enable_arenas = true;
+
 message WorkerObjectInfoPb {
   bool exist_valid_obj = 1; // Valid object exists on the worker process.
   bool exist_g_ref = 2; // Global reference exists on the worker process.
@@ -72,7 +74,7 @@ message CreateMultiMetaReqPb {
   uint32 life_state = 9;
   uint32 ttl_second = 10;
   ExistenceOptPb existence = 11;
-  
+
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
   string signature = 101;

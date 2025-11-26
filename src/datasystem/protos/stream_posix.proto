@@ -24,6 +24,8 @@ package datasystem;
 import "rpc_option.proto";
 import "utils.proto";
 
+option cc_enable_arenas = true;
+
 message ShmViewPb {
   int32 fd = 1;
   uint64 mmap_size = 2;

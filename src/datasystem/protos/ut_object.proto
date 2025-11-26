@@ -20,13 +20,15 @@
 syntax = "proto3";
 package datasystem;
 
+option cc_enable_arenas = true;
+
 message GRefTableReqPb {
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
   string signature = 101;
   string access_key = 102;
 }
-  
+
 message GRefTableRspPb {
   message SingleClientGRefPb {
     string hostport = 1;
@@ -56,7 +58,7 @@ message TestReqPbV1 {
   string field2 = 2;
   uint32 field3 = 3;
   repeated string filed4 = 4;
-  
+
   uint32 auth_req = 96;
   string client_id = 97;
   string token = 98;

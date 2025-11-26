@@ -149,7 +149,8 @@ Status OCMetadataManager::Init()
     if (!objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
     }
-    asyncTaskPool_ = std::make_unique<ThreadPool>(FLAGS_rpc_thread_num, FLAGS_rpc_thread_num, "AsyncTaskPool");
+    const int minAsyncTaskThreadNum = 8;
+    asyncTaskPool_ = std::make_unique<ThreadPool>(minAsyncTaskThreadNum, FLAGS_rpc_thread_num, "AsyncTaskPool");
     InitSubscribeEvent();
     StartMetaMonitor();
     masterDevOcManager_ = std::make_shared<MasterDevOcManager>();
@@ -1110,7 +1111,6 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     const auto &address = req.address();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!address.empty(), StatusCode::K_RUNTIME_ERROR, "Address is empty");
     FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
-    std::set<std::string> sortedObjectKeys = { notRedirectObjectKeys.begin(), notRedirectObjectKeys.end() };
     INJECT_POINT("OCMetadataManager.QueryMeta,wait");
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_FROM_META_TABLE);
     std::vector<std::string> tmpNotExistObjectKeys;
@@ -1203,8 +1203,11 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
                      "ParallelFor QueryMetaFromMetaTable failed");
         RETURN_IF_NOT_OK(lastRc);
     }
-    for (auto &info : infos) {
-        rsp.add_query_metas()->Swap(&info);
+    if (!infos.empty()) {
+        rsp.mutable_query_metas()->Reserve(static_cast<int>(infos.size()));
+        for (auto &info : infos) {
+            rsp.add_query_metas()->Swap(&info);
+        }
     }
     RETURN_OK_IF_TRUE(notExistObjectKeys.empty());
     LOG(INFO) << "Can not found some objects, size: " << notExistObjectKeys.size()

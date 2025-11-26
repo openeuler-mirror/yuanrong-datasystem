@@ -109,11 +109,6 @@ TEST_F(ThreadPoolTest, DISABLED_ExceptionHandling)
     LOG(INFO) << rc.ToString();
 }
 
-TEST_F(ThreadPoolTest, MaxThreadsLessThanminThreads)
-{
-    EXPECT_THROW({ ThreadPool pool(3, 1); }, std::runtime_error);
-}
-
 TEST_F(ThreadPoolTest, DynamicThreadsNum)
 {
     size_t minThreadsNum = 5;

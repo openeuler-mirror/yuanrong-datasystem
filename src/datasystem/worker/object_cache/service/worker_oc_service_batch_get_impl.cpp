@@ -426,6 +426,9 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
         BatchGetObjectRemoteReqPb reqPb;
         BatchGetObjectRemoteRspPb rspPb;
         std::vector<RpcMessage> payloads;
+        if (!infos.empty()) {
+            reqPb.mutable_requests()->Reserve(static_cast<int>(infos.size()));
+        }
         auto constructAndSend = [&]() {
             PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND_PRE);
             // If address is empty, we fallback to get non-batched object from L2 Cache.

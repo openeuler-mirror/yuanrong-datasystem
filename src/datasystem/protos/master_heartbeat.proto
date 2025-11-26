@@ -21,6 +21,8 @@ syntax = "proto3";
 package datasystem.master;
 import "google/protobuf/any.proto";
 
+option cc_enable_arenas = true;
+
 enum NodeTypePb {
   NONE = 0;
   GCS_NODE = 1;

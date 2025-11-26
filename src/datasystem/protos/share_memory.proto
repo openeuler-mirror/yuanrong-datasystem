@@ -18,6 +18,8 @@ syntax = "proto3";
 package datasystem;
 import "google/protobuf/any.proto";
 
+option cc_enable_arenas = true;
+
 message GetClientFdReqPb {
     bytes client_id = 1;
     repeated int32 worker_fds = 2;

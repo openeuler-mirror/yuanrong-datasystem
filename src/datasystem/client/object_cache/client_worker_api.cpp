@@ -270,8 +270,16 @@ Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspP
                                          FormatString("Invalid offset read param, object count %zu, params count %zu",
                                                       objectKeys.size(), readParams.size()));
     GetReqPb req;
-    size_t size = objectKeys.size();
-    for (size_t i = 0; i < size; i++) {
+    // the max count of objectKeys is 10000.
+    auto size = static_cast<int>(objectKeys.size());
+    if (size > 0) {
+        req.mutable_object_keys()->Reserve(size);
+        if (!readParams.empty()) {
+            req.mutable_read_offset_list()->Reserve(size);
+            req.mutable_read_size_list()->Reserve(size);
+        }
+    }
+    for (int i = 0; i < size; i++) {
         req.add_object_keys(objectKeys[i]);
         if (!readParams.empty()) {
             req.add_read_offset_list(readParams[i].offset);

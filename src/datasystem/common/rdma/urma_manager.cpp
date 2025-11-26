@@ -107,10 +107,12 @@ Status UrmaManager::Init(const HostPort &hostport)
                                          "Invalid ip address to get device name");
     LOG(INFO) << "deviceName = " << deviceName;
     std::string urmaDeviceName;
+    int eidIndex = -1;
     if (GetUrmaMode() == UrmaMode::IB) {
         RETURN_IF_NOT_OK(EthToRdmaDevName(deviceName, urmaDeviceName));
     } else if (GetUrmaMode() == UrmaMode::UB) {
         urmaDeviceName = GetStringFromEnv(ENV_UB_DEVICE_NAME.c_str(), DEFAULT_UB_DEVICE_NAME.c_str());
+        eidIndex = GetInt32FromEnv(ENV_UB_DEVICE_EID.c_str(), 0);
         if (urmaDeviceName.empty()) {
             RETURN_STATUS(K_INVALID, "env DS_URMA_DEV_NAME is empty");
         }
@@ -120,8 +122,9 @@ Status UrmaManager::Init(const HostPort &hostport)
     urma_device_t *urmaDevice = nullptr;
     RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
     RETURN_IF_NOT_OK(UrmaQueryDevice(urmaDevice));
-    int eidIndex = -1;
-    RETURN_IF_NOT_OK(GetEidIndex(urmaDevice, eidIndex));
+    if (eidIndex < 0) {
+        RETURN_IF_NOT_OK(GetEidIndex(urmaDevice, eidIndex));
+    }
     RETURN_IF_NOT_OK(UrmaCreateContext(urmaDevice, eidIndex));
     RETURN_IF_NOT_OK(UrmaCreateJfce());
     RETURN_IF_NOT_OK(UrmaCreateJfc(urmaJfc_));
@@ -277,10 +280,6 @@ Status UrmaManager::UrmaCreateContext(urma_device_t *&urmaDevice, uint32_t eidIn
     LOG(INFO) << "UrmaManager::UrmaCreateContext() with eidIndex:" << eidIndex;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!urmaContext_, K_DUPLICATED,
                                          "Failed to urma create context, context already exist");
-    if (GetUrmaMode() == UrmaMode::UB) {
-        LOG(INFO) << "force using eidIndex 0";
-        eidIndex = 0;
-    }
     urmaContext_ = urma_create_context(urmaDevice, eidIndex);
     if (urmaContext_) {
         LOG(INFO) << "urma create context success";

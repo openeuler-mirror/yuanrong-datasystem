@@ -91,6 +91,7 @@ Status ZmqFrontend::Init()
                                          "Unable to create event fd. Errno: " + std::to_string(errno));
     efd_ = static_cast<eventfd_t>(efd);
     RETURN_IF_EXCEPTION_OCCURS(async_ = Thread([this]() { LOG_IF_ERROR(WorkerEntry(), ""); }));
+    async_.set_name("ZmqFrontWorker");
     initWp_.Wait();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(initialized_, K_RUNTIME_ERROR, "Frontend socket fails to initialize.");
     return Status::OK();
@@ -797,14 +798,14 @@ Status ZmqSockConnHelper::RegisterStub(const std::shared_ptr<StubInfo> &info, co
     auto cur = connEntry->pools_.size();
     for (size_t i = cur; i < numConn; ++i) {
         auto tempFdConn = std::make_shared<SockConnEntry::FdConn>();
-        tempFdConn->outMux_ = std::make_unique<WriterPrefRWLock>(),
-        tempFdConn->fd_ = ZMQ_NO_FILE_FD,
-        tempFdConn->inHandle_ = nullptr,
-        tempFdConn->outHandle_ = nullptr,
-        tempFdConn->decoder_ = nullptr,
-        tempFdConn->encoder_ = nullptr,
-        tempFdConn->inPoller_ = ZmqStubConnMgr::Instance()->GetPoller(),
-        tempFdConn->outPoller_ = ZmqStubConnMgr::Instance()->GetPoller(),
+        tempFdConn->outMux_ = std::make_unique<WriterPrefRWLock>();
+        tempFdConn->fd_ = ZMQ_NO_FILE_FD;
+        tempFdConn->inHandle_ = nullptr;
+        tempFdConn->outHandle_ = nullptr;
+        tempFdConn->decoder_ = nullptr;
+        tempFdConn->encoder_ = nullptr;
+        tempFdConn->inPoller_ = ZmqStubConnMgr::Instance()->GetPoller();
+        tempFdConn->outPoller_ = ZmqStubConnMgr::Instance()->GetPoller();
         tempFdConn->outMsgQueue_ = std::make_unique<std::deque<std::pair<EventType, ZmqMsgFrames>>>();
         connEntry->pools_.push_back(tempFdConn);
     }

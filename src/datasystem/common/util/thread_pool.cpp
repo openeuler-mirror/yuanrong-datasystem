@@ -27,7 +27,6 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
 
-
 namespace datasystem {
 
 // If ThreadPool throw std::system_error when constructing, ThreadPool's destructor won't execute,
@@ -173,7 +172,7 @@ ThreadPool::ThreadPool(size_t minThreadNum, size_t maxThreadNum, std::string nam
       droppable_(droppable),
       minThreadNum_(minThreadNum),
       maxThreadNum_(maxThreadNum),
-      name_(name),
+      name_(std::move(name)),
       threadIdleTimeoutMs_(threadIdleTimeoutMs),
       warnLevel_(WarnLevel::HIGH)
 {
@@ -184,7 +183,9 @@ ThreadPool::ThreadPool(size_t minThreadNum, size_t maxThreadNum, std::string nam
         maxThreadNum_ = minThreadNum_;
     }
     if (minThreadNum_ > maxThreadNum_) {
-        throw std::runtime_error("ThreadPool: minThreadNum > maxThreadNum");
+        minThreadNum_ = maxThreadNum_;
+        LOG(WARNING) << FormatString("ThreadPool: minThreadNum %zu > maxThreadNum, adjust minThreadNum to %zu",
+                                     minThreadNum_, maxThreadNum_);
     }
     // create core workers when construct
     workers_.reserve(minThreadNum_);

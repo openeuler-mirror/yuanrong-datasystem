@@ -20,6 +20,8 @@
 syntax = "proto3";
 package datasystem;
 
+option cc_enable_arenas = true;
+
 message GetPerfLogReqPb {
   uint64 timestamp = 100;
   string signature = 101;

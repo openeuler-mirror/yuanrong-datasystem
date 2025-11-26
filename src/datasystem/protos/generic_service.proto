@@ -20,6 +20,8 @@
 syntax = "proto3";
 package datasystem;
 
+option cc_enable_arenas = true;
+
 message GcovFlushReqPb {
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

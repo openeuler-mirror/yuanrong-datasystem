@@ -24,6 +24,8 @@ import "worker_stream.proto";
 import "utils.proto";
 import "rpc_option.proto";
 
+option cc_enable_arenas = true;
+
 message StreamMetaPb {
     string stream_name = 1;
     uint64 max_stream_size = 2;

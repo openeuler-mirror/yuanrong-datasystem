@@ -24,6 +24,8 @@ import "rpc_option.proto";
 import "utils.proto";
 import "p2p_subscribe.proto";
 
+option cc_enable_arenas = true;
+
 message HealthCheckRequestPb {
   string info = 1;
   string client_id = 2;
@@ -68,7 +70,7 @@ message MultiCreateReqPb {
   repeated uint64 data_size = 3;
   string token = 4;
   string tenant_id = 5;
-  bool   skip_check_existence = 6; 
+  bool   skip_check_existence = 6;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -119,7 +121,7 @@ message MultiPublishReqPb {
     string object_key = 1;
     uint64 data_size = 2;
     string shm_id = 3;
-    repeated uint64 blob_sizes = 4; 
+    repeated uint64 blob_sizes = 4;
   }
 
   string client_id = 1;
@@ -133,7 +135,7 @@ message MultiPublishReqPb {
   string tenant_id = 9;
   uint32 cache_type = 10;
   bool is_replica = 11;
-  bool auto_release_memory_ref = 12 ; 
+  bool auto_release_memory_ref = 12 ;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -311,34 +313,34 @@ message DeleteObjectRspPb {
 
 message LpushRequestPb {
 }
- 
+
 message LpushReplyPb {
 }
- 
+
 message LpopRequestPb {
 }
- 
+
 message LpopReplyPb {
 }
- 
+
 message LindexRequestPb {
 }
- 
+
 message LindexReplyPb {
 }
- 
+
 message LlenRequestPb {
 }
- 
+
 message LlenReplyPb {
 }
- 
+
 message HgetRequestPb {
 }
- 
+
 message HgetReplyPb {
 }
- 
+
 message HsetRequestPb {
 }
 
@@ -552,7 +554,7 @@ service WorkerOCService {
   rpc IncrSeqNo(IncrSeqNoReqPb) returns (IncrSeqNoRspPb) {option deprecated = true;}
   rpc GetSeqNo(GetSeqNoReqPb) returns (GetSeqNoRspPb) {option deprecated = true;}
   rpc DelSeqNo(DelSeqNoReqPb) returns (DelSeqNoRspPb) {option deprecated = true;}
- 
+
   rpc Lpush (LpushRequestPb) returns (LpushReplyPb) {option deprecated = true;}
   rpc Lpop (LpopRequestPb) returns (LpopReplyPb) {option deprecated = true;}
   rpc Lindex (LindexRequestPb) returns (LindexReplyPb) {option deprecated = true;}
@@ -600,6 +602,6 @@ service WorkerOCService {
   rpc Exist(ExistReqPb) returns (ExistRspPb) {}
 
   rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
-   
+
   rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
 }

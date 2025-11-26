@@ -23,6 +23,8 @@ package datasystem;
 import "stream_posix.proto";
 import "utils.proto";
 
+option cc_enable_arenas = true;
+
 message DelStreamContextReqPb {
   string stream_name = 1;
   bool force_delete = 2;

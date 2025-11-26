@@ -305,6 +305,7 @@ public:
                 }
             }
         });
+        prefetcher_.set_name("ZmqPrefetcher");
         return Status::OK();
     }
 

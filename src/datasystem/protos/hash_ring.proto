@@ -21,6 +21,8 @@
 syntax = "proto3";
 package datasystem;
 
+option cc_enable_arenas = true;
+
 message WorkerPb {
   enum StatePb {
     INITIAL = 0; // waiting to join hash ring
@@ -60,4 +62,3 @@ message HashRingPb {
   map<string, string> key_with_worker_id_meta_map = 6; // The pair is {workerUuid, workerAddr}
   map<string, UpdateNodePb> update_worker_map = 7; // The pair is {workerAddr, workerUuid}
 }
-

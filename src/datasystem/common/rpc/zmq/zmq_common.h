@@ -313,13 +313,20 @@ inline void StartTheClock(MetaPb &meta)
     // Start the clock
     meta.mutable_ticks()->Clear();
     TickPb tick;
+#ifdef ENABLE_PERF
     tick.set_ts(TimeSinceEpoch());
     tick.set_tick_name("META_TICK_START");
     meta.mutable_ticks()->Add(std::move(tick));
+#else
+    // The old version of client and worker will check if ticks is empty or not,
+    // so we must add one for compatibility.
+    meta.mutable_ticks()->Add(std::move(tick));
+#endif
 }
 
-inline uint64_t GetLapTime(MetaPb &meta, const std::string &tickName)
+inline uint64_t GetLapTime(MetaPb &meta, const char *tickName)
 {
+#ifdef ENABLE_PERF
     auto ts = TimeSinceEpoch();
     auto n = meta.ticks_size();
     // To make sure ticks is not empty before access
@@ -329,14 +336,23 @@ inline uint64_t GetLapTime(MetaPb &meta, const std::string &tickName)
     tick.set_tick_name(tickName);
     meta.mutable_ticks()->Add(std::move(tick));
     return diff;
+#else
+    (void)meta;
+    (void)tickName;
+    return 0;
+#endif
 }
 
 inline uint64_t GetTotalTime(MetaPb &meta)
 {
+#ifdef ENABLE_PERF
     auto n = meta.ticks_size();
     if (n > 0) {
         return meta.ticks(n - 1).ts() - meta.ticks(0).ts();
     }
+#else
+    (void)meta;
+#endif
     return 0;
 }
 

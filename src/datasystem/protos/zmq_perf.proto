@@ -23,6 +23,8 @@ import "rpc_option.proto";
 import "utils.proto";
 import "meta_zmq.proto";
 
+option cc_enable_arenas = true;
+
 enum opType {
   PAYLOAD_MEMCPY = 0;
   PAYLOAD_NO_MEMCPY = 1;

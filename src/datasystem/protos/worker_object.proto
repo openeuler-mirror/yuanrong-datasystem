@@ -26,6 +26,8 @@ import "object_posix.proto";
 import "hash_ring.proto";
 import "p2p_subscribe.proto";
 
+option cc_enable_arenas = true;
+
 message GetObjectRemoteReqPb {
   string object_key = 1;
   string request_id = 2;

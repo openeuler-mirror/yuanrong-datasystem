@@ -322,6 +322,10 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
 {
     auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId_);
     bool shmEnabled = clientInfo != nullptr && clientInfo->ShmEnabled();
+    if (shmEnabled && !rawObjectKeys_.empty()) {
+        // avoid per key allocation. pre-allocate all the required space
+        resp.mutable_objects()->Reserve(static_cast<int>(rawObjectKeys_.size()));
+    }
     Status lastRc;
     for (size_t objectIndex = 0; objectIndex < rawObjectKeys_.size(); objectIndex++) {
         auto &objectKeyUri = rawObjectKeys_[objectIndex];

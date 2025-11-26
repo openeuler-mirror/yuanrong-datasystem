@@ -53,14 +53,14 @@ namespace datasystem {
 namespace object_cache {
 
 struct MultiCreateParam {
-    MultiCreateParam(size_t index, std::string objectKey, size_t dataSize)
-        : index(index), objectKey(std::move(objectKey)), dataSize(dataSize)
+    MultiCreateParam(size_t index, const std::string &objectKey, size_t dataSize)
+        : index(index), objectKey(objectKey), dataSize(dataSize)
     {
         shmBuf = std::make_shared<ShmUnitInfo>();
     }
 
     size_t index;
-    std::string objectKey;
+    const std::string &objectKey;
     size_t dataSize;
     size_t metadataSize;
     std::shared_ptr<ShmUnitInfo> shmBuf;
@@ -93,9 +93,9 @@ public:
      * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
      */
     explicit ClientWorkerApi(HostPort hostPort, RpcCredential cred,
-                             HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                             Signature *signature = nullptr, std::string tenantId = "",
-                             bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
+                             HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT, Signature *signature = nullptr,
+                             std::string tenantId = "", bool enableCrossNodeConnection = false,
+                             bool enableExclusiveConnection = false);
 
     /**
      * @brief Initialize ClientWorkerApi.

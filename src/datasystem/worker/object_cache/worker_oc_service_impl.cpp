@@ -243,7 +243,8 @@ Status WorkerOCServiceImpl::Init()
 
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localMasterAddress_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Hash master get failed, Init failed");
-    RETURN_IF_EXCEPTION_OCCURS(threadPool_ = std::make_shared<ThreadPool>(FLAGS_oc_thread_num, 0, "OcGetThread"));
+    const int minOcGetThreadNum = 8;
+    RETURN_IF_EXCEPTION_OCCURS(threadPool_ = std::make_shared<ThreadPool>(minOcGetThreadNum, 0, "OcGetThread"));
     RETURN_IF_EXCEPTION_OCCURS(memCpyThreadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM));
     datasystem::Parallel::InitParallelThreadPool(PARALLEL_THREAD_NUM);
     constexpr uint32_t gcThrdNum = 4;
@@ -1427,8 +1428,7 @@ void WorkerOCServiceImpl::EraseFailedWorkerMasterApi(HostPort &masterAddr)
     workerMasterApiManager_->EraseFailedWorkerMasterApi(masterAddr, StubType::WORKER_MASTER_OC_SVC);
 }
 
-Status WorkerOCServiceImpl::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset,
-                                            ShmKey &id)
+Status WorkerOCServiceImpl::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id)
 {
     size_t index = lockId / SHM_QUEUE_SLOT_NUM;
     std::shared_ptr<ShmCircularQueue> circularQueue;
