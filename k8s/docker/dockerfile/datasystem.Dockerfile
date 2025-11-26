@@ -18,10 +18,10 @@ FROM ${DS_BASE_IMAGE}
 ARG UID
 
 ENV USER_UID="${UID}" \
-    USER_NAME=sn \
+    USER_NAME=yuanrong \
     GROUP_ID="${UID}" \
-    GROUP_NAME=sn \
-    HOME=/home/sn
+    GROUP_NAME=yuanrong \
+    HOME=/home/yuanrong
 
 ARG DATASYSTEM_ROOT=${HOME}/datasystem
 ARG TARGET_SYSTEM
@@ -40,13 +40,13 @@ RUN mkdir -p ${DATASYSTEM_ROOT} && \
     chown -R ${USER_UID}:${GROUP_ID} ${HOME} && \
     chmod 700 ${DATASYSTEM_ROOT}
 
-COPY --chown=sn:sn ./worker_entry.sh ${HOME}/
-COPY --chown=sn:sn ./uninstall.sh ${HOME}/
-COPY --chown=sn:sn ./install.sh ${HOME}/
-COPY --chown=sn:sn ./liveness_check.sh ${HOME}/
-COPY --chown=sn:sn ./file_check.sh ${HOME}/
-COPY --chown=sn:sn ./utils.sh ${HOME}/
-COPY --chown=sn:sn ./check_taint.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./worker_entry.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./uninstall.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./install.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./liveness_check.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./file_check.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./utils.sh ${HOME}/
+COPY --chown=yuanrong:yuanrong ./check_taint.sh ${HOME}/
 RUN chmod 500 ${HOME}/worker_entry.sh && \
     chmod 500 ${HOME}/liveness_check.sh && \
     chmod 500 ${HOME}/uninstall.sh && \
@@ -55,12 +55,12 @@ RUN chmod 500 ${HOME}/worker_entry.sh && \
     chmod 500 ${HOME}/utils.sh && \
     chmod 500 ${HOME}/check_taint.sh && \
     cp /etc/skel/.bashrc ${HOME}/.bashrc && \
-    chown sn:sn ${HOME}/.bashrc && \
+    chown yuanrong:yuanrong ${HOME}/.bashrc && \
     chmod -R 700 ${HOME}/.bashrc
 
 # install operator binary
-ADD --chown=sn:sn bin ${DATASYSTEM_ROOT}/bin
-ADD --chown=sn:sn lib ${DATASYSTEM_ROOT}/lib
+ADD --chown=yuanrong:yuanrong bin ${DATASYSTEM_ROOT}/bin
+ADD --chown=yuanrong:yuanrong lib ${DATASYSTEM_ROOT}/lib
 RUN chmod -R 500 ${DATASYSTEM_ROOT}/bin && \
     chmod 500 ${DATASYSTEM_ROOT}/lib && \
     chmod 400 ${DATASYSTEM_ROOT}/lib/*

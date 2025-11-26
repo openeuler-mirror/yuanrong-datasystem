@@ -23,7 +23,6 @@ spec:
     rollingUpdate:
       maxUnavailable: {{ $.Values.global.maxUnavailable }}
     type: RollingUpdate
-  progressDeadlineSeconds: {{ $.Values.global.rollingUpdateTimeoutS }}
   template:
     metadata:
       labels:
@@ -154,7 +153,7 @@ spec:
         - -l2_cache_delete_thread_num={{ $.Values.global.l2Cache.l2CacheDeleteThreadNum }}
         - -object_del_retry_delay_sec={{ $.Values.global.l2Cache.objectDelRetryDelaySec }}
         - -max_rpc_session_num={{ $.Values.global.rpc.maxRpcSessionNum }}
-        - -rocksdb_store_dir=/home/sn/datasystem/rocksdb
+        - -rocksdb_store_dir=/home/yuanrong/datasystem/rocksdb
         - -rocksdb_max_open_file={{ $.Values.global.metadata.rocksdbMaxOpenFile }}
         - -rocksdb_background_threads={{ $.Values.global.metadata.rocksdbBackgroundThreads }}
         - -rocksdb_write_mode={{ $.Values.global.metadata.rocksdbWriteMode }}
@@ -191,7 +190,7 @@ spec:
         - -arena_per_tenant={{ $.Values.global.performance.arenaPerTenant }}
         - -shared_memory_populate={{ $.Values.global.performance.sharedMemoryPopulate }}
         - -memory_reclamation_time_second={{ $.Values.global.performance.memoryReclamationTimeSecond }}
-        - -monitor_config_file=/home/sn/config/datasystem.config
+        - -monitor_config_file=/home/yuanrong/config/datasystem.config
         - -client_dead_timeout_s={{ $.Values.global.reliability.clientDeadTimeoutS }}
         - -enable_thp={{ $.Values.global.performance.enableThp }}
         - -cross_az_get_data_from_worker={{ $.Values.global.crossAz.crossAzGetDataFromWorker }}
@@ -216,7 +215,7 @@ spec:
         - -rolling_update_timeout_s={{ $.Values.global.rollingUpdateTimeoutS }}
         - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}
         command:
-        - /home/sn/worker_entry.sh
+        - /home/yuanrong/worker_entry.sh
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -227,7 +226,7 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/sn/file_check.sh startupProbe $(LIVENESS_CHECK_PATH)
+              - /home/yuanrong/file_check.sh startupProbe $(LIVENESS_CHECK_PATH)
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 5
@@ -241,7 +240,7 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/sn/file_check.sh readinessProbe $(HEALTH_CHECK_PATH) $(READY_CHECK_PATH)
+              - /home/yuanrong/file_check.sh readinessProbe $(HEALTH_CHECK_PATH) $(READY_CHECK_PATH)
           initialDelaySeconds: 1
           periodSeconds: 5
           timeoutSeconds: 5
@@ -251,7 +250,7 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/sn/liveness_check.sh -f $(LIVENESS_CHECK_PATH) -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
+              - /home/yuanrong/liveness_check.sh -f $(LIVENESS_CHECK_PATH) -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
           initialDelaySeconds: 1
           periodSeconds: 5
           timeoutSeconds: 5
@@ -283,9 +282,9 @@ spec:
           - name: WORKER_PORT
             value: "{{ $.Values.global.port.datasystemWorker }}"
           - name: WORKER_LOG_DIR
-            value: "/home/sn/datasystem/logs/worker"
+            value: "/home/yuanrong/datasystem/logs/worker"
           - name: MASTER_ROCKSDB_STORE_DIR
-            value: "/home/sn/datasystem/rocksdb"
+            value: "/home/yuanrong/datasystem/rocksdb"
           - name: SHARE_MEMORY_SIZE
             value: "{{ $spec.workerResources.sharedMemory }}"
           - name: CURVE_KEY_DIR
@@ -295,13 +294,13 @@ spec:
           - name: ETCD_CERT_DIR
             value: {{ $.Values.global.etcd.etcdCertDir }}
           - name: HEALTH_CHECK_PATH
-            value: "/home/sn/datasystem/health/healthy"
+            value: "/home/yuanrong/datasystem/health/healthy"
           - name: READY_CHECK_PATH
-            value: "/home/sn/datasystem/health/ready"
+            value: "/home/yuanrong/datasystem/health/ready"
           - name: LIVENESS_CHECK_PATH
-            value: "/home/sn/datasystem/health/liveness"
+            value: "/home/yuanrong/datasystem/health/liveness"
           - name: STATUS_FILE_PATH
-            value: "/home/sn/datasystem/logs/worker/worker-status"
+            value: "/home/yuanrong/datasystem/logs/worker/worker-status"
           - name: SCALE_IN_TAINT
             value: "{{ $.Values.global.gracefulShutdown.scaleInTaint }}"
           - name: NAMESPACE
@@ -332,7 +331,7 @@ spec:
               command:
                 - /bin/bash
                 - -c
-                - /home/sn/uninstall.sh -f ${WORKER_LOG_DIR}/worker-status -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
+                - /home/yuanrong/uninstall.sh -f ${WORKER_LOG_DIR}/worker-status -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
         ports:
         - containerPort: {{ $.Values.global.port.datasystemWorker }}
           protocol: TCP
@@ -354,9 +353,9 @@ spec:
         {{- end }}
         - mountPath: /dev/shm
           name: sharememory
-        - mountPath: /home/sn/datasystem/logs
+        - mountPath: /home/yuanrong/datasystem/logs
           name: logs
-        - mountPath: /home/sn/datasystem/rocksdb
+        - mountPath: /home/yuanrong/datasystem/rocksdb
           name: rocksdb
         - mountPath: /etc/localtime
           name: time-zone
@@ -369,7 +368,7 @@ spec:
           name: {{ $index | printf "mount-path-%d" }}
         {{- end }}
         {{- end }}
-        - mountPath: /home/sn/config
+        - mountPath: /home/yuanrong/config
           name: datasystem-config
         {{- if $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
         - mountPath: /var/run/secrets/tokens
@@ -403,14 +402,14 @@ spec:
         args:
           - >
             {{- if $.Values.global.rpc.enableCurveZmq }}
-            cp -rH /home/sn/curve/* {{ $.Values.global.rpc.curveKeyDir }} &&
+            cp -rH /home/yuanrong/curve/* {{ $.Values.global.rpc.curveKeyDir }} &&
             chmod 700 {{ $.Values.global.rpc.curveKeyDir }} &&
-            chown -R -h sn:sn {{ $.Values.global.rcp.curveKeyDir }} &&
+            chown -R -h yuanrong:yuanrong {{ $.Values.global.rcp.curveKeyDir }} &&
             {{- end }}
             {{- if $.Values.global.etcd.enableEtcdAuth }}
-            cp -rH /home/sn/etcd-cert/* {{ $.Values.global.etcd.etcdCertDir }} &&
+            cp -rH /home/yuanrong/etcd-cert/* {{ $.Values.global.etcd.etcdCertDir }} &&
             chmod 700 {{ $.Values.global.etcd.etcdCertDir }} &&
-            chown -R -h sn:sn {{ $.Values.global.etcd.etcdCertDir }} &&
+            chown -R -h yuanrong:yuanrong {{ $.Values.global.etcd.etcdCertDir }} &&
             chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/ca.crt &&
             chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/client.crt &&
             chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/client.key &&
@@ -419,15 +418,15 @@ spec:
             {{- range $.Values.global.mount }}
             {{- if and .hostPath .mountPath }}
             chmod 750 {{ .mountPath }} &&
-            chown -R -h sn:sn {{ .mountPath }} &&
+            chown -R -h yuanrong:yuanrong {{ .mountPath }} &&
             {{- end }}
             {{- end }}
-            chmod 700 /home/sn/datasystem/logs &&
+            chmod 700 /home/yuanrong/datasystem/logs &&
             chmod 750 {{ $.Values.global.ipc.udsDir }} &&
-            chown -R -h sn:sn /home/sn/datasystem/logs &&
-            chown -R -h sn:sn {{ $.Values.global.ipc.udsDir }} &&
-            chmod 700 /home/sn/datasystem/rocksdb &&
-            chown -R -h sn:sn /home/sn/datasystem/rocksdb
+            chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/logs &&
+            chown -R -h yuanrong:yuanrong {{ $.Values.global.ipc.udsDir }} &&
+            chmod 700 /home/yuanrong/datasystem/rocksdb &&
+            chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/rocksdb
         resources:
           limits:
             cpu: 150m
@@ -439,16 +438,16 @@ spec:
         {{- if $.Values.global.rpc.enableCurveZmq  }}
         - mountPath: {{ $.Values.global.rpc.curveKeyDir }}
           name: secret-dir
-        - mountPath: "/home/sn/curve"
+        - mountPath: "/home/yuanrong/curve"
           name: curve-key-worker
         {{- end }}
         {{- if $.Values.global.etcd.enableEtcdAuth}}
         - mountPath: {{ $.Values.global.etcd.etcdCertDir }}
           name: etcd-cert-empty-dir
-        - mountPath: "/home/sn/etcd-cert"
+        - mountPath: "/home/yuanrong/etcd-cert"
           name: etcd-cert
         {{- end }}
-        - mountPath: /home/sn/datasystem/logs
+        - mountPath: /home/yuanrong/datasystem/logs
           name: logs
         - mountPath: {{ $.Values.global.ipc.udsDir }}
           name: sock
@@ -458,7 +457,7 @@ spec:
           name: {{ $index | printf "mount-path-%d" }}
         {{- end }}
         {{- end }}
-        - mountPath: /home/sn/datasystem/rocksdb
+        - mountPath: /home/yuanrong/datasystem/rocksdb
           name: rocksdb
       volumes:
         {{- if $.Values.global.rpc.enableCurveZmq }}

@@ -28,10 +28,10 @@ sed -i "/alias ll=/d" ${bashrc_file}
 
 #append
 sed -i "\$a\alias log='cd ${WORKER_LOG_DIR}'" ${bashrc_file}
-sed -i "\$a\alias bin='cd /home/sn/datasystem/bin'" ${bashrc_file}
+sed -i "\$a\alias bin='cd /home/yuanrong/datasystem/bin'" ${bashrc_file}
 sed -i "\$a\alias ll='ls -lrta --color=auto'" ${bashrc_file}
 
 sed -i '/source ~\/.connect_bashrc/d' ${HOME}/.bashrc
 sed -i "\$a\source ~\/.connect_bashrc" ${HOME}/.bashrc
-source /home/sn/.bashrc
+source /home/yuanrong/.bashrc
 chmod 600 ${bashrc_file}
