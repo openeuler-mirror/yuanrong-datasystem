@@ -56,5 +56,43 @@ TEST_F(KVCacheExclusiveClientTest, GetTimeout)
     DS_ASSERT_NOT_OK(client1_->Get("key1", val));
 }
 
+TEST_F(KVCacheExclusiveClientTest, ExclusiveIdOutOfRange)
+{
+    std::thread t1([&]() {
+        int numClients = 130;
+        std::shared_ptr<KVClient> client;
+        for (int i = 0; i < numClients; ++i) {
+            InitTestKVClient(0, client, timeoutMs_, false, true);
+            std::string objKey = "objKey_" + std::to_string(i);
+            std::string val = "value";
+            DS_ASSERT_OK(client->Set(objKey, val));
+            DS_ASSERT_OK(client->ShutDown());
+        }
+    });
+    t1.join();
+}
+
+TEST_F(KVCacheExclusiveClientTest, TestShutdownAndRestartWorker)
+{
+    std::string objKey = "objKey_dddd";
+    std::string val = "dddd";
+    DS_ASSERT_OK(client1_->Set(objKey, val));
+
+    // Shutdown worker
+    DS_ASSERT_OK(cluster_->ShutdownNode(ClusterNodeType::WORKER, 0));
+
+    // Get value after worker has shutdown and the call is expected to fail.
+    std::string getVal;
+    DS_ASSERT_NOT_OK(client1_->Get(objKey, getVal));
+
+    // Restart worker
+    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
+
+    // Do operation succesfully after worker is reconnected.
+    DS_ASSERT_OK(client1_->Set(objKey, val));
+    DS_ASSERT_OK(client1_->Get(objKey, getVal));
+    ASSERT_EQ(val, getVal);
+}
 }
 }

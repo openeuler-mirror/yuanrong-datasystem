@@ -112,7 +112,12 @@ Status ClientWorkerApi::ReconnectWorker(const std::vector<std::string> &gRefIds)
     RegisterClientReqPb req;
     req.add_extend()->PackFrom(extendPb);
     req.set_client_id(GetClientId());
-    return Connect(req, timeoutMs_, true);
+    RETURN_IF_NOT_OK(Connect(req, timeoutMs_, true));
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && GetShmEnabled()) {
+        // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
+        stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+    }
+    return Status::OK();
 }
 
 Status ClientWorkerApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,

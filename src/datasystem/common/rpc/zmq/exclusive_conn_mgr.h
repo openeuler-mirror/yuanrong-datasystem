@@ -34,11 +34,7 @@ namespace datasystem {
  * @brief The common use-case is that a single thread only uses one client and so it only needs to manage one
  * connection in the thread local memory.
  * But, it is not impossible that a given user thread might have other clients created. Since this class exists in
- * thread local memory, we need an index or key to find the connection given a client identifier (exclusiveId)
- * This manager is performance-optimized to only have one or few connections. Instead of a map and having to incur key
- * lookups in a performance sensitive codepath, it uses a pre-allocated table (slots) with fast index deference for
- * lookup.
- * The table has a small size and it can grow to support more entries, but this is highly unlikely to ever happen.
+ * thread local memory, we need an index or key to find the connection given a client identifier (exclusiveId).
  */
 class ExclusiveConnMgr {
 public:
@@ -110,17 +106,7 @@ private:
     
     Status CreateExclusiveConn(std::unique_ptr<ExclusiveConn> &conn, const std::string &sockPath);
 
-    /**
-     * @brief Returns true of the exclusiveId exists in the correct range
-     * @param[in] exclusiveId The id to check
-     */
-    inline bool IsExclusiveIdInRange(int32_t exclusiveId)
-    {
-        return (exclusiveId >= 0 && static_cast<size_t>(exclusiveId) < sockTable_.size());
-    }
-
-    // Fixed length table (for performance on lookups).
-    std::vector<std::unique_ptr<ExclusiveConn>> sockTable_;
+    std::unordered_map<int32_t, std::unique_ptr<ExclusiveConn>> sockMap_;
     pid_t pid_;
     pid_t tid_;
 };

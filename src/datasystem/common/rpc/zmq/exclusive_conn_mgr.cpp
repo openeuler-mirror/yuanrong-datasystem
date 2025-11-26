@@ -36,7 +36,7 @@ namespace datasystem {
 // The instantiation only happens on first access from the given thread to this global var.
 thread_local ExclusiveConnMgr gExclusiveConnMgr;
 
-ExclusiveConnMgr::ExclusiveConnMgr() : sockTable_(TABLE_SIZE)
+ExclusiveConnMgr::ExclusiveConnMgr()
 {
     pid_ = getpid();
     tid_ = gettid();
@@ -45,45 +45,41 @@ ExclusiveConnMgr::ExclusiveConnMgr() : sockTable_(TABLE_SIZE)
 
 Status ExclusiveConnMgr::CreateExclusiveConnection(int32_t exclusiveId, int64_t timeoutMs, const std::string &sockPath)
 {
-    CHECK_FAIL_RETURN_STATUS(IsExclusiveIdInRange(exclusiveId), K_RUNTIME_ERROR, "Exclusive id out of range");
-
-    // All slots in the table are pre-allocated (fixed length table). However, they might contain nullptr, which means
-    // the connection has not been created yet (it needs to be created).
-    if (!sockTable_[exclusiveId]) {
+    // Create the connection if it has not been created yet.
+    auto sockTableIter = sockMap_.find(exclusiveId);
+    if (sockTableIter == sockMap_.end()) {
         // Create connection entry with a uds socket and connect it to the service
         std::unique_ptr<ExclusiveConn> conn;
         RETURN_IF_NOT_OK(CreateExclusiveConn(conn, sockPath));
         VLOG(RPC_LOG_LEVEL) << FormatString("Exclusive connection created. exclusiveId: %d, fd: %d, timeout: %d",
                                             exclusiveId, conn->sockFd_.GetFd(), timeoutMs);
-        sockTable_[exclusiveId] = std::move(conn);
+        sockTableIter = sockMap_.emplace(exclusiveId, std::move(conn)).first;
     }
 
     // A previous usage of the socket fd changes the remaining time allowed for sends/recv.
     // Update this timeout now so that it starts with a fresh value
-    sockTable_[exclusiveId]->sockFd_.SetTimeoutEnforced(timeoutMs);
+    sockTableIter->second->sockFd_.SetTimeoutEnforced(timeoutMs);
     VLOG(RPC_LOG_LEVEL) << "Exclusive connection initialized. Timeout: " << timeoutMs;
     return Status::OK();
 }
 
 Status ExclusiveConnMgr::GetExclusiveConnDecoder(int32_t exclusiveId, ZmqMsgDecoder *&decoder)
 {
-    CHECK_FAIL_RETURN_STATUS(IsExclusiveIdInRange(exclusiveId), K_RUNTIME_ERROR, "Exclusive id out of range");
-
-    CHECK_FAIL_RETURN_STATUS(sockTable_[exclusiveId] != nullptr, K_RUNTIME_ERROR,
+    auto sockTableIter = sockMap_.find(exclusiveId);
+    CHECK_FAIL_RETURN_STATUS(sockTableIter != sockMap_.end(), K_RUNTIME_ERROR,
                              "Missing exclusive socket connection: " + std::to_string(exclusiveId));
 
-    decoder = sockTable_[exclusiveId]->decoder_.get();
+    decoder = sockTableIter->second->decoder_.get();
     return Status::OK();
 }
 
 Status ExclusiveConnMgr::GetExclusiveConnEncoder(int32_t exclusiveId, ZmqMsgEncoder *&encoder)
 {
-    CHECK_FAIL_RETURN_STATUS(IsExclusiveIdInRange(exclusiveId), K_RUNTIME_ERROR, "Exclusive id out of range");
-
-    CHECK_FAIL_RETURN_STATUS(sockTable_[exclusiveId] != nullptr, K_RUNTIME_ERROR,
+    auto sockTableIter = sockMap_.find(exclusiveId);
+    CHECK_FAIL_RETURN_STATUS(sockTableIter != sockMap_.end(), K_RUNTIME_ERROR,
                              "Missing exclusive socket connection: " + std::to_string(exclusiveId));
 
-    encoder = sockTable_[exclusiveId]->encoder_.get();
+    encoder = sockTableIter->second->encoder_.get();
     return Status::OK();
 }
 
@@ -112,8 +108,11 @@ std::string ExclusiveConnMgr::GetExclusiveConnMgrName() const
 
 Status ExclusiveConnMgr::CloseExclusiveConn(int32_t exclusiveId)
 {
-    if (IsExclusiveIdInRange(exclusiveId)) {
-        sockTable_[exclusiveId].reset();
+    VLOG(RPC_LOG_LEVEL) << "Close exclusive connection " << std::to_string(exclusiveId);
+    // Remove the exclusive connection from socket map.
+    auto sockTableIter = sockMap_.find(exclusiveId);
+    if (sockTableIter != sockMap_.end()) {
+        sockMap_.erase(sockTableIter);
     }
     return Status::OK();
 }

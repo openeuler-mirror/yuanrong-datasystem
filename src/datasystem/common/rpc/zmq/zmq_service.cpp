@@ -1031,7 +1031,7 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
     auto dbName = meta.db_name();
 
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-    VLOG(1) << "Receive message and timeout: " << std::to_string(timeout) << ", dbName:" << dbName;
+    VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeout) << ", dbName:" << dbName;
     Timer timer;
     auto func = [=]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
@@ -1186,8 +1186,8 @@ Status ZmqService::ProcessAccept(int listenFd)
     UnixSockFd connectedSockFd;
     RETURN_IF_NOT_OK(listenSockFd.Accept(connectedSockFd));
     if (listenFd == exclListenFd_) {
-        VLOG(RPC_LOG_LEVEL) << FormatString("Spawn new work agent for exclusive connection, sock_fd: %s",
-                                            connectedSockFd.GetFd());
+        LOG(INFO) << FormatString("Spawn new work agent for exclusive connection, sock_fd: %s",
+                                  connectedSockFd.GetFd());
         if (!workAgentThreadPool_) {
             RETURN_IF_EXCEPTION_OCCURS(workAgentThreadPool_ =
                                        std::make_unique<ThreadPool>(1, MAX_EXCLUSIVE_CONNECTIONS_LIMIT));

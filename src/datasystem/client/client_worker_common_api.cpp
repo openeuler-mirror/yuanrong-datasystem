@@ -38,6 +38,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/fd_pass.h"
@@ -429,7 +430,12 @@ Status ClientWorkerCommonApi::Disconnect()
     });
     RpcOptions opts;
     opts.SetTimeout(rpcTimeoutMs);
-    return commonWorkerSession_->DisconnectClient(opts, req, rsp);
+    RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
+    if (enableExclusiveConnection_ && exclusiveId_.has_value()) {
+        LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
+                     FormatString("Failed to close exclusive connection %d", exclusiveId_.value()));
+    }
+    return Status::OK();
 }
 
 HeartbeatType ClientWorkerCommonApi::GetHeartbeatType() const

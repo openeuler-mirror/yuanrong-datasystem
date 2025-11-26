@@ -381,7 +381,17 @@ private:
             // This could be a candidate for removal from the protocol later.
             std::string gatewayId;
             RETURN_IF_NOT_OK(PushFrontStringToFrames(gatewayId, frames));
-            RETURN_IF_NOT_OK(encoder->SendMsgFrames(EventType::V1MTP, frames));
+            Status rc = encoder->SendMsgFrames(EventType::V1MTP, frames);
+            if (rc.IsError()) {
+                // If any error happens from sending the data, we shall close the exclusive connection so that future
+                // rpcs are forced to create a new connection. This avoids subsequent connection re-use againt a
+                // connection that is in error state.
+                // In the future, we may consider more intelligent error handling, since all errors may not require
+                // full cleanup.
+                LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
+                             "Error closing exclusive conn during error path");
+                return rc;
+            }
         }
         return Status::OK();
     }
@@ -407,14 +417,11 @@ private:
             // v2 decode supports v1 format. Use the v2 version of the decode.
             Status rc = decoder->ReceiveMsgFramesV2(replyFrames);
             if (rc.IsError()) {
-                // If there was a timeout in the communication codepaths, then the client-side may have done error exit
-                // while the service is still working on the request. Later, the service might send a reply back to this
-                // connection but that is stale/old data.
-                // The solution is that this connection should not be used anymore. Close it.
-                // A future request from this thread can make a new connection again.
-                // Note: Not all errors would require connection reset. For example, some normal error coming back from
-                // the server doesn't mean the connection needs to be cleaned up.
-                // Future code here can decide to close only for specific error codes.
+                // If any error happens from receiving the data, we shall close the exclusive connection so that future
+                // rpcs are forced to create a new connection. This avoids subsequent connection re-use againt a
+                // connection that is in error state.
+                // In the future, we may consider more intelligent error handling, since all errors may not require
+                // full cleanup.
                 LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
                              "Error closing exclusive conn during error path");
                 return rc;
