@@ -108,7 +108,7 @@ openYuanrong datasystem 还提供了基于 Kubernetes 容器化部署方式，�
 ```python
 import acl
 import os
-from datasystem import Blob, DsClient, DeviceBlobList
+from yr.datasystem import Blob, DsClient, DeviceBlobList
 
 # hetero_dev_mset and hetero_dev_mget must be executed in different processes
 # because they need to be bound to different NPUs.
@@ -184,7 +184,7 @@ else:
 :::{tab-item} Python
 
 ```python
-from datasystem.ds_client import DsClient
+from yr.datasystem.ds_client import DsClient
 
 client = DsClient("127.0.0.1", 31501)
 client.init()
@@ -266,7 +266,7 @@ int main()
 
 ```python
 import random
-from datasystem.ds_client import DsClient
+from yr.datasystem.ds_client import DsClient
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"

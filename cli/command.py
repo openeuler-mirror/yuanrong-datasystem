@@ -40,7 +40,7 @@ class BaseCommand:
         """Initialize of command"""
         if BaseCommand.logger is None:
             BaseCommand._configure_logging()
-        self._base_dir = str(resources.files("datasystem"))
+        self._base_dir = str(resources.files("yr.datasystem"))
         self._base_dir = self.valid_safe_path(self._base_dir)
 
     @staticmethod
@@ -144,7 +144,7 @@ def main():
         "collect_log",
     ]
     for m in modules:
-        module = import_module(f"datasystem.cli.{m}")
+        module = import_module(f"yr.datasystem.cli.{m}")
         command_cls = getattr(module, "Command", None)
         if command_cls is None or not issubclass(command_cls, BaseCommand):
             continue

@@ -134,7 +134,7 @@ def setup(app):
 
     # Verify DsClient can be imported
     try:
-        from datasystem import DsClient
+        from yr.datasystem import DsClient
         print(f"✅ Successfully imported DsClient from {DsClient.__module__}")
     except ImportError as e:
         print(f"❌ Failed to import DsClient: {e}")

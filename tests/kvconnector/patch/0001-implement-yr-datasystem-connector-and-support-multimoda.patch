@@ -233,7 +233,7 @@ index 0000000..c2e18b5
 +PREFILL_PORT=$3
 +DECODE_PORT=$4
 +
-+if python -c "import datasystem" &> /dev/null; then
++if python -c "import yr.datasystem" &> /dev/null; then
 +    echo "yr-datasystem is already installed"
 +else
 +    echo "Install yr-datasystem ..."
@@ -980,7 +980,7 @@ index 0000000..9b7407a
 +from vllm.v1.core.sched.output import SchedulerOutput
 +from vllm.distributed.parallel_state import get_tp_group
 +
-+from datasystem import DsTensorClient, Future
++from yr.datasystem import DsTensorClient, Future
 +
 +ENABLE_PREFIX_CACHING = int(os.environ.get("USING_PREFIX_CONNECTOR", 1))
 +FUTURE_TIMEOUT = int(os.getenv("FUTURE_TIMEOUT", 10000))

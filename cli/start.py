@@ -21,8 +21,8 @@ import time
 import shutil
 from typing import Dict, Optional, Any
 
-import datasystem.cli.common.util as util
-from datasystem.cli.command import BaseCommand
+import yr.datasystem.cli.common.util as util
+from yr.datasystem.cli.command import BaseCommand
 
 
 class Command(BaseCommand):

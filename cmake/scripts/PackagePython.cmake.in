@@ -25,7 +25,6 @@ foreach(SO_FILE ${SO_FILES})
     endif()
 endforeach()
 
-file(RENAME ${PYTHON_PACKAGE_LIBPATH}/setup.py ${PYTHON_PACKAGE_PATH}/setup.py)
 # Run python setup.py bdist_wheel to generate origin wheel file.
 execute_process(
     COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel

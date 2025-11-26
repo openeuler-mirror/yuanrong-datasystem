@@ -659,7 +659,7 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}"  "${multi_value_args}" ${ARGN})
 
   # Store all temporary package files, will be deleted after package finish.
-  set(DATASYSTEM_WHEEL_PATH ${CMAKE_BINARY_DIR}/dist/datasystem)
+  set(DATASYSTEM_WHEEL_PATH ${CMAKE_BINARY_DIR}/dist/yr/datasystem)
   set(DATASYSTEM_SETUP_PATH ${CMAKE_BINARY_DIR}/dist)
   set(DATASYSTEM_PACKAGE_LIBPATH ${CMAKE_SOURCE_DIR})
 
@@ -715,7 +715,7 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
 
   # Copy python sdk
   install(DIRECTORY ${PYTHON_SDK}/
-          DESTINATION ${DATASYSTEM_WHEEL_PATH}/)
+          DESTINATION ${DATASYSTEM_SETUP_PATH}/)
 
   # Copy ds cli source files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli
@@ -782,7 +782,7 @@ function(PACKAGE_PYTHON PACKAGE_NAME)
 
   # Copy python source files to package lib path
   install(DIRECTORY ${ARG_PYTHON_SRC_DIR}/
-          DESTINATION ${PYTHON_PACKAGE_LIBPATH})
+          DESTINATION ${PYTHON_PACKAGE_PATH})
   # Copy VERSION and LICENSE to package lib path
   install(FILES ${CMAKE_SOURCE_DIR}/VERSION ${CMAKE_SOURCE_DIR}/LICENSE
           DESTINATION ${PYTHON_PACKAGE_LIBPATH})

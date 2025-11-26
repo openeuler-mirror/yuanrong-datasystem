@@ -22,9 +22,9 @@ import json
 import time
 import unittest
 
-from datasystem.ds_client import DsClient
-from datasystem.object_client import WriteMode
-from datasystem.util import Context
+from yr.datasystem.ds_client import DsClient
+from yr.datasystem.object_client import WriteMode
+from yr.datasystem.util import Context
 
 
 class TestDsClientMethods(unittest.TestCase):

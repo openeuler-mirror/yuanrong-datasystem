@@ -22,9 +22,9 @@ import json
 import time
 import unittest
 
-from datasystem.object_client import WriteMode, ObjectClient
-from datasystem.kv_client import KVClient, ExistenceOpt, ReadParam
-from datasystem.util import Context
+from yr.datasystem.object_client import WriteMode, ObjectClient
+from yr.datasystem.kv_client import KVClient, ExistenceOpt, ReadParam
+from yr.datasystem.util import Context
 
 
 class TestKVClientMethods(unittest.TestCase):

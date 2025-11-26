@@ -21,7 +21,7 @@ from __future__ import absolute_import
 import argparse
 import time
 
-from datasystem.kv_client import KVClient
+from yr.datasystem import KVClient
 
 
 class KVClientExample():
