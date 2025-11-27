@@ -339,7 +339,7 @@ function run_example() {
 
     # sanitize path
     local old_ld_path=$LD_LIBRARY_PATH
-    local new_ld_path=$(echo $old_ld_path | tr ':' '\n' | grep -v "output/service" | grep -v "output/sdk" | tr '\n' ':')
+    local new_ld_path=$(echo $old_ld_path | tr ':' '\n' | grep -v "output/datasystem/service" | grep -v "output/datasystem/sdk" | tr '\n' ':')
     export LD_LIBRARY_PATH=$new_ld_path
     echo -e "---- Sanitize LD_LIBRARY_PATH from ${old_ld_path} to ${new_ld_path}"
 
@@ -348,7 +348,7 @@ function run_example() {
     echo -e "---- [TIMER] Run example: $(($(date +%s)-$baseTime_s)) seconds"
 
     # clean unpackage files.
-    rm -rf "${INSTALL_DIR}/service" "${INSTALL_DIR}/sdk"
+    rm -rf "${INSTALL_DIR}/datasystem/service" "${INSTALL_DIR}/datasystem/sdk"
   fi
 }
 
@@ -455,7 +455,7 @@ function run_manual_ut()
       echo -e "---- [TIMER] Run python llt: $(($(date +%s)-$baseTime_s)) seconds"
 
       # clean unpackage files.
-      rm -rf "${INSTALL_DIR}/service" "${INSTALL_DIR}/sdk"
+      rm -rf "${INSTALL_DIR}/datasystem/service" "${INSTALL_DIR}/datasystem/sdk"
     fi
   fi
 }
@@ -566,7 +566,7 @@ function build_datasystem()
   cmake "${cmake_options[@]}" || go_die "-- build datasystem CMake project failed!"
   cmake --build "${BUILD_DIR}" -j "${BUILD_THREAD_NUM}" || go_die "-- datasystem cmake build failed!"
   cmake --install "${BUILD_DIR}" || go_die "-- datasystem cmake install failed!"
-  cp "${DATASYSTEM_DIR}/LOG_README" "${INSTALL_DIR}/service/"
+  cp "${DATASYSTEM_DIR}/LOG_README" "${INSTALL_DIR}/datasystem/service/"
   echo -e "---- [TIMER] Build source: $(($(date +%s)-$baseTime_s)) seconds"
 
   # erase symbol table if need.
@@ -574,15 +574,15 @@ function build_datasystem()
     if [[ "${BUILD_TYPE}" = "Debug" ]]; then
       echo -e "WARNING: Build in debug mode and use strip tool to erase symbol table, it could be a problem when you use gdb."
     fi
-    strip_symbols "${INSTALL_DIR}/sdk/cpp/lib" "${INSTALL_DIR}/sdk/DATASYSTEM_SYM"
+    strip_symbols "${INSTALL_DIR}/datasystem/sdk/cpp/lib" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     if is_on "${BUILD_HETERO}"; then
-      cp ${BUILD_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so.sym "${INSTALL_DIR}/sdk/DATASYSTEM_SYM"
+      cp ${BUILD_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     fi
     if is_on "${PACKAGE_PYTHON}"; then
-      cp ${BUILD_DIR}/python_lib/*.sym "${INSTALL_DIR}/sdk/DATASYSTEM_SYM"
+      cp ${BUILD_DIR}/python_lib/*.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     fi
-    strip_symbols "${INSTALL_DIR}/service" "${INSTALL_DIR}/service/DATASYSTEM_SYM"
-    strip_symbols "${INSTALL_DIR}/service/lib" "${INSTALL_DIR}/service/DATASYSTEM_SYM"
+    strip_symbols "${INSTALL_DIR}/datasystem/service" "${INSTALL_DIR}/datasystem/service/DATASYSTEM_SYM"
+    strip_symbols "${INSTALL_DIR}/datasystem/service/lib" "${INSTALL_DIR}/datasystem/service/DATASYSTEM_SYM"
   fi
 
   # build example if -t is build or run
@@ -594,7 +594,7 @@ function build_datasystem()
 
   # package 
   cd "${INSTALL_DIR}"
-  tar --remove-files -zcf yr-datasystem-v$(cat "${BASE_DIR}/VERSION").tar.gz service sdk
+  tar --remove-files -zcf yr-datasystem-v$(cat "${BASE_DIR}/VERSION").tar.gz datasystem
   cd -
   echo -e "-- build datasystem success!"
 }

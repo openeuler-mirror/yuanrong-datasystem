@@ -139,7 +139,7 @@ function start_all()
   })
 
   # generate worker config
-  ${DSCLI} generate_config -o "${deploy_dir}/service"
+  ${DSCLI} generate_config -o "${deploy_dir}/datasystem/service"
 
   worker_port=$(get_random_port "${DEFAULT_MIN_PORT}" "${DEFAULT_MAX_PORT}")
   WORKER_ADDRESS="127.0.0.1:${worker_port}"
@@ -149,9 +149,9 @@ function start_all()
     -e '/"worker_address": {/,/}/ s|"value": "[^"]*"|"value": "'"${WORKER_ADDRESS}"'"|' \
     -e '/"etcd_address": {/,/}/ s|"value": "[^"]*"|"value": "'"${WORKER_ETCD_ADDRESS}"'"|' \
     -e '/"add_node_wait_time_s": {/,/}/ s|"value": "[^"]*"|"value": "0"|' \
-    "${deploy_dir}/service/worker_config.json"
+    "${deploy_dir}/datasystem/service/worker_config.json"
 
-  ${DSCLI} start -d "${root_dir}" -f "${deploy_dir}/service/worker_config.json"
+  ${DSCLI} start -d "${root_dir}" -f "${deploy_dir}/datasystem/service/worker_config.json"
   WORKER_HEALTH_CHECK_PATH=$(find "${root_dir}" -type f -path "*/probe/healthy" 2>/dev/null | head -1)
 
   # wait worker ready
@@ -165,7 +165,7 @@ function stop_all()
     exit 1;
   fi
   local deploy_dir=$1
-  ${DSCLI} stop -f "${deploy_dir}/service/worker_config.json"
+  ${DSCLI} stop -f "${deploy_dir}/datasystem/service/worker_config.json"
   if ps -p ${etcd_pid} >/dev/null; then
     # interrupt signal will shutdown the etcd cluster
     echo "Shutting down etcd service pid: ${etcd_pid}"
