@@ -5,7 +5,9 @@
   :hidden:
 
   log_guide.md
+  hugepage_guide.md
 ```
 
 附录包含以下内容：
 - [openYuanrong datasystem 日志指南](log_guide.md)
+- [openYuanrong datasystem 大页内存配置指南](hugepage_guide.md)
