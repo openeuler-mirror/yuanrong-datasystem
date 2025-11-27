@@ -65,11 +65,6 @@ RUN chmod -R 500 ${DATASYSTEM_ROOT}/bin && \
     chmod 500 ${DATASYSTEM_ROOT}/lib && \
     chmod 400 ${DATASYSTEM_ROOT}/lib/*
 
-RUN sh -c 'if [ -d "${DATASYSTEM_ROOT}/lib/urma" ]; then \
-        chmod 500 ${DATASYSTEM_ROOT}/lib/urma && \
-        chmod 400 ${DATASYSTEM_ROOT}/lib/urma/*; \
-    fi'
-
 RUN if [ -f /etc/sudoers ]; then \
         sed -i "s|%wheel|#%wheel|g" "/etc/sudoers"; \
     fi

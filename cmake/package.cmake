@@ -21,10 +21,6 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
 # Datasystem rpc libraries.
 ############################################################
 set(RPC_LIB_PATH "${ZeroMQ_LIB_PATH}/libzmq.so*")
-if (BUILD_WITH_URMA)
-        list(APPEND RPC_LIB_PATH "${URMA_LIB_LOCATION}/liburma*.so*")
-        list(APPEND URMA_LIB_PATH "${URMA_IP_IB_LIB_LOCATION}/liburma_*.so*")
-endif()
 if (BUILD_WITH_RDMA)
         list(APPEND RPC_LIB_PATH "${UCX_LIB_PATH}/libuc*.so*")
         list(APPEND UCX_LIB_PATH "${UCX_LIB_PATH}/libuc*.so*")
@@ -214,14 +210,6 @@ install_file_pattern(
         PATH_PATTERN ${SERVICE_LIB_PATTERNS}
         DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}
 )
-
-if (BUILD_WITH_URMA)
-    install_file_pattern(
-        PATH_PATTERN ${URMA_LIB_PATH}
-        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}/urma
-        PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
-    )
-endif()
 
 if (BUILD_WITH_RDMA)
     install_file_pattern(

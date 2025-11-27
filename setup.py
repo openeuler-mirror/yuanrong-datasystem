@@ -154,7 +154,7 @@ def delete_unuse_so(directory: Path):
     """delete unuse so"""
     for item in directory.iterdir():
         if item.is_file():
-            if item.name not in all_dependencies_for_datasystem and 'urma' not in item.name:
+            if item.name not in all_dependencies_for_datasystem:
                 item.unlink()
         elif item.is_dir():
             delete_unuse_so(item)
@@ -180,10 +180,7 @@ def update_permissions(path):
             file_fullpath = os.path.join(dirpath, filename)
             if os.path.islink(file_fullpath):
                 continue
-            if filename.startswith("liburma"):
-                os.chmod(file_fullpath, stat.S_IREAD | stat.S_IEXEC)
-            else:
-                os.chmod(file_fullpath, stat.S_IREAD)
+            os.chmod(file_fullpath, stat.S_IREAD)
 
 
 class EggInfo(egg_info):
