@@ -37,10 +37,24 @@
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
 
+#include "datasystem/common/rdma/ucp_segment.h"
+
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
+#ifdef BEING_TESTED
+namespace ut {
+class UcpManagerTestFriend;
+class UcpManagerTest;
+class UcpManagerTest_ImportSegAndUcpPutPayloadNonBlocking_Test;
+class UcpManagerTest_InsertEventsModifiesInternalSets_Test;
+class UcpManagerTest_EventManagement_Test;
+class UcpManagerTest_WaitToFinishTimeout_Test;
+class UcpManagerTest_FillUcpInfoimpl_Test;
+}  // namespace ut
+#endif
+class UcpWorkerPool;
 template <typename T>
 using custom_unique_ptr = std::unique_ptr<T, std::function<void(T *)>>;
 
@@ -69,7 +83,7 @@ public:
      * @param[in] timeout time in milliseconds to wait
      * @return Status of the call.
      */
-    Status waitFor(std::chrono::milliseconds timeout)
+    Status wait_for(std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> lock(eventMutex_);
         bool gotNotification = cv.wait_for(lock, timeout, [this] { return ready_; });
@@ -84,7 +98,7 @@ public:
     /**
      * @brief Notify all threads that are waiting for the event
      */
-    void notifyAll()
+    void notify_all()
     {
         std::unique_lock<std::mutex> lock(eventMutex_);
         ready_ = true;
@@ -117,82 +131,6 @@ private:
 
 using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
 
-class UcpSegment {
-public:
-    /**
-     * @brief Create a new UcpSegment object.
-     */
-    UcpSegment(){};
-    ~UcpSegment(){};
-
-    /**
-     * @brief Sets UcpSegment object
-     * @param[in] seg target UcpSegment object
-     * @param[in] local if local no need to unimport the UcpSegment
-     * @return Status of the call.
-     */
-    void Set(ucp_mem_h *seg, bool local);
-
-    void Clear();
-
-private:
-    custom_unique_ptr<ucp_mem_h> segment_;
-    bool local_;
-};
-
-using UcpSegmentMap = LockMap<uint64_t, UcpSegment>;
-
-class UcpEndpoint {
-public:
-    /**
-     * @brief Create a new UcpEndpoint object.
-     */
-    UcpEndpoint(){};
-
-    ~UcpEndpoint(){};
-};
-
-using UcpEndpointMap = LockMap<std::string, UcpEndpoint>;
-
-class UcpWorker {
-public:
-    /**
-     * @brief Create a new UcpWorker object.
-     */
-    UcpWorker(){};
-
-    ~UcpWorker();
-
-    /**
-     * @brief Get remote UcpSegment or import remote UcpSegment from the device
-     * @param[in] remoteEndpoint remote ucp endpoint
-     * @param[in] localSegAddress Starting address of the segment (e.g. Arena
-     * start address)
-     * @param[in] localSegSize Total size of the segment (e.g. Arena size)
-     * @param[in] localObjectAddress Object address
-     * @param[in] readOffset Offset in the object to read
-     * @param[in] readSize Size of the object
-     * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of
-     * object)
-     * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish.
-     * @return Status of the call.
-     */
-    Status PutPayloadToRemoteEndpoint(custom_unique_ptr<UcpEndpoint> &remoteEndpoint, const uint64_t &localSegAddress,
-                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                      const uint64_t &readOffset, const uint64_t &readSize,
-                                      const uint64_t &metaDataSize, bool blocking);
-
-    /**
-     * @brief bind remote endpoint to the ucp worker, stored in remoteEndpointVec_
-     * @param[in] remoteEndpoint ucp endpoint ptr
-     * @return Status of the call.
-     */
-    Status BindRemoteEndpoint(custom_unique_ptr<UcpEndpoint> remoteEndpoint);
-
-private:
-    std::vector<custom_unique_ptr<UcpEndpoint>> remoteEndpointVec_;
-};
-
 class UcpManager {
 public:
     /**
@@ -204,34 +142,22 @@ public:
     ~UcpManager();
 
     /**
-     * @brief Init a Rdma device
+     * @brief Init a rdma device
      * @return Status of the call.
      */
     Status Init();
 
     /**
-     * @brief Check if Ucp Rdma worker flag is set
+     * @brief Check if rdma worker flag is set
      * @return True if flag is set, else false
      */
-    static bool IsUcpEnabled()
-    {
-        return FLAGS_enable_rdma;
-    };
+    static bool IsUcpEnabled();
 
     /**
      * @brief Check we should register whole arena upfront
      * @return True if flag is set, else false
      */
-    static bool IsRegisterWholeArenaEnabled()
-    {
-        return FLAGS_rdma_register_whole_arena;
-    }
-
-    /**
-     * @brief Check we should use event mode for interrupts
-     * @return True if flag is set, else false
-     */
-    static bool IsEventModeEnabled();
+    static bool IsRegisterWholeArenaEnabled();
 
     /**
      * @brief Register segment
@@ -253,11 +179,11 @@ public:
                            UcpRemoteInfoPb &ucpInfo);
 
     /**
-     * @brief UCP RDMA write object data to remote worker memory location
-     * 1. Choose a UcpWorker to build/reuse the UcpEndpoint
-     * 2. Prepare the obj data, including address offsets and data chunks
-     * 3. does a ucp put
-     * @param[in] ucpInfo Protobuf contians remote worker UCP RDMA info.
+     * @brief Does a RDMA write to remote worker memory location
+     * 1. Registers the segment if address is not already registered
+     * 2. Imports remote segment
+     * 3. does a Ucp write
+     * @param[in] ucpInfo Protobuf contians remote worker UCP info
      * @param[in] localObjectAddress Object address
      * @param[in] readOffset Offset in the object to read
      * @param[in] readSize Size of the object
@@ -267,9 +193,9 @@ public:
      * @param[out] keys The new request id to wait for if not blocking
      * @return Status of the call
      */
-    Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
-                         const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
-                         std::vector<uint64_t> &keys);
+    Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress,
+                         const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                         bool blocking, std::vector<uint64_t> &keys);
 
     /**
      * @brief Remove Remote Endpoint and all associated segments
@@ -280,35 +206,39 @@ public:
 
     /**
      * @brief Ucp write operation waits on the CV to check completion status
-     * @param[in] requestId unique id for the urma request (passed as user_ctx in
-     * urma_write)
+     * @param[in] requestId unique id for the rdma request
      * @param[in] timeoutMs timeout waiting for the request to end
      * @return Status of the call.
      */
     Status WaitToFinish(uint64_t requestId, int64_t timeoutMs);
 
+    /**
+     * @brief Get the network address of the receiving worker.
+     * @param[in] ipAddr IP address in string format, e.g., "192.168.1.100"
+     * @return string containing the network address
+     */
+    std::string GetRecvWorkerAddress(const std::string &ipAddr);
+
+    /**
+     * @brief Inserts a successful event.
+     * @param[in] requestId a unique identifier for the request
+     */
+    void InsertSuccessfulEvent(uint64_t requestId);
+
+    /**
+     * @brief Inserts a failed event.
+     * @param[in] requestId a unique identifier for the request
+     */
+    void InsertFailedEvent(uint64_t requestId);
+
 private:
     UcpManager();
 
     /**
-     * @brief Initialize ucp.
+     * @brief Create a UCP context.
      * @return Status of the call.
      */
-    Status UcpInit();
-
-    /**
-     * @brief Uninitialize ucp.
-     * @return Status of the call.
-     */
-    Status UcpUninit();
-
-    /**
-     * @brief Creates Ucp context
-     * @param[in] urmaDevice local Urma device
-     * @param[in] eidIndex eid index of the device
-     * @return Status of the call.
-     */
-    Status UcpCreateContext(ucp_params_t *params, ucp_config_t *config);
+    Status UcpCreateContext();
 
     /**
      * @brief Deletes Ucp context object
@@ -317,7 +247,13 @@ private:
     Status UcpDeleteContext();
 
     /**
-     * @brief Continously running Event handler thread that polls JFC
+     * @brief Create a UCP worker pool.
+     * @return Status of the call.
+     */
+    Status UcpCreateWorkerPool();
+
+    /**
+     * @brief Continously running Event handler thread
      * @return Status of the call.
      */
     Status ServerEventHandleThreadMain();
@@ -331,15 +267,6 @@ private:
      */
     Status GetOrRegisterSegment(const uint64_t &segAddress, const uint64_t &segSize,
                                 UcpSegmentMap::ConstAccessor &constAccessor);
-
-    /**
-     * @brief UnImport segment
-     * @param[in] remoteAddress Remote worker address
-     * @param[in] segmentAddress Segment start address
-     * @return Status of the call
-     */
-    Status UnimportSegment(const HostPort &remoteAddress, uint64_t segmentAddress);
-
     /**
      * @brief Stops the polling thread
      * @return Status of the call.
@@ -354,7 +281,7 @@ private:
 
     /**
      * @brief Gets event object of request id
-     * @param[in] requestId unique id of the Urma request
+     * @param[in] requestId unique id of the rdma request
      * @param[out] event event object for the request
      * @return Status of the call.
      */
@@ -362,7 +289,7 @@ private:
 
     /**
      * @brief Create Event object for the request
-     * @param[in] requestId unique id for the Urma request
+     * @param[in] requestId unique id for the rdma request
      * @param[out] event event object for the request
      * @return Status of the call.
      */
@@ -370,7 +297,7 @@ private:
 
     /**
      * @brief Deletes the Event object for the request
-     * @param[in] requestId unique id for the Urma request
+     * @param[in] requestId unique id for the rdma request
      * @return Status of the call.
      */
     void DeleteEvent(uint64_t requestId);
@@ -378,20 +305,29 @@ private:
     // Polling thread
     std::unique_ptr<std::thread> serverEventThread_{ nullptr };
 
-    ucp_context_h *ucpContext_ = nullptr;
-    // ip -> ucp endpoint
-    std::unordered_map<std::string, custom_unique_ptr<UcpEndpoint>> endPointCache_;
-    std::vector<custom_unique_ptr<UcpWorker>> ucpWorkerVec_;
+    ucp_context_h ucpContext_ = nullptr;
+    std::unique_ptr<UcpWorkerPool> workerPool_;
     std::atomic<uint64_t> requestId_{ 0 };
 
+    // Memory address to local segment mapping.
     std::unique_ptr<UcpSegmentMap> localSegmentMap_;
-    // Eid to segment maps mapping for remote segment.
-    std::unique_ptr<UcpEndpointMap> remoteEndpointMap_;
+    mutable std::shared_timed_mutex localMapMutex_;
     mutable std::shared_timed_mutex eventMapMutex_;
-    std::unordered_map<uint64_t, std::shared_ptr<Event>> eventMap_;
+    std::unique_ptr<EventMap> eventMap_;
+    std::mutex finishedRequestsMutex_;
+    std::mutex failedRequestsMutex_;
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };
+#ifdef BEING_TESTED
+    friend class ut::UcpManagerTestFriend;
+    friend class ut::UcpManagerTest;
+    friend class ut::UcpManagerTest_ImportSegAndUcpPutPayloadNonBlocking_Test;
+    friend class ut::UcpManagerTest_InsertEventsModifiesInternalSets_Test;
+    friend class ut::UcpManagerTest_EventManagement_Test;
+    friend class ut::UcpManagerTest_WaitToFinishTimeout_Test;
+    friend class ut::UcpManagerTest_FillUcpInfoimpl_Test;
+#endif
 };
 
 }  // namespace datasystem

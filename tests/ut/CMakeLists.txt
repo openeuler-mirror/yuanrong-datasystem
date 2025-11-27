@@ -62,7 +62,7 @@ target_link_libraries(ds_ut_object PRIVATE ${DS_UT_DEPEND_LIBS})
 
 set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
 
-target_compile_definitions(ds_ut PRIVATE ${BIN_PATH_LIST})
+target_compile_definitions(ds_ut PRIVATE ${BIN_PATH_LIST} BEING_TESTED)
 target_compile_definitions(ds_ut_stream PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_object PRIVATE ${BIN_PATH_LIST})
 set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
