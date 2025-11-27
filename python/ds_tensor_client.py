@@ -210,8 +210,7 @@ class DsTensorClient:
     @staticmethod
     def _is_ms_tensor(tensor: Tensor) -> str:
         """check if the tensor is mindspore type"""
-        is_ms = (DsTensorClient._get_tensor_device_type(tensor) == "Ascend")
-        return is_ms
+        return DsTensorClient._get_tensor_device_type(tensor) == "Ascend"
 
     @staticmethod
     def _check_tensor_device_type(tensor: Tensor) -> None:
