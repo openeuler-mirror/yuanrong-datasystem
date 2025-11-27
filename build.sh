@@ -403,7 +403,7 @@ function strip_symbols() {
     mkdir -p "${dest_dir}"
   fi
 
-  for file in ${src_dir}/*; do
+  find "$src_dir" -type f -print0 | while IFS= read -r -d '' file; do
     local type
     type="$(file -b --mime-type ${file} | sed 's|/.*||')"
     local basename
