@@ -64,7 +64,7 @@ class ObjectClientExample:
         buf.unwlatch()
 
         # Get the key.
-        buffer_list = client.get([key], True)
+        buffer_list = client.get([key], 0)
         if value != buffer_list[0].immutable_data():
             raise RuntimeError(f"Assert failed, expect {value}, but got {buffer_list[0].immutable_data()}")
 

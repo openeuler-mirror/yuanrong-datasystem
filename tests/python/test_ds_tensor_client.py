@@ -89,7 +89,7 @@ class TestDsTensorClient(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root_dir = os.path.dirname(os.path.abspath('..'))
-        worker_env_path = os.path.join(root_dir, 'output', 'service', 'worker_config.json')
+        worker_env_path = os.path.join(root_dir, 'output', 'datasystem', 'service', 'worker_config.json')
         with open(worker_env_path, "r") as f:
             config = json.load(f)
 

@@ -142,6 +142,7 @@ int main(int argc, char *argv[])
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };
+    connectOpts.enableExclusiveConnection = false;
     client_ = std::make_shared<HeteroClient>(connectOpts);
     (void)Context::SetTraceId("init");
     Status status = client_->Init();
