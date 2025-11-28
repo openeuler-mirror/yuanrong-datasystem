@@ -92,6 +92,7 @@ spec:
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
         - -enable_meta_replica={{ $.Values.global.metadata.enableMetaReplica }}
         - -enable_redirect={{ $.Values.global.metadata.enableRedirect }}
+        - -enable_data_replication={{ $.Values.global.metadata.enableDataReplication }}
         - -log_async={{ $.Values.global.log.logAsync }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
