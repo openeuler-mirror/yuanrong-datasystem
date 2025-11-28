@@ -38,7 +38,8 @@ namespace datasystem {
 namespace object_cache {
 template  <typename T>
 class ObjectRefInfo {
-using TbbObjKeyTable = tbb::concurrent_hash_map<T, uint32_t>;
+    using TbbObjKeyTable = tbb::concurrent_hash_map<T, uint32_t>;
+
 public:
     explicit ObjectRefInfo(bool isUniqueCnt = true) : isUniqueCnt_(isUniqueCnt)
     {
@@ -437,7 +438,8 @@ public:
      * @param[in] clientId uuid of client.
      * @param[in] shmUnits The safe objects.
      */
-    void AddShmUnits(const ClientKey &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits);
+    void AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
+                     std::vector<std::shared_ptr<ShmUnit>> &shmUnits);
 
     /**
      * @brief Check one shared memory unit whether be referred by client.
@@ -461,6 +463,8 @@ public:
      * @return Status of the call
      */
     Status RemoveClient(const ClientKey &clientId);
+
+    void ClientTableGetOrInsert(const ClientKey &clientId, TbbMemoryClientRefTable::const_accessor &accessor);
 
 #ifdef WITH_TESTS
     /**
