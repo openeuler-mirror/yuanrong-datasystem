@@ -346,6 +346,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     auto iter = infos.begin();
     std::vector<std::string> needEvictObjs;
     for (int i = 0; iter != infos.end(); i++) {
+        bool isFromL2 = false;
         auto metaIter = iter->queryMeta->mutable_meta();
         PerfPoint point(PerfKey::WORKER_HANDLE_BATCH_SUB_PRE);
         auto &objectKey = iter->queryMeta->meta().object_key();
@@ -385,6 +386,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             LOG(INFO) << "Query from L2 cache use " << timer.ElapsedMilliSecond()
                       << " millisecond, address: " << address << ", ifWorkerConnected: " << ifWorkerConnected;
             CheckAndReturnPullNotFoundForRetry(*metaIter, address, *entry, checkConnectStatus, subRc);
+            isFromL2 = true;
         }
         if (subRc.IsOk() && entry->Get() == nullptr) {
             subRc = Status(K_NOT_FOUND, FormatString("Get from remote worker failed, object(%s) not exist in "
@@ -407,6 +409,9 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         BatchGetObjectHandleIndividualStatus(subRc, *readKey, successIds, needRetryIds, failedIds);
         lastRc = subRc;
+        if (subRc.IsOk()) {
+            isFromL2 ? cacheHitInfo_->IncL2Hit(1) : cacheHitInfo_->IncRemoteHit(1);
+        }
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_OTHER);
     }
     SubmitAsyncAddEvictTask(std::move(needEvictObjs));

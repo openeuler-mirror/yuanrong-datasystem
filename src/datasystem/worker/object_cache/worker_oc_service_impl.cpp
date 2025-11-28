@@ -339,6 +339,11 @@ size_t WorkerOCServiceImpl::GetTotalObjectSize() const
     return stat.objectMemoryUsage;
 }
 
+std::string WorkerOCServiceImpl::GetHitInfo() const
+{
+    return getProc_->GetHitInfo();
+}
+
 Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp, std::vector<RpcMessage> payloads)
 {
     ReadLock noRecon;

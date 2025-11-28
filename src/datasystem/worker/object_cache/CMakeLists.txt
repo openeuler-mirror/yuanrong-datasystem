@@ -14,6 +14,7 @@ set(WORKER_OC_SRCS
         async_rollback_manager.cpp
         object_kv.cpp
         eviction_list.cpp
+        cache_hit_info.cpp
         device/device_obj_cache.cpp
         device/worker_device_oc_manager.cpp
         device/worker_dev_req_manager.cpp

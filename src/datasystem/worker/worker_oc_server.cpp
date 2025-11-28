@@ -923,6 +923,8 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
         instance.RegisterCollectHandler(ResMetricName::OBJECT_SIZE, [this] {
             return std::to_string(objCacheClientWorkerSvc_->GetTotalObjectSize());
         });
+        instance.RegisterCollectHandler(ResMetricName::OC_HIT_NUM,
+                                        [this] { return objCacheClientWorkerSvc_->GetHitInfo(); });
     }
 
     if (EnableSCService()) {

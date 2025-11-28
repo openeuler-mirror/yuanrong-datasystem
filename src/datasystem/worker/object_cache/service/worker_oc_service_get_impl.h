@@ -29,6 +29,7 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -145,6 +146,12 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     Status GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp);
+
+    /**
+     * @brief Get the hit info statistic data.
+     * @return The data string.
+     */
+    std::string GetHitInfo();
 
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
@@ -920,6 +927,7 @@ private:
     std::unordered_set<std::string> inRemoteGetIds_;  // the object keys that in remote get
 
     std::vector<std::string> otherAZNames_;
+    std::shared_ptr<CacheHitInfo> cacheHitInfo_;  // the cache hit info
 
     static constexpr size_t OBJECTS_NOT_EXIST_IDX = 0;
     static constexpr size_t OBJECTS_PUZZLED_IDX = 1;
