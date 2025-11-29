@@ -1,0 +1,117 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: UcpWorkerPool class that wraps around and manages multiple
+ * UcpWorkers. This class automatically handles reuses of UcpWorkers and provides
+ * methods for removing info associated with a bad IP address
+ */
+
+#ifndef DATASYSTEM_COMMON_RDMA_UCP_WORKER_POOL_H
+#define DATASYSTEM_COMMON_RDMA_UCP_WORKER_POOL_H
+
+#include <memory>
+#include <string>
+#include <cstring>
+#include <unordered_map>
+#include <mutex>
+#include <shared_mutex>
+#include <atomic>
+#include <cstdint>
+
+#include "ucp/api/ucp.h"
+
+#include "datasystem/utils/status.h"
+
+namespace datasystem {
+
+class UcpManager;
+class UcpWorker;
+
+class UcpWorkerPool {
+public:
+    UcpWorkerPool() = default;
+
+    explicit UcpWorkerPool(const ucp_context_h &ucpContext, UcpManager *manager, uint32_t workerN);
+    virtual ~UcpWorkerPool();
+
+    /**
+     * @brief initialize a UcpWorkerPool with workerN number of UcpWorkers
+     * @return Status::OK() if successful, otherwise error messages
+     */
+    virtual Status Init();
+
+    /**
+     * @brief asynchronously write to a remote memory
+     * @param remoteRkey the rkey passed from a remote server
+     * @param remoteSegAddr the head pointer to the remote buffer that will be written into
+     * @param remoteWorkerAddr the worker address of a remote worker used for communication
+     * @param ipAddr the IP address of the remote server
+     * @param localSegAddr pointer to the head of local memory containing the content to be sent
+     * @param localSegSize length of the content to be sent
+     * @param requestID request ID passed in by UcpManager to track progress
+     * @return Status::OK() if successfully executed write, otherwise error message
+     * Notice that this function does not guarantee the success of the actual RDMA put action. UcpManager
+     * will actively check the log filled by CallBack function in UcpWorker to see if the put action is
+     * really successful. However, if this function fails, the put action would have failed.
+     */
+    virtual Status Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
+                         const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t &localSegAddr,
+                         size_t localSegSize, uint64_t requestID);
+
+    /**
+     * @brief Obtain the worker that previously talked with this IP, or assign a new one
+     * @param ipAddr IP address of the remote server
+     * @return local worker address to be sent to remote server in the form of a string
+     */
+    virtual std::string GetOrSelRecvWorkerAddr(const std::string &ipAddr);
+
+    /**
+     * @brief remove EP and map entries associated with a broken remote IP and worker address
+     * @param ipAddr a reference to the remote IP address that is broken
+     * @return Status::OK() if successful, otherwise error messages
+     */
+    virtual Status RmByIp(const std::string &ipAddr);
+
+private:
+    UcpWorker *GetOrSelSendWorker(const std::string &ipAddr);
+
+    void Clean();
+
+    // env variables
+    ucp_context_h context_;
+    UcpManager *manager_;
+    uint32_t workerN_;
+
+    // all worker info
+    std::unordered_map<uint32_t, std::shared_ptr<UcpWorker>> localWorkerPool_;
+
+    // worker for sending
+    std::unordered_map<std::string, UcpWorker *> localWorkerSendMap_;
+
+    // worker for receiving
+    std::unordered_map<std::string, std::string> localWorkerRecvMap_;
+
+    // round robin, will increment whenever used
+    std::atomic<size_t> roundRobin_{ 0 };
+
+    // locks
+    std::shared_mutex recvMapMutex_;  // protect localWorkerRecvMap_
+    std::shared_mutex sendMapMutex_;  // protect localWorkerPool_
+};
+}  // namespace datasystem
+
+#endif

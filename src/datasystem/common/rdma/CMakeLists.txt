@@ -25,7 +25,7 @@ if (BUILD_WITH_URMA)
 endif()
 
 if (BUILD_WITH_RDMA)
-    list(APPEND RDMA_SRCS ucp_manager.cpp)
+    list(APPEND RDMA_SRCS ucp_manager.cpp ucp_worker_pool.cpp ucp_worker.cpp ucp_endpoint.cpp ucp_segment.cpp)
     list(APPEND RDMA_DEPEND_LIBS ${UCX_LIBRARIES})
 endif()
 
