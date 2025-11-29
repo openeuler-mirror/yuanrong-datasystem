@@ -206,7 +206,6 @@ int main(int argc, char *argv[])
     }
 
     ConnectOptions connectOptions{ .host = ip, .port = port, .connectTimeoutMs = 3 * 1000 };
-    connectOptions.enableExclusiveConnection = false;
     dsClient_ = std::make_shared<DsClient>(connectOptions);
     (void)Context::SetTraceId("init");
     Status status = dsClient_->Init();

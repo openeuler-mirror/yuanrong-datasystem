@@ -181,7 +181,6 @@ int main(int argc, char *argv[])
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };
-    connectOpts.enableExclusiveConnection = false;
     if (InitClient(connectOpts) != 0) {
         return -1;
     }

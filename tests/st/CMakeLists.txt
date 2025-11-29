@@ -32,6 +32,10 @@ set(DS_ST_DEPEND_LIBS
         httpclient
         common_persistence_api)
 
+if (BUILD_GO_API)
+    list(APPEND DS_ST_DEPEND_LIBS
+            datasystem_c_static)
+endif ()
 
 #include dirs
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -64,6 +68,13 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/kv_cache/.*)
 if (NOT ENABLE_PERF)
     list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/perf_client/.*)
 endif()
+
+if (NOT BUILD_GO_API)
+    list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client_c_api/.*)
+    list(FILTER DS_ST_STREAM_CACHE_SRCS EXCLUDE REGEX .*/client_c_api/.*)
+    list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/client_c_api/.*)
+    list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*/client_c_api/.*)
+endif ()
 
 set(ST_COMMON_SRCS
         test_main.cpp

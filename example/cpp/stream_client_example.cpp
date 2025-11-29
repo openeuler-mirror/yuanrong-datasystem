@@ -109,7 +109,6 @@ int RunExample(const std::string &ip, const int32_t port, const std::string &cli
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };
-    connectOpts.enableExclusiveConnection = false;
     auto client = std::make_shared<StreamClient>(connectOpts);
     Status status = client->Init();
     if (status.IsError()) {

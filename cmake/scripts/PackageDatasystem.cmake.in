@@ -16,7 +16,7 @@ if(EXISTS ${PYTHON_LIBPATH})
          DESTINATION ${DATASYSTEM_WHEEL_PATH}/lib
          REGEX ".*sym$" EXCLUDE)
 endif()
-file(GLOB_RECURSE FILE_LIST ${CMAKE_INSTALL_PREFIX}/datasystem/sdk/cpp/lib/*so*)
+file(GLOB_RECURSE FILE_LIST ${CMAKE_INSTALL_PREFIX}/sdk/cpp/lib/*so*)
 file(WRITE "${DATASYSTEM_WHEEL_PATH}/sdk_lib_list" "")
 foreach(FILE ${FILE_LIST})
     get_filename_component(FILENAME ${FILE} NAME)
