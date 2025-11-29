@@ -139,7 +139,7 @@ void P2PSubscribe::ProcessP2PSend(
         std::vector<std::string> objectKeys;
         std::transform(npuEvents.begin(), npuEvents.end(), std::back_inserter(objectKeys),
                        [](const SubscribeReceiveNpuEventPb &npuEvent) { return npuEvent.object_key(); });
-        LOG(INFO) << FormatString("Get send event from npuId: %s;%d, keys:%s", recvClientId, recvDeviceId,
+        LOG(INFO) << FormatString("Get send event from npuId: %s;%d, keys: [%s]", recvClientId, recvDeviceId,
                                   VectorToString(objectKeys));
 
         StartMonitorThread();
@@ -200,7 +200,7 @@ void P2PSubscribe::ProcessP2PSend(
                     auto rc = comm->SubmitPipelineTask(std::move(sendTask));
                     if (rc.IsError()) {
                         LOG(ERROR) << FormatString(
-                            "Submitted P2P send task execution failed for object:%s, error msg: [%s]",
+                            "Submitted P2P send task execution failed for object: %s, error msg: [%s]",
                             objectKey,
                             rc.GetMsg());
                         LOG_IF_ERROR(putRequest->SetPromiseValue(rc), "promise set value failed.");
@@ -330,6 +330,8 @@ Status P2PSubscribe::ProcessP2PGet(const std::shared_ptr<P2PGetRequestsWrapper> 
     std::vector<std::shared_ptr<DeviceBufferInfo>> bufferInfoList;
     std::vector<DeviceBlobList> blobStorageList;
     std::unordered_map<std::string, std::shared_ptr<P2PGetRequest>> objKeyToP2PRequest;
+    std::stringstream allKeys;
+    bool first = true;
     for (size_t i = 0; i < p2pGetRequests->Size(); i++) {
         auto &p2pGetRequest = p2pGetRequests->requestList_[i];
         const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
@@ -338,8 +340,13 @@ Status P2PSubscribe::ProcessP2PGet(const std::shared_ptr<P2PGetRequestsWrapper> 
         bufferInfoList.emplace_back(bufferInfo);
         blobStorageList.emplace_back(DeviceBlobList{ .blobs = blobStorage, .deviceIdx = -1 });
         (void)objKeyToP2PRequest.emplace(objectKey, p2pGetRequest);
-        VLOG(1) << FormatString("%s is ready to P2PGet", objectKey);
+        if (!first) {
+            allKeys << ", ";
+        }
+        allKeys << objectKey;
+        first = false;
     }
+    LOG(INFO) << FormatString("Start to P2PGet keys: [%s]", allKeys.str());
     GetP2PMetaRspPb resp;
     auto now = std::chrono::system_clock::now();
     int64_t elapsedTime =
@@ -366,6 +373,8 @@ void P2PSubscribe::ProcessP2PRecv(
     const std::unordered_map<std::string, std::shared_ptr<P2PGetRequest>> &objKeyToP2PRequest,
     std::set<std::string> &finishedList)
 {
+    VLOG(1) << FormatString(
+        "Start processing the keys that were successfully queried, keys:[%s]", VectorToString(finishedList));
     for (auto &kv : groupedSubResp) {
         PerfPoint point(PerfKey::CLIENT_P2P_SUB_GET_COMM_AND_SUBMIT);
         auto &srcClientId = kv.first.remoteClientId;
@@ -417,7 +426,8 @@ void P2PSubscribe::ProcessP2PRecv(
                     const auto &objectKey = p2pGetRequest->GetObjectKey();
                     const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
                     auto blobStorage = p2pGetRequest->GetBlobsStorage();
-                    LOG(INFO) << FormatString("Start submit recv task for object key: %s", objectKey);
+                    LOG(INFO) << FormatString(
+                        "Start submit recv task for object key: %s, to comm: %s", objectKey, comm->GetCommId());
                     acl::P2PRecvTask recvTask{ .destBuffers = blobStorage,
                                                .totalSize = p2pGetRequest->GetTotalSize(),
                                                .comm = comm,
@@ -425,7 +435,7 @@ void P2PSubscribe::ProcessP2PRecv(
                     auto rc = comm->SubmitPipelineTask(std::move(recvTask));
                     if (rc.IsError()) {
                         LOG(ERROR) << FormatString(
-                            "Submitted P2P receive task execution failed for object:%s, error msg: [%s]",
+                            "Submitted P2P receive task execution failed for object: %s, error msg: [%s]",
                             objectKey,
                             rc.GetMsg());
                         LOG_IF_ERROR(p2pGetRequest->SetPromiseValue(rc), "promise set value failed.");
@@ -452,7 +462,8 @@ Status P2PSubscribe::ProcessP2PResponse(
 {
     std::set<std::string> finishedList;
     std::unordered_map<P2PGroupKey, std::vector<DeviceObjectMetaRspPb>> groupedSubResp;
-
+    std::stringstream respKeys;
+    bool first = true;
     for (auto &subResp : resp.dev_obj_resp_meta()) {
         // in case of unavailable object key, all of them should be traced
         const auto &objectKey = subResp.object_key();
@@ -472,10 +483,16 @@ Status P2PSubscribe::ProcessP2PResponse(
                               .remoteClientId = subResp.src_client_id(),
                               .sameNode = subResp.is_same_node() };
         groupedSubResp[groupKey].emplace_back(std::move(subResp));
+        if (!first) {
+            respKeys << ", ";
+        }
+        respKeys << objectKey;
+        first = false;
     }
+    VLOG(1) << FormatString("Start processing the keys that were successfully queried, keys:[%s]", respKeys.str());
     ProcessP2PRecv(groupedSubResp, objKeyToP2PRequest, finishedList);
     std::stringstream retryKeys;
-    bool first = true;
+    first = true;
     auto remainTasks =
         std::make_shared<P2PGetRequestsWrapper>(p2pGetRequests->prefetchTimeout_, p2pGetRequests->subTimeout_);
     for (size_t i = 0; i < p2pGetRequests->Size(); i++) {
@@ -489,9 +506,10 @@ Status P2PSubscribe::ProcessP2PResponse(
             first = false;
         }
         remainTasks->initializationTime_ = p2pGetRequests->initializationTime_;
+        remainTasks->getTraceId_ = p2pGetRequests->getTraceId_;
     }
     if (remainTasks->Size() > 0) {
-        VLOG(1) << FormatString("Re-adding unfinished keys [%s] to p2pGetQueue_", retryKeys.str());
+        VLOG(1) << FormatString("Re-adding unfinished keys to p2pGetQueue_，keys: [%s]", retryKeys.str());
         p2pGetQueue_.Push(remainTasks);
     }
     return Status::OK();

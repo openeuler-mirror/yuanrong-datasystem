@@ -55,9 +55,11 @@ public:
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      * @param[in] payloads The rpc request payload.
+     * @param[in]  clientId the client id.
      * @return K_OK on success; the error code otherwise.
      */
-    Status MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads);
+    Status MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads,
+                        const ClientKey &clientId);
 
 private:
     using ObjGroupMap = std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>>;
@@ -73,9 +75,11 @@ private:
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      * @param[out] payloads The rpc request payload.
+     * @param[in]  clientId the client id.
      * @return K_OK on success; the error code otherwise.
      */
-    Status MultiPublishImpl(const MultiPublishReqPb &req, MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads);
+    Status MultiPublishImpl(const MultiPublishReqPb &req, MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads,
+                            const ClientKey &clientId);
 
     /**
      * @brief Handle multiply set request from the client transaction.

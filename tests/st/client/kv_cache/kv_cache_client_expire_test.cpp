@@ -131,7 +131,7 @@ TEST_F(KVCacheClientExpireTest, ExpireInvalidKey)
     size_t objNum = 20;
     failedKeys.clear();
     for (size_t i = 0; i < objNum; i++) {
-        key1 = "key1" + std::to_string(i);
+        key1 = "key" + std::to_string(i);
         keys.emplace_back(key1);
     }
     rc = client_->Expire(keys, ttlTimeout, failedKeys);

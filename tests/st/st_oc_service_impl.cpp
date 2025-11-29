@@ -48,7 +48,7 @@ Status StOCServiceImpl::GetMasterGRefTable(const GRefTableReqPb &req, GRefTableR
 Status StOCServiceImpl::GetWorkerGRefTable(const GRefTableReqPb &req, GRefTableRspPb &rsp)
 {
     (void)req;
-    std::unordered_map<std::string, std::vector<std::string>> refTable;
+    std::unordered_map<ClientKey, std::vector<std::string>> refTable;
     workerOc_->GetGlobalRefTable()->GetAllClientRef(refTable);
     for (const auto &singleWorker : refTable) {
         auto singleWorkerGRef = rsp.add_single_client_gref();

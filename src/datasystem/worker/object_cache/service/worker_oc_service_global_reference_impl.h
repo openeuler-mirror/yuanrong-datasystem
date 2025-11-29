@@ -30,7 +30,7 @@ namespace object_cache {
 class WorkerOcServiceGlobalReferenceImpl : public WorkerOcServiceCrudCommonApi {
 public:
     WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-                                       std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> globalRefTable,
+                                       std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
 
     /**
@@ -72,7 +72,7 @@ public:
      * @param[out] failDecIds The failed object keys.
      * @return Status of the call.
      */
-    Status GDecreaseRefWithLock(const std::vector<std::string> &objectKeys, const std::string &clientId,
+    Status GDecreaseRefWithLock(const std::vector<std::string> &objectKeys, const ClientKey &clientId,
                                 std::vector<std::string> &failDecIds);
 
     /**
@@ -164,7 +164,7 @@ private:
      * @param[out] unAliveIds The object keys state is unKeep and gRef is 0, can be destroy.
      * @param[out] failDecIds Object keys that are failed to update
      */
-    Status UpdateMasterForFinishedIds(const std::string &clientId, const std::vector<std::string> &finishDecIds,
+    Status UpdateMasterForFinishedIds(const ClientKey &clientId, const std::vector<std::string> &finishDecIds,
                                       std::unordered_set<std::string> &unAliveIds,
                                       std::vector<std::string> &failDecIds);
 
@@ -238,7 +238,7 @@ private:
 
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
-    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> globalRefTable_;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

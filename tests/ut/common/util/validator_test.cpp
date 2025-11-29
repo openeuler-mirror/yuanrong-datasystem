@@ -32,8 +32,6 @@ TEST_F(ValidatorTest, TestValidator1)
     EXPECT_TRUE(Validator::ValidateInt32("FlagName", 65));
     EXPECT_TRUE(Validator::ValidatePort("FlagName", 65535));
     EXPECT_FALSE(Validator::ValidatePort("FlagName", 65536));
-    EXPECT_TRUE(Validator::ValidateHostIPv4("FlagName", "255.255.0.0"));
-    EXPECT_FALSE(Validator::ValidateHostIPv4("FlagName", "0.0.0.256"));
     EXPECT_TRUE(Validator::ValidateRealPath("FlagName", "/tmp"));
     EXPECT_FALSE(Validator::ValidateRealPath("FlagName", "/path/not/exist"));
     EXPECT_TRUE(Validator::ValidatePathString("FlagName", "/path/To/Dir/"));
@@ -66,27 +64,27 @@ TEST_F(ValidatorTest, TestIsRegexMatch)
     EXPECT_FALSE(Validator::IsRegexMatch(simpleIdRe1, "wqeiqwo$"));
 }
 
-TEST_F(ValidatorTest, TestValidateHostPortIPv4)
+TEST_F(ValidatorTest, TestValidateHostPortString)
 {
-    EXPECT_TRUE(Validator::ValidateHostPortIPv4("FlagName", ""));
-    EXPECT_TRUE(Validator::ValidateHostPortIPv4("FlagName", "0.0.0.0:0"));
-    EXPECT_TRUE(Validator::ValidateHostPortIPv4("FlagName", "255.255.255.255:65535"));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", "255.255.255.255: 65535"));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", "255.255.255.255:65535 "));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", "255.255.255.255:65536"));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", "255"));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", ":65535"));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", "255.255.255.255:"));
-    EXPECT_FALSE(Validator::ValidateHostPortIPv4("FlagName", "255.255.255.:65535"));
+    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", ""));
+    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "0.0.0.0:0"));
+    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:65535"));
+    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[::1]:65535"));
+    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "::1:65535"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.255: 65535"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:65535 "));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:65536"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", ":65535"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.:65535"));
 }
 
 TEST_F(ValidatorTest, TestValidator2)
 {
     EXPECT_EQ(Validator::ValidateInt32("FlagName", -65), false);
     EXPECT_EQ(Validator::ValidatePort("FlagName", 1), true);
-    EXPECT_EQ(Validator::ValidateHostIPv4("FlagName", "255.255.0.0"), true);
-    EXPECT_TRUE(Validator::ValidateHostIPv4("FlagName", "0.0.0.0"));
-    EXPECT_FALSE(Validator::ValidateHostIPv4("FlagName", "0432.3.0.0"));
     EXPECT_EQ(Validator::ValidatePathString("FlagName", "./p0/dir/1/0/"), true);
     EXPECT_EQ(Validator::ValidatePathString("FlagName", "./测试/华为/1/0/"), true);
     EXPECT_EQ(Validator::ValidatePathString("FlagName", "./@测试/!华为/1/0/"), true);
@@ -116,15 +114,6 @@ TEST_F(ValidatorTest, TestValidatorThreadNum)
     EXPECT_EQ(Validator::ValidateThreadNum("spill_thread_num", static_cast<uint32_t>(4097)), false);
 }
 
-TEST_F(ValidatorTest, TestApiValidator)
-{
-    EXPECT_TRUE(Validator::IsIpv4OrUrl("255.255.255.255:1"));
-    EXPECT_TRUE(Validator::IsIpv4OrUrl("255.255.255.255:65535"));
-    EXPECT_TRUE(Validator::IsIpv4OrUrl("0.0.0.0:65535"));
-    EXPECT_TRUE(Validator::IsIpv4OrUrl("0.0.0.0:0"));
-    EXPECT_TRUE(Validator::IsIpv4OrUrl("ds-master.datasystem.cluster.local:55555"));
-}
-
 TEST_F(ValidatorTest, IsIdFormat)
 {
     EXPECT_TRUE(Validator::IsIdFormat("woqednuielwhdu329UG-!@#%;"));
@@ -148,18 +137,6 @@ TEST_F(ValidatorTest, ValidateDomainNamePort)
     EXPECT_TRUE(Validator::ValidateDomainNamePort("qqq", "qwdqwdUL-HUL.dbilqwu-dqHIIIL:32131"));
     EXPECT_FALSE(Validator::ValidateDomainNamePort("qqq", "-qwdqwdUL-HUL.dbilqwu-dqHIIIL:32131"));
     EXPECT_FALSE(Validator::ValidateDomainNamePort("qqq", "qwdqwdUL-HUL.dbilqwu-dqHIIIL:82131"));
-}
-
-TEST_F(ValidatorTest, TestHttpUrl)
-{
-    EXPECT_TRUE(Validator::IsHttpUrl("https://agc-storage-ops-server-test-cn.hwcloudtest.cn"));
-    EXPECT_TRUE(Validator::IsHttpUrl("https://agc-storage-ops-server-test-cn.hwcloudtest.cn:9443"));
-    EXPECT_TRUE(Validator::IsHttpUrl("http://agc-storage-ops-server-test-cn.hwcloudtest.cn"));
-    EXPECT_TRUE(Validator::IsHttpUrl("https://114.222.6.221:443"));
-    EXPECT_TRUE(Validator::IsHttpUrl("https://114.222.6.221"));
-    EXPECT_TRUE(Validator::IsHttpUrl("http://114.222.6.221"));
-    EXPECT_FALSE(Validator::IsHttpUrl("ftp://114.222.6.221"));
-    EXPECT_FALSE(Validator::IsHttpUrl("somethinghttp://114.222.6.221"));
 }
 
 TEST_F(ValidatorTest, TestEncryptKitFlag)

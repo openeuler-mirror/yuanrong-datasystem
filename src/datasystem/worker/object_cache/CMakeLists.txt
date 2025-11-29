@@ -41,6 +41,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         common_event_loop
         common_shared_memory
         common_immutable_string
+        string_ref
         common_persistence_api
         common_parallel
         master_heartbeat_protos

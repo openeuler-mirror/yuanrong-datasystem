@@ -216,7 +216,7 @@ Status MasterWorkerOCServiceImpl::QueryGlobalRefNumOnWorker(const QueryGlobalRef
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "[GRef] Query All Objs Global References Rpc Received";
-    std::unordered_map<std::string, std::unordered_set<std::string>> refTable;
+    std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     ocClientWorkerSvc_->globalRefTable_->GetAllRef(refTable);
     if (req.object_keys_size() == 0) {
         // Query All objects

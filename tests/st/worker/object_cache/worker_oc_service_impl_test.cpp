@@ -347,7 +347,7 @@ public:
 // Non shared memory case: Publish -> Get.
 TEST_F(WorkerOCServiceImplTest, TestPublish)
 {
-    std::string clientId = "c1";
+    auto clientId = ClientKey::Intern("c1");
     uint32_t lockId;
     DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, false, 1, "", "", "", lockId));
 
@@ -371,7 +371,7 @@ TEST_F(WorkerOCServiceImplTest, TestPublish)
 // Shared memory case: Create -> Write -> Publish -> Get -> DecRef -> Delete.
 TEST_F(WorkerOCServiceImplTest, TestPut)
 {
-    std::string clientId = "c1";
+    auto clientId = ClientKey::Intern("c1");
     uint32_t lockId;
     DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, true, true, "", "", "", lockId));
 
@@ -416,7 +416,7 @@ TEST_F(WorkerOCServiceImplTest, TestPut)
 
 TEST_F(WorkerOCServiceImplTest, TestMultiCreate)
 {
-    std::string clientId = "c1";
+    auto clientId = ClientKey::Intern("c1");
     uint32_t lockId;
     DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, true, true, "", "", "", lockId));
 
@@ -435,7 +435,7 @@ TEST_F(WorkerOCServiceImplTest, TestMultiCreate)
 
 TEST_F(WorkerOCServiceImplTest, DISABLED_TestSealAfterSealVarySz)
 {
-    std::string clientId = "c1";
+    auto clientId = ClientKey::Intern("c1");
     datasystem::worker::ClientManager::Instance().AddClient(clientId, 1);
 
     // NoShm Put.
@@ -471,7 +471,7 @@ TEST_F(WorkerOCServiceImplTest, DISABLED_TestSealAfterSealVarySz)
 
 TEST_F(WorkerOCServiceImplTest, TestObjectTableDeadlock)
 {
-    std::string clientId = "c1";
+    ClientKey clientId = ClientKey::Intern("c1");
     DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, 1));
     size_t dataSz = 100;
     auto str = random_.GetRandomString(dataSz);
@@ -510,7 +510,7 @@ TEST_F(WorkerOCServiceImplTest, LEVEL2_TestRemoveMetaLocation)
         std::string key = "KEY_REMOVELOCATIOIN_" + std::to_string(i);
         DS_ASSERT_OK(client->Set(key, "aaaaaaaaa", param));
     }
-    std::string clientId = "c1";
+    auto clientId = ClientKey::Intern("c1");
     DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, 1));
     for (int i = 0; i < 20; i++) {  // Generate 20 objects
         std::string key = "KEY_REMOVELOCATIOIN_" + std::to_string(i);

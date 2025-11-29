@@ -140,7 +140,7 @@ public:
 
     void Close();
     Status Bind(const std::string &endPoint);
-    Status Connect(const std::string &endPoint);
+    Status Connect(const std::string &endPoint, bool isIPv6 = false);
     Status RecvMsg(ZmqMessage &msg, ZmqRecvFlags flags);
     Status SendMsg(ZmqMessage &msg, ZmqSendFlags flags);
 

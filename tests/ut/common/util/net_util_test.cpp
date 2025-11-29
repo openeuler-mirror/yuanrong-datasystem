@@ -61,45 +61,9 @@ TEST_F(NetUtilTest, TestParseAddress)
         HostPort hostPort;
         Status status = hostPort.ParseString(addr);
         DS_ASSERT_NOT_OK(status);
-        ASSERT_TRUE(status.GetMsg().find("Size of vector of parsed string must be 2 or 3") != std::string::npos);
         addr = "0.0.0.0.8481";
         status = hostPort.ParseString(addr);
         DS_ASSERT_NOT_OK(status);
-        ASSERT_TRUE(status.GetMsg().find("Size of vector of parsed string must be 2 or 3") != std::string::npos);
-    }
-
-    // Invalid input: use default address if parsing of address fails
-    {
-        std::string addr = "0.0.0.0:8481";
-        HostPort hostPort, default_addr;
-        default_addr.ParseString(addr);
-        Status status = hostPort.ParseString("", default_addr);
-        ASSERT_EQ(hostPort.Host(), "0.0.0.0");
-        ASSERT_EQ(hostPort.Port(), 8481);
-        ASSERT_EQ(hostPort.ToString(), "0.0.0.0:8481");
-    }
-}
-
-TEST_F(NetUtilTest, TestValidateAddress)
-{
-    LOG(INFO) << "Test HostPort ValidateAddress.";
-    {
-        std::string addr = "0.0.0.0:8481";
-        ASSERT_TRUE(HostPort::IsValidateAddress(addr));
-    }
-
-    // Invalid addr: large port
-    {
-        std::string addr = "0.0.0.0:65536";
-        ASSERT_FALSE(HostPort::IsValidateAddress(addr));
-    }
-
-    // Invalid addr: not host:port
-    {
-        std::string addr = "0.0.0.0.10000";
-        ASSERT_FALSE(HostPort::IsValidateAddress(addr));
-        addr = "0.0.0.0::::8481";
-        ASSERT_FALSE(HostPort::IsValidateAddress(addr));
     }
 }
 
@@ -159,19 +123,6 @@ TEST_F(NetUtilTest, TestMoveAssignment)
     ASSERT_EQ(another.Host(), "0.0.0.0");
     ASSERT_EQ(another.Port(), 8481);
     ASSERT_EQ(another.ToString(), "0.0.0.0:8481");
-}
-
-TEST_F(NetUtilTest, TestGetDeviceIp)
-{
-    LOG(INFO) << "Test Get device ip.";
-    std::string ip;
-    ASSERT_EQ(GetDeviceIp("lo", ip), 0);
-    ASSERT_EQ(ip, "127.0.0.1");
-
-    ASSERT_EQ(GetDeviceIp("invalid_dev", ip), -1);
-
-    std::string invalidDev(IFNAMSIZ + 1, 'c');
-    ASSERT_EQ(GetDeviceIp(invalidDev, ip), -1);
 }
 
 TEST_F(NetUtilTest, TestToString)

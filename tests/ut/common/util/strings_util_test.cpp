@@ -131,5 +131,22 @@ TEST_F(StringsUtilTest, TestIsValidNumber)
     ASSERT_FALSE(IsValidNumber(num7));
     ASSERT_FALSE(IsValidNumber(num8));
 }
+
+TEST_F(StringsUtilTest, TestFormatStringForLog)
+{
+    // Case1: Test empty strings and null pointers
+    EXPECT_EQ(FormatStringForLog(""), "");
+
+    // Case2: Create a long string that will definitely be truncated
+    std::string longStr = "This is the beginning of a very long string that should be truncated "
+                          "and here is the end part that should remain visible";
+    size_t maxDisplayLength1 = 1000;
+    EXPECT_EQ(FormatStringForLog(longStr, maxDisplayLength1), longStr);
+    EXPECT_EQ(FormatStringForLog(longStr), longStr);
+
+    std::string expectStr = "This... [total: 120]";
+    size_t maxDisplayLength2 = 4;
+    EXPECT_EQ(FormatStringForLog(longStr, maxDisplayLength2), expectStr);
+}
 }  // namespace ut
 }  // namespace datasystem

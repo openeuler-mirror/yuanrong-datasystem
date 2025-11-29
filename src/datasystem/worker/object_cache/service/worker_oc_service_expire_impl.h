@@ -66,7 +66,7 @@ private:
      * @param[out] objExpireFailed The objects failed to expire.
      * @param[out] rsp The expire response protobuf.
      */
-    Status ExpireFromMaster(std::vector<std::string> objectKeys, HostPort masterAddr, uint32_t ttlSeconds,
+    Status ExpireFromMaster(std::vector<std::string> objectKeys, const HostPort &masterAddr, uint32_t ttlSeconds,
                             std::vector<std::string> &absentObj, std::unordered_set<std::string> &objExpireFailed,
                             ExpireRspPb &rsp);
 

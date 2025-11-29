@@ -46,8 +46,8 @@ Status Future::Get(uint64_t subTimeoutMs)
     if (future_.wait_for(std::chrono::milliseconds(subTimeoutMs)) == std::future_status::timeout) {
         RETURN_STATUS_LOG_ERROR(
             K_FUTURE_TIMEOUT,
-            FormatString("The %s get is timeout, still waiting for promise setting value, please try again.",
-                         futureName));
+            FormatString("The %s get is timeout (%d ms), still waiting for promise setting value, please try again.",
+                         futureName, subTimeoutMs));
     }
 
     // future_.get() is non-blocked when std::future_status is ready.

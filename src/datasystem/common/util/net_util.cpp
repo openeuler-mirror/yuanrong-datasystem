@@ -31,41 +31,32 @@
 #include "datasystem/common/util/validator.h"
 
 namespace datasystem {
-constexpr int PORT_MIN = 1024;
-constexpr int PORT_MAX = 65535;
-int GetDeviceIp(const std::string &devName, std::string &devIp)
+Status ParseToHostPortString(const std::string &str, std::string &host, std::string &port, bool &isIPv6)
 {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        return -1;
+    std::string addrStr;
+    std::string portNumStr;
+
+    CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("HostPort", str), K_INVALID,
+                             "Invalid IP address and port parsed");
+    
+    auto pos = str.find_last_of(':');
+    portNumStr = str.substr(pos + 1);
+
+    // If the host string part begins with '[' then this can be a valid IPv6 host.
+    // If it does not start with this, assume IPv4 format.
+    if (str[0] != '[') {
+        addrStr = str.substr(0, pos);
+    } else {
+        const int lastCharPosTruncate = 2;
+        isIPv6 = true;
+        // strip the first and last characters (validator already confirmed the format was good, no need to check again)
+        addrStr = str.substr(1, pos - lastCharPosTruncate);
     }
 
-    // Type of address to retrieve - IPv4 IP address.
-    struct ifreq ifr;
-    ifr.ifr_addr.sa_family = AF_INET;
-    // Copy the interface name in the ifreq structure.
-    int ret = strcpy_s(ifr.ifr_name, sizeof(ifr.ifr_name), devName.c_str());
-    if (ret != EOK) {
-        RETRY_ON_EINTR(close(fd));
-        return -1;
-    }
+    host = addrStr;
+    port = portNumStr;
 
-    if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
-        RETRY_ON_EINTR(close(fd));
-        return -1;
-    }
-
-    const int ipLength = 32;
-    char buf[ipLength] = { 0 };
-    if (inet_ntop(AF_INET, &((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr, buf, ipLength) == NULL) {
-        RETRY_ON_EINTR(close(fd));
-        return -1;
-    }
-
-    devIp = std::string(buf);
-    RETRY_ON_EINTR(close(fd));
-
-    return 0;
+    return Status::OK();
 }
 
 std::vector<std::string> Split(const std::string &input, const std::string &pattern)
@@ -87,76 +78,25 @@ std::vector<std::string> Split(const std::string &input, const std::string &patt
     return result;
 }
 
-Status ParseToNodeIdString(const std::string &str, std::string &nodeId)
+HostPort::HostPort(std::string host, int port)
+    : host_(std::move(host)), port_(port)
 {
-    const auto &parsed = Split(str, ":");
-    if (parsed.size() == SPLIT_NODE_LIST_NUM) {
-        nodeId = parsed[0];
-        return Status::OK();
+    // IPv6 addresses have the form like: xxxx:xxxx:xxxx:xxxx:xxxx:xxxx
+    // Where x's are hex digits. It also supports compaction-like wild cards, so the actual regex to match it
+    // is complicated.
+    // Quick method: if there's a : in the host name part, assume its v6.
+    // The flag setting is needed so that the correct format can be produced in the call to ToString later.
+    if (!host_.empty() && host_.find(':') != std::string::npos) {
+        isIPv6_ = true;
     }
-    RETURN_STATUS(StatusCode::K_INVALID, "Parse node failed");
-}
-
-Status ParseToHostPortString(const std::string &str, std::string &host, std::string &port, int expectedSz)
-{
-    int idxHost = 0;
-    int idxPort = 1;
-    std::vector<std::string> parsed = Split(str, ":");
-    if (parsed.size() == SPLIT_NODE_LIST_NUM) {
-        ++idxHost;
-        ++idxPort;
-    } else if (parsed.size() != SPLIT_LIST_NUM) {
-        RETURN_STATUS(StatusCode::K_INVALID, "Size of vector of parsed string must be 2 or 3");
-    }
-    CHECK_FAIL_RETURN_STATUS(expectedSz == SPLIT_NUM_AUTO || static_cast<int>(parsed.size()) == expectedSz,
-                             StatusCode::K_INVALID, "Size of vector of parsed string is not expected");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIpv4OrUrl(parsed[idxHost]), K_INVALID, "Invalid IPv4 address parsed");
-    CHECK_FAIL_RETURN_STATUS(Validator::IsInPortRange(parsed[idxPort]), K_INVALID, "Invalid port number");
-    host = parsed[idxHost];
-    port = parsed[idxPort];
-
-    return Status::OK();
-}
-
-Status HostPort::ParseString(const std::string &str, const HostPort &defaultHostPort)
-{
-    if (ParseString(str).IsError()) {
-        *this = defaultHostPort;
-    }
-    return Status::OK();
 }
 
 Status HostPort::ParseString(const std::string &str)
 {
     std::string port;
-    RETURN_IF_NOT_OK(ParseToHostPortString(str, host_, port));
-    CHECK_FAIL_RETURN_STATUS(StringToInt(port, port_), StatusCode::K_INVALID, "Parse failed with port " + port);
-
-    if (port_ > PORT_MAX) {
-        std::stringstream error;
-        error << "port [" << port_ << "] > 65535";
-        RETURN_STATUS(StatusCode::K_INVALID, error.str());
-    }
+    // This parse call already validates the format. Not need to sanity check here.
+    RETURN_IF_NOT_OK(ParseToHostPortString(str, host_, port, isIPv6_));
+    StringToInt(port, port_);
     return Status::OK();
-}
-
-bool HostPort::IsValidateAddress(const std::string &address)
-{
-    if (!address.empty()) {
-        std::vector<std::string> split_str = Split(address, ":");
-        if (split_str.size() != SPLIT_LIST_NUM) {
-            return false;
-        }
-        int port = 0;
-        if (!StringToInt(split_str[1], port)) {
-            return false;
-        }
-        // The Ip address is invalid OR The port is invalid.
-        if ((INADDR_NONE == inet_addr(split_str[0].c_str()))
-            || (port < PORT_MIN || port > PORT_MAX)) {
-            return false;
-        }
-    }
-    return true;
 }
 }  // namespace datasystem

@@ -50,8 +50,8 @@ TEST_F(MasterDevOcDirectoryTest, ConcurrentAddAndGetAll)
         while (keepRunning) {
             for (const auto &key : keys) {
                 GetP2PMetaReqPb req;
-                auto request = std::make_shared<GetP2PMetaRequest>(std::vector<std::string>{ key }, nullptr, "client1",
-                                                                   0, req);
+                auto request = std::make_shared<GetP2PMetaRequest>(std::vector<std::string>{ key }, nullptr,
+                                                                   ClientKey::Intern("client1"), 0, req);
                 getP2PMetaTable_.AddGetP2PMetaRequest(key, request);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10)); // sleep 10 ms

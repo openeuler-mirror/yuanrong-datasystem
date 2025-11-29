@@ -64,13 +64,13 @@ WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
 }
 
 Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
-                                                     std::vector<RpcMessage> &payloads)
+                                                     std::vector<RpcMessage> &payloads, const ClientKey &clientId)
 {
     workerOperationTimeCost.Clear();
     Timer timer;
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_MULTIPUBLISH);
     CHECK_FAIL_RETURN_STATUS(!req.object_info().empty(), K_INVALID, "The list of object info is empty.");
-    Status status = MultiPublishImpl(req, resp, payloads);
+    Status status = MultiPublishImpl(req, resp, payloads, clientId);
     RequestParam reqParam;
     reqParam.objectKey = FormatString(
         "%s,count:%s", req.object_info(0).object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT), req.object_info_size());
@@ -81,7 +81,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
 }
 
 Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
-                                                         std::vector<RpcMessage> &payloads)
+                                                         std::vector<RpcMessage> &payloads, const ClientKey &clientId)
 {
     PerfPoint pointAll(PerfKey::WORKER_MULTI_PUBLISH_TOTAL);
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_INPUT_CHECK);
@@ -98,7 +98,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
         }
     }
     RETURN_IF_NOT_OK(
-        WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, req.client_id(), shmUnits, memoryRefTable_));
+        WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
 
     // MSet doesn't support distributed master with : case1: NTX and Existence::NX ; case2: TX and Existence::NONE.
     if (FLAGS_enable_distributed_master) {
@@ -119,7 +119,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
             TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_info(i).object_key()));
     }
 
-    LOG(INFO) << FormatString("Process multi pub from client: %s, cacheType: %d", req.client_id(), req.cache_type());
+    LOG(INFO) << FormatString("Process multi pub from client: %s, cacheType: %d", clientId, req.cache_type());
     VLOG(1) << "Multi publish with key : " << VectorToString(namespaceUri);
 
     // Insert entry to object table and get lock.
@@ -290,7 +290,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
 {
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_NTX_SAVE_ENTRY);
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
-    const bool shmEnabled = ClientShmEnabled(req.client_id());
+    const bool shmEnabled = ClientShmEnabled(ClientKey::Intern(req.client_id()));
     for (size_t i = 0; i < entries.size(); i++) {
         PerfPoint pointIn(PerfKey::WORKER_MULTI_PUBLISH_NTX_SET_ENTRY);
         if (entries[i] == nullptr) {
@@ -356,7 +356,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
                                                            std::vector<RpcMessage> &payloads)
 {
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
-    const bool shmEnabled = ClientShmEnabled(req.client_id());
+    const bool shmEnabled = ClientShmEnabled(ClientKey::Intern(req.client_id()));
     size_t idx = 0;
     for (size_t i = 0; i < objectKeys.size(); ++i) {
         if (entries[i]->Get() != nullptr) {

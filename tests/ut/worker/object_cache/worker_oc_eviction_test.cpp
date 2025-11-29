@@ -147,7 +147,7 @@ TEST_F(EvictionManagerTest, TestEvictionManagerInit)
     std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, HostPort("127.0.0.1", 31501),
                                                           HostPort("127.0.0.1", 31500));
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
     std::vector<EvictionList::Node> objsInList;
     EvictionList::Node oldest;
@@ -160,7 +160,7 @@ TEST_F(EvictionManagerTest, TestEvictionManagerAddErase)
     std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, HostPort("127.0.0.1", 31501),
                                                           HostPort("127.0.0.1", 31500));
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
 
     uint64_t dataSize = 10 * 1024 * 1024;
@@ -180,7 +180,7 @@ TEST_F(EvictionManagerTest, TestEvictionManagerAddErase)
     std::vector<std::string> objectKeys = { id3 };
     std::vector<std::string> failIncIds;
     std::vector<std::string> firstIncIds;
-    globalRefTable->GIncreaseRef("client-id", objectKeys, failIncIds, firstIncIds);
+    globalRefTable->GIncreaseRef(ClientKey::Intern("client-id"), objectKeys, failIncIds, firstIncIds);
     DS_EXPECT_OK(CreateObject(id3, dataSize));
     std::shared_ptr<SafeObjType> entry3;
     DS_EXPECT_OK(objectTable_->Get(id3, entry3));
@@ -246,7 +246,7 @@ public:
         evictionManager_ = std::make_shared<object_cache::WorkerOcEvictionManager>(
             objectTable, HostPort("127.0.0.1", 32131),  // worker port is 32131,
             HostPort("127.0.0.1", 52319));              // master port is 52319;
-        auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ImmutableString>>();
+        auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         DS_ASSERT_OK(evictionManager_->Init(globalRefTable, akSkManager_));
         scAllocateManager_ = std::make_shared<worker::stream_cache::WorkerSCAllocateMemory>(evictionManager_);
     }

@@ -75,7 +75,7 @@ Status CommonServer::Shutdown()
     return Status::OK();
 }
 
-Status CommonServer::AddClient(const std::string &clientId, bool shmEnabled, int32_t socketFd,
+Status CommonServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
                                const std::string &tenantId, bool enableCrossNode, const std::string &podName,
                                uint32_t &lockId)
 {

@@ -36,7 +36,7 @@ namespace object_cache {
 
 WorkerOcServiceGlobalReferenceImpl::WorkerOcServiceGlobalReferenceImpl(
     WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
     HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
       etcdCM_(etcdCM),
@@ -67,7 +67,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     BatchGRefLock(objectKeys, true, lockedEntries);
     Raii unlockAll([&lockedEntries]() { BatchGRefUnlock(lockedEntries); });
 
-    Status lastErr = globalRefTable_->GIncreaseRef(req.address(), objectKeys, failIncIds, firstIncIds);
+    Status lastErr =
+        globalRefTable_->GIncreaseRef(ClientKey::Intern(req.client_id()), objectKeys, failIncIds, firstIncIds);
     LOG_IF_ERROR(lastErr, "[Ref] GIncreaseRef in worker failed");
     if (!firstIncIds.empty()) {
         Status status = UpdateMasterForFirstIds(req, firstIncIds, failIncIds);
@@ -117,7 +118,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &re
         if (!req.remote_client_id().empty()) {
             return GDecreaseRefWithLockWithRemoteClientId(objectKeys, req.remote_client_id(), failedObjectKeys);
         }
-        return GDecreaseRefWithLock(objectKeys, req.address(), failedObjectKeys);
+        return GDecreaseRefWithLock(objectKeys, ClientKey::Intern(req.client_id()), failedObjectKeys);
     });
 
     if (!failedObjectKeys.empty()) {
@@ -424,7 +425,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
 Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRefWithLock(
     std::function<bool(const std::string &)> matchFunc, std::string masterAddr)
 {
-    std::unordered_map<std::string, std::unordered_set<std::string>> refTable;
+    std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     std::vector<std::string> increaseMasterObjs;
     globalRefTable_->GetAllRef(refTable);
     for (const auto &objRef : refTable) {
@@ -480,6 +481,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(firstIncIds);
     // Send requests for each master
     Status lastErr;
+    auto clientId = ClientKey::Intern(req.address());
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> &currentFirstIncIds = item.second;
@@ -491,7 +493,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
             lastErr = Status(K_RUNTIME_ERROR, "Cannot connect to master, check the network.");
             std::vector<std::string> temFailedIds;
             std::vector<std::string> temFirstIds;
-            (void)globalRefTable_->GDecreaseRef(req.address(), currentFirstIncIds, temFailedIds, temFirstIds);
+            (void)globalRefTable_->GDecreaseRef(clientId, currentFirstIncIds, temFailedIds, temFirstIds);
             (void)failIncIds.insert(failIncIds.end(), currentFirstIncIds.begin(), currentFirstIncIds.end());
         } else {
             Status masterResult = GIncreaseMasterRef(currentFirstIncIds, masterAddr, rpcFailedIds);
@@ -503,7 +505,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
             if (!rpcFailedIds.empty()) {
                 currentFirstIncIds.clear();
                 std::vector<std::string> tmpFailIds;
-                (void)globalRefTable_->GDecreaseRef(req.address(), rpcFailedIds, tmpFailIds, currentFirstIncIds);
+                (void)globalRefTable_->GDecreaseRef(clientId, rpcFailedIds, tmpFailIds, currentFirstIncIds);
                 (void)failIncIds.insert(failIncIds.end(), tmpFailIds.begin(), tmpFailIds.end());
             }
         }
@@ -546,7 +548,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const std::vector<
 }
 
 Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRefWithLock(const std::vector<std::string> &objectKeys,
-                                                                const std::string &clientId,
+                                                                const ClientKey &clientId,
                                                                 std::vector<std::string> &failDecIds)
 {
     VLOG(1) << "GDecreaseRefWithLock begin, objectKeys size: " << objectKeys.size();
@@ -613,7 +615,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRefWithLock(const std::vecto
     return lastErr;
 }
 
-Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const std::string &clientId,
+Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const ClientKey &clientId,
                                                                       const std::vector<std::string> &finishDecIds,
                                                                       std::unordered_set<std::string> &unAliveIds,
                                                                       std::vector<std::string> &failDecIds)

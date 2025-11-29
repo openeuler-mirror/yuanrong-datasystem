@@ -64,7 +64,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    Status rc = CreateImpl(tenantId, req.client_id(), req.object_key(), req.data_size(), resp,
+    Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(), resp,
                            static_cast<CacheType>(req.cache_type()));
     RequestParam reqParam;
     reqParam.objectKey = req.object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
@@ -76,7 +76,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     return rc;
 }
 
-Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const std::string &clientId,
+Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const ClientKey &clientId,
                                              const std::string &rawObjectKey, size_t dataSize, CreateRspPb &resp,
                                              CacheType cacheType)
 {
@@ -178,7 +178,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             subRsp[i].set_metadata_size(metadataSize);
         }
         PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ADD_SHM_UNITS);
-        memoryRefTable_->AddShmUnits(req.client_id(), shmUnits);
+        memoryRefTable_->AddShmUnits(ClientKey::Intern(req.client_id()), shmUnits);
         return Status::OK();
     };
 
@@ -240,7 +240,7 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
     Status rc = MultiCreateImpl(req, tenantId, resp);
     if (rc.IsError()) {
         // Rollback all memory if failed.
-        const auto &clientId = req.client_id();
+        const auto clientId = ClientKey::Intern(req.client_id());
         for (auto &subResp : resp.results()) {
             memoryRefTable_->RemoveShmUnit(clientId, ShmKey::Intern(subResp.shm_id()));
         }

@@ -121,13 +121,16 @@ class Command(BaseCommand, ParallelMixin):
         )
 
         # Update worker_address
-        util.is_valid_ipv4(node)
+        is_ipv6 = util.is_valid_ip(node)
+        node_arg = node
+        if is_ipv6:
+            node_arg = "[" + node + "]"
         util.is_valid_port(worker_port)
         sed_command = (
             r"sed -i "
             r'"/\"worker_address\"/,/}/ s/\"value\"\s*:\s*\"[^\"]*\"/\"value\": \"%s\"/g" '
             r"%s"
-        ) % (f"{node}:{worker_port}", self._hidden_config_path)
+        ) % (f"{node_arg}:{worker_port}", self._hidden_config_path)
         util.ssh_execute(
             node,
             user_name,

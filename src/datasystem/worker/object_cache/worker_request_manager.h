@@ -109,11 +109,12 @@ public:
      * @param[in] shmRefTable The instance of SharedMemoryRefTable.
      * @param[in] api The instance of server api.
      * @param[in] threadPool The thread pool for GET requests.
+     * @param[in] clientId The client id.
      * @return Status of this call.
      */
     Status Init(const std::string &tenantId, const GetReqPb &req, std::shared_ptr<SharedMemoryRefTable> shmRefTable,
                 std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api,
-                std::shared_ptr<ThreadPool> threadPool);
+                std::shared_ptr<ThreadPool> threadPool, const ClientKey &clientId);
 
     /**
      * @brief Update GetRequst according to local get result, return to client if all data has been obtained
@@ -206,7 +207,7 @@ private:
     std::mutex mutex_;
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi_;
     std::shared_ptr<SharedMemoryRefTable> shmRefTable_;
-    std::string clientId_;
+    ClientKey clientId_;
     std::vector<ObjectKey> rawObjectKeys_;
     std::unordered_map<ObjectKey, GetObjInfo> objects_;
     std::atomic<size_t> readyCount_{ 0 };

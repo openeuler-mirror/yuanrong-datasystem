@@ -28,6 +28,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -79,8 +80,9 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     Status rc;
     size_t threadNum = std::min<size_t>(objKeysGrpByMaster.size(), FLAGS_rpc_thread_num);
     auto batchExpireThreadPool_ = std::make_unique<ThreadPool>(1, threadNum, "BatchExpireMeta");
+    futures.reserve(objKeysGrpByMaster.size());
     for (auto &item : objKeysGrpByMaster) {
-        futures.emplace_back(batchExpireThreadPool_->Submit([&, item, traceID, timer]() {
+        futures.emplace_back(batchExpireThreadPool_->Submit([&, item, timer]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
@@ -147,7 +149,7 @@ Status WorkerOcServiceExpireImpl::TryExpireObjKeyFromOtherAZ(std::unordered_set<
     return Status::OK();
 }
 
-Status WorkerOcServiceExpireImpl::ExpireFromMaster(std::vector<std::string> objectKeys, HostPort masterAddr,
+Status WorkerOcServiceExpireImpl::ExpireFromMaster(std::vector<std::string> objectKeys, const HostPort &masterAddr,
                                                    uint32_t ttlSeconds, std::vector<std::string> &absentObj,
                                                    std::unordered_set<std::string> &objExpireFailed, ExpireRspPb &rsp)
 {

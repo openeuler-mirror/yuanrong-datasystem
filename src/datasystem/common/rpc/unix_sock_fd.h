@@ -26,14 +26,15 @@
 #include <google/protobuf/io/zero_copy_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <netdb.h>
 #include <securec.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
-
 #include <deque>
 #include <memory>
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -203,12 +204,6 @@ public:
     Status CreateUnixSocket();
 
     /**
-     * @brief Setup a socket of type AF_INET
-     * @return Status of call.
-     */
-    Status CreateTcpIpSocket();
-
-    /**
      * Disable Nagel algorithm
      * @return Status of call
      */
@@ -229,27 +224,20 @@ public:
     static Status SetUpSockPath(const std::string &path, struct sockaddr_un &addr);
 
     /**
-     * @brief Initialize the fd_ for tcp/ip socket.
-     * @param[in] path tcp/ip endpoint in the form "x.y.z.w:port".
-     * @param[in] addr User provided sockaddr.
-     * @return Status of call.
-     */
-    static Status SetUpTcpIpAddr(const std::string &endPt, struct sockaddr_in &addr);
-
-    /**
      * @brief Bind to socket.
      * @param[in] addr Created by SetUpSockPath.
      * @param[in] perm Permission of path to bind to.
      * @return Status of call.
      */
-    Status Bind(sockaddr_un &addr, mode_t perm) const;
+    Status BindUds(sockaddr_un &addr, mode_t perm) const;
 
     /**
-     * @brief Bind to socket.
-     * @param[in] addr Created by SetUpTcpIpSocket.
+     * @brief Create and bind to socket.
+     * @param[in] servInfo The serv info for binding
+     * @param[out] bindingHostPort After successful bind, the HostPort that was bound
      * @return Status of call.
      */
-    Status Bind(sockaddr_in &addr) const;
+    Status BindTcp(struct addrinfo *servInfo, HostPort &bindingHostPort);
 
     /**
      * @brief Bind to an endpoint starts with either "ipc://" or "tcp://"
@@ -267,10 +255,11 @@ public:
     Status Connect(sockaddr_un &addr) const;
 
     /**
-     * @brief Connect to a remote end point.
-     * @param[in] addr Created by SetUpTcpIpSocket.
+     * @brief Create and connect to a remote end point.
+     * @param[in] servInfo The serv info for binding
+     * @return status of the call
      */
-    Status Connect(sockaddr_in &addr) const;
+    Status ConnectTcp(struct addrinfo *servInfo);
 
     /**
      * @brief Connect to an endpoint starts with either "ipc://" or "tcp://"
@@ -339,13 +328,24 @@ public:
      * @return Status
      */
     static Status ErrnoToStatus(int err, int fd = RPC_NO_FILE_FD);
-
+    
     /**
-     * Return the address/port a socket bind/connect to
-     * @param out
+     * @brief Return the address/port a socket bind/connect to
+     * @param[in] servInfo The serv info to query
+     * @param[out] outHostPort The host port for the connected or bound socket
      * @return Status
      */
-    Status GetBindingHostPort(datasystem::HostPort &out) const;
+    Status GetSocketHostPort(struct addrinfo *servInfo, datasystem::HostPort &outHostPort);
+
+    /**
+     * @brief Given the input address string, does a lookup to produce the addrinfo struct for use with bind or connect.
+     * A wrapper for getaddrinfo() system call.
+     * @param[in] tcpIpAddr The input address string. Supports both IPv4 and IPv6 addresses.
+     * @param[out] servInfo The result of the lookup. servInfo is the first entry in a linked list as per system
+     * call specification of getaddrinfo()
+     * @return Status of the call
+     */
+    Status GetAddrInfo(const std::string &tcpIpAddr, struct addrinfo **servInfo);
 
 private:
     // The underlying type of this enum (int) matches the third argument for getsockopt and setsockopt from sys/socket.h
@@ -417,6 +417,16 @@ private:
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(timeRemainingMs > 0, K_RPC_DEADLINE_EXCEEDED, "Socket send/recv timeout");
         return Status::OK();
     }
+
+    /**
+     * @brief Internal helper function to cast to the appropriate flavour of socket address struct (depending on domain
+     * family)
+     * @param[in] sockaddr struct to fetch the info from
+     * @return pointer to the sockaddr_in or sockaddr_in6 structure
+     */
+    void *GetInAddr(struct sockaddr *sa);
+
+    in_port_t GetInPort(struct sockaddr *sa);
 
     constexpr static int waSz_ = 64;
     int fd_;

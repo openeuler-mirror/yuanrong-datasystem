@@ -15,12 +15,15 @@
  */
 
 /**
- * Description: Some tools for parsing ID.
+ * Description: Some tools for routing meta data.
  */
-#ifndef DATASYSTEM_COMMON_UTIL_ID_TOOL_H
-#define DATASYSTEM_COMMON_UTIL_ID_TOOL_H
+#ifndef DATASYSTEM_COMMON_UTIL_META_ROUTE_TOOL_H
+#define DATASYSTEM_COMMON_UTIL_META_ROUTE_TOOL_H
 
+#include <cstdint>
 #include <string>
+#include <string_view>
+#include <variant>
 
 #include "datasystem/utils/status.h"
 
@@ -45,7 +48,7 @@ bool HasWorkerId(const std::string &objKey);
  * @param[in] objKey The id of object.
  * @return The workerId carried in objectKey. If not carried, returns ""
  */
-std::string SplitWorkerIdFromObjecId(const std::string &objKey);
+std::string_view SplitWorkerIdFromObjecId(const std::string &objKey);
 
 inline const std::string &ExtractObjectId(const std::string &s)
 {
@@ -63,5 +66,12 @@ inline std::string ExtractObjectId(std::pair<std::string, T> &&p)
 {
     return std::move(p.first);
 }
+
+using HashPosition = uint32_t;
+using Range = std::pair<uint32_t, uint32_t>;
+struct RouteInfo {
+    std::variant<std::monostate, std::string, Range> payload;  // <workerId, hashRange>
+    int64_t currHashRingVersion = -1;
+};
 }  // namespace datasystem
 #endif

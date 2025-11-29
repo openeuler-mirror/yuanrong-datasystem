@@ -75,7 +75,7 @@ std::tuple<int, std::shared_ptr<ThreadPool>> HcclCommMagr::AssignThreadToComm(co
     int chosenThreadId = GetOptimalThreadId(scoreList, negDirectionCommId);
     UpdateThreadDetailRecord(chosenThreadId, commId);
 
-    LOG(INFO) << "The commId: " << commId << " select tid: " << chosenThreadId;
+    VLOG(1) << "The commId: " << commId << " select tid: " << chosenThreadId;
     return GetThreadPool(chosenThreadId);
 }
 

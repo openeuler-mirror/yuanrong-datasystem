@@ -510,5 +510,13 @@
     "skip_authenticate": {
         "value": "false",
         "description": "Skip authentication for worker requests"
+    },
+    "enable_data_replication": {
+        "value": "true",
+        "description": "Allow data's replica to be cached locally"
+    },
+    "enable_redirect": {
+        "value": "true",
+        "description": "Enable query meta redirect when scale up or voluntary scale down, default is true"
     }
 }

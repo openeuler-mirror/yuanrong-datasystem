@@ -80,7 +80,7 @@ public:
      * @param[out] newUuid The rehashed worker ID.
      * @return Status of the call.
      */
-    Status GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid);
+    Status GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid, std::optional<RouteInfo> &routeInfo);
 
     /**
      * @brief Get worker address by uuid for addressing.
@@ -105,7 +105,8 @@ public:
      * @param[out] outWorkerUuid the outWorkerUuid is calc by consistent hash algorithm when enable consistent
      * hash(enable_distribute_master is true and etcd_address is valid);
      */
-    Status GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid) const;
+    Status GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid,
+                                std::optional<RouteInfo> &routeInfo) const;
 
     /**
      * @brief Return true if the hash ring is in RUNNING or PRE_RUNNING state.

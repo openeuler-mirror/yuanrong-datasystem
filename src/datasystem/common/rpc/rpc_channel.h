@@ -64,6 +64,27 @@ public:
     static std::string TcpipEndPoint(const HostPort &localAddress);
 
     /**
+     * @brief Checks if the string endpoint is a an IPv6 endpoint
+     * @param[in] endPoint The end point string
+     * @return T/F if its IPv6 format
+     */
+    static bool IsTcpipEndPointIPv6(const std::string &endPoint)
+    {
+        // IPv6 endpoints start with '[' character in the string
+        const std::string TCPIPV6_PREFIX = "tcp://[";
+        return (endPoint.compare(0, TCPIPV6_PREFIX.size(), TCPIPV6_PREFIX) == 0);
+    }
+
+    /**
+     * @brief Parses a tcpip address/port string into its 2 parts. Supports both ipv4 and ipv6 formats.
+     * @param[in] endPoint The end point string in the form of either ipv4:port or [ipv6]:port
+     * @param[out] addr The host portion of the endpoint string
+     * @param[out] port The port portion of the endpoint string
+     * @return status of the call
+     */
+    static Status ParseTcpipEndpoint(const std::string &endPoint, std::string &addr, std::string &port);
+
+    /**
      * @brief Get Zmq End Point.
      * @return const std::string& Zmq endpoint string
      */
@@ -121,6 +142,11 @@ public:
      */
     size_t GetServiceConnectPoolSize(const std::string &svcName);
 
+    bool IsIPv6() const
+    {
+        return isIPv6_;
+    }
+
 private:
     std::string endPoint_;
     RpcCredential cred_;
@@ -129,6 +155,7 @@ private:
     std::map<std::string, bool> tcpDirect_;
     std::map<std::string, size_t> connectPoolSize_;
     const HostPort destAddr_;
+    bool isIPv6_{ false };
 };
 
 }  // namespace datasystem

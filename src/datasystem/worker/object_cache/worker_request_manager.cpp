@@ -45,7 +45,7 @@ std::function<Status(const std::string &, uint64_t)> WorkerRequestManager::delet
 Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
                         std::shared_ptr<SharedMemoryRefTable> shmRefTable,
                         std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> api,
-                        std::shared_ptr<ThreadPool> threadPool)
+                        std::shared_ptr<ThreadPool> threadPool, const ClientKey &clientId)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
@@ -69,7 +69,7 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
         readOffsetCount == readSizeCount, K_INVALID,
         FormatString("readOffsetCount %zu should be the same with readSizeCount %zu", readOffsetCount, readSizeCount));
 
-    clientId_ = req.client_id();
+    clientId_ = clientId;
     subTimeout_ = req.sub_timeout();
     shmRefTable_ = std::move(shmRefTable);
     serverApi_ = std::move(api);

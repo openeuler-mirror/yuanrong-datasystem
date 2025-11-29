@@ -72,7 +72,7 @@ public:
     Status ProcessGetDeviceObjectRequest(
         const std::vector<std::string> &objectKeys,
         std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetDeviceObjectRspPb, GetDeviceObjectReqPb>> serverApi,
-        int64_t subTimeout, const std::string &clientId);
+        int64_t subTimeout, const ClientKey &clientId);
 
     /**
      * @brief Get one device object from local memory.

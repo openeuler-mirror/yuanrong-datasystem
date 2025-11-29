@@ -105,7 +105,7 @@ public:
      * @param[in] msg The message from the client
      * @return Status of the call
      */
-    Status ProcessServerReboot(const std::string &clientId, const std::string &tenantId, const std::string &reqToken,
+    Status ProcessServerReboot(const ClientKey &clientId, const std::string &tenantId, const std::string &reqToken,
                                const google::protobuf::RepeatedPtrField<google::protobuf::Any> &msg) override;
 
     Status GetExclConnSockPath(std::string &sockPath) override;
@@ -121,7 +121,7 @@ public:
      * @param[out] lockId The lock id.
      * @return Status of the call.
      */
-    Status AddClient(const std::string &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
+    Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
                      bool enableCrossNode, const std::string &podName, uint32_t &lockId) override;
 
     /**
@@ -151,7 +151,7 @@ private:
      * @brief General method of cleaning the data of a client while the client disconnecting.
      * @param[in] clientId The client id of the corresponding client with the socket fd.
      */
-    void AfterClientLostHandler(const std::string &clientId) override;
+    void AfterClientLostHandler(const ClientKey &clientId) override;
 
     /**
      * @brief Init object service for client request.

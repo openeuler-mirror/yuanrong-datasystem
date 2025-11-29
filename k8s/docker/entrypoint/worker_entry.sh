@@ -54,7 +54,7 @@ BASE_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
 ) &
 
 bash "${HOME}"/install.sh
-source /home/sn/.bashrc
+source /home/yuanrong/.bashrc
 umask 0027
 
 ilog "start worker"

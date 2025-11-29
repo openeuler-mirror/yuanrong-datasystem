@@ -132,7 +132,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     clientStateManager_ = std::make_unique<ClientStateManager>();
     ConnectOptions connectOptions = connectOptions1;
     ReadOptFromEnv(connectOptions);
-    ipAddress_ = connectOptions.host + ":" + std::to_string(connectOptions.port);
+    ipAddress_ = HostPort(connectOptions.host, connectOptions.port);
     timeoutMs_ = connectOptions.connectTimeoutMs;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
@@ -210,15 +210,13 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         return rc;
     }
 
-    LOG(INFO) << "Start to init worker client at address:" << ipAddress_;
+    LOG(INFO) << "Start to init worker client at address: " << ipAddress_.ToString();
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
-    HostPort hostPort;
-    RETURN_IF_NOT_OK(hostPort.ParseString(ipAddress_));
     CHECK_FAIL_RETURN_STATUS(timeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
     workerApi_[LOCAL_WORKER] =
-        std::make_shared<ClientWorkerApi>(hostPort, cred_, heartbeatType, signature_.get(), tenantId_,
+        std::make_shared<ClientWorkerApi>(ipAddress_, cred_, heartbeatType, signature_.get(), tenantId_,
                                           enableCrossNodeConnection_, enableExclusiveConnection_);
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(timeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
@@ -435,7 +433,7 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWor
             continue;
         }
         LOG(INFO) << FormatString("[Switch] Switch worker to %s", standbyWorker.ToString());
-        if (ipAddress_ == standbyWorker.ToString()) {
+        if (ipAddress_ == standbyWorker) {
             if (TrySwitchBackToLocalWorker()) {
                 result = true;
                 break;
@@ -590,6 +588,17 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
         return future;
     }
 
+    for (const auto &blockList : devBlobList) {
+        if (blockList.srcOffset < 0) {
+            Status err = Status(K_INVALID,
+                __LINE__,
+                __FILE__,
+                FormatString("Invalid srcOffset: %d, which must be non-negative.", blockList.srcOffset));
+            asyncResource->promise.set_value({err, asyncResource->failList});
+            return future;
+        }
+    }
+
     auto traceID = Trace::Instance().GetTraceID();
     // copy objectKeys , devBlobList and asyncResource to avoid user destroy it
     asyncResource->rpcFuture =
@@ -669,6 +678,9 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     filterBufferList.reserve(objectKeys.size());
     filterDevBlobList.reserve(objectKeys.size());
     for (auto idx = 0u; idx < objectKeys.size(); idx++) {
+        CHECK_FAIL_RETURN_STATUS(devBlobList[idx].srcOffset >= 0,
+            K_INVALID,
+            FormatString("Invalid srcOffset: %d, which must be non-negative.", devBlobList[idx].srcOffset));
         if (exists[idx]) {
             continue;
         }
@@ -1197,14 +1209,13 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objKeys, int32_t su
 
     Status result = Status::OK();
     for (size_t i = 0; i < objKeys.size(); i++) {
-        std::string idenfier = GetFutureMapIdentifier(objKeys[i], buffers[i]);
         Status rc = futureVec[i].Get(std::max(RPC_TIMEOUT, subTimeoutMs));
         INJECT_POINT("ObjectClientImpl.Get", [&rc] {
             rc = Status(K_INVALID, "inject error");
             return Status::OK();
         });
         if (rc != Status::OK()) {
-            failedList.emplace_back(idenfier);
+            failedList.emplace_back(objKeys[i]);
             result = rc;
         }
     }
@@ -1787,10 +1798,13 @@ void ObjectClientImpl::GDecreaseRefRollback(const std::vector<std::string> &roll
 
 Status ObjectClientImpl::CheckValidObjectKey(const std::string &key)
 {
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key), K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key),
+        K_INVALID,
         FormatString("The key contains illegal char(s), allowed regex format: %s "
-        "or the length of key must be no more than 255, current key length is %d.",
-            Validator::objKeyFormat, key.size()));
+                     "or the length of key must be no more than 255. Current key: %s, length: %d.",
+            Validator::objKeyFormat,
+            FormatStringForLog(key),
+            key.size()));
     return Status::OK();
 }
 
@@ -2264,13 +2278,6 @@ Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefix
     return Status::OK();
 }
 
-std::string ObjectClientImpl::GetFutureMapIdentifier(const std::string &devObjKey,
-                                                     std::shared_ptr<DeviceBuffer> deviceBuffer)
-{
-    std::string identifier = FormatString("%s,%s", devObjKey, deviceBuffer->GetDeviceIdx());
-    return identifier;
-}
-
 Status ObjectClientImpl::GetPrefix(const std::string &key, std::string &prefix)
 {
     std::size_t pos = key.find_last_of(';');
@@ -2638,6 +2645,9 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
     for (size_t i = 0; i < blob2dList.size(); i++) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ (uint32_t)blob2dList[i].deviceIdx }),
                                          "Check device failed.");
+        CHECK_FAIL_RETURN_STATUS(blob2dList[i].srcOffset >= 0,
+            K_INVALID,
+            FormatString("Invalid srcOffset: %d, which must be non-negative.", blob2dList[i].srcOffset));
         std::shared_ptr<DeviceBuffer> devBuff;
         RETURN_IF_NOT_OK(CreateDevBuffer(keys[i], blob2dList[i], createParam, devBuff));
         devBuff->bufferInfo_->autoRelease = false;

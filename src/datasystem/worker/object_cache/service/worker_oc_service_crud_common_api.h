@@ -195,7 +195,7 @@ public:
      * @param shmUnitIds shmUnitIds
      * @return Status
      */
-    static Status CheckShmUnitByTenantId(const std::string &tenantId, const std::string &clientId,
+    static Status CheckShmUnitByTenantId(const std::string &tenantId, const ClientKey &clientId,
                                          std::vector<ShmKey> &shmUnitIds,
                                          std::shared_ptr<SharedMemoryRefTable> memoryRefTable);
 
@@ -211,7 +211,7 @@ public:
      * @param[in] objectKV The key-value of the object.
      * @return true if client enable share memory.
      */
-    static bool ClientShmEnabled(const std::string &clientId);
+    static bool ClientShmEnabled(const ClientKey &clientId);
 
     /**
      * @brief Indicates whether the client allows shared memory.

@@ -76,8 +76,13 @@ std::string VectorToString(const Vec &vec, bool allowCut = true)
     std::stringstream out;
     auto totalCount = vec.size();
     decltype(totalCount) count = 0;
+    bool first = true;
     for (auto &item : vec) {
-        out << item << " ";
+        if (!first) {
+            out << ", ";
+        }
+        out << item;
+        first = false;
         auto length = GetSize(&out);
         count++;
         if (length > static_cast<decltype(length)>(LOG_MAX_SIZE_LIMIT) && allowCut) {
@@ -443,6 +448,24 @@ inline std::string GetTruncatedStr(const std::string &input, size_t retainDigits
     retainDigits = std::min(retainDigits, input.length());
 
     return std::string(input.length() - retainDigits, '*') + input.substr(input.length() - retainDigits);
+}
+
+/**
+ * Formats a string for logging output.
+ *
+ * @param str The original string to format,
+ * @param maxDisplayLength Maximum characters to display before truncation (default: 255)
+ * @return Formatted string.
+ */
+inline std::string FormatStringForLog(const std::string &str, size_t maxDisplayLength = 255)
+{
+    // Check if truncation is needed
+    if (str.size() <= maxDisplayLength) {
+        return str;
+    }
+
+    // Simple truncation: take the beginning portion and add ellipsis with size info
+    return FormatString("%s... [total: %zu]", str.substr(0, maxDisplayLength).c_str(), str.size());
 }
 }  // namespace datasystem
 #endif

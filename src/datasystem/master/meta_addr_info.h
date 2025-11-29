@@ -105,10 +105,21 @@ public:
         return addr_.Empty();
     }
 
+    void UpdateRc(Status rc)
+    {
+        rc_ = std::move(rc);
+    }
+
+    const Status &GetRc() const
+    {
+        return rc_;
+    }
+
 private:
     HostPort addr_;
     std::string dbName_;
     bool isFromOtherAz_ = false;
+    Status rc_;
 };
 }  // namespace datasystem
 

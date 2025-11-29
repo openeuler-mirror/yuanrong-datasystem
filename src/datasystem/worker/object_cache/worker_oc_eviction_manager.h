@@ -84,7 +84,7 @@ public:
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @return Status of the call.
      */
-    Status Init(const std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> &gRefTable,
+    Status Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable,
                 std::shared_ptr<AkSkManager> akSkManager);
 
     /**
@@ -364,7 +364,7 @@ private:
     HostPort localAddress_;
     HostPort masterAddress_;
     std::atomic<bool> isDone_;
-    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> gRefTable_{ nullptr };
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager

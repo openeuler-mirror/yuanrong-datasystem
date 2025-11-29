@@ -21,8 +21,10 @@
 #define DATASYSTEM_COMMON_UTIL_FLAG_VALIDATOR_H
 
 #include <sys/vfs.h>
+#include <algorithm>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -123,46 +125,25 @@ public:
     }
 
     /**
-     * @brief Validate a string is a valid ipv4 address.
-     * @param[in] flagName IP address flag.
-     * @param[in] value The string to be checked.
-     * @return True if valid.
-     */
-    static bool ValidateHostIPv4(const char *flagName, const std::string &value)
-    {
-        // Regex to match ipv4 address from 0.0.0.0 to 255.255.255.255
-        // ^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)(\\.(?!$)|$)){4}$
-        static const re2::RE2 re("(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}$");
-
-        // Allow value size 0 due to certain circumstances that indicates default or function disabled.
-        if (re2::RE2::FullMatch(value, re) || value.empty()) {
-            return true;
-        }
-        LOG(ERROR) << FormatString("The value of %s flag is %s, which is a illegal IPv4 address format.", flagName,
-                                   value);
-        return false;
-    }
-
-    /**
-     * @brief Validate a string is a a valid set of IPv4 addresses in the format "ip:port,ip:port"
+     * @brief Validate a string is a a valid set of addresses in the format "ip:port,ip:port".
+     * IPv6 formats are also support, like "[ipv6]:port,[ipv6]:port
      * @param[in] flagName IP address flag.
      * @param[in] value The string to be checked.
      * @return Returns true if the value is empty or all are valid ip:port addresses, false otherwise.
      */
     static bool ValidateEtcdAddresses(const char *flagName, const std::string &value)
     {
-        // Regex to match the ipv4 address fo etcd with port from 0.0.0.0:0 to 255.255.255.255:65535
-        // Format for Multiple Addresses: "host:port,host:port,host:port"
+        // Regex to match the address for etcd with port from 0.0.0.0:0 to 255.255.255.255:65535
         char delimiter = ',';
         std::stringstream sstream(value);
         std::string word;
         while (std::getline(sstream, word, delimiter)) {
             // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
-            if (ValidateHostPortIPv4("etcd_address", word) || ValidateDomainNamePort("etcd_address", word)) {
+            if (ValidateHostPortString("etcd_address", word) || ValidateDomainNamePort("etcd_address", word)) {
                 continue;
             } else {
                 LOG(ERROR) << FormatString(
-                    "The value of %s flag is %s, which contains some illegal IPv4 address or domain name formats.",
+                    "The value of %s flag is %s, which contains some illegal IP address or domain name formats.",
                     flagName, value);
                 return false;
             }
@@ -171,12 +152,29 @@ public:
     }
 
     /**
-     * @brief Validate a string is a valid ipv4 address with port as the format ip:port.
+     * @brief Validate a string is a valid ip address with port as the format ipv4_format:port.
+     * ipv6 formats are also allowed, with format: [ipv6_format]:port
      * @param[in] flagName IP address with port flag.
      * @param[in] value The string to be checked.
      * @return True if valid.
      */
-    static bool ValidateHostPortIPv4(const char *flagName, const std::string &value)
+    static bool ValidateHostPortString(const char *flagName, const std::string &value)
+    {
+        // If the first character is not a [, then validate this as an IPv4 address. Otherwise, it must be IPv6
+        if (value[0] != '[') {
+            return IsValidIPv4HostPortString(flagName, value);
+        } else {
+            return IsValidIPv6HostPortString(flagName, value);
+        }
+    }
+
+    /**
+     * @brief Validate a string is a valid IPv4 address with port as the format ipv4_format:port.
+     * @param[in] flagName IP address with port flag.
+     * @param[in] value The string to be checked.
+     * @return True if valid and its an IPv6
+     */
+    static bool IsValidIPv4HostPortString(const char *flagName, const std::string &value)
     {
         // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
         // or localhost:<port>.
@@ -189,36 +187,48 @@ public:
         if (re2::RE2::FullMatch(value, re) || value.empty()) {
             return true;
         }
-        LOG(INFO) << FormatString("The value of %s flag is %s, which is a illegal IPv4:Port address format.", flagName,
-                                  value);
+        LOG(INFO) << FormatString("Value of %s flag is %s. Illegal [IPv6]:port or IPv4:Port address format.",
+                                  flagName, value);
         return false;
     }
-
+    
     /**
-     * @brief Validate a string is a valid redis ipv4 address with port as the format ip:port.
-     * @Note Valid IPv4 Cluster Address Reference: '10.42.0.99:6379-10.42.0.101:6379,10.42.0.102:6379-10.42.1.108:6379'
-     *       Use hyphens '-' to connect to the active/standby nodes in the same Redis cluster, and use commas ','
-     *       to connect to different Redis clusters.
+     * @brief Validate a string is a valid IPv6 address with port as the format [ipv6_format]:port.
      * @param[in] flagName IP address with port flag.
      * @param[in] value The string to be checked.
-     * @return True if valid.
+     * @return True if valid and its an IPv6
      */
-    static bool ValidateRedisHostPortIPv4(const char *flagName, const std::string &value)
+    static bool IsValidIPv6HostPortString(const char *flagName, const std::string &value)
     {
-        // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
-        // or localhost:<port>.
-        static const re2::RE2 re(
-            "^((((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})){3})|("
-            "localhost))(:((6553[0-5])|(655[0-2][0-9])|(65[0-4][0-9]{2})|(6[0-4][0-9]{3})|([1-5][0-9]{4})|([0-5]{1,5})|"
-            "([0-9]{1,4})))(,\\s*|-\\s*|\\s*|$))+$");
-
-        // Allow value size 0 due to certain circumstances that indicates default or function disabled.
-        if (re2::RE2::FullMatch(value, re)  || value.empty()) {
-            return true;
+        // Future: A regex can be created to make a more comprehensive IPv6 validator
+        // For now, do manual some condition checks.
+        // First character must be [
+        if (value[0] != '[') {
+            return false;
         }
-        LOG(ERROR) << FormatString("The value of %s flag is %s, which is a illegal IPv4:Port address format.", flagName,
-                                   value);
-        return false;
+        // Quick solution for now. A full regex for IPv6 would be complex. Just make sure the address has form:
+        // [IPv6_addr]:port
+        // Don't actually dive into the IPv6_addr structure itself for validation.
+        auto pos = value.find_last_of(':');
+        if (pos == std::string::npos) {
+            LOG(INFO) << FormatString("The value of %s flag is %s, which is an illegal [IPv6]:Port address format.",
+                                      flagName, value);
+            return false;
+        }
+        if (value[pos - 1] != ']') {
+            LOG(INFO) << FormatString("The value of %s flag is %s, which is an illegal [IPv6]:Port address format.",
+                                      flagName, value);
+            return false;
+        }
+
+        // extract the port piece and validate it.
+        std::string portNumStr = value.substr(pos + 1);
+        if (!IsInPortRange(portNumStr, false)) {
+            return false;
+        }
+
+        // made through all the checks. format looks good.
+        return true;
     }
 
     /**
@@ -482,7 +492,7 @@ public:
      */
     static bool ValidateClientNum(const char *clientNum, const uint32_t value)
     {
-        constexpr uint32_t maxClientNum = 10'000;
+        constexpr uint32_t maxClientNum = 10000;
         if (value > 0 && value <= maxClientNum) {
             return true;
         }
@@ -539,35 +549,6 @@ public:
             return true;
         }
         LOG(ERROR) << value << " is miss match";
-        return false;
-    }
-
-    /**
-     * @brief Check passed in string is a valid IPv4 address with or without a valid port.
-     * @param[in] value The string to be checked.
-     * @return True if param is a valid ipv4 address. Otherwise false.
-     */
-    static bool IsIpv4OrUrl(const std::string &value, bool allowEmpty = true)
-    {
-        // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
-        // or localhost:<port>
-        // or just a ip address or localhost
-        // or any url based on RFC 1738
-        static const re2::RE2 re(
-            "^(((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})){3})|("
-            "localhost)|([a-zA-Z0-9\\$\\.\\-_\\+\\!\\*'\\(\\),]+))(:((6553[0-5])|(655[0-2][0-9])|(65[0-4][0-9]{2})|(6["
-            "0-4][0-9]{3})|([1-5][0-9]{4})|([0-5]{1,5})|"
-            "([0-9]{1,4})))?$|^$");
-
-        // Allow value size 0 due to certain circumstances that indicates default or function disabled.
-        if (allowEmpty == false && value.size() == 0) {
-            LOG(ERROR) << value << " empty is not a IPv4 address format.";
-            return false;
-        }
-        if (re2::RE2::FullMatch(value, re)) {
-            return true;
-        }
-        LOG(ERROR) << value << " is an illegal IPv4 address format.";
         return false;
     }
 
@@ -723,25 +704,6 @@ public:
     }
 
     /**
-     * @brief whether the value is http url
-     * @param[in] value the value of the flag
-     * @return true if is http url, otherwise false
-     */
-    static bool IsHttpUrl(const std::string &value)
-    {
-        std::string::size_type pos = value.find("https://");
-        constexpr int HTTP_INDEX = 7, HTTPS_INDEX = 8;
-        if (pos != std::string::npos && pos == 0) {
-            return IsIpv4OrUrl(value.substr(HTTPS_INDEX));
-        }
-        pos = value.find("http://");
-        if (pos != std::string::npos && pos == 0) {
-            return IsIpv4OrUrl(value.substr(HTTP_INDEX));
-        }
-        return false;
-    }
-
-    /**
      * @brief check whether value is empty
      * @param[in] value the value of the flag
      * @return true if the value is not empty, otherwise false
@@ -790,7 +752,8 @@ public:
         return false;
     }
 
-    static bool IsUuid(const std::string &value)
+    template<typename T>
+    static bool IsUuid(const T &value)
     {
         static const re2::RE2 re("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
         if (re2::RE2::FullMatch(value, re)) {
@@ -870,7 +833,7 @@ public:
     static bool ValidateMaxRpcSessionNum(const char *flagName, int32_t value)
     {
         const int32_t MIN_NUM = 512;
-        const int32_t MAX_NUM = 10'000;
+        const int32_t MAX_NUM = 10000;
         if (value >= MIN_NUM && value <= MAX_NUM) {
             return true;
         }

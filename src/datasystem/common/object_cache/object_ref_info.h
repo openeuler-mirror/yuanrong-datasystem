@@ -24,20 +24,18 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace object_cache {
-
 template  <typename T>
 class ObjectRefInfo {
 using TbbObjKeyTable = tbb::concurrent_hash_map<T, uint32_t>;
@@ -418,9 +416,9 @@ private:
     std::function<Status(const std::string &, const std::string &, bool)> removeFromKvStore_;
 };
 
-using TbbMemoryClientRefTable = tbb::concurrent_hash_map<ImmutableString, std::shared_ptr<ObjectRefInfo<ShmKey>>>;
+using TbbMemoryClientRefTable = tbb::concurrent_hash_map<ClientKey, std::shared_ptr<ObjectRefInfo<ShmKey>>>;
 using TbbMemoryObjectRefTable =
-    tbb::concurrent_hash_map<ShmKey, std::pair<std::shared_ptr<ShmUnit>, std::unordered_set<ImmutableString>>>;
+    tbb::concurrent_hash_map<ShmKey, std::pair<std::shared_ptr<ShmUnit>, std::unordered_set<ClientKey>>>;
 class SharedMemoryRefTable {
 public:
     SharedMemoryRefTable() = default;
@@ -432,14 +430,14 @@ public:
      * @param[in] clientId uuid of client.
      * @param[in] shmUnit The safe object.
      */
-    void AddShmUnit(const std::string &clientId, std::shared_ptr<ShmUnit> &shmUnit);
+    void AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit);
 
     /**
      * @brief Add shared memory units reference to the client table.
      * @param[in] clientId uuid of client.
      * @param[in] shmUnits The safe objects.
      */
-    void AddShmUnits(const std::string &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits);
+    void AddShmUnits(const ClientKey &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits);
 
     /**
      * @brief Check one shared memory unit whether be referred by client.
@@ -455,14 +453,14 @@ public:
      * @param[in] shmId The shared memory id.
      * @return Status of the call
      */
-    Status RemoveShmUnit(const std::string &clientId, const ShmKey &shmId);
+    Status RemoveShmUnit(const ClientKey &clientId, const ShmKey &shmId);
 
     /**
      * @brief Remove a client from the client table.
      * @param[in] clientId uuid of client.
      * @return Status of the call
      */
-    Status RemoveClient(const std::string &clientId);
+    Status RemoveClient(const ClientKey &clientId);
 
 #ifdef WITH_TESTS
     /**
@@ -471,7 +469,7 @@ public:
      * @param[in] shmId Shared memory unit id of object.
      * @return true on success, false otherwise.
      */
-    bool Contains(const std::string &clientId, const ShmKey &shmId) const;
+    bool Contains(const ClientKey &clientId, const ShmKey &shmId) const;
 #endif
 
     /**
@@ -479,7 +477,7 @@ public:
      * @param[in] clientId uuid of client.
      * @param[out] shmIds Shared memory unit id of object.
      */
-    void GetClientRefIds(const std::string &clientId, std::vector<ShmKey> &shmIds) const;
+    void GetClientRefIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds) const;
 
 private:
     /**
@@ -488,7 +486,7 @@ private:
      * @param[in/out] shmAccessor the tbb accessor of object reference table.
      * @param[in/out] clientAccessor the tbb accessor of client table.
      */
-    void RemoveShmUnitDetail(const std::string &clientId, TbbMemoryObjectRefTable::accessor &shmAccessor,
+    void RemoveShmUnitDetail(const ClientKey &clientId, TbbMemoryObjectRefTable::accessor &shmAccessor,
                              TbbMemoryClientRefTable::accessor &clientAccessor);
 
     // The map is client id and the shared memory ids referenced by this client.

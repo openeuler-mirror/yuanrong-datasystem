@@ -20,15 +20,17 @@
  */
 #include <sstream>
 #include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 RpcChannel::RpcChannel(std::string zmqEndPoint, const RpcCredential &cred)
     : endPoint_(std::move(zmqEndPoint)), cred_(cred)
 {
+    isIPv6_ = IsTcpipEndPointIPv6(zmqEndPoint);
 }
 
 RpcChannel::RpcChannel(const HostPort &destAddr, const RpcCredential &cred)
-    : endPoint_(TcpipEndPoint(destAddr)), cred_(cred), destAddr_(destAddr)
+    : endPoint_(TcpipEndPoint(destAddr)), cred_(cred), destAddr_(destAddr), isIPv6_(destAddr.IsIPv6())
 {
 }
 
@@ -93,5 +95,29 @@ const std::string &RpcChannel::GetZmqEndPoint() const
 const HostPort &RpcChannel::GetHostPort() const
 {
     return destAddr_;
+}
+
+Status RpcChannel::ParseTcpipEndpoint(const std::string &endPoint, std::string &addr, std::string &port)
+{
+    auto pos = endPoint.find_last_of(':');
+    CHECK_FAIL_RETURN_STATUS(pos != std::string::npos, K_INVALID, FormatString("Invalid address %s", endPoint));
+    port = endPoint.substr(pos + 1);
+
+    // If addr is ipv6, it might be surrounded by [] paranthesis. Remove these.
+    // If the first char is not '[' then assume a v4 address
+    if (endPoint[0] != '[') {
+        addr = endPoint.substr(0, pos);
+    } else {
+        const int lastCharPosTruncate = 2;
+        // strip the first and last characters of the host part of the string (remove the '[' and ']')
+        CHECK_FAIL_RETURN_STATUS(
+            endPoint[pos - 1] == ']', K_INVALID, FormatString("Malformed ipv6 address %s", endPoint));
+        addr = endPoint.substr(1, pos - lastCharPosTruncate);
+    }
+
+    if (port == "*") {
+        port = "0";
+    }
+    return Status::OK();
 }
 }  // namespace datasystem

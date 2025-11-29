@@ -16,14 +16,14 @@ if(EXISTS "${BASE_DIR}/config.cmake")
     include(${BASE_DIR}/config.cmake)
 endif()
 
-if(NOT EXISTS "${INSTALL_DIR}/sdk/cpp")
+if(NOT EXISTS "${INSTALL_DIR}/datasystem/sdk/cpp")
     file(ARCHIVE_EXTRACT
         INPUT ${INSTALL_DIR}/yr-datasystem-v${version}.tar.gz
         DESTINATION ${INSTALL_DIR}
     )
 endif()
 
-SET(CMAKE_PREFIX_PATH "${INSTALL_DIR}/sdk/cpp")
+SET(CMAKE_PREFIX_PATH "${INSTALL_DIR}/datasystem/sdk/cpp")
 
 find_package(Datasystem ${Datasystem_version} REQUIRED)
 

@@ -375,14 +375,6 @@ public:
     Status GetPrefix(const std::string &key, std::string &prefix);
 
     /**
-     * @brief get indendifer to trace the future status for prefetch/get
-     * @param[in] devObjKey the object key to be prefetched/get
-     * @param[in] deviceBuffer the device buffer associated with object key
-     * @return std::string the identifier that marks a meta data transfer
-     */
-    std::string GetFutureMapIdentifier(const std::string &devObjKey, std::shared_ptr<DeviceBuffer> deviceBuffer);
-
-    /**
      * @brief Publish device object to datasystem.
      * @param[in] buffer The device buffer ready to publish.
      * @return Status of the result.
@@ -1141,7 +1133,7 @@ private:
                               std::vector<std::shared_ptr<Buffer>> &bufferList,
                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
 
-    std::string ipAddress_;
+    HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
     int32_t timeoutMs_;

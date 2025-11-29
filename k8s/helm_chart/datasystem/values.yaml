@@ -29,7 +29,7 @@ global:
     # Base64 transcoding is required, and whether encryption is required depends on whether passphrase is applied:
     etcdKey: ""
     # The path where the encrypted etcd certificate is mounted. This must be specified when etcd authentication is enabled.
-    etcdCertDir: /home/sn/datasystem/etcd_cert_dir
+    etcdCertDir: /home/yuanrong/datasystem/etcd_cert_dir
     # The value of passphrase. Encryption is required, base64 transcoding required.
     passphraseValue: ""
     # ETCD metadata async operation pool size.
@@ -105,7 +105,7 @@ global:
   log:
     # Log config.
     # The directory where log files are stored.
-    logDir: /home/sn/datasystem/logs
+    logDir: /home/yuanrong/datasystem/logs
     # Size of async logger's message queue.
     logAsyncQueueSize: 65536
     # Vlog level, a larger value indicates more detailed logs. The value is between 0-3.
@@ -203,7 +203,7 @@ global:
     # Config MASTER back store directory and must specify in rocksdb scenario.
     # The rocksdb database is used to persistently store the metadata stored in the master
     # so that the metadata before the restart can be re-obtained when the master restarts.
-    rocksdbStoreDir: /home/sn/datasystem/rocksdb
+    rocksdbStoreDir: /home/yuanrong/datasystem/rocksdb
     # Number of open files that can be used by the rocksdb. The default value is 128, which is suitable for general
     # small and medium-sized applications. This value can be modified according to system limitations.
     rocksdbMaxOpenFile: 128
@@ -214,13 +214,15 @@ global:
     rocksdbWriteMode: "async"
     # Enable query meta redirect when scale up or voluntary scale down, default is true
     enableRedirect: "true"
+    # Allow data's replica to be cached locally, default is true
+    enableDataReplication: "true"
 
   rpc:
     # Whether to enable the authentication function between components(worker, master)
     enableCurveZmq: false
     # The directory to find ZMQ curve key files.
     # This path must be specified when zmq authentication is enabled.
-    curveKeyDir: /home/sn/datasystem/curve_key_dir
+    curveKeyDir: /home/yuanrong/datasystem/curve_key_dir
     curveZmqKey:
       # Control whether try to get data from other AZ's worker firstly, if false then get data from L2 cache directly.
       # The service mapping, public key and private key are configured with base64 to avoid the special characters problem when restore to files.

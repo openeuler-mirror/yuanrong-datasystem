@@ -124,27 +124,6 @@ public:
     std::shared_ptr<KVClient> client4_;
 };
 
-class KVCacheClientNoRedirectTest : public KVCacheClientTest {
-public:
-    std::vector<std::string> workerAddress_;
-
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numOBS = 1;
-        opts.numWorkers = 2; // worker num is 2
-        opts.enableDistributedMaster = "true";
-        opts.numEtcd = 1;
-        std::string hostIp = "127.0.0.1";
-        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
-        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
-        for (auto addr : opts.workerConfigs) {
-            workerAddress_.emplace_back(addr.ToString());
-        }
-        opts.workerGflagParams =
-            "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 --enable_redirect=false";
-    }
-};
-
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
 {
     ConnectOptions connectOptions;
@@ -803,6 +782,27 @@ TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
     std::string objectKey2 = NewObjectKey();
     DS_ASSERT_OK(client->Set(objectKey2, data));
 }
+
+class KVCacheClientNoRedirectTest : public KVCacheClientTest {
+public:
+    std::vector<std::string> workerAddress_;
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numOBS = 1;
+        opts.numWorkers = 2; // worker num is 2
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
+        std::string hostIp = "127.0.0.1";
+        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+        for (auto addr : opts.workerConfigs) {
+            workerAddress_.emplace_back(addr.ToString());
+        }
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 --enable_redirect=false";
+    }
+};
 
 TEST_F(KVCacheClientNoRedirectTest, ConcurrentDeleteAndRemoteGet)
 {

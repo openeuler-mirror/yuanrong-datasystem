@@ -21,8 +21,10 @@
 #include <iterator>
 #include <shared_mutex>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 
 #include <google/protobuf/util/message_differencer.h>
 
@@ -35,7 +37,7 @@
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/hash_algorithm.h"
-#include "datasystem/common/util/id_tool.h"
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
@@ -645,28 +647,36 @@ Status HashRing::AddNode(const HashRingPb &currRing)
     return Status::OK();
 }
 
-Status HashRing::GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid) const
+Status HashRing::GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid,
+                                      std::optional<RouteInfo> &routeInfo) const
 {
     uint32_t hash = hashFunction_(key);
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     std::string workerAddr;
-    RETURN_IF_NOT_OK(GetPrimaryWorkerAddrNoLock(hash, workerAddr));
+    RETURN_IF_NOT_OK(GetPrimaryWorkerAddrNoLock(hash, workerAddr, routeInfo));
     return GetUuidByWorkerAddrNoLock(workerAddr, outWorkerUuid);
 }
 
 Status HashRing::GetPrimaryWorkerAddr(uint32_t keyHash, std::string &outWorkerAddr) const
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    return GetPrimaryWorkerAddrNoLock(keyHash, outWorkerAddr);
+    std::optional<RouteInfo> routeInfo;
+    return GetPrimaryWorkerAddrNoLock(keyHash, outWorkerAddr, routeInfo);
 }
 
-Status HashRing::GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWorkerAddr) const
+Status HashRing::GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWorkerAddr,
+                                            std::optional<RouteInfo> &routeInfo) const
 {
     if (tokenMap_.empty()) {
         RETURN_STATUS(K_NOT_READY, "HashRing not ready, the token map is empty.");
     }
     auto iter = tokenMap_.upper_bound(keyHash);
     if (iter != tokenMap_.end()) {
+        if (routeInfo) {
+            routeInfo->currHashRingVersion = currHashRingVersion_;
+            routeInfo->payload = std::make_pair(
+                iter == tokenMap_.begin() ? tokenMap_.rbegin()->first : std::prev(iter)->first, iter->first);
+        }
         VLOG(1) << "GetPrimaryWorker for hash:" << keyHash << ", the result token:" << iter->first
                 << ", the result worker is:" << iter->second;
         outWorkerAddr = iter->second;
@@ -674,6 +684,10 @@ Status HashRing::GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWo
     }
     VLOG(1) << "GetPrimaryWorker for hash:" << keyHash << ", the result token:" << tokenMap_.begin()->first
             << ", the result worker is:" << tokenMap_.begin()->second;
+    if (routeInfo) {
+        routeInfo->currHashRingVersion = currHashRingVersion_;
+        routeInfo->payload = std::make_pair(tokenMap_.rbegin()->first, tokenMap_.begin()->first);
+    }
     outWorkerAddr = tokenMap_.begin()->second;
     return Status::OK();
 }
@@ -990,7 +1004,7 @@ Status HashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_t ve
     {
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
         RETURN_OK_IF_TRUE(SkipUpdateRing(newRing, version, forceUpdate));
-
+        currHashRingVersion_++;
         LOG(INFO) << "Update ring of version " << version << ". " << SummarizeHashRing(newRing);
         auto lines = SplitRingJson(FormatString("Worker %s update local hash ring to", workerAddr_), newRing);
         std::for_each(lines.begin(), lines.end(), [](const std::string &line) { LOG(INFO) << line; });
@@ -1324,7 +1338,8 @@ Status HashRing::GetMasterUuid(const std::string &objKey, std::string &masterUui
     // To make sure hash ring is running
     RETURN_IF_NOT_OK(WaitWorkable());
     if (TrySplitWorkerIdFromObjecId(objKey, masterUuid).IsError()) {
-        RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid));
+        std::optional<RouteInfo> routeInfo;
+        RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid, routeInfo));
     }
     return Status::OK();
 }
@@ -1828,10 +1843,14 @@ Status HashRing::GetPrevWorker(const std::string &currWorkerUuid, std::string &p
                                 prevWorkerAddr);
 }
 
-Status HashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid)
+Status HashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid,
+                                      std::optional<RouteInfo> &routeInfo)
 {
     CHECK_FAIL_RETURN_STATUS(Validator::IsUuid(oldUuid), K_INVALID,
                              FormatString("%s must be in the format of uuid", oldUuid));
+    if (routeInfo) {
+        routeInfo->payload = oldUuid;
+    }
     newUuid.clear();
     RETURN_IF_NOT_OK(WaitWorkable());
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -1847,12 +1866,11 @@ Status HashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &n
         if (iter3 != workerAddr2UuidMap_.end()) {
             newUuid = iter3->second;
             return Status::OK();
-        } else {
-            LOG(ERROR) << FormatString("The msg in ringInfo_[%s] and workerAddr2UuidMap_[%s] is inconsistent",
-                                       MapToString(ringInfo_.key_with_worker_id_meta_map()),
-                                       MapToString(workerAddr2UuidMap_));
-            RETURN_STATUS(K_RUNTIME_ERROR, "Cannot find the master of " + oldUuid);
         }
+        LOG(ERROR) << FormatString("The msg in ringInfo_[%s] and workerAddr2UuidMap_[%s] is inconsistent",
+                                   MapToString(ringInfo_.key_with_worker_id_meta_map()),
+                                   MapToString(workerAddr2UuidMap_));
+        RETURN_STATUS(K_RUNTIME_ERROR, "Cannot find the master of " + oldUuid);
     }
     RETURN_STATUS(K_NOT_FOUND, FormatString("%s is not in this az", oldUuid));
 }

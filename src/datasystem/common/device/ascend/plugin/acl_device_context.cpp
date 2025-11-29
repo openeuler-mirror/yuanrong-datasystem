@@ -100,6 +100,7 @@ int DSHcclCommInitRootInfo(uint32_t nRanks, const HcclRootInfo *rootInfo, uint32
     HcclCommConfig config;
     HcclCommConfigInit(&config);
     config.hcclBufferSize = DEFAULT_HCCL_BUFFSIZE;
+    config.hcclOpExpansionMode = 1;  // Reduce the streams consumption of comm
     return HcclCommInitRootInfoConfig(nRanks, rootInfo, rank, &config, comm);
 }
 

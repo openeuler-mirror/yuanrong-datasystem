@@ -89,12 +89,15 @@ class Command(BaseCommand, ParallelMixin):
         user_name = self._config[ClusterConfig.SSH_USER_NAME]
         private_key = self._config[ClusterConfig.SSH_PRIVATE_KEY]
         worker_port = self._config[ClusterConfig.WORKER_PORT]
-        util.is_valid_ipv4(node)
+        is_ipv6 = util.is_valid_ip(node)
+        node_arg = node
+        if is_ipv6:
+            node_arg = "[" + node + "]"
         util.is_valid_port(worker_port)
         util.ssh_execute(
             node,
             user_name,
             private_key,
-            f"bash -l -c 'dscli stop -w {node}:{worker_port}' 2>/dev/null",
+            f"bash -l -c 'dscli stop -w {node_arg}:{worker_port}' 2>/dev/null",
         )
         self.logger.info(f"Stop worker service @ {node}:{worker_port} success.")

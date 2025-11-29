@@ -160,11 +160,9 @@ Status ZmqService::BindTcpIpPort(const std::vector<std::string> &frontendEndPtLi
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!tcpHostPort.empty(), K_UNKNOWN_ERROR,
                                          "Parent server not binding to any tcp/ip port");
     UnixSockFd sock;
-    RETURN_IF_NOT_OK(sock.CreateTcpIpSocket());
-    sockaddr_in addr{};
-    RETURN_IF_NOT_OK(sock.SetUpTcpIpAddr(tcpHostPort, addr));
-    RETURN_IF_NOT_OK(sock.Bind(addr));
-    RETURN_IF_NOT_OK(sock.GetBindingHostPort(tcpHostPort_));
+    struct addrinfo *servInfo;
+    RETURN_IF_NOT_OK(sock.GetAddrInfo(tcpHostPort, &servInfo));
+    RETURN_IF_NOT_OK(sock.BindTcp(servInfo, tcpHostPort_));  // Create/bind/listen
     tcpfd_ = sock.GetFd();
     RETURN_IF_NOT_OK(AddListenFd(tcpfd_));
     return Status::OK();
@@ -195,7 +193,7 @@ Status ZmqService::BindUnixPath()
         UnixSockFd sockfd;
         RETURN_IF_NOT_OK(sockfd.CreateUnixSocket());
         RETURN_IF_NOT_OK(UnixSockFd::SetUpSockPath(sockPath, addr));
-        RETURN_IF_NOT_OK(sockfd.Bind(addr, ele.second));
+        RETURN_IF_NOT_OK(sockfd.BindUds(addr, ele.second));
         RETURN_IF_NOT_OK(sockfd.SetNonBlocking());
         auto listenFd = sockfd.GetFd();
         RETURN_IF_NOT_OK(AddListenFd(listenFd));
@@ -209,7 +207,7 @@ Status ZmqService::BindUnixPath()
     UnixSockFd tempsockfd;
     RETURN_IF_NOT_OK(tempsockfd.CreateUnixSocket());
     RETURN_IF_NOT_OK(UnixSockFd::SetUpSockPath(exclSockPath, addr));
-    RETURN_IF_NOT_OK(tempsockfd.Bind(addr, RPC_SOCK_MODE));
+    RETURN_IF_NOT_OK(tempsockfd.BindUds(addr, RPC_SOCK_MODE));
     RETURN_IF_NOT_OK(tempsockfd.SetNonBlocking());
     exclListenFd_ = tempsockfd.GetFd();
     RETURN_IF_NOT_OK(AddListenFd(exclListenFd_));

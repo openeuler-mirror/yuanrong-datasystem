@@ -358,7 +358,7 @@ public:
      * @param[in] clientId The id of client.
      * @return Status of the call.
      */
-    Status RefreshMeta(const std::string &clientId);
+    Status RefreshMeta(const ClientKey &clientId);
 
     /**
      * @brief The rpc method used to delete the objects.
@@ -430,7 +430,7 @@ public:
      * @param[in] req Request that contains need recovery message.
      * @return K_OK on success; the error code otherwise.
      */
-    Status RecoveryClient(const std::string &clientId, const std::string &tenantId, const std::string &reqToken,
+    Status RecoveryClient(const ClientKey &clientId, const std::string &tenantId, const std::string &reqToken,
                           const google::protobuf::RepeatedPtrField<google::protobuf::Any> &req);
 
     // These function of list, hashmap and seqNo need keep until completely abandoned.
@@ -607,7 +607,7 @@ public:
     /**
      * @brief Return a pointer to global reference table.
      */
-    ObjectGlobalRefTable<ImmutableString> *GetGlobalRefTable()
+    ObjectGlobalRefTable<ClientKey> *GetGlobalRefTable()
     {
         return globalRefTable_.get();
     }
@@ -853,7 +853,7 @@ private:
      * @param[in] shmIds The ids of object reference.
      * @return K_OK on success; the error code otherwise.
      */
-    Status DecreaseMemoryRef(const std::string &clientId, const std::vector<ShmKey> &shmIds);
+    Status DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds);
 
     /**
      * @brief Get object data from remote cache (remote worker or redis) based on object meta.
@@ -943,14 +943,14 @@ private:
      * @param[in] clientId the client id.
      * @return Status of the call.
      */
-    Status ClearDeviceMetaData(const std::string &clientId);
+    Status ClearDeviceMetaData(const ClientKey &clientId);
 
     /**
      * @brief Async clear client metadata in master side.
      * @param[in] clientId The client id.
      * @param[in] retryTimes The retry info.
      */
-    void AsyncClearClientRef(const std::string &clientId, uint64_t retryTimes = 0);
+    void AsyncClearClientRef(const ClientKey &clientId, uint64_t retryTimes = 0);
 
     /**
      * @brief Lock a batch of objects.
@@ -1106,7 +1106,7 @@ private:
     std::atomic<bool> setValue_ = false;
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::shared_ptr<SharedMemoryRefTable> memoryRefTable_;
-    std::shared_ptr<ObjectGlobalRefTable<ImmutableString>> globalRefTable_;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };

@@ -148,13 +148,19 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
         ASSERT_NE(opts.workerOcDirectPorts.back(), -1);
     }
 
-    for (uint32_t i = 0; i < opts.numEtcd; ++i) {
-        int clientPort = GetFreePort();
-        ASSERT_NE(clientPort, -1);
-        int serverPort = GetFreePort();
-        ASSERT_NE(serverPort, -1);
-        opts.etcdIpAddrs.emplace_back(
-            std::make_pair(HostPort("127.0.0.1", clientPort), HostPort("127.0.0.1", serverPort)));
+    // If a testcase has manually added etcd addresses already, then do not add the default ones
+    // here.
+    if (opts.etcdIpAddrs.size() == 0) {
+        for (uint32_t i = 0; i < opts.numEtcd; ++i) {
+            int clientPort = GetFreePort();
+            ASSERT_NE(clientPort, -1);
+            int serverPort = GetFreePort();
+            ASSERT_NE(serverPort, -1);
+            opts.etcdIpAddrs.emplace_back(
+                std::make_pair(HostPort("127.0.0.1", clientPort), HostPort("127.0.0.1", serverPort)));
+        }
+    } else {
+        LOG(INFO) << "External cluster setup detected custom etcd ip addresses. Default has been bypassed.";
     }
 
     for (uint32_t i = 0; i < opts.numOBS; ++i) {

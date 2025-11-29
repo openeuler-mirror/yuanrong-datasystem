@@ -50,7 +50,7 @@ public:
      * @param[in] enableCrossNode Client is enable cross node connection or not.
      * @param[in] podName Client pod name.
      */
-    ClientInfo(int32_t socketFd, std::string clientId, bool uniqueCount, bool shmEnabled = true,
+    ClientInfo(int32_t socketFd, ClientKey clientId, bool uniqueCount, bool shmEnabled = true,
                std::string tenantId = "", bool enableCrossNode = false, const std::string &podName = "")
         : socketFd_(socketFd),
           clientId_(std::move(clientId)),
@@ -244,7 +244,7 @@ public:
 private:
     std::mutex mutex_;
     int32_t socketFd_;
-    std::string clientId_;
+    ClientKey clientId_;
     bool uniqueCount_;
     uint32_t lockId_;
     bool shmEnabled_;
