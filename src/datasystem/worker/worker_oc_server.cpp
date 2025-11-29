@@ -41,6 +41,7 @@
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/rdma/urma_manager_wrapper.h"
@@ -777,6 +778,7 @@ Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
 Status WorkerOCServer::Init()
 {
     ImmutableStringPool::Instance().Init();
+    intern::StringPool::InitAll();
     RETURN_IF_NOT_OK(InitAkSk());
     // The static members are destructed in the reverse order of their construction,
     // Below call guarantees that the destructor of Env is behind other Rocksdb singletons.

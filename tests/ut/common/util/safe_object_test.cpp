@@ -698,6 +698,7 @@ TEST_F(SafeObjectTest, TestReadWriteLock)
     BaseTable safeTable;
     std::string key = NewObjectKey();
     ImmutableStringPool::Instance().Init();
+    intern::StringPool::InitAll();
 
     std::atomic<bool> running{ true };
     const int printBatch = 100;

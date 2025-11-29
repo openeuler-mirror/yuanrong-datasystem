@@ -95,6 +95,7 @@ public:
     {
         // immutable string pool should be initiailzed first
         ImmutableStringPool::Instance().Init();
+        intern::StringPool::InitAll();
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
         // The static members are destructed in the reverse order of their construction,

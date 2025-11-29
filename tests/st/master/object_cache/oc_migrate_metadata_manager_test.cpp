@@ -76,6 +76,7 @@ public:
     {
         // immutable string pool should be initiailzed first
         ImmutableStringPool::Instance().Init();
+        intern::StringPool::InitAll();
         // The static members are destructed in the reverse order of their construction,
         // Below call guarantees that the destructor of Env is behind other Rocksdb singletons.
         (void)rocksdb::Env::Default();

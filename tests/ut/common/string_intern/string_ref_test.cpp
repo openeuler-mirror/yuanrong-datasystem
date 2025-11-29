@@ -26,13 +26,20 @@
 
 #include "common.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 namespace ut {
 using ImmutableString = OtherKey;
-using ImmutableStringPool = OtherKeyPool;
+
+namespace {
+intern::StringPool &GetStringPool()
+{
+    return intern::StringPool::Instance(intern::KeyType::OTHER);
+}
+}  // namespace
 class StringRefTest : public CommonTest {
 public:
     static void CheckImmutableStringEqual(const ImmutableString &im1, const ImmutableString &im2)
@@ -47,11 +54,11 @@ public:
     {
         set1.unsafe_erase("123");
         set2.unsafe_erase(ImmutableString("123"));
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1UL);
+        EXPECT_EQ(GetStringPool().Size(), 1UL);
 
         set1.unsafe_erase("456");
         set2.unsafe_erase(std::string("456"));
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 0UL);
+        EXPECT_EQ(GetStringPool().Size(), 0UL);
     }
 
     template <typename T>
@@ -59,11 +66,11 @@ public:
     {
         set1.erase("123");
         set2.erase(ImmutableString("123"));
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1UL);
+        EXPECT_EQ(GetStringPool().Size(), 1UL);
 
         set1.erase("456");
         set2.erase(std::string("456"));
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 0UL);
+        EXPECT_EQ(GetStringPool().Size(), 0UL);
     }
 
     template <typename T>
@@ -85,13 +92,13 @@ public:
             map2[key1] = value2;
             ASSERT_EQ(map2[im1], value2);
 
-            EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1UL);
+            EXPECT_EQ(GetStringPool().Size(), 1UL);
             map1.erase(key1);
-            EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1UL);
+            EXPECT_EQ(GetStringPool().Size(), 1UL);
             map2.erase(key1);
         }
 
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 0UL);
+        EXPECT_EQ(GetStringPool().Size(), 0UL);
     }
 
     template <typename T>
@@ -109,7 +116,7 @@ public:
         pair = set1.insert(ImmutableString(test2));
         ASSERT_FALSE(pair.second);
         // After insert, 2 RefCountString in pool.
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 2UL);
+        EXPECT_EQ(GetStringPool().Size(), 2UL);
         // find by ImmutableString
         auto iter = set1.find(ImmutableString(test1));
         ASSERT_TRUE(iter != set1.end());
@@ -132,7 +139,7 @@ public:
         ASSERT_TRUE(pair.second);
         pair = set2.insert(ImmutableString(test2));
         ASSERT_TRUE(pair.second);
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 2UL);
+        EXPECT_EQ(GetStringPool().Size(), 2UL);
 
         auto iterInSet1 = set1.find(test1);
         auto iterInSet2 = set2.find(test1);
@@ -165,9 +172,9 @@ TEST_F(StringRefTest, TestConstructor)
         CheckImmutableStringEqual(im3, im5);
         CHECK_NE(im1, im3);
         CHECK_NE(im1.ToString(), im3.ToString());
-        EXPECT_EQ(ImmutableStringPool::Instance().Size(), 2UL);
+        EXPECT_EQ(GetStringPool().Size(), 2UL);
     }
-    EXPECT_EQ(ImmutableStringPool::Instance().Size(), 0UL);
+    EXPECT_EQ(GetStringPool().Size(), 0UL);
 }
 
 TEST_F(StringRefTest, TestBigString)
@@ -182,9 +189,9 @@ TEST_F(StringRefTest, TestBigString)
         // Need copy once.
         imVec.emplace_back(str);
     }
-    EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1UL);
+    EXPECT_EQ(GetStringPool().Size(), 1UL);
     imVec.clear();
-    EXPECT_EQ(ImmutableStringPool::Instance().Size(), 0UL);
+    EXPECT_EQ(GetStringPool().Size(), 0UL);
 }
 
 TEST_F(StringRefTest, TestDestructorInParallel)
@@ -209,7 +216,7 @@ TEST_F(StringRefTest, TestDestructorInParallel)
     }
     pool.reset();
 
-    EXPECT_EQ(ImmutableStringPool::Instance().Size(), 0UL);
+    EXPECT_EQ(GetStringPool().Size(), 0UL);
 }
 
 TEST_F(StringRefTest, TestImInTbbUnorderedSet)
@@ -257,7 +264,7 @@ TEST_F(StringRefTest, ImInTbbHashMap)
     ASSERT_EQ(ac->second, value2);
     ac.release();
 
-    EXPECT_EQ(ImmutableStringPool::Instance().Size(), 1UL);
+    EXPECT_EQ(GetStringPool().Size(), 1UL);
 }
 
 TEST_F(StringRefTest, ImInUnorderedMapInParrel)
@@ -304,11 +311,14 @@ TEST_F(StringRefTest, ImInSTLUnorderedMap)
 
 TEST_F(StringRefTest, BaseTest)
 {
+    intern::StringPool::InitAll();
     auto s1 = ObjectKey::Intern("abc");
     auto s2 = ObjectKey::Intern("abc");
     auto s3 = ObjectKey::Intern("abcd");
     ASSERT_EQ(s1, s2);
     ASSERT_NE(s1, s3);
+
+    ASSERT_EQ(intern::StringPool::Instance(intern::KeyType::OBJECT_KEY).Size(), 2);  // OBJECT_KEY count 2
 
     std::unordered_map<ObjectKey, int> map;
     map.emplace(s1, 1);
@@ -317,6 +327,12 @@ TEST_F(StringRefTest, BaseTest)
     auto s4 = ObjectKey::Intern("abcde");
     s4 = s3;
     ASSERT_EQ(s3, s4);
+    ASSERT_EQ(intern::StringPool::Instance(intern::KeyType::OBJECT_KEY).Size(), 3);  // OBJECT_KEY count 3
+
+    auto c1 = ClientKey::Intern("abc");
+    auto c2 = ClientKey::Intern("abcd");
+    ASSERT_EQ(intern::StringPool::Instance(intern::KeyType::OBJECT_KEY).Size(), 3);  // OBJECT_KEY count still 3
+    ASSERT_EQ(intern::StringPool::Instance(intern::KeyType::CLIENT_KEY).Size(), 2);  // CLIENT_KEY count still 2
 }
 
 TEST_F(StringRefTest, TestMove)
