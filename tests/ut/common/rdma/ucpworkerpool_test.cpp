@@ -1,0 +1,288 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: UcpWorkerPool test.
+ */
+
+#include <chrono>
+#include <cstring>
+#include <gtest/gtest.h>
+#include <memory>
+#include <thread>
+
+#include "ucp/api/ucp.h"
+#include "ucp/api/ucp_def.h"
+
+#include "common/rdma/create_ucp_context.h"
+#include "common/rdma/mimic_remote_server.h"
+#include "common/rdma/prepare_local_server.h"
+#include "datasystem/common/rdma/ucp_manager.h"
+#define private public
+#include "datasystem/common/rdma/ucp_worker_pool.h"
+#undef private
+#include "datasystem/utils/status.h"
+
+namespace datasystem {
+namespace ut {
+class UcpWorkerPoolTest : public ::testing::Test {
+protected:
+    size_t workerN_ = 5;
+    std::unique_ptr<UcpWorkerPool> workerPool_;
+    std::string message_ = "Das ist gut";
+
+    std::unique_ptr<MimicRemoteServer> remoteServer_;
+    UcpManager *ucpManager_{ nullptr };
+    std::unique_ptr<CreateUcpContext> cUcpContext_;
+    std::unique_ptr<PrepareLocalServer> localBuffer_;
+    ucp_context_h context_;
+
+    static constexpr int RDMA_WAIT_TIME_MS = 1000;
+
+    void SetUp() override
+    {
+        ucpManager_ = &UcpManager::Instance();
+        cUcpContext_ = std::make_unique<CreateUcpContext>();
+        context_ = cUcpContext_->GetContext();
+
+        remoteServer_ = std::make_unique<MimicRemoteServer>(context_);
+        remoteServer_->InitUcpWorker();
+        remoteServer_->InitUcpSegment();
+
+        localBuffer_ = std::make_unique<PrepareLocalServer>(context_, message_);
+
+        workerPool_ = std::make_unique<UcpWorkerPool>(context_, ucpManager_, workerN_);
+        Status status = workerPool_->Init();
+        ASSERT_EQ(status, Status::OK());
+    }
+
+    void TearDown() override
+    {
+        remoteServer_.reset();
+        localBuffer_.reset();
+        workerPool_.reset();
+        ucpManager_ = nullptr;
+        cUcpContext_.reset();
+    }
+};
+
+TEST_F(UcpWorkerPoolTest, TestInitialization)
+{
+    // pool map should contain 5 elements
+    EXPECT_EQ(workerPool_->localWorkerPool_.size(), workerN_);
+
+    // all maps should be empty
+    EXPECT_TRUE(workerPool_->localWorkerSendMap_.empty());
+    EXPECT_TRUE(workerPool_->localWorkerRecvMap_.empty());
+
+    // miscellaneous
+    EXPECT_EQ(workerPool_->workerN_, workerN_);
+    EXPECT_EQ(workerPool_->roundRobin_, 0);
+}
+
+TEST_F(UcpWorkerPoolTest, TestGetOrSelRecvWorker)
+{
+    // keep record of the round robin number
+    auto initRR = workerPool_->roundRobin_.load();
+
+    // keep record of the initial size of the map
+    auto initMapSize = workerPool_->localWorkerRecvMap_.size();
+
+    // insert one dummy IP
+    auto chosen1 = workerPool_->GetOrSelRecvWorkerAddr("aaa");
+    initRR += 1;
+    initMapSize += 1;
+
+    // map should now be populated, round robin value += 1 modulo the size of the pool
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initMapSize);
+    EXPECT_NE(workerPool_->localWorkerRecvMap_.find("aaa"), workerPool_->localWorkerRecvMap_.end());
+
+    // do it again and make sure not the same worker is assigned to the task
+    auto chosen2 = workerPool_->GetOrSelRecvWorkerAddr("bbb");
+    initRR += 1;
+    initMapSize += 1;
+
+    EXPECT_NE(workerPool_->localWorkerRecvMap_.at("aaa"), workerPool_->localWorkerRecvMap_.at("bbb"));
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_NE(chosen1, chosen2);
+
+    // repeat a key
+    auto chosen3 = workerPool_->GetOrSelRecvWorkerAddr("aaa");
+    EXPECT_EQ(chosen1, chosen3);
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initMapSize);
+
+    // check a non-existing key
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.find("blah"), workerPool_->localWorkerRecvMap_.end());
+}
+
+TEST_F(UcpWorkerPoolTest, TestGetOrSelSendWorker)
+{
+    // keep record of the round robin number
+    auto initRR = workerPool_->roundRobin_.load();
+
+    // keep record of the initial size of the map
+    auto initMapSize = workerPool_->localWorkerSendMap_.size();
+
+    // insert one dummy IP
+    auto chosen1 = workerPool_->GetOrSelSendWorker("aaa");
+    initRR += 1;
+    initMapSize += 1;
+
+    // map should now be populated, round robin value += 1 modulo the size of the pool
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initMapSize);
+    EXPECT_NE(workerPool_->localWorkerSendMap_.find("aaa"), workerPool_->localWorkerSendMap_.end());
+
+    // do it again and make sure not the same worker is assigned to the task
+    auto chosen2 = workerPool_->GetOrSelSendWorker("bbb");
+    initRR += 1;
+    initMapSize += 1;
+    EXPECT_NE(workerPool_->localWorkerSendMap_.at("aaa"), workerPool_->localWorkerSendMap_.at("bbb"));
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_NE(chosen1, chosen2);
+
+    // repeat a key
+    auto chosen3 = workerPool_->GetOrSelSendWorker("aaa");
+    EXPECT_EQ(chosen1, chosen3);
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initMapSize);
+
+    // check a non-existing key
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.find("blah"), workerPool_->localWorkerSendMap_.end());
+}
+
+TEST_F(UcpWorkerPoolTest, TestWriteOnce)
+{
+    Status status;
+    auto initMapSize = workerPool_->localWorkerSendMap_.size();
+    auto initRR = workerPool_->roundRobin_.load();
+
+    status =
+        workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                           remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
+    EXPECT_EQ(status, Status::OK());
+    std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
+    // should have inserted "aaa" into send map
+    initRR += 1;
+    initMapSize += 1;
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initMapSize);
+    EXPECT_NE(workerPool_->localWorkerSendMap_.find("aaa"), workerPool_->localWorkerSendMap_.end());
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+}
+
+TEST_F(UcpWorkerPoolTest, TestWriteTwice)
+{
+    Status status;
+    auto initMapSize = workerPool_->localWorkerSendMap_.size();
+    auto initRR = workerPool_->roundRobin_.load();
+
+    status =
+        workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                           remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
+    EXPECT_EQ(status, Status::OK());
+    std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
+
+    // should have inserted "aaa" into send map
+    initRR += 1;
+    initMapSize += 1;
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initMapSize);
+    EXPECT_NE(workerPool_->localWorkerSendMap_.find("aaa"), workerPool_->localWorkerSendMap_.end());
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+
+    status =
+        workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                           remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
+    EXPECT_EQ(status, Status::OK());
+    std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
+    // should reuse the existing map entry
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initMapSize);
+    EXPECT_NE(workerPool_->localWorkerSendMap_.find("aaa"), workerPool_->localWorkerSendMap_.end());
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+}
+
+TEST_F(UcpWorkerPoolTest, TestRmByIp)
+{
+    // initial values
+    auto initRR = workerPool_->roundRobin_.load();
+    auto initSendMapSize = workerPool_->localWorkerSendMap_.size();
+    auto initRecvMapSize = workerPool_->localWorkerRecvMap_.size();
+
+    // insert values to maps insert aaa as a put action, insert bbb naively
+    workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                       remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
+    initRR += 1;
+    initSendMapSize += 1;
+
+    workerPool_->GetOrSelSendWorker("bbb");
+    initRR += 1;
+    initSendMapSize += 1;
+
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initSendMapSize);
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_NE(workerPool_->localWorkerSendMap_.find("aaa"), workerPool_->localWorkerSendMap_.end());
+
+    workerPool_->GetOrSelRecvWorkerAddr("aaa");
+    initRR += 1;
+    initRecvMapSize += 1;
+    workerPool_->GetOrSelRecvWorkerAddr("ccc");
+    initRR += 1;
+    initRecvMapSize += 1;
+
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initRecvMapSize);
+    EXPECT_EQ(workerPool_->roundRobin_, initRR % workerPool_->localWorkerPool_.size());
+    EXPECT_NE(workerPool_->localWorkerRecvMap_.find("aaa"), workerPool_->localWorkerRecvMap_.end());
+
+    EXPECT_EQ(workerPool_->RemoveByIp(std::string("aaa")), Status::OK());
+    initRecvMapSize -= 1;
+    initSendMapSize -= 1;
+
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initRecvMapSize);
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initSendMapSize);
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.find("aaa"), workerPool_->localWorkerRecvMap_.end());
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.find("aaa"), workerPool_->localWorkerSendMap_.end());
+
+    EXPECT_EQ(workerPool_->RemoveByIp(std::string("aaa")), Status::OK());
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initRecvMapSize);
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initSendMapSize);
+
+    EXPECT_EQ(workerPool_->RemoveByIp(std::string("bbb")), Status::OK());
+    initSendMapSize -= 1;
+
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initRecvMapSize);
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initSendMapSize);
+
+    EXPECT_EQ(workerPool_->RemoveByIp(std::string("ccc")), Status::OK());
+    initRecvMapSize -= 1;
+
+    EXPECT_EQ(workerPool_->localWorkerRecvMap_.size(), initRecvMapSize);
+    EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initSendMapSize);
+}
+
+TEST_F(UcpWorkerPoolTest, TestClean)
+{
+    workerPool_->Clean();
+
+    EXPECT_TRUE(workerPool_->localWorkerSendMap_.empty());
+    EXPECT_TRUE(workerPool_->localWorkerRecvMap_.empty());
+}
+
+}  // namespace ut
+}  // namespace datasystem

@@ -24,14 +24,13 @@
 
 #include <memory>
 #include <mutex>
-#include <string>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 
 #include "ucp/api/ucp.h"
 
 #include "datasystem/utils/status.h"
-
 
 namespace datasystem {
 

@@ -83,7 +83,7 @@ Status UcpManager::UcpCreateContext()
     memset_s(&params, sizeof(params), 0, sizeof(params));
     params.field_mask = UCP_PARAM_FIELD_FEATURES | UCP_PARAM_FIELD_MT_WORKERS_SHARED;
     // Feature flags
-    params.features = UCP_FEATURE_RMA;
+    params.features = UCP_FEATURE_RMA | UCP_FEATURE_WAKEUP;
     // Multi-threaded worker shared mode
     params.mt_workers_shared = 1;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!ucpContext_, K_DUPLICATED,

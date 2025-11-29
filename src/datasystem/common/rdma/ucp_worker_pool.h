@@ -23,19 +23,19 @@
 #ifndef DATASYSTEM_COMMON_RDMA_UCP_WORKER_POOL_H
 #define DATASYSTEM_COMMON_RDMA_UCP_WORKER_POOL_H
 
-#include <memory>
-#include <string>
-#include <cstring>
-#include <unordered_map>
-#include <mutex>
-#include <shared_mutex>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
+#include <unordered_map>
 
 #include "ucp/api/ucp.h"
 
-#include "datasystem/utils/status.h"
 #include "datasystem/common/rdma/ucp_worker.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 
@@ -68,9 +68,9 @@ public:
      * will actively check the log filled by CallBack function in UcpWorker to see if the put action is
      * really successful. However, if this function fails, the put action would have failed.
      */
-    virtual Status Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                         const std::string &remoteWorkerAddr, const std::string &ipAddr,
-                         const uintptr_t &localSegAddr, size_t localSegSize, uint64_t requestID);
+    virtual Status Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
+                         const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t localSegAddr,
+                         size_t localSegSize, uint64_t requestID);
 
     /**
      * @brief Obtain the worker that previously talked with this IP, or assign a new one

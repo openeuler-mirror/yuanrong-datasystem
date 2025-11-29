@@ -24,6 +24,8 @@
 
 #include <cstring>
 
+#include "datasystem/common/util/status_helper.h"
+
 namespace datasystem {
 
 UcpSegment::UcpSegment(uintptr_t localSegAddr, size_t localSegSize, const ucp_context_h &ucpContext)
@@ -65,14 +67,16 @@ Status UcpSegment::Init()
 
     ucs_status_t status = ucp_mem_map(context_, &params, &memH_);
     if (status != UCS_OK) {
-        return Status(K_RDMA_ERROR, std::string("[UcpSegment] Failed to map memory: ") + ucs_status_string(status));
+        RETURN_STATUS(K_RDMA_ERROR, std::string("[UcpSegment] Failed to map memory: ") + ucs_status_string(status));
     }
 
     void *rkeyBuffer;
     size_t rkeySize;
-    if (ucp_rkey_pack(context_, memH_, &rkeyBuffer, &rkeySize) != UCS_OK) {
+    status = ucp_rkey_pack(context_, memH_, &rkeyBuffer, &rkeySize);
+    if (status != UCS_OK) {
+        LOG(ERROR) << "[UcpSegment] Failed to pack rkey: " << ucs_status_string(status);
         ucp_mem_unmap(context_, memH_);
-        return Status(K_RDMA_ERROR, "[UcpSegment] Failed to pack rkey.");
+        RETURN_STATUS(K_RDMA_ERROR, "[UcpSegment] Failed to pack rkey.");
     }
 
     packedRkey_ = std::string(static_cast<const char *>(rkeyBuffer), rkeySize);
