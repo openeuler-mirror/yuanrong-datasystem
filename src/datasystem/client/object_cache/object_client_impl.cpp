@@ -136,7 +136,8 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     ConnectOptions connectOptions = connectOptions1;
     ReadOptFromEnv(connectOptions);
     ipAddress_ = HostPort(connectOptions.host, connectOptions.port);
-    timeoutMs_ = connectOptions.connectTimeoutMs;
+    connectTimeoutMs_ = connectOptions.connectTimeoutMs;
+    requestTimeoutMs_ = connectOptions.requestTimeoutMs > 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableExclusiveConnection_ = connectOptions.enableExclusiveConnection;
@@ -215,13 +216,13 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
 
     LOG(INFO) << "Start to init worker client at address: " << ipAddress_.ToString();
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
-    CHECK_FAIL_RETURN_STATUS(timeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
     workerApi_[LOCAL_WORKER] =
         std::make_shared<ClientWorkerApi>(ipAddress_, cred_, heartbeatType, signature_.get(), tenantId_,
                                           enableCrossNodeConnection_, enableExclusiveConnection_);
-    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(timeoutMs_));
+    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(requestTimeoutMs_, connectTimeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
     const size_t threadCount = 8;
     asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
@@ -458,7 +459,7 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWor
             std::make_shared<ClientWorkerApi>(standbyWorker, cred_, heartbeatType, signature_.get(), tenantId_,
                                               enableCrossNodeConnection_, enableExclusiveConnection_);
         workerApi_[next]->SetIsUseStandbyWorker(true);
-        Status rc = workerApi_[next]->Init(timeoutMs_);
+        Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_);
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("[Switch] Worker(%s) init failed, error msg: %s", standbyWorker.ToString(),
                                        rc.ToString());

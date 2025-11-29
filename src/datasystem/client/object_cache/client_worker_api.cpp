@@ -68,9 +68,9 @@ ClientWorkerApi::ClientWorkerApi(HostPort hostPort, RpcCredential cred, Heartbea
     }
 }
 
-Status ClientWorkerApi::Init(int32_t timeoutMs)
+Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 {
-    RETURN_IF_NOT_OK(ClientWorkerCommonApi::Init(timeoutMs));
+    RETURN_IF_NOT_OK(ClientWorkerCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     // We will enable uds after handshaking with the worker.
@@ -79,9 +79,9 @@ Status ClientWorkerApi::Init(int32_t timeoutMs)
                                       GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
     }
     if (clientDeadTimeoutMs_ > 0) {
-        timeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(timeoutMs));
+        connectTimeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs));
     }
-    stub_ = std::make_unique<WorkerOCService_Stub>(channel, timeoutMs);
+    stub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
     if (enableExclusiveConnection_ && exclusiveId_.has_value() && GetShmEnabled()) {
         // Note: exclusiveConnSockPath_ will be initialized during client register call driven from base class Init()
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
@@ -112,7 +112,7 @@ Status ClientWorkerApi::ReconnectWorker(const std::vector<std::string> &gRefIds)
     RegisterClientReqPb req;
     req.add_extend()->PackFrom(extendPb);
     req.set_client_id(GetClientId());
-    RETURN_IF_NOT_OK(Connect(req, timeoutMs_, true));
+    RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
     if (enableExclusiveConnection_ && exclusiveId_.has_value() && GetShmEnabled()) {
         // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
@@ -137,7 +137,7 @@ Status ClientWorkerApi::Create(const std::string &objectKey, int64_t dataSize, u
     CreateRspPb rsp;
     PerfPoint partPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
     RETURN_IF_NOT_OK(RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -178,7 +178,7 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_IPC);
     MultiCreateRspPb rsp;
     RETURN_IF_NOT_OK(RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -300,13 +300,13 @@ Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspP
     int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
     INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
         rpcTimeout = timeout;
-        timeoutMs_ = timeout;
+        requestTimeoutMs_ = timeout;
         return Status::OK();
     });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when get data.");
     Status getStatus;
     Status status = RetryOnError(
-        std::max<int32_t>(timeoutMs_, subTimeoutMs),
+        std::max<int32_t>(requestTimeoutMs_, subTimeoutMs),
         [this, &req, &rsp, &payloads, &getStatus](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -338,8 +338,8 @@ Status ClientWorkerApi::InvalidateBuffer(const std::string &objectKey)
     req.set_client_id(GetClientId());
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     InvalidateBufferRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_INVALIDATE_BUFFER);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -394,7 +394,7 @@ Status ClientWorkerApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferI
     bool isRetry = false;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         RetryOnError(
-            timeoutMs_,
+            requestTimeoutMs_,
             [this, &req, &rsp, &payloads, &isRetry](int32_t realRpcTimeout) {
                 req.set_is_retry(isRetry);
                 RpcOptions opts;
@@ -452,7 +452,7 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
     point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         RetryOnError(
-            timeoutMs_,
+            requestTimeoutMs_,
             [this, &req, &rsp, &payloads](int32_t realRpcTimeout) {
                 RpcOptions opts;
                 opts.SetTimeout(realRpcTimeout);
@@ -529,7 +529,7 @@ Status ClientWorkerApi::DecreaseWorkerRefByShm(const ShmKey &shmId, const std::f
     // Interval for futex wait is 3 second.
     constexpr int intervalSec = 3;
     // calculate retry count.
-    int64_t waitTimes = static_cast<int64_t>(retryTimes_) * timeoutMs_ / ONE_THOUSAND / intervalSec + 1;
+    int64_t waitTimes = static_cast<int64_t>(retryTimes_) * requestTimeoutMs_ / ONE_THOUSAND / intervalSec + 1;
 
     struct timespec timeoutStruct = { .tv_sec = static_cast<long int>(intervalSec), .tv_nsec = 0 };
     uint32_t slotIndex;
@@ -560,7 +560,7 @@ Status ClientWorkerApi::DecreaseWorkerRefByShm(const ShmKey &shmId, const std::f
         break;
     } while (true);
     timeoutStruct.tv_sec =
-        timeoutMs_ / ONE_THOUSAND;  // Time for wait rsp , it can wake up by worker rsp or disconnect.
+        requestTimeoutMs_ / ONE_THOUSAND;  // Time for wait rsp , it can wake up by worker rsp or disconnect.
     auto rc = CheckShmFutexResult((uint32_t *)waitFlag, waitNum, timeoutStruct);
     std::lock_guard<std::mutex> lock(mtx_);  // protect the circular queue.
     waitRespMap_.erase(slotIndex);
@@ -579,8 +579,8 @@ Status ClientWorkerApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when decreaseWorkerRef data.");
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     DecreaseReferenceResponse resp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(stub_->DecreaseReference(opts, req, resp));
@@ -600,7 +600,7 @@ Status ClientWorkerApi::GIncreaseWorkerRef(const std::vector<std::string> &first
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when gincreaseWorkerRef data.");
 
     Status rc = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -638,7 +638,7 @@ Status ClientWorkerApi::GDecreaseWorkerRef(const std::vector<std::string> &finis
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GDecreaseWorkerRef data.");
     return RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp, &finishDecIds, &failedObjectKeys](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -673,7 +673,7 @@ Status ClientWorkerApi::ReleaseGRefs(const std::string &remoteClientId)
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when ReleaseGRefs data.");
     auto rc = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -713,7 +713,7 @@ Status ClientWorkerApi::Delete(const std::vector<std::string> &objectKeys, std::
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_DEL_OBJECT);
     auto rc = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp, &failedObjectKeys, &objectKeys](int32_t realRpcTimeout) {
             failedObjectKeys.clear();
             RpcOptions opts;
@@ -751,8 +751,8 @@ Status ClientWorkerApi::QueryGlobalRefNum(
     req.set_client_id(GetClientId());
     QueryGlobalRefNumRspCollectionPb rsp;
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     LOG(INFO) << "[GRef] Client Send Rpc QueryGlobalRefNum to worker";
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(stub_->QueryGlobalRefNum(opts, req, rsp));
@@ -796,8 +796,8 @@ Status ClientWorkerApi::PublishDeviceObject(const std::shared_ptr<DeviceBufferIn
         payloads.emplace_back(nonShmPointer, dataSize);
     }
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     PublishDeviceObjectRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when PublishDeviceObject data.");
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -879,12 +879,12 @@ Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &buff
     auto subReq = req.add_dev_obj_meta();
     FillDevObjMeta(bufferInfo, blobs, subReq);
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
+    opts.SetTimeout(requestTimeoutMs_);
     INJECT_POINT("ClientWorkerApi.PutP2PMeta.timeoutDuration", [](int time) {
         reqTimeoutDuration.Init(time);
         return Status::OK();
     });
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when FillDevObjMeta data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
@@ -928,8 +928,8 @@ Status ClientWorkerApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>
 Status ClientWorkerApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SendRootInfo data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
@@ -958,8 +958,8 @@ Status ClientWorkerApi::AckRecvFinish(AckRecvFinishReqPb &req)
 {
     AckRecvFinishRspPb resp;
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when AckRecvFinish.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
@@ -1002,8 +1002,8 @@ Status ClientWorkerApi::RemoveP2PLocation(const std::string &objectKey, int32_t 
     req.set_device_id(deviceId);
     RemoveP2PLocationRspPb resp;
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    opts.SetTimeout(requestTimeoutMs_);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when RemoveP2PLocation.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data.");
@@ -1019,7 +1019,7 @@ Status ClientWorkerApi::GetObjMetaInfo(const std::string &tenantId, const std::v
     req.set_tenantid(tenantId);
     GetObjMetaInfoRspPb rsp;
     auto status = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp, tenantId](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -1048,7 +1048,7 @@ Status ClientWorkerApi::QuerySize(const std::vector<std::string> &objectKeys, Qu
     req.set_client_id(GetClientId());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when QuerySize.");
     auto status = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -1085,7 +1085,7 @@ Status ClientWorkerApi::Exist(const std::vector<std::string> &keys, std::vector<
     ExistRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_EXIST);
     auto status = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -1119,7 +1119,7 @@ Status ClientWorkerApi::Expire(const std::vector<std::string> &keys, uint32_t tt
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExpireReqPb.");
     ExpireRspPb rsp;
     auto status = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -1149,7 +1149,7 @@ Status ClientWorkerApi::GetMetaInfo(const std::vector<std::string> &keys, const 
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to GetMetaInfoReqPb.");
     auto status = RetryOnError(
-        timeoutMs_,
+        requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);

@@ -71,10 +71,12 @@ public:
 
     /**
      * @brief Initialize the ClientWorkerApi Object.
+     * @param[in] requestTimeoutMs The request timeout.
+     * @param[in] connectTimeoutMs The connec  timeout.
      * @return K_OK on success; the error code otherwise.
      *         K_INVALID: the input ip or port is invalid.
      */
-    virtual Status Init(int32_t timeoutMs);
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs);
 
     /**
      * @brief Send heartbeat messages periodically.
@@ -366,9 +368,10 @@ protected:
     void RecvPageFd();
 
     /**
+     * @param[in] timeout The original timeout to adjust
      * @brief Set the rpc timeout.
      */
-    void SetRpcTimeout();
+    void SetRpcTimeout(int32_t timeout);
 
     /**
      * @brief Compute a timeout value that will result in a new timeout that is a bit smaller than the input timeout
@@ -452,7 +455,8 @@ protected:
     uint64_t shmThreshold_{ 0 };
     Signature *signature_;
     std::string tenantId_;
-    int32_t timeoutMs_{ 0 };
+    int32_t requestTimeoutMs_{ 0 };
+    int32_t connectTimeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };
     bool enableCrossNodeConnection_{ false };
     bool enableExclusiveConnection_{ false };

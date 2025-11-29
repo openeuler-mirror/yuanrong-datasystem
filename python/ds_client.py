@@ -28,17 +28,18 @@ class DsClient:
     """
 
     def __init__(
-            self,
-            host,
-            port,
-            connect_timeout_ms=60000,
-            client_public_key="",
-            client_private_key="",
-            server_public_key="",
-            access_key="",
-            secret_key="",
-            tenant_id="",
-            enable_cross_node_connection=False
+        self,
+        host,
+        port,
+        connect_timeout_ms=60000,
+        client_public_key="",
+        client_private_key="",
+        server_public_key="",
+        access_key="",
+        secret_key="",
+        tenant_id="",
+        enable_cross_node_connection=False,
+        req_timeout_ms=0,
     ):
         """Constructor of the DsClient class
 
@@ -53,6 +54,8 @@ class DsClient:
             secret_key(str): The secret key for AK/SK authorize.
             tenant_id(str): The tenant ID.
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
+            req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+            connect_timeout_ms.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -67,7 +70,8 @@ class DsClient:
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
-            ["enable_cross_node_connection", enable_cross_node_connection, bool]
+            ["enable_cross_node_connection", enable_cross_node_connection, bool],
+            ["req_timeout_ms", req_timeout_ms, int],
         ]
         validator.check_args_types(args)
         self._kv_client = KVClient(
@@ -80,7 +84,8 @@ class DsClient:
             access_key,
             secret_key,
             tenant_id,
-            enable_cross_node_connection
+            enable_cross_node_connection,
+            req_timeout_ms,
         )
         self._hetero_client = HeteroClient(
             host,
@@ -92,7 +97,8 @@ class DsClient:
             access_key,
             secret_key,
             tenant_id,
-            enable_cross_node_connection
+            enable_cross_node_connection,
+            req_timeout_ms
         )
         self._object_client = ObjectClient(
             host,
@@ -103,7 +109,8 @@ class DsClient:
             server_public_key,
             access_key,
             secret_key,
-            tenant_id
+            tenant_id,
+            req_timeout_ms
         )
 
     def init(self):

@@ -241,5 +241,42 @@ TEST_F(KVCacheClientExistTest, TestExistence)
     EXPECT_THAT(exists, testing::Each(false));
 }
 
+TEST_F(KVCacheClientExistTest, ConnectTimeout)
+{
+    auto connectTimeoutMs = 4000;
+    auto requestTimeoutMs = 7000;
+    auto op = ConnectOptions{
+        .host = "127.0.0.1",
+        .port = 11212,
+        .connectTimeoutMs = connectTimeoutMs,
+        .requestTimeoutMs = requestTimeoutMs,
+        .accessKey = "QTWAOYTTINDUT2QVKYUC",
+        .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
+    };
+    KVClient client(op);
+    Timer timer;
+    client.Init();
+    auto ms1000 = 1000;
+    auto t = timer.ElapsedSecond() - connectTimeoutMs / ms1000;
+    DS_ASSERT_TRUE((abs(t) <= 1), true);
+    HostPort addr;
+    cluster_->GetWorkerAddr(0, addr);
+    op = ConnectOptions{
+        .host = addr.Host(),
+        .port = addr.Port(),
+        .connectTimeoutMs = connectTimeoutMs,
+        .requestTimeoutMs = requestTimeoutMs,
+        .accessKey = "QTWAOYTTINDUT2QVKYUC",
+        .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
+    };
+    cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "Exist.Sleep", "sleep(8000)");
+    client = KVClient(op);
+    DS_ASSERT_OK(client.Init());
+    Timer timer2;
+    std::vector<bool> ex;
+    client.Exist({ "failedKeys" }, ex);
+    t = timer2.ElapsedSecond() - requestTimeoutMs / ms1000;
+    DS_ASSERT_TRUE((abs(t) <= 1), true);
+}
 }  // namespace st
 }  // namespace datasystem

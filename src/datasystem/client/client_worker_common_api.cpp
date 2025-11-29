@@ -86,38 +86,39 @@ ClientWorkerCommonApi::~ClientWorkerCommonApi()
     }
 }
 
-void ClientWorkerCommonApi::SetRpcTimeout()
+void ClientWorkerCommonApi::SetRpcTimeout(int32_t timeout)
 {
     constexpr int32_t rpcMaxTimeout = 600000;  // 10min
-    int32_t rpcTimeout = timeoutMs_ / retryTimes_;
+    int32_t rpcTimeout = timeout / retryTimes_;
 
     int32_t shorterSplitTime = 30000;  // 30s
     int32_t longerSplitTime = 90000;   // 90s
-    if (timeoutMs_ <= shorterSplitTime) {
-        rpcTimeoutMs_ = timeoutMs_;
-    } else if (timeoutMs_ <= longerSplitTime) {
+    if (timeout <= shorterSplitTime) {
+        rpcTimeoutMs_ = timeout;
+    } else if (timeout <= longerSplitTime) {
         rpcTimeoutMs_ = shorterSplitTime;
     } else {
         rpcTimeoutMs_ = std::min(rpcTimeout, rpcMaxTimeout);
     }
-    LOG(INFO) << "The total timeout is " << timeoutMs_ << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
+    LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
 }
 
-Status ClientWorkerCommonApi::Init(int32_t timeoutMs)
+Status ClientWorkerCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 {
-    if (timeoutMs < RPC_MINIMUM_TIMEOUT) {
-        std::string errInfo = "The connect timeout should be greater than or equal to "
-                              + std::to_string(RPC_MINIMUM_TIMEOUT) + " milliseconds.";
-        LOG(ERROR) << errInfo;
-        RETURN_STATUS(StatusCode::K_INVALID, errInfo);
-    }
-    timeoutMs_ = timeoutMs;
-    recvClientFdState_.getClientFdTimeoutMs = timeoutMs_;
-    SetRpcTimeout();
+    CHECK_FAIL_RETURN_STATUS(
+        connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
+        FormatString("The connect timeout should be greater than or equal to %d milliseconds.", RPC_MINIMUM_TIMEOUT));
+    CHECK_FAIL_RETURN_STATUS(
+        requestTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
+        FormatString("The req timeout should be greater than or equal to %d milliseconds.", RPC_MINIMUM_TIMEOUT));
+    requestTimeoutMs_ = requestTimeoutMs;
+    connectTimeoutMs_ = connectTimeoutMs;
+    recvClientFdState_.getClientFdTimeoutMs = connectTimeoutMs;
+    SetRpcTimeout(requestTimeoutMs);
     VLOG(1) << "Client start to connect worker";
     CHECK_FAIL_RETURN_STATUS(TimerQueue::GetInstance()->Initialize(), K_RUNTIME_ERROR, "TimerQueue init failed!");
     RegisterClientReqPb req;
-    RETURN_IF_NOT_OK(Connect(req, timeoutMs));
+    RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs));
     VLOG(1) << "The new client id is: " << clientId_ << ", Received pageSize= " << pageSize_ << " from worker.";
     return Status::OK();
 }
@@ -610,7 +611,7 @@ int64_t ClientWorkerCommonApi::GetHeartBeatInterval()
 
 int32_t ClientWorkerCommonApi::GetConnectTimeoutMs()
 {
-    return timeoutMs_;
+    return connectTimeoutMs_;
 }
 }  // namespace client
 }  // namespace datasystem

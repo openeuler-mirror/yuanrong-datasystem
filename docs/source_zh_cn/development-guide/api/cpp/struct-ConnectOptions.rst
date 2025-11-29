@@ -20,7 +20,10 @@ ConnectOptions
 
     .. cpp:member:: int32_t connectTimeoutMs = 60 * 1000;
 
-        客户端连接和请求超时时间，单位为毫秒。默认值：60'000。
+        客户端连接超时时间，单位为毫秒。默认值：60'000。
+    .. cpp:member:: int32_t requestTimeoutMs;
+
+        客户端请求超时时间，单位为毫秒。默认值:与connectTimeoutMs一致。
 
     .. cpp:member:: std::string clientPublicKey = "";
 

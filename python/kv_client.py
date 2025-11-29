@@ -145,18 +145,21 @@ class KVClient:
     Features: Data system State Cache Client management for python.
     """
 
-    def __init__(self,
-                 host: str = '',
-                 port: int = 0,
-                 timeout_ms=60000,
-                 client_public_key: str = '',
-                 client_private_key: str = '',
-                 server_public_key: str = "",
-                 access_key="",
-                 secret_key="",
-                 tenant_id="",
-                 enable_cross_node_connection=False):
-        """ Constructor of the KVClient class
+    def __init__(
+        self,
+        host: str = "",
+        port: int = 0,
+        timeout_ms=60000,
+        client_public_key: str = "",
+        client_private_key: str = "",
+        server_public_key: str = "",
+        access_key="",
+        secret_key="",
+        tenant_id="",
+        enable_cross_node_connection=False,
+        req_timeout_ms=0,
+    ):
+        """Constructor of the KVClient class
 
         Args:
             host(str): The host of the worker. If the host is not filled in, we will initialize it from the environment
@@ -170,6 +173,8 @@ class KVClient:
             secret_key(str): The secret key for AK/SK authorize.
             tenant_id(str): The tenant ID.
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
+            req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same
+            with timeout_ms.
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
@@ -184,9 +189,19 @@ class KVClient:
         ]
         validator.check_args_types(args)
         validator.check_param_range("timeout_ms", timeout_ms, 0, validator.INT32_MAX_SIZE)
-        self._client = ds.KVClient(host, port, timeout_ms, client_public_key, client_private_key,
-                                      server_public_key, access_key, secret_key, tenant_id,
-                                      enable_cross_node_connection)
+        self._client = ds.KVClient(
+            host,
+            port,
+            timeout_ms,
+            client_public_key,
+            client_private_key,
+            server_public_key,
+            access_key,
+            secret_key,
+            tenant_id,
+            enable_cross_node_connection,
+            req_timeout_ms,
+        )
 
     def init(self):
         """ Init a client to connect to a worker.

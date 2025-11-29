@@ -2339,6 +2339,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     workerOperationTimeCost.Clear();
     Timer timer;
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
+    INJECT_POINT("Exist.Sleep");
     auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "Exist start from client:" << clientId;
     std::string tenantId;

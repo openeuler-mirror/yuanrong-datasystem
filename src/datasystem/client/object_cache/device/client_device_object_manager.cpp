@@ -42,7 +42,9 @@
 namespace datasystem {
 namespace object_cache {
 ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
-    : devInterImpl_(acl::AclDeviceManager::Instance()), objClientImpl_(impl), clientDevOJTimeoutMs_(impl->timeoutMs_)
+    : devInterImpl_(acl::AclDeviceManager::Instance()),
+      objClientImpl_(impl),
+      clientDevOJTimeoutMs_(impl->requestTimeoutMs_)
 {
 }
 

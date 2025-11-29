@@ -76,21 +76,6 @@ class MetaInfo:
 class HeteroClient:
     """
     Data system Hetero Client management for python.
-
-    Args:
-        host(str): The host of the worker address.
-        port(int): The port of the worker address.
-        connect_timeout_ms(int): The timeout_ms interval for the connection between the client and worker.
-        client_public_key(str): The client's public key, for curve authentication.
-        client_private_key(str): The client's private key, for curve authentication.
-        server_public_key(str): The worker server's public key, for curve authentication.
-        access_key(str): The access key used by AK/SK authorize.
-        secret_key(str): The secret key for AK/SK authorize.
-        tenant_id(str): The tenant ID.
-        enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
-
-    Raises:
-        TypeError: Raise a type error if the input parameter is invalid.
     """
 
     def __init__(
@@ -105,6 +90,7 @@ class HeteroClient:
         secret_key="",
         tenant_id="",
         enable_cross_node_connection=False,
+        req_timeout_ms=0,
     ):
         """Constructor of the HeteroClient class
 
@@ -123,6 +109,8 @@ class HeteroClient:
             oauth_url(str): The auth url of IAM.
             tenant_id(str): The tenant ID.
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
+            req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+            connect_timeout_ms.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -151,6 +139,7 @@ class HeteroClient:
             secret_key,
             tenant_id,
             enable_cross_node_connection,
+            req_timeout_ms,
         )
 
     @staticmethod

@@ -1136,7 +1136,8 @@ private:
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
-    int32_t timeoutMs_;
+    int32_t requestTimeoutMs_;
+    int32_t connectTimeoutMs_;
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
     bool enableExclusiveConnection_ = false;

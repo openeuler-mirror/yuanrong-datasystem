@@ -42,9 +42,9 @@ ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, RpcCredential cred,
 {
 }
 
-Status ClientWorkerApi::Init(int32_t timeoutMs)
+Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 {
-    RETURN_IF_NOT_OK(ClientWorkerCommonApi::Init(timeoutMs));
+    RETURN_IF_NOT_OK(ClientWorkerCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Setting client-worker communication via Unix socket : %s",
@@ -75,12 +75,12 @@ Status ClientWorkerApi::CreateProducer(const std::string &streamName, const std:
     req.set_encrypt_stream(producerConf.encryptStream);
     req.set_reserve_size(producerConf.reserveSize);
     req.set_stream_mode(producerConf.streamMode);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_PRODUCER);
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
+    opts.SetTimeout(requestTimeoutMs_);
     CreateProducerRspPb rsp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_EXCEPT(rpcSession_->CreateProducer(opts, req, rsp), StatusCode::K_DUPLICATED);
@@ -114,13 +114,13 @@ Status ClientWorkerApi::Subscribe(const std::string &streamName, const std::stri
     configReqPtr->set_subscription_name(config.subscriptionName);
     configReqPtr->set_subscription_type(SubscriptionTypePb(config.subscriptionType));
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
+    opts.SetTimeout(requestTimeoutMs_);
     SubscribeReqPb req;
     req.set_stream_name(streamName);
     req.set_allocated_subscription_config(configReqPtr.release());
     req.set_client_id(GetClientId());
     req.set_consumer_id(consumerId);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_SUBSCRIBE);
@@ -158,12 +158,12 @@ Status ClientWorkerApi::SetRpcTimeout(int64_t &requestedTimeout, int32_t &rpcTim
 Status ClientWorkerApi::DeleteStream(const std::string &streamName)
 {
     RpcOptions opts;
-    opts.SetTimeout(timeoutMs_);
+    opts.SetTimeout(requestTimeoutMs_);
     DeleteStreamReqPb req;
     DeleteStreamRspPb rsp;
     req.set_stream_name(streamName);
     req.set_client_id(GetClientId());
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_DELETE_STREAM);
@@ -182,7 +182,7 @@ Status ClientWorkerApi::QueryGlobalProducersNum(const std::string &streamName, u
     req.set_stream_name(streamName);
     req.set_client_id(GetClientId());
 
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(rpcSession_->QueryGlobalProducersNum(req, rsp));
@@ -197,7 +197,7 @@ Status ClientWorkerApi::QueryGlobalConsumersNum(const std::string &streamName, u
     QueryGlobalNumRsqPb rsp;
     req.set_stream_name(streamName);
 
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(timeoutMs_));
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     req.set_client_id(GetClientId());
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -223,7 +223,7 @@ Status ClientWorkerApi::ResetStreams(const std::vector<std::string> &streamNames
     PerfPoint point(PerfKey::RPC_WORKER_RESET_STREAM);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         RetryOnError(
-            timeoutMs_,
+            requestTimeoutMs_,
             [this, &opts, &req, &rsp](int32_t) {
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 return rpcSession_->ResetStreams(opts, req, rsp);
@@ -251,7 +251,7 @@ Status ClientWorkerApi::ResumeStreams(const std::vector<std::string> &streamName
     PerfPoint point(PerfKey::RPC_WORKER_RESUME_STREAM);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         RetryOnError(
-            timeoutMs_,
+            requestTimeoutMs_,
             [this, &opts, &req, &rsp](int32_t) {
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 return rpcSession_->ResumeStreams(opts, req, rsp);

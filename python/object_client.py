@@ -316,7 +316,8 @@ class ObjectClient:
         server_public_key="",
         access_key="",
         secret_key="",
-        tenant_id=""
+        tenant_id="",
+        req_timeout_ms=0,
     ):
         """Constructor of the ObjectClient class
 
@@ -334,6 +335,8 @@ class ObjectClient:
             oauth_client_secret(str): The client secret for tenant.
             oauth_url(str): The auth url of IAM.
             tenant_id(str): The tenant ID.
+            req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+            connect_timeout_ms.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -359,7 +362,8 @@ class ObjectClient:
             server_public_key,
             access_key,
             secret_key,
-            tenant_id
+            tenant_id,
+            req_timeout_ms,
         )
 
     @staticmethod

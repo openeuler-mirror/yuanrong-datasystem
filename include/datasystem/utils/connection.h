@@ -18,9 +18,9 @@
 
 #include <string>
 
+#include "datasystem/object/object_enum.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
-#include "datasystem/object/object_enum.h"
 
 namespace datasystem {
 struct ConnectOptions {
@@ -34,6 +34,7 @@ struct ConnectOptions {
     std::string host;
     int32_t port;
     int32_t connectTimeoutMs = 60 * 1000;  // 60s
+    int32_t requestTimeoutMs = 0;
     std::string clientPublicKey = "";
     SensitiveValue clientPrivateKey = "";
     std::string serverPublicKey = "";

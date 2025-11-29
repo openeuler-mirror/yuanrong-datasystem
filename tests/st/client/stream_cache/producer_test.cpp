@@ -184,7 +184,7 @@ public:
         HostPort workerAddress;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerNum, workerAddress));
         workerApi = std::make_shared<ClientWorkerApi>(workerAddress, RpcCredential(), signature_.get());
-        RETURN_IF_NOT_OK(workerApi->Init(CLIENT_RPC_TIMEOUT));
+        RETURN_IF_NOT_OK(workerApi->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT));
         return Status::OK();
     }
 
