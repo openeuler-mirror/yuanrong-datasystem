@@ -433,7 +433,7 @@ void ListenWorker::ShutdownStandbyConnection()
 {
     LOG(INFO) << "[Switch] Try to shutdown idle standby client: " << clientId_;
     StopListenWorker(true);
-    LOG_IF_ERROR(clientCommonWorker_->Disconnect(), "[Switch] Disconnect idle client failed");
+    LOG_IF_ERROR(clientCommonWorker_->Disconnect(false), "[Switch] Disconnect idle client failed");
 }
 
 void ListenWorker::TryShutdownStandbyConnection()

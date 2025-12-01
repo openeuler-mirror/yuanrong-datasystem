@@ -413,7 +413,7 @@ int64_t ClientWorkerCommonApi::GetClientDeadTimeoutMs()
     return clientDeadTimeoutMs_;
 }
 
-Status ClientWorkerCommonApi::Disconnect()
+Status ClientWorkerCommonApi::Disconnect(bool isDestruct)
 {
     CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr, StatusCode::K_OK,
                              "No active connection. Do not send disconnect notice.");
@@ -432,7 +432,7 @@ Status ClientWorkerCommonApi::Disconnect()
     RpcOptions opts;
     opts.SetTimeout(rpcTimeoutMs);
     RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
-    if (enableExclusiveConnection_ && exclusiveId_.has_value()) {
+    if (!isDestruct && enableExclusiveConnection_ && exclusiveId_.has_value()) {
         LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
                      FormatString("Failed to close exclusive connection %d", exclusiveId_.value()));
     }
