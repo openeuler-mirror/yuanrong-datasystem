@@ -18,6 +18,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <shared_mutex>
 #include <sstream>
 #include <utility>
 
@@ -2163,7 +2165,7 @@ void ClientWorkerSCServiceImpl::RemoveStreamNo(uint64_t streamNo)
 template <typename W, typename R>
 BlockedCreateRequest<W, R>::BlockedCreateRequest(std::string streamName, const R &req, size_t reqSz,
                                                  std::shared_ptr<ServerUnaryWriterReader<W, R>> serverApi,
-                                                 BlockedCreateReqFn fn)
+                                                 BlockedCreateReqFn fn, std::weak_ptr<StreamManager> streamMgr)
     : req_(req),
       reqSize_(reqSz),
       serverApi_(std::move(serverApi)),
@@ -2173,6 +2175,7 @@ BlockedCreateRequest<W, R>::BlockedCreateRequest(std::string streamName, const R
       traceId_(Trace::Instance().GetTraceID()),
       callBackFn_(fn),
       ack_(AckVal::NONE),
+      streamMgr_(std::move(streamMgr)),
       timer_(nullptr),
       timeSpent_(req_.sub_timeout())
 {
@@ -2218,6 +2221,12 @@ R BlockedCreateRequest<W, R>::GetCreateRequest() const
 template <typename W, typename R>
 Status BlockedCreateRequest<W, R>::SendStatus(const Status &rc)
 {
+    std::shared_ptr<BlockedCreateRequest<W, R>> outblockedReq;
+    auto streamMgr = streamMgr_.lock();
+    if (streamMgr != nullptr) {
+        auto streamName = streamMgr->GetStreamName();
+        LOG_IF_ERROR(streamMgr->MarkMemAllocFinish(streamName, this, outblockedReq), "MarkMemAllocFinish failed");
+    }
     if (serverApi_) {
         return serverApi_->SendStatus(rc);
     } else {
@@ -2229,6 +2238,12 @@ Status BlockedCreateRequest<W, R>::SendStatus(const Status &rc)
 template <typename W, typename R>
 Status BlockedCreateRequest<W, R>::Write()
 {
+    std::shared_ptr<BlockedCreateRequest<W, R>> outblockedReq;
+    auto streamMgr = streamMgr_.lock();
+    if (streamMgr != nullptr) {
+        auto streamName = streamMgr->GetStreamName();
+        LOG_IF_ERROR(streamMgr->MarkMemAllocFinish(streamName, this, outblockedReq), "MarkMemAllocFinish failed");
+    }
     if (serverApi_) {
         return serverApi_->Write(rsp_);
     } else {
@@ -2341,16 +2356,30 @@ bool BlockedCreateRequest<W, R>::HasRequestPbOlderThan(const BlockedCreateReques
 
 template <typename W, typename R>
 Status MemAllocRequestList<W, R>::AddBlockedCreateRequest(ClientWorkerSCServiceImpl *scSvc,
-                                                          std::shared_ptr<BlockedCreateRequest<W, R>> blockedReq)
+                                                          std::shared_ptr<BlockedCreateRequest<W, R>> blockedReq,
+                                                          std::shared_ptr<BlockedCreateRequest<W, R>> *out)
 {
-    auto subTimeout = blockedReq->GetRemainingTimeMs();
     const auto req = blockedReq->GetCreateRequest();
     const auto &producerId = req.producer_id();
-    const auto streamName = blockedReq->streamName_;
+    std::unique_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+    if (out != nullptr) {
+        auto it1 = blockedList_.find(producerId);
+        if (it1 != blockedList_.end()) {
+            *out = it1->second;
+            return Status::OK();
+        }
+        auto it2 = processingBlockedList_.find(producerId);
+        if (it2 != processingBlockedList_.end()) {
+            *out = it2->second;
+            return Status::OK();
+        }
+    }
+
+    auto subTimeout = blockedReq->GetRemainingTimeMs();
+    const auto &streamName = blockedReq->streamName_;
     const std::chrono::steady_clock::time_point startTime = blockedReq->startTime_;
     VLOG(SC_NORMAL_LOG_LEVEL) << "Adding a blocked request to the blocked queue for stream " << streamName
                               << " with producer " << producerId << " and timeout " << subTimeout;
-    std::unique_lock<std::shared_timed_mutex> lock(blockedListMutex_);
     std::shared_ptr<BlockedCreateRequest<W, R>> savedReq = blockedReq;  // save the ptr for later
     // Add the entry to the blocked list and queue
     auto it = blockedList_.find(producerId);
@@ -2483,6 +2512,16 @@ Status MemAllocRequestList<W, R>::GetBlockedCreateRequest(std::shared_ptr<Blocke
         FormatString("[S:%s, P:%s] Alloc memory request not found", streamName, producerId));
     // Cancel the timer for this entry since we will take action here
     it->second->CancelTimer();
+
+    if (blockedReq->streamMgr_.lock()) {
+        bool success;
+        std::tie(std::ignore, success) = processingBlockedList_.emplace(producerId, it->second);
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            success, StatusCode::K_RUNTIME_ERROR,
+            FormatString("Fail to process BlockedCreateRequest for stream %s with producer %s", streamName,
+                         producerId));
+    }
+
     out = std::move(it->second);
     (void)blockedList_.erase(it);
     return Status::OK();
@@ -2518,6 +2557,44 @@ void MemAllocRequestList<W, R>::ClearBlockedList()
     std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
     blockedList_.clear();
     queue_ = std::priority_queue<BlockedCreateRequest<W, R> *, std::vector<BlockedCreateRequest<W, R> *>, Compare>();
+}
+
+template <typename W, typename R>
+Status MemAllocRequestList<W, R>::MarkMemAllocFinish(const std::string &streamName, const std::string &producerId,
+                                                     std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq)
+{
+    std::lock_guard<std::shared_timed_mutex> lock(blockedListMutex_);
+    auto it = processingBlockedList_.find(producerId);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        it != processingBlockedList_.end(), K_RUNTIME_ERROR,
+        FormatString("[S: %s, P:%s] MarkMemAllocFinish but request not found", streamName, producerId));
+    // Once memory allocation is complete, "BlockedCreateRequest" will be removed from "processingBlockedList_", and its
+    // lifecycle is then managed by the caller.
+    outblockedReq = std::move(it->second);
+    (void)processingBlockedList_.erase(it);
+    return Status::OK();
+}
+
+template <typename W, typename R>
+Status MemAllocRequestList<W, R>::GetOrCreate(ClientWorkerSCServiceImpl *scSvc,
+                                            std::shared_ptr<BlockedCreateRequest<W, R>> inblockedReq,
+                                            std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq)
+{
+    {
+        std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);
+        const auto &producerId = inblockedReq->req_.producer_id();
+        auto it1 = blockedList_.find(producerId);
+        if (it1 != blockedList_.end()) {
+            outblockedReq = it1->second;
+            return Status::OK();
+        }
+        auto it2 = processingBlockedList_.find(producerId);
+        if (it2 != processingBlockedList_.end()) {
+            outblockedReq = it2->second;
+            return Status::OK();
+        }
+    }
+    return AddBlockedCreateRequest(scSvc, std::move(inblockedReq), &outblockedReq);
 }
 
 StreamManagerWithLock::StreamManagerWithLock(std::shared_ptr<StreamManager> mgr, void *accessor, bool exclusive,

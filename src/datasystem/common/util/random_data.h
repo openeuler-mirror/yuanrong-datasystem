@@ -84,14 +84,6 @@ public:
     uint64_t GetRandomUint64(uint64_t start, uint64_t end);
 
     /**
-     * @brief Generate a random int64 in a range [start, end).
-     * @param[in] start Range start.
-     * @param[in] end Range end.
-     * @return Random int64.
-     */
-    int64_t GetRandomInt64(int64_t start, int64_t end);
-
-    /**
      * @brief Randomly select an index from the container size.
      * @param[in] The size of the container.
      * @return Random size_t of valid index.

@@ -289,12 +289,12 @@ Status WorkerWorkerSCServiceImpl::PushElementsCursors(
 {
     INJECT_POINT("PushElementsCursors.begin");
     PerfPoint point(PerfKey::PUSH_CURSOR_ALL);
-    VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Preparing to receive pushed data.");
     PushReqPb pushReqPb;
     PushRspPb pushRspPb;
     std::vector<RpcMessage> payloads;
     RETURN_IF_NOT_OK(serverApi->Read(pushReqPb));
     RETURN_IF_NOT_OK(serverApi->ReceivePayload(payloads));
+    VLOG(1) << FormatString("Preparing to receive pushed data. streamName: %s", pushReqPb.stream_name());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(pushReqPb), "AK/SK failed");
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(pushReqPb.trace_id());
     RETURN_IF_NOT_OK(PushElementsCursorsHelper(pushReqPb, payloads, pushRspPb));

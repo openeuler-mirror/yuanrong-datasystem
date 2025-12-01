@@ -16,6 +16,8 @@
 
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
+#include <memory>
+#include <string>
 #include <utility>
 
 #include "datasystem/common/eventloop/timer_queue.h"
@@ -30,6 +32,7 @@
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/utils/status.h"
@@ -379,12 +382,11 @@ Status StreamManager::AllocDataPage(BlockedCreateRequest<CreateShmPageRspPb, Cre
     return Status::OK();
 }
 
-Status StreamManager::AllocDataPageInternalReq(uint64_t timeoutMs, const ShmView &curView, ShmView &outView)
+Status StreamManager::AllocDataPageInternalReq(uint64_t timeoutMs, const ShmView &curView, ShmView &outView,
+                                               const std::string &producerId)
 {
     CreateShmPageReqPb req;
     req.set_stream_name(streamName_);
-    // We need to fake a producer id as a unique key into MemAllocRequestList
-    auto producerId = GetStringUuid();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, P:%s] Send an internal AllocDataPage request for size %zu.",
                                               LogPrefix(), producerId, GetStreamPageSize());
     req.set_producer_id(producerId);
@@ -396,16 +398,28 @@ Status StreamManager::AllocDataPageInternalReq(uint64_t timeoutMs, const ShmView
     req.mutable_cur_view()->CopyFrom(pb);
 
     auto fn = std::bind(&StreamManager::AllocDataPage, shared_from_this(), std::placeholders::_1);
-    auto blockedReq = std::make_shared<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>>(
-        streamName_, req, GetStreamPageSize(), nullptr, fn);
+    auto inBlockedReq = std::make_shared<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>>(
+        streamName_, req, GetStreamPageSize(), nullptr, fn, weak_from_this());
     // Lock to compete with StreamManager::UnblockProducers
     auto scSvc = scSvc_.lock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
-    RETURN_IF_NOT_OK(AddBlockedCreateRequest(scSvc.get(), blockedReq, true));
-    scSvc->AsyncSendMemReq<CreateShmPageRspPb, CreateShmPageReqPb>(streamName_);
-    VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s, P:%s] Wait for internal AllocDataPage reply.", LogPrefix(),
-                                                blockedReq->req_.producer_id());
+    bool hitCache;
+    std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> outBlockedReq;
+    {
+        std::shared_lock<std::shared_timed_mutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
+        rlock.lock();
+        RETURN_IF_NOT_OK(dataBlockedList_.GetOrCreate(scSvc.get(), inBlockedReq, outBlockedReq));
+        hitCache = outBlockedReq != nullptr;
+    }
+
+    auto blockedReq = hitCache ? outBlockedReq : inBlockedReq;
+    if (!hitCache) {
+        scSvc->AsyncSendMemReq<CreateShmPageRspPb, CreateShmPageReqPb>(streamName_);
+    }
+    VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s, P:%s] Wait for internal AllocDataPage reply, hitCache: %s",
+                                                LogPrefix(), blockedReq->req_.producer_id(), hitCache ? "yes" : "no");
     RETURN_IF_NOT_OK(blockedReq->Wait(timeoutMs));
+
     CreateShmPageRspPb &rsp = blockedReq->rsp_;
     outView.off = static_cast<ptrdiff_t>(rsp.last_page_view().offset());
     outView.sz = rsp.last_page_view().size();
@@ -477,23 +491,33 @@ Status StreamManager::AllocBigShmMemory(BlockedCreateRequest<CreateLobPageRspPb,
     return Status::OK();
 }
 
-Status StreamManager::AllocBigShmMemoryInternalReq(uint64_t timeoutMs, size_t sz, ShmView &outView)
+Status StreamManager::AllocBigShmMemoryInternalReq(uint64_t timeoutMs, size_t sz, ShmView &outView,
+                                                   const std::string &producerId)
 {
     CreateLobPageReqPb req;
     req.set_stream_name(streamName_);
-    // We need to fake a producer id as a unique key into MemAllocRequestList
-    auto producerId = GetStringUuid();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, P:%s] Send an internal AllocBigShmMemory request for size %zu.",
                                               LogPrefix(), producerId, sz);
     req.set_producer_id(producerId);
     req.set_page_size(sz);
     auto fn = std::bind(&StreamManager::AllocBigShmMemory, shared_from_this(), std::placeholders::_1);
-    auto blockedReq = std::make_shared<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>>(streamName_, req,
-                                                                                                     sz, nullptr, fn);
+    auto inBlockedReq = std::make_shared<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>>(
+        streamName_, req, sz, nullptr, fn, weak_from_this());
     auto scSvc = scSvc_.lock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
-    RETURN_IF_NOT_OK(AddBlockedCreateRequest(scSvc.get(), blockedReq, true));
-    scSvc->AsyncSendMemReq<CreateLobPageRspPb, CreateLobPageReqPb>(streamName_);
+
+    bool hitCache;
+    std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> outBlockedReq;
+    {
+        std::shared_lock<std::shared_timed_mutex> rlock(streamManagerBlockedListsMutex_, std::defer_lock);
+        rlock.lock();
+        RETURN_IF_NOT_OK(lobBlockedList_.GetOrCreate(scSvc.get(), inBlockedReq, outBlockedReq));
+        hitCache = outBlockedReq != nullptr;
+    }
+    auto blockedReq = hitCache ? outBlockedReq : inBlockedReq;
+    if (!hitCache) {
+        scSvc->AsyncSendMemReq<CreateLobPageRspPb, CreateLobPageReqPb>(streamName_);
+    }
     VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s, P:%s] Wait for internal AllocBigShmMemory reply.", LogPrefix(),
                                                 blockedReq->req_.producer_id());
     auto waitTime = [timeoutMs]() {
@@ -575,10 +599,12 @@ Status StreamManager::UnblockCreators()
     // We will handle BigElement first.
     if (!lobBlockedList_.Empty()) {
         // Block AddBlockedCreateRequest
-        std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
         LOG(INFO) << FormatString("[%s] Freed page result in unblocking a waiting AllocBigShmMemory.", LogPrefix());
         std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> blockedReq;
-        RETURN_IF_NOT_OK_EXCEPT(lobBlockedList_.GetBlockedCreateRequest(blockedReq), K_TRY_AGAIN);
+        {
+            std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
+            RETURN_IF_NOT_OK_EXCEPT(lobBlockedList_.GetBlockedCreateRequest(blockedReq), K_TRY_AGAIN);
+        }
         if (blockedReq) {
             // To avoid deadlock with itself, don't lock the streamManagerBlockedListsMutex_ again
             RETURN_IF_NOT_OK_EXCEPT(HandleBlockedRequestImpl(std::move(blockedReq), false), K_OUT_OF_MEMORY);
@@ -588,13 +614,15 @@ Status StreamManager::UnblockCreators()
     if (!dataBlockedList_.Empty()) {
         // Block AddBlockedCreateRequest
         INJECT_POINT("UnblockCreators.sleep");
-        std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
         LOG(INFO) << FormatString("[%s] Freed page result in unblocking a waiting CreateShmPage.", LogPrefix());
         // Because producers are sharing pages, we will need to keep popping.
         Status rc;
         while (rc.IsOk()) {
             std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> blockedReq;
-            rc = dataBlockedList_.GetBlockedCreateRequest(blockedReq);
+            {
+                std::unique_lock<std::shared_timed_mutex> xlock(streamManagerBlockedListsMutex_);
+                rc = dataBlockedList_.GetBlockedCreateRequest(blockedReq);
+            }
             if (rc.IsOk()) {
                 // To avoid deadlock with itself, don't lock the streamManagerBlockedListsMutex_ again
                 rc = HandleBlockedRequestImpl(std::move(blockedReq), false);
@@ -662,10 +690,10 @@ Status StreamManager::HandleBlockedRequestImpl(std::shared_ptr<BlockedCreateRequ
         auto scSvc = scSvc_.lock();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
 
-        Status blocked_rc = AddBlockedCreateRequest(scSvc.get(), std::move(blockedReq), lockBeforeAdd);
+        Status blockedRc = AddBlockedCreateRequest(scSvc.get(), std::move(blockedReq), lockBeforeAdd);
         // Log error if we can not block and return original OOM error to the user
-        LOG_IF_ERROR(blocked_rc, "error while producer blocking");
-        if (blocked_rc.IsError()) {
+        LOG_IF_ERROR(blockedRc, "error while producer blocking");
+        if (blockedRc.IsError()) {
             return blockedReq->SendStatus(rc);
         }
         // Return OOM back to the caller so the caller can distinguish between a successful retry vs
@@ -1399,7 +1427,8 @@ Status StreamManager::CopyElementView(std::shared_ptr<RecvElementView> &recvElem
     // while competing with local producers. We can also be resuming from where we left off last time.
     std::pair<size_t, size_t> res(0, 0);
     auto rc = pageQueue->BatchInsert(recvElementView->GetBufferPointer(), sz, res, timeoutMs,
-                                     recvElementView->headerBits_, GetStreamMetaShm());
+                                     recvElementView->headerBits_, GetStreamMetaShm(),
+                                    recvElementView->ProducerName());
     totalLength = res.second;
     recvElementView->idx_ += res.first;
     // PageView is processed and will be removed from local cache
@@ -1632,6 +1661,22 @@ void StreamManager::ClearBlockedList()
 bool StreamManager::EnableSharedPage(StreamMode streamMode)
 {
     return streamMode == StreamMode::MPSC || streamMode == StreamMode::SPSC;
+}
+
+Status StreamManager::MarkMemAllocFinish(
+    const std::string &streamName, BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb> *blockedReq,
+    std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> &outblockedReq)
+{
+    const auto &producerId = blockedReq->req_.producer_id();
+    return dataBlockedList_.MarkMemAllocFinish(streamName, producerId, outblockedReq);
+}
+
+Status StreamManager::MarkMemAllocFinish(
+    const std::string &streamName, BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb> *blockedReq,
+    std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> &outblockedReq)
+{
+    const auto &producerId = blockedReq->req_.producer_id();
+    return lobBlockedList_.MarkMemAllocFinish(streamName, producerId, outblockedReq);
 }
 }  // namespace stream_cache
 }  // namespace worker

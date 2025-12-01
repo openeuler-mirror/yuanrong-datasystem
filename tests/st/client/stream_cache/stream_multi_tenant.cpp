@@ -61,11 +61,10 @@ public:
         std::string data = RandomData().GetRandomString(dataSize);
         Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
         DS_ASSERT_OK(producer->Send(element));
-        sleep(1);
-
+        int timeoutMs = 10'000;
         for (auto consumer: receiveCon) {
             std::vector<Element> outElements;
-            ASSERT_EQ(consumer->Receive(1, 0, outElements), Status::OK());
+            ASSERT_EQ(consumer->Receive(1, timeoutMs, outElements), Status::OK());
             ASSERT_EQ(memcmp(outElements[0].ptr, data.c_str(), outElements[0].size), 0);
         }
 

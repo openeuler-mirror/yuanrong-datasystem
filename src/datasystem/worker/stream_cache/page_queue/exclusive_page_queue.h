@@ -185,7 +185,8 @@ public:
      * @note This function is not thread safe, and/or lock safe.
      */
     Status BatchInsert(void *buf, std::vector<size_t> &sz, std::pair<size_t, size_t> &res, uint64_t timeoutMs,
-                       const std::vector<bool> &headerBits, StreamMetaShm *StreamMetaShm);
+                       const std::vector<bool> &headerBits, StreamMetaShm *StreamMetaShm,
+                       const std::string &producerId);
 
     /**
      * @brief Used by the consumer to return the first starting page of the lastAckCursor
@@ -268,9 +269,10 @@ private:
         const ShmView &shmView,
         const std::shared_ptr<ServerUnaryWriterReader<GetDataPageRspPb, GetDataPageReqPb>> &serverApi);
     Status InsertBigElement(void *buf, size_t sz, std::pair<size_t, size_t> &res, uint64_t timeoutMs,
-                            const bool headerBit, StreamMetaShm *streamMetaShm);
+                            const bool headerBit, StreamMetaShm *streamMetaShm, const std::string &producerId);
     Status BatchInsertImpl(void *buf, std::vector<size_t> &sz, std::pair<size_t, size_t> &res, InsertFlags flags,
-                           uint64_t timeoutMs, const std::vector<bool> &headerBits, StreamMetaShm *streamMetaShm);
+                           uint64_t timeoutMs, const std::vector<bool> &headerBits, StreamMetaShm *streamMetaShm,
+                           const std::string &producerId);
     Status UnblockProducers();
     Status ReserveAdditionalMemory();
 };
