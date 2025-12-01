@@ -17,16 +17,15 @@
 /**
  * Description: UCX-UCP manager for ucp context, ucp worker, ucp endpoint, etc.
  */
-#include "datasystem/common/rdma/ucp_manager.h"
-#include "datasystem/common/rdma/ucp_segment.h"
-#include "datasystem/common/rdma/ucp_worker_pool.h"
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/ucp_manager.h"
+#include "datasystem/common/rdma/ucp_segment.h"
+#include "datasystem/common/rdma/ucp_worker_pool.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
 
@@ -81,13 +80,10 @@ Status UcpManager::UcpCreateContext()
         RETURN_STATUS_LOG_ERROR(K_RDMA_ERROR, FormatString("Failed to read UCX config, ret = %d", configRet));
     }
     ucp_params_t params;
-    memset(&params, 0, sizeof(params));
-    params.field_mask =
-        UCP_PARAM_FIELD_FEATURES | UCP_PARAM_FIELD_ESTIMATED_NUM_EPS | UCP_PARAM_FIELD_MT_WORKERS_SHARED;
+    memset_s(&params, sizeof(params), 0, sizeof(params));
+    params.field_mask = UCP_PARAM_FIELD_FEATURES | UCP_PARAM_FIELD_MT_WORKERS_SHARED;
     // Feature flags
-    params.features = UCP_FEATURE_RMA | UCP_FEATURE_TAG | UCP_FEATURE_STREAM | UCP_FEATURE_AM;
-    // Estimated number of endpoints
-    params.estimated_num_eps = 16;
+    params.features = UCP_FEATURE_RMA;
     // Multi-threaded worker shared mode
     params.mt_workers_shared = 1;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!ucpContext_, K_DUPLICATED,
@@ -268,8 +264,8 @@ Status UcpManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
 
     VLOG(1) << "[UcpEventHandler] Started waiting for the request id: " << requestId;
-    RETURN_IF_NOT_OK(event->wait_for(std::chrono::milliseconds(timeoutMs)));
-    if (event->is_failed()) {
+    RETURN_IF_NOT_OK(event->WaitFor(std::chrono::milliseconds(timeoutMs)));
+    if (event->IsFailed()) {
         point.Record();
         return Status(K_RDMA_ERROR, FormatString("Polling failed with an error for requestId: %d", requestId));
     }
@@ -325,10 +321,10 @@ Status UcpManager::CheckAndNotify()
                 }
             }
             if (shouldSetFailed) {
-                event->set_failed();
+                event->SetFailed();
             }
             // Notify everyone who are waiting on the event
-            event->notify_all();
+            event->NotifyAll();
             // delete the event and
             VLOG(1) << "[UcpEventHandler] Notifying the request id: " << requestId;
         }

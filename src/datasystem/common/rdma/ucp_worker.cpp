@@ -103,7 +103,7 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
 
     PerfPoint point3(PerfKey::RDMA_UCP_WORKER_EXECUTE_PUT);
     ucp_request_param_t param;
-    std::memset(&param, 0, sizeof(param));
+    memset_s(&param, sizeof(param), 0, sizeof(param));
     param.op_attr_mask = UCP_OP_ATTR_FIELD_CALLBACK | UCP_OP_ATTR_FIELD_USER_DATA;
     param.cb.send = CallBack;
 

@@ -155,7 +155,6 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 #elif defined(USE_RDMA)
     is_register_whole_arena = UcpManager::IsRegisterWholeArenaEnabled();
 #endif
-
     if (is_register_whole_arena) {
         segAddress = memoryAddress - shmUnit->GetOffset();
         segSize = shmUnit->GetMmapSize();

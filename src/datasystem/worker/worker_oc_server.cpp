@@ -798,7 +798,8 @@ Status WorkerOCServer::Init()
                                      "Init allocator failed");
     // Call base class to init common service
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CommonServer::Init(), "CommonServer init failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_), "Fast transport (URMA/RDMA) init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_),
+                                     "Fast transport (URMA/RDMA) init failed");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_max_rpc_session_num, hostPort_));
     if (IsSupportL2Storage(GetCurrentStorageType())) {
         persistenceApi_ = std::make_shared<PersistenceApi>();

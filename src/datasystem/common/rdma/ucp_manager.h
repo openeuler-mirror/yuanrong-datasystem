@@ -43,17 +43,6 @@ DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
-#ifdef BEING_TESTED
-namespace ut {
-class UcpManagerTestFriend;
-class UcpManagerTest;
-class UcpManagerTest_ImportSegAndUcpPutPayloadNonBlocking_Test;
-class UcpManagerTest_InsertEventsModifiesInternalSets_Test;
-class UcpManagerTest_EventManagement_Test;
-class UcpManagerTest_WaitToFinishTimeout_Test;
-class UcpManagerTest_FillUcpInfoimpl_Test;
-}  // namespace ut
-#endif
 class UcpWorkerPool;
 template <typename T>
 using custom_unique_ptr = std::unique_ptr<T, std::function<void(T *)>>;
@@ -83,7 +72,7 @@ public:
      * @param[in] timeout time in milliseconds to wait
      * @return Status of the call.
      */
-    Status wait_for(std::chrono::milliseconds timeout)
+    Status WaitFor(std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> lock(eventMutex_);
         bool gotNotification = cv.wait_for(lock, timeout, [this] { return ready_; });
@@ -98,7 +87,7 @@ public:
     /**
      * @brief Notify all threads that are waiting for the event
      */
-    void notify_all()
+    void NotifyAll()
     {
         std::unique_lock<std::mutex> lock(eventMutex_);
         ready_ = true;
@@ -108,7 +97,7 @@ public:
     /**
      * @brief Sets the event status as failed
      */
-    void setFailed()
+    void SetFailed()
     {
         failed_ = true;
     }
@@ -116,7 +105,7 @@ public:
     /**
      * @brief Checks the event status
      */
-    bool isFailed()
+    bool IsFailed()
     {
         return failed_;
     }
@@ -223,13 +212,13 @@ public:
      * @brief Inserts a successful event.
      * @param[in] requestId a unique identifier for the request
      */
-    void InsertSuccessfulEvent(uint64_t requestId);
+    virtual void InsertSuccessfulEvent(uint64_t requestId);
 
     /**
      * @brief Inserts a failed event.
      * @param[in] requestId a unique identifier for the request
      */
-    void InsertFailedEvent(uint64_t requestId);
+    virtual void InsertFailedEvent(uint64_t requestId);
 
 private:
     UcpManager();
@@ -319,15 +308,6 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };
-#ifdef BEING_TESTED
-    friend class ut::UcpManagerTestFriend;
-    friend class ut::UcpManagerTest;
-    friend class ut::UcpManagerTest_ImportSegAndUcpPutPayloadNonBlocking_Test;
-    friend class ut::UcpManagerTest_InsertEventsModifiesInternalSets_Test;
-    friend class ut::UcpManagerTest_EventManagement_Test;
-    friend class ut::UcpManagerTest_WaitToFinishTimeout_Test;
-    friend class ut::UcpManagerTest_FillUcpInfoimpl_Test;
-#endif
 };
 
 }  // namespace datasystem
