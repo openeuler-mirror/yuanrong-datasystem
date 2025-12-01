@@ -19,6 +19,7 @@
  */
 
 #include "client/object_cache/oc_client_common.h"
+#include <atomic>
 
 namespace datasystem {
 namespace st {
@@ -45,7 +46,7 @@ public:
 
 protected:
     std::shared_ptr<KVClient> client1_;
-    const int timeoutMs_ = 2'000;
+    const int timeoutMs_ = 2000;
 };
 
 TEST_F(KVCacheExclusiveClientTest, GetTimeout)
@@ -93,6 +94,69 @@ TEST_F(KVCacheExclusiveClientTest, TestShutdownAndRestartWorker)
     DS_ASSERT_OK(client1_->Set(objKey, val));
     DS_ASSERT_OK(client1_->Get(objKey, getVal));
     ASSERT_EQ(val, getVal);
+}
+
+TEST_F(KVCacheExclusiveClientTest, TestMaxWorkAgents)
+{
+    const int numUsers = 4;
+    const int numKeys = numUsers + 1;
+    const int spinLockSleep = 500;
+    std::atomic<int> threadsIn = 0;
+    std::vector<std::thread> userThreads;
+    std::vector<std::string> objKeys;
+    std::string val("a");
+    bool testSucceed = true;
+    
+    LOG(INFO) << "create the data locally before putting";
+    for (int i = 0; i < numKeys; ++i) {
+        objKeys.push_back("key_" + std::to_string(i));
+    }
+
+    // Fake the maximum number of agents to be the number of user threads we'll create.
+    // Later, going 1 more thread will exceed the faked limit
+    std::string injectCall("call(");
+    injectCall += std::to_string(numUsers) + ")";
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "ZmqService.ProcessAccept.FakeFullPool",
+                                           injectCall));
+
+    // spin up user threads. Each one runs a single rpc call and then sleeps.
+    int i = 0;
+    for (; i < numUsers; ++i) {
+        userThreads.emplace_back([this, &objKeys, &val, i, &threadsIn, &spinLockSleep]() {
+            LOG(INFO) << "User thread doing put of key " << objKeys[i];
+            DS_ASSERT_OK(client1_->Set(objKeys[i], val));
+            LOG(INFO) << "User thread put complete. Wait for exit.";
+            // Hang the thread in a spin lock until parent releases it so that the connection remains active
+            // Parent resets the count to 0 which will unblock us.
+            ++threadsIn;
+            while (threadsIn != 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+            }
+            LOG(INFO) << "User thread quitting now.";
+        });
+    }
+
+    // Parent wait until all threads have done their work
+    while (threadsIn != numUsers) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+
+    // now, using our current thread (its still a new thread for exclusive connection), try to set.
+    // Internally, we have injected a fake max agents that will cause this one to exceed the count.
+    Status rc = client1_->Set(objKeys[i], val);
+    if (rc.GetCode() == K_NO_SPACE) {
+        LOG(INFO) << "RPC call correctly failed due to maximum number of work agents: " << rc.ToString();
+    } else {
+        testSucceed = false;
+        LOG(INFO) << "Test failed. Incorrect rc returned: " << rc.ToString();
+    }
+
+    threadsIn = 0;  // unblocks the spinning threads to allow them to quit
+    for (auto &t : userThreads) {
+        t.join();
+    }
+
+    ASSERT_TRUE(testSucceed);
 }
 }
 }

@@ -26,6 +26,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -1177,6 +1178,30 @@ Status ZmqService::FrontendToBackend(int fd, const EventType type, ZmqMetaMsgFra
     return Status::OK();
 }
 
+Status ZmqService::SendErrorMaxExclusive(WorkAgent *workAgent, const ThreadPool::ThreadPoolUsage &poolUsage)
+{
+    ZmqMetaMsgFrames inMsg;
+    ZmqMsgFrames replyMsg;
+    ZmqMetaMsgFrames outMsg;
+    Status rcForClient(K_NO_SPACE, "There are too many exclusive connections in use. Connection failed.");
+
+    // Even though this is a failure path, parse the incoming request anyway for debugging purpose to align
+    // the exclusive connection name with the client side based on the meta data.
+    RETURN_IF_NOT_OK(workAgent->ClientToService(inMsg));
+    MetaPb &meta = inMsg.first;
+
+    LOG(ERROR) << FormatString("No space for exclusive connection %s. (activeAgents/maxAgents) : (%d/%d)",
+                               meta.gateway_id(), poolUsage.runningTasksNum + poolUsage.waitingTaskNum,
+                               poolUsage.maxThreadNum);
+
+    replyMsg.push_back(std::move(StatusToZmqMessage(rcForClient)));
+    outMsg.first = std::move(meta);
+    outMsg.second = std::move(replyMsg);
+
+    RETURN_IF_NOT_OK(workAgent->ServiceToClient(outMsg));
+    return Status::OK();
+}
+
 Status ZmqService::ProcessAccept(int listenFd)
 {
     bool isTcp = (listenFd == tcpfd_);
@@ -1184,15 +1209,30 @@ Status ZmqService::ProcessAccept(int listenFd)
     UnixSockFd connectedSockFd;
     RETURN_IF_NOT_OK(listenSockFd.Accept(connectedSockFd));
     if (listenFd == exclListenFd_) {
-        LOG(INFO) << FormatString("Spawn new work agent for exclusive connection, sock_fd: %s",
-                                  connectedSockFd.GetFd());
         if (!workAgentThreadPool_) {
+            int maxWorkAgents = MAX_EXCLUSIVE_CONNECTIONS_LIMIT;
+
+            INJECT_POINT_NO_RETURN("ZmqService.ProcessAccept.FakeFullPool", [&maxWorkAgents](int32_t fakeMax) {
+                 maxWorkAgents = fakeMax;
+                 LOG(INFO) << "Testcase injection has faked the max work agents to: " << maxWorkAgents;
+            });
+
             RETURN_IF_EXCEPTION_OCCURS(workAgentThreadPool_ =
-                                       std::make_unique<ThreadPool>(1, MAX_EXCLUSIVE_CONNECTIONS_LIMIT));
+                                       std::make_unique<ThreadPool>(1, maxWorkAgents));
         }
+
+        // grab the pool usage stats for debug purposes
+        ThreadPool::ThreadPoolUsage currentPoolUsage = workAgentThreadPool_->GetThreadPoolUsage();
         auto newAgent = std::make_unique<WorkAgent>(connectedSockFd, this, !isTcp);
         auto ptr = newAgent.get();
-        workAgentThreadPool_->Execute([this, ptr] { ptr->Run(); });
+        // Invoke the thread to execute the WorkAgent and perform the request logic.
+        // If we cannot get a thread for the agent, use this agent locally here in this thread to help send the
+        // error message back to the client.
+        if (!workAgentThreadPool_->ExecuteNoWait([this, ptr, currentPoolUsage] { ptr->Run(currentPoolUsage); })) {
+            RETURN_IF_NOT_OK(SendErrorMaxExclusive(ptr, currentPoolUsage));
+            ptr->CloseSocket();
+            return Status::OK();
+        }
         workAgents_.push_back(std::move(newAgent));
     } else {
         // Make it non-blocking
@@ -1209,21 +1249,8 @@ Status ZmqService::ProcessAccept(int listenFd)
     return Status::OK();
 }
 
-Status ZmqService::DirectExecInternalMethod(int fd, EventType type, ZmqMetaMsgFrames &inFrames,
-                                            ZmqMetaMsgFrames &outFrames)
+Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaMsgFrames &outFrames)
 {
-    if (type == EventType::V2MTP || type == EventType::V1MTP) {
-        MetaPb meta;
-        ZmqCurveUserId userId;
-        // A direct connection from stub needs to be parsed.
-        Status rc = ParseMsgFrames(inFrames.second, meta, fd, type, userId);
-        if (rc.IsError()) {
-            // Log the message for anything else, and move on.
-            RETURN_STATUS_LOG_ERROR(StatusCode::K_OK, "Incompatible rpc request. Ignore");
-        }
-        inFrames.first = std::move(meta);
-    }
-
     CHECK_FAIL_RETURN_STATUS(cfg_.numRegularSockets_ != 0, K_RUNTIME_ERROR,
                              "Get id failed, regular sockets as divisor is 0, route to reg back end failed");
     MetaPb &meta = inFrames.first;

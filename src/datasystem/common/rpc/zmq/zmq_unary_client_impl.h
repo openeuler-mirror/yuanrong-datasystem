@@ -375,11 +375,11 @@ private:
             // Add the meta to the frames
             RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, frames));
 
-            // The following field is part of the protocol and seems to be the first frame sent.
-            // In exclusive connection mode, I doubt this frame is needed. For now, add it anyway as an empty
-            // string so that client/server follow agreed protocol.
-            // This could be a candidate for removal from the protocol later.
-            std::string gatewayId;
+            // The gatewayId field is part of the protocol for non-exclusive connections.
+            // In exclusive connection mode, this field is not functional, however it does provide a debugging handle
+            // for aligning the client request with server response when viewing logs, so it will continue to be added
+            // to the send frames.
+            std::string gatewayId = gExclusiveConnMgr.GetExclusiveConnMgrName();
             RETURN_IF_NOT_OK(PushFrontStringToFrames(gatewayId, frames));
             Status rc = encoder->SendMsgFrames(EventType::V1MTP, frames);
             if (rc.IsError()) {

@@ -24,6 +24,7 @@
 #include <future>
 #include <atomic>
 #include <mutex>
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/zmq_msg_decoder.h"
 #include "datasystem/common/rpc/zmq/zmq_service.h"
@@ -35,10 +36,10 @@ class WorkAgent {
 public:
     WorkAgent(const UnixSockFd &fd, ZmqService *svc, bool uds);
     ~WorkAgent() = default;
-    Status Run();
-    Status DoWork();
+    void Run(const ThreadPool::ThreadPoolUsage &poolUsage);
     Status Stop();
     Status CloseSocket();
+    int GetFd() const;
 
 private:
     friend class ZmqService;

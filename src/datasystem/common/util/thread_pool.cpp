@@ -107,6 +107,15 @@ void ThreadPool::DestroyUnuseWorker(std::thread::id tid)
     }
 }
 
+bool ThreadPool::IsPoolFull()
+{
+    std::shared_lock<std::shared_timed_mutex> lock(workersMtx_);
+    if (taskQ_.size() + runningThreadsNum_ >= maxThreadNum_) {
+        return true;
+    }
+    return false;
+}
+
 void ThreadPool::TryToAddThreadIfNeeded()
 {
     {
