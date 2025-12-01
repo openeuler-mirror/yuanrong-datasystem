@@ -31,7 +31,6 @@
 
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/ucp_manager.h"
-#include "datasystem/common/rdma/ucp_endpoint.h"
 
 namespace datasystem {
 
@@ -67,7 +66,7 @@ Status UcpWorker::Init()
         return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to get worker address.");
     }
 
-    localWorkerAddrStr_ = std::string(reinterpret_cast<const char *>(localWorkerAddr_), workerAddrLen);
+    localWorkerAddrStr_ = std::string(reinterpret_cast<const char*>(localWorkerAddr_), workerAddrLen);
 
     StartProgressThread();
 
@@ -76,11 +75,10 @@ Status UcpWorker::Init()
 }
 
 Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                        const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t &localSegAddr,
-                        size_t localSegSize, uint64_t requestID)
+                        const std::string &remoteWorkerAddr, const std::string &ipAddr,
+                        const uintptr_t &localSegAddr, size_t localSegSize, uint64_t requestID)
 {
     PerfPoint point(PerfKey::RDMA_UCP_WORKER_WRITE);
-    PerfPoint point1(PerfKey::RDMA_UCP_WORKER_GET_ENDPOINT);
     const auto &ucpEp = GetOrCreateEndpoint(ipAddr, remoteWorkerAddr);
     if (ucpEp == nullptr) {
         return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to create Endpoint.");
@@ -89,7 +87,7 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
     if (ep == nullptr) {
         return Status(K_RDMA_ERROR, errorMsgHead_ + " UcpEndpoint contained an empty endpoint?");
     }
-    point1.Record();
+    point.RecordAndReset(PerfKey::RDMA_UCP_WORKER_WRITE);
 
     Status status = ucpEp->UnpackRkey(remoteRkey);
     if (status != Status::OK()) {
@@ -101,9 +99,7 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
         return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
     }
 
-    PerfPoint point3(PerfKey::RDMA_UCP_WORKER_EXECUTE_PUT);
-    ucp_request_param_t param;
-    memset_s(&param, sizeof(param), 0, sizeof(param));
+    ucp_request_param_t param{};
     param.op_attr_mask = UCP_OP_ATTR_FIELD_CALLBACK | UCP_OP_ATTR_FIELD_USER_DATA;
     param.cb.send = CallBack;
 
@@ -114,8 +110,7 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
     void *request =
         ucp_put_nbx(ep, reinterpret_cast<const void *>(localSegAddr), localSegSize, remoteSegAddr, rkey, &param);
 
-    point3.Record();
-    point.Record();
+    point.RecordAndReset(PerfKey::RDMA_UCP_WORKER_WRITE);
 
     if (UCS_PTR_IS_ERR(request)) {
         ucs_status_t status = UCS_PTR_STATUS(request);
@@ -132,10 +127,8 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
 
 Status UcpWorker::RmEpByIp(const std::string &ipAddr)
 {
-    std::unique_lock write_lock(mapLock_);
-    auto it = remoteEndpointMap_.find(ipAddr);
-    if (it != remoteEndpointMap_.end()) {
-        remoteEndpointMap_.erase(it);
+    std::unique_lock writeLock(mapLock_);
+    if (remoteEndpointMap_.erase(ipAddr) > 0) {
         return Status::OK();
     }
     return Status(K_RDMA_ERROR, errorMsgHead_ + " No endpoint found to IP " + ipAddr);
@@ -147,7 +140,7 @@ void UcpWorker::StartProgressThread()
         return;
     }
     running_.store(true);
-    progressThread_ = std::make_unique<std::thread>(&UcpWorker::ProgressLoop, this);
+    progressThread_ = std::make_unique<Thread>(&UcpWorker::ProgressLoop, this);
 }
 
 void UcpWorker::StopProgressThread()
@@ -165,33 +158,39 @@ void UcpWorker::StopProgressThread()
 
 void UcpWorker::ProgressLoop()
 {
+    const int UCP_WORKER_PROGRESS_INTERVAL_MS = 100;
     while (running_.load()) {
         ucp_worker_progress(worker_);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::microseconds(UCP_WORKER_PROGRESS_INTERVAL_MS));
     }
 }
 
-UcpEndpoint *UcpWorker::GetOrCreateEndpoint(const std::string &ipAddr, const std::string &remoteWorkerAddr)
+std::shared_ptr<UcpEndpoint> UcpWorker::GetOrCreateEndpoint(const std::string &ipAddr, const std::string &remoteWorkerAddr)
 {
     {
-        std::shared_lock read_lock(mapLock_);
+        std::shared_lock readLock(mapLock_);
 
         auto it = remoteEndpointMap_.find(ipAddr);
         if (it != remoteEndpointMap_.end()) {
-            return it->second.get();
+            return it->second;
         }
     }
 
-    std::unique_lock write_lock(mapLock_);
+    std::unique_lock writeLock(mapLock_);
 
-    std::unique_ptr<UcpEndpoint> ep = std::make_unique<UcpEndpoint>(worker_, remoteWorkerAddr);
+    auto it = remoteEndpointMap_.find(ipAddr);
+    if (it != remoteEndpointMap_.end()) {
+        return it->second;
+    }
+
+    std::shared_ptr<UcpEndpoint> ep = std::make_shared<UcpEndpoint>(worker_, remoteWorkerAddr);
     Status status = ep->Init();
-    if (status != Status::OK()) {
+    if (status.IsError()) {
         return nullptr;
     }
     remoteEndpointMap_.emplace(ipAddr, std::move(ep));
 
-    return remoteEndpointMap_[ipAddr].get();
+    return remoteEndpointMap_[ipAddr];
 }
 
 void UcpWorker::Clean()
@@ -217,6 +216,7 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
 
     if (request == nullptr) {
         ctx->worker->manager_->InsertSuccessfulEvent(ctx->request_id);
+        delete ctx;
         return;
     }
 
@@ -228,7 +228,5 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
 
     delete ctx;
     ucp_request_free(request);
-
-    return;
 }
 }  // namespace datasystem

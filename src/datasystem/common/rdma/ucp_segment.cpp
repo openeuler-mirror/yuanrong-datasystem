@@ -81,5 +81,4 @@ Status UcpSegment::Init()
 
     return Status::OK();
 }
-
 }  // namespace datasystem

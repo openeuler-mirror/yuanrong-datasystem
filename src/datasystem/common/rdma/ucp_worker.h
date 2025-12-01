@@ -23,7 +23,6 @@
 #ifndef DATASYSTEM_COMMON_RDMA_UCP_WORKER_H
 #define DATASYSTEM_COMMON_RDMA_UCP_WORKER_H
 
-#include <thread>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -35,11 +34,12 @@
 #include "ucp/api/ucp.h"
 
 #include "datasystem/utils/status.h"
+#include "datasystem/common/util/thread.h"
+#include "datasystem/common/rdma/ucp_endpoint.h"
 
 namespace datasystem {
 
 class UcpManager;
-class UcpEndpoint;
 
 class UcpWorker {
 public:
@@ -69,8 +69,8 @@ public:
      *   It will assign worker address to worker_addr_ and the address length to workerAddrLen_ for later use.
      */
     virtual Status Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                         const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t &localSegAddr,
-                         size_t localSegSize, uint64_t requestID);
+                         const std::string &remoteWorkerAddr, const std::string &ipAddr,
+                         const uintptr_t &localSegAddr, size_t localSegSize, uint64_t requestID);
 
     /**
      * @brief remove ep tied to a remote worker
@@ -98,7 +98,7 @@ private:
      * @param[in] remoteWorkerAddr ucp endpoint ptr in the form of a string
      * @return a pointer to a UcpEndpoint instance.
      */
-    UcpEndpoint *GetOrCreateEndpoint(const std::string &ipAddr, const std::string &remoteWorkerAddr);
+    std::shared_ptr<UcpEndpoint> GetOrCreateEndpoint(const std::string &ipAddr, const std::string &remoteWorkerAddr);
 
     /**
      * @brief asynchronous put events to log so manager can read the status of the put action
@@ -123,7 +123,7 @@ private:
     // status variables
     uint32_t workerId_;
     std::string errorMsgHead_;
-    std::unique_ptr<std::thread> progressThread_;
+    std::unique_ptr<Thread> progressThread_{ nullptr };
     std::atomic<bool> running_{ false };
 
     // variables for endpoint creation
@@ -133,11 +133,11 @@ private:
     ucp_address_t *localWorkerAddr_ = nullptr;
     std::string localWorkerAddrStr_;
 
-    std::unordered_map<std::string, std::unique_ptr<UcpEndpoint>> remoteEndpointMap_;
+    std::unordered_map<std::string, std::shared_ptr<UcpEndpoint>> remoteEndpointMap_;
 
     // locks
     std::shared_mutex mapLock_;  // protect Ep map
-    std::mutex writeLock_;       // protect write method
+    std::mutex writeLock_; // protect write method
 };
 
 }  // namespace datasystem

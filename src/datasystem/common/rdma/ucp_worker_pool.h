@@ -35,11 +35,11 @@
 #include "ucp/api/ucp.h"
 
 #include "datasystem/utils/status.h"
+#include "datasystem/common/rdma/ucp_worker.h"
 
 namespace datasystem {
 
 class UcpManager;
-class UcpWorker;
 
 class UcpWorkerPool {
 public:
@@ -69,8 +69,8 @@ public:
      * really successful. However, if this function fails, the put action would have failed.
      */
     virtual Status Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                         const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t &localSegAddr,
-                         size_t localSegSize, uint64_t requestID);
+                         const std::string &remoteWorkerAddr, const std::string &ipAddr,
+                         const uintptr_t &localSegAddr, size_t localSegSize, uint64_t requestID);
 
     /**
      * @brief Obtain the worker that previously talked with this IP, or assign a new one
@@ -84,7 +84,7 @@ public:
      * @param ipAddr a reference to the remote IP address that is broken
      * @return Status::OK() if successful, otherwise error messages
      */
-    virtual Status RmByIp(const std::string &ipAddr);
+    virtual Status RemoveByIp(const std::string &ipAddr);
 
 private:
     UcpWorker *GetOrSelSendWorker(const std::string &ipAddr);
@@ -96,13 +96,13 @@ private:
     UcpManager *manager_;
     uint32_t workerN_;
 
-    // all worker info
+    // all worker info. key: worker index; value: UcpWorker
     std::unordered_map<uint32_t, std::shared_ptr<UcpWorker>> localWorkerPool_;
 
-    // worker for sending
+    // worker for sending. key: remote IP address; value: pointer to an existing UcpWorker for sending
     std::unordered_map<std::string, UcpWorker *> localWorkerSendMap_;
 
-    // worker for receiving
+    // worker for receiving. key: remote IP address; value: ucp worker address for receiving
     std::unordered_map<std::string, std::string> localWorkerRecvMap_;
 
     // round robin, will increment whenever used

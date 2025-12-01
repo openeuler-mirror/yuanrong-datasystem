@@ -32,10 +32,8 @@
 
 #include "datasystem/utils/status.h"
 
-namespace datasystem {
 
-class UcpWorker;
-class UcpManager;
+namespace datasystem {
 
 class UcpEndpoint {
 public:
@@ -81,7 +79,6 @@ private:
 
     // variables for ep creation
     std::string remoteWorkerData_;
-    ucp_address_t *remoteWorkerAddr_;
 
     // variables for rkey unpack
     ucp_ep_h ep_ = nullptr;

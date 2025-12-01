@@ -23,14 +23,11 @@
 
 #include "ucp/api/ucp_def.h"
 
-#include "datasystem/common/rdma/ucp_worker.h"
-
 namespace datasystem {
 
 UcpEndpoint::UcpEndpoint(const ucp_worker_h &localWorker, const std::string &remoteWorkerAddr)
     : worker_(localWorker),
-      remoteWorkerData_(remoteWorkerAddr),
-      remoteWorkerAddr_(reinterpret_cast<ucp_address_t *>(remoteWorkerData_.data()))
+      remoteWorkerData_(remoteWorkerAddr)
 {
 }
 
@@ -44,7 +41,7 @@ Status UcpEndpoint::Init()
     ucp_ep_params_t epParams = {};
     epParams.field_mask =
         UCP_EP_PARAM_FIELD_REMOTE_ADDRESS | UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE | UCP_EP_PARAM_FIELD_ERR_HANDLER;
-    epParams.address = remoteWorkerAddr_;
+    epParams.address = reinterpret_cast<ucp_address_t *>(remoteWorkerData_.data());
 
     if (ucp_ep_create(worker_, &epParams, &ep_) != UCS_OK) {
         return Status(K_RDMA_ERROR, "[UcpEndpoint] ucp_ep_create failed");

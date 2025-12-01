@@ -26,7 +26,7 @@
 #include <sstream>
 
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rdma/ucp_worker.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/rdma/ucp_manager.h"
 
 namespace datasystem {
@@ -46,10 +46,7 @@ Status UcpWorkerPool::Init()
     PerfPoint point(PerfKey::RDMA_UCP_WORKER_POOL_INIT);
     for (uint32_t i = 0; i < workerN_; i++) {
         std::shared_ptr<UcpWorker> ucpWorker = std::make_shared<UcpWorker>(context_, manager_, i);
-        Status status = ucpWorker->Init();
-        if (status != Status::OK()) {
-            return Status(K_RDMA_ERROR, "[UcpWorkerPool] InitUcpWorkerPool failed");
-        }
+        RETURN_IF_NOT_OK(ucpWorker->Init());
         localWorkerPool_.emplace(i, std::move(ucpWorker));
     }
 
@@ -64,7 +61,7 @@ Status UcpWorkerPool::Write(const std::string &remoteRkey, const uintptr_t &remo
     UcpWorker *worker = GetOrSelSendWorker(ipAddr);
     if (worker == nullptr) {
         // no worker found and no worker created
-        return Status(K_RDMA_ERROR, "[UcpWorkerPool] Failed to obtain worker for communication");
+        return Status(K_RDMA_ERROR, std::string("[UcpWorkerPool] Failed to obtain worker for communication with ") + ipAddr);
     }
     // this process is locked inside UcpWorker so no need to lock here
     return worker->Write(remoteRkey, remoteSegAddr, remoteWorkerAddr, ipAddr, localSegAddr, localSegSize, requestID);
@@ -74,7 +71,7 @@ std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
 {
     PerfPoint point(PerfKey::RDMA_UCP_WORKER_POOL_GET_RECV_WORKER_ADDR);
     {
-        std::shared_lock<std::shared_mutex> read_lock(recvMapMutex_);
+        std::shared_lock<std::shared_mutex> readLock(recvMapMutex_);
         // first check the Recv map to see if the ipAddr has appeared before
         // need to lock guard -- read-only
         auto it = localWorkerRecvMap_.find(ipAddr);
@@ -85,7 +82,12 @@ std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
 
     // nothing found, get a random one and return the worker address
     // need to lock guard -- write
-    std::unique_lock<std::shared_mutex> write_lock(recvMapMutex_);
+    std::unique_lock<std::shared_mutex> writeLock(recvMapMutex_);
+
+    auto it = localWorkerRecvMap_.find(ipAddr);
+    if (it != localWorkerRecvMap_.end()) {
+        return it->second;
+    }
 
     auto &worker = localWorkerPool_[roundRobin_];
     roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
@@ -96,7 +98,7 @@ std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
     return workerAddr;
 }
 
-Status UcpWorkerPool::RmByIp(const std::string &ipAddr)
+Status UcpWorkerPool::RemoveByIp(const std::string &ipAddr)
 {
     // need to clean both recv and send map. First do recv
 
@@ -104,7 +106,7 @@ Status UcpWorkerPool::RmByIp(const std::string &ipAddr)
     std::stringstream errMsg;
     {
         // first check if there is a worker attached to this IP
-        std::unique_lock write_lock(recvMapMutex_);
+        std::unique_lock writeLock(recvMapMutex_);
         auto it = localWorkerRecvMap_.find(ipAddr);
         if (it != localWorkerRecvMap_.end()) {
             localWorkerRecvMap_.erase(it);
@@ -115,14 +117,14 @@ Status UcpWorkerPool::RmByIp(const std::string &ipAddr)
 
     {
         // then check for send. Need to go inside UcpWorker and clean ep
-        std::unique_lock write_lock(sendMapMutex_);
+        std::unique_lock writeLock(sendMapMutex_);
         // get the remoteWorkerAddr
         auto it = localWorkerSendMap_.find(ipAddr);
         if (it != localWorkerSendMap_.end()) {
             Status status = it->second->RmEpByIp(ipAddr);
             localWorkerSendMap_.erase(it);
-            if (status != Status::OK()) {
-                errMsg << "found send record but failed to delete EP, ";
+            if (status.IsError()) {
+                errMsg << status.ToString().c_str();
             }
         } else {
             errMsg << "never sent to this IP, ";
@@ -140,7 +142,7 @@ Status UcpWorkerPool::RmByIp(const std::string &ipAddr)
 UcpWorker *UcpWorkerPool::GetOrSelSendWorker(const std::string &ipAddr)
 {
     {
-        std::shared_lock<std::shared_mutex> read_lock(sendMapMutex_);
+        std::shared_lock<std::shared_mutex> readLock(sendMapMutex_);
         // first check the Send map to see if the ipAddr has appeared before
         // need to lock guard -- read-only
         auto it = localWorkerSendMap_.find(ipAddr);
@@ -152,7 +154,7 @@ UcpWorker *UcpWorkerPool::GetOrSelSendWorker(const std::string &ipAddr)
     // nothing found, need to get the NEXT worker and add to map
     // write lock to protect the map
 
-    std::unique_lock<std::shared_mutex> write_lock(sendMapMutex_);
+    std::unique_lock<std::shared_mutex> writeLock(sendMapMutex_);
 
     auto worker = localWorkerPool_[roundRobin_].get();
     roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
@@ -166,11 +168,11 @@ void UcpWorkerPool::Clean()
     // first clean the maps
     // UcpWorker instances will deconstruct properly by its deconstructor
     {
-        std::unique_lock<std::shared_mutex> write_lock(sendMapMutex_);
+        std::unique_lock<std::shared_mutex> writeLock(sendMapMutex_);
         localWorkerSendMap_.clear();
     }
     {
-        std::unique_lock<std::shared_mutex> write_lock(recvMapMutex_);
+        std::unique_lock<std::shared_mutex> writeLock(recvMapMutex_);
         localWorkerRecvMap_.clear();
     }
 

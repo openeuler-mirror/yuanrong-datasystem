@@ -240,7 +240,7 @@ void UcpManager::InsertFailedEvent(uint64_t requestId)
 
 Status UcpManager::RemoveEndpoint(const HostPort &remoteAddress)
 {
-    Status status = workerPool_->RmByIp(remoteAddress.ToString());
+    Status status = workerPool_->RemoveByIp(remoteAddress.ToString());
     if (!status.IsOk()) {
         std::string detailed_msg =
             FormatString("Cannot remove RemoteEndpoint, RemoteEndpoint for %s does not exist. Underlying error: %s",
