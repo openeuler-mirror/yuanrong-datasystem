@@ -20,9 +20,9 @@
 #include <string>
 #include <vector>
 
-#include <urma_api.h>
+#include <ub/umdk/urma/urma_api.h>
 #ifdef URMA_OVER_UB
-#include <urma_ubagg.h>
+#include <ub/umdk/urma/urma_ubagg.h>
 #endif
 
 #include "datasystem/common/rdma/rdma_util.h"

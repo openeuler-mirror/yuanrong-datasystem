@@ -885,7 +885,7 @@ private:
         CHECK_FAIL_RETURN_STATUS(nullable || !vec.empty(), K_INVALID, "The keys are empty");
         if (!vec.empty()) {
             CHECK_FAIL_RETURN_STATUS(!vec.begin()->empty(), K_INVALID,
-                                     FormatString("The objectKey at position %d is empty", 0));
+                                     FormatString("keys[%d] can not be empty", 0));
             RETURN_IF_NOT_OK(CheckValidObjectKey(*vec.begin()));
         }
         return Status::OK();

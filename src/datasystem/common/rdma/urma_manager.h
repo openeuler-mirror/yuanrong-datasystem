@@ -26,9 +26,9 @@
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
 
-#include <urma_api.h>
+#include <ub/umdk/urma/urma_api.h>
 #ifdef URMA_OVER_UB
-#include <urma_ubagg.h>
+#include <ub/umdk/urma/urma_ubagg.h>
 #endif
 
 #include "datasystem/common/flags/flags.h"
