@@ -66,7 +66,7 @@ Status UcpWorker::Init()
         return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to get worker address.");
     }
 
-    localWorkerAddrStr_ = std::string(reinterpret_cast<const char*>(localWorkerAddr_), workerAddrLen);
+    localWorkerAddrStr_ = std::string(reinterpret_cast<const char *>(localWorkerAddr_), workerAddrLen);
 
     StartProgressThread();
 
@@ -75,8 +75,8 @@ Status UcpWorker::Init()
 }
 
 Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                        const std::string &remoteWorkerAddr, const std::string &ipAddr,
-                        const uintptr_t &localSegAddr, size_t localSegSize, uint64_t requestID)
+                        const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t &localSegAddr,
+                        size_t localSegSize, uint64_t requestID)
 {
     PerfPoint point(PerfKey::RDMA_UCP_WORKER_WRITE);
     const auto &ucpEp = GetOrCreateEndpoint(ipAddr, remoteWorkerAddr);
@@ -165,7 +165,8 @@ void UcpWorker::ProgressLoop()
     }
 }
 
-std::shared_ptr<UcpEndpoint> UcpWorker::GetOrCreateEndpoint(const std::string &ipAddr, const std::string &remoteWorkerAddr)
+std::shared_ptr<UcpEndpoint> UcpWorker::GetOrCreateEndpoint(const std::string &ipAddr,
+                                                            const std::string &remoteWorkerAddr)
 {
     {
         std::shared_lock readLock(mapLock_);

@@ -61,7 +61,8 @@ Status UcpWorkerPool::Write(const std::string &remoteRkey, const uintptr_t &remo
     UcpWorker *worker = GetOrSelSendWorker(ipAddr);
     if (worker == nullptr) {
         // no worker found and no worker created
-        return Status(K_RDMA_ERROR, std::string("[UcpWorkerPool] Failed to obtain worker for communication with ") + ipAddr);
+        return Status(K_RDMA_ERROR,
+                      std::string("[UcpWorkerPool] Failed to obtain worker for communication with ") + ipAddr);
     }
     // this process is locked inside UcpWorker so no need to lock here
     return worker->Write(remoteRkey, remoteSegAddr, remoteWorkerAddr, ipAddr, localSegAddr, localSegSize, requestID);
