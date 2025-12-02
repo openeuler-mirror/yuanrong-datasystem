@@ -18,8 +18,8 @@ endif()
 
 set(UCX_CONF_OPTIONS
         --enable-optimizations
-        --with-verbs=${rdma_core_ROOT}
-        --with-rdmacm=${rdma_core_ROOT}
+        --with-verbs
+        --with-rdmacm
         --enable-mt
         )
 

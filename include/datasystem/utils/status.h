@@ -70,6 +70,7 @@ enum StatusCode : uint32_t {
     K_RPC_UNAVAILABLE = 1002,
     K_RPC_STREAM_END = 1003,
     K_URMA_ERROR = 1004,
+    K_RDMA_ERROR = 1005,
 
     // object error code, range: [2000, 3000)
     K_OC_ALREADY_SEALED = 2000,

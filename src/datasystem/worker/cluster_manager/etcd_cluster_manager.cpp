@@ -31,7 +31,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -777,7 +777,7 @@ Status EtcdClusterManager::HandleClusterEvent(const mvccpb::Event &event)
         rc = (this->*addNodeFunc)(eventNodeKey, std::move(eventNode), azName);
     } else if (event.type() == mvccpb::Event_EventType::Event_EventType_DELETE) {
         LOG(INFO) << "Event Type: Remove Node: " << eventNode->ToString(eventNodeKey);
-        LOG_IF_ERROR_EXCEPT(RemoveRemoteUrmaDevice(eventNodeKey), "", K_NOT_FOUND);
+        LOG_IF_ERROR_EXCEPT(RemoveRemoteFastTransportNode(eventNodeKey), "", K_NOT_FOUND);
         rc = (this->*removeNodeFunc)(eventNodeKey, std::move(eventNode), azName);
     } else {
         rc = Status(K_RUNTIME_ERROR, "unknown type: " + event.DebugString());

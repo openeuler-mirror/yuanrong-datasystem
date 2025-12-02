@@ -20,14 +20,12 @@
 #ifndef DATASYSTEM_COMMON_STRING_INTERN_STRING_REF_H
 #define DATASYSTEM_COMMON_STRING_INTERN_STRING_REF_H
 
-#include "datasystem/common/string_intern/string_entity.h"
+#include "datasystem/common/string_intern/key_type.h"
 #include "datasystem/common/string_intern/string_ptr.h"
 #include "datasystem/common/string_intern/string_pool.h"
 
 namespace datasystem {
 namespace intern {
-enum class KeyType : size_t { OTHER, OBJECT_KEY, CLIENT_KEY, SHM_KEY };
-
 template <auto I>
 class StringRef {
 public:
@@ -72,7 +70,7 @@ public:
     void Clear()
     {
         if (handle_.DecRef()) {
-            StringPool<I>::Instance().Erase(handle_);
+            StringPool::Instance(I).Erase(handle_);
         }
         handle_ = StringPtr();
     }
@@ -81,7 +79,7 @@ public:
     StringRef(const std::string &val) noexcept
     {
         if (!val.empty()) {
-            handle_ = StringPool<I>::Instance().Intern(val);
+            handle_ = StringPool::Instance(I).Intern(val);
         }
     }
 
@@ -157,7 +155,7 @@ inline StringRef<I> StringRef<I>::Intern(const std::string &str)
     if (str.empty()) {
         return StringRef<I>(StringPtr());
     }
-    return StringRef<I>(StringPool<I>::Instance().Intern(str));
+    return StringRef<I>(StringPool::Instance(I).Intern(str));
 }
 
 template <auto I>
@@ -180,18 +178,9 @@ inline std::string operator+(const StringRef<I> &lhs, S &&rhs)
 }
 }  // namespace intern
 
-using ObjectKey = intern::StringRef<intern::KeyType::OBJECT_KEY>;
-using ObjectKeyPool = intern::StringPool<intern::KeyType::OBJECT_KEY>;
-
-using ClientKey = intern::StringRef<intern::KeyType::CLIENT_KEY>;
-using ClientKeyPool = intern::StringPool<intern::KeyType::CLIENT_KEY>;
-
-using ShmKey = intern::StringRef<intern::KeyType::SHM_KEY>;
-using ShmKeyPool = intern::StringPool<intern::KeyType::SHM_KEY>;
-
-using OtherKey = intern::StringRef<intern::KeyType::OTHER>;
-using OtherKeyPool = intern::StringPool<intern::KeyType::OTHER>;
-
+#define KEY_TYPE_DEF(keyType, keyEnum) using keyType = intern::StringRef<intern::KeyType::keyEnum>;
+#include "datasystem/common/string_intern/key_type.def"
+#undef KEY_TYPE_DEF
 }  // namespace datasystem
 
 #if TBB_INTERFACE_VERSION >= 12050
@@ -250,18 +239,17 @@ using OtherKeyPool = intern::StringPool<intern::KeyType::OTHER>;
 namespace tbb {
 using datasystem::intern::KeyType;
 using datasystem::intern::StringRef;
-STRING_REF_IMPL_FOR_TBB(OBJECT_KEY);
-STRING_REF_IMPL_FOR_TBB(CLIENT_KEY);
-STRING_REF_IMPL_FOR_TBB(SHM_KEY);
-STRING_REF_IMPL_FOR_TBB(OTHER);
+
+#define KEY_TYPE_DEF(keyType, keyEnum) STRING_REF_IMPL_FOR_TBB(keyEnum);
+#include "datasystem/common/string_intern/key_type.def"
+#undef KEY_TYPE_DEF
 }  // namespace tbb
 
 namespace std {
 using datasystem::intern::KeyType;
 using datasystem::intern::StringRef;
-STRING_REF_IMPL_FOR_STD(OBJECT_KEY);
-STRING_REF_IMPL_FOR_STD(CLIENT_KEY);
-STRING_REF_IMPL_FOR_STD(SHM_KEY);
-STRING_REF_IMPL_FOR_STD(OTHER);
+#define KEY_TYPE_DEF(keyType, keyEnum) STRING_REF_IMPL_FOR_STD(keyEnum);
+#include "datasystem/common/string_intern/key_type.def"
+#undef KEY_TYPE_DEF
 }  // namespace std
 #endif

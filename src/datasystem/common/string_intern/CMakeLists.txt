@@ -1,5 +1,6 @@
 set(STRING_REF_SRC
     string_entity.cpp
+    string_pool.cpp
 )
 
 set(STRING_REF_DEPENDS_LIB

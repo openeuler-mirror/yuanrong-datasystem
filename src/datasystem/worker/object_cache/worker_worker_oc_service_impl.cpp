@@ -28,7 +28,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/shm_guard.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -122,9 +122,9 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
         disabledParrallel ? *(rsp.add_responses()) : parallelRes[paraIndex].respPbs.emplace_back();
 
     std::vector<RpcMessage> subPayload;
-    std::vector<uint64_t> urmaEventKeys;
+    std::vector<uint64_t> fastTransportEventKeys;
 
-    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, urmaEventKeys, batchPtr);
+    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, fastTransportEventKeys, batchPtr);
     if (status.IsError()) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
@@ -134,13 +134,13 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
     // If keys are empty, we 1) get payload from spill or 2) urma is not enabled.
     // In both cases we send payload as part of the response.
     // Otherwise we extend the lifecycle of payload only until urma_write is done.
-    if (urmaEventKeys.empty()) {
+    if (fastTransportEventKeys.empty()) {
         auto &localPayload = disabledParrallel ? payload : parallelRes[paraIndex].pays;
         localPayload.insert(localPayload.end(), std::make_move_iterator(subPayload.begin()),
                             std::make_move_iterator(subPayload.end()));
     } else if (batchPtr == nullptr) {
         auto &localKps = disabledParrallel ? keys : parallelRes[paraIndex].kps;
-        localKps.emplace(paraIndex, std::make_pair(std::move(urmaEventKeys), std::move(subPayload)));
+        localKps.emplace(paraIndex, std::make_pair(std::move(fastTransportEventKeys), std::move(subPayload)));
     }
 }
 
@@ -233,11 +233,18 @@ Status WorkerWorkerOCServiceImpl::AggregaedMemorySend(uint64_t subIndex, Aggrega
     const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(aggregatedMem->batchShmUnit->GetPointer());
     uint64_t localSegAddress = 0;
     uint64_t localSegSize;
-    GetSegmentInfoFromShmUnit(aggregatedMem->batchShmUnit, localObjectAddress, localSegAddress, localSegSize);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        UrmaWritePayload(subReq->urma_info(), localSegAddress, localSegSize, localObjectAddress, 0,
-                         info.batchSizes[subIndex], ocClientWorkerSvc_->GetMetadataSize(), false, subKeys),
-        "Failed in aggregate memory urma write");
+    if (IsUrmaEnabled()) {
+        GetSegmentInfoFromShmUnit(aggregatedMem->batchShmUnit, localObjectAddress, localSegAddress, localSegSize);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            UrmaWritePayload(subReq->urma_info(), localSegAddress, localSegSize, localObjectAddress, 0,
+                             info.batchSizes[subIndex], ocClientWorkerSvc_->GetMetadataSize(), false, subKeys),
+            "Failed in aggregate memory urma write");
+    } else if (IsUcpEnabled()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            UcpPutPayload(subReq->ucp_info(), localObjectAddress, 0, info.batchSizes[subIndex],
+                          ocClientWorkerSvc_->GetMetadataSize(), false, subKeys),
+            "Failed in aggregate memory ucp put");
+    }
 
     ShmGuard shmGuard(aggregatedMem->batchShmUnit, info.batchSizes[subIndex], 0);
     RETURN_IF_NOT_OK(shmGuard.TransferTo(subPayload, 0, info.batchSizes[subIndex]));
@@ -352,7 +359,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                          FormatString("[ObjectKey %s] is invalid", objectKey));
     LOG_IF(WARNING, entry->GetCreateTime() != version) << FormatString(
         "[ObjectKey %s] Version: %ld, require version: %ld", objectKey, entry->GetCreateTime(), version);
-    if (IsUrmaEnabled() && req.has_urma_info() && entry->GetDataSize() != expectedDataSize) {
+    bool isFastTransportEnabled = (IsUrmaEnabled() && req.has_urma_info()) || (IsUcpEnabled() && req.has_ucp_info());
+    if (isFastTransportEnabled && entry->GetDataSize() != expectedDataSize) {
         // Return error with changed size, so the request can be retried.
         rsp.mutable_error()->set_error_code(StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
         rsp.set_data_size(static_cast<int64_t>(entry->GetDataSize()));
@@ -383,7 +391,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
 
         PerfPoint p(PerfKey::WORKER_REMOTE_GET_PAYLOAD);
         // Support send payload exceed 2GB
-        if (IsUrmaEnabled() && req.has_urma_info()) {
+        if (isFastTransportEnabled) {
             if (batchPtr) {
                 PerfPoint aggregateCopy(PerfKey::WORKER_AGGREGATE_MEM_COPY);
                 uint64_t dataPos = batchPtr->batchCursor + entry->GetMetadataSize();
@@ -398,7 +406,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                          FormatString("Copy root info failed, the memcpy_s return: %d", ret));
                 batchPtr->batchCursor += Align4BitsCeiling(entry->GetDataSize() + entry->GetMetadataSize());
                 keys.emplace_back(dataPos);
-            } else {
+            } else if (IsUrmaEnabled()) {
                 // later add a check on data size and read size.
                 auto shmUnit = entry->GetShmUnit();
                 const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
@@ -408,12 +416,19 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                 RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                     UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset, size,
                                      entry->GetMetadataSize(), blocking, keys),
-                    "Failed in sigle data urma write");
+                    "Failed in single data urma write");
+            } else if (IsUcpEnabled()) {
+                // later add a check on data size and read size.
+                auto shmUnit = entry->GetShmUnit();
+                const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(UcpPutPayload(req.ucp_info(), localObjectAddress, offset, size,
+                                                               entry->GetMetadataSize(), blocking, keys),
+                                                 "Failed in single data ucp put");
             }
             rsp.set_data_in_payload(true);
         }
-        // We need to extend the ShmGuard lifecycle if we perform parallel urma_write.
-        if (!IsUrmaEnabled() || !blocking) {
+        // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
+        if (!IsFastTransportEnabled() || !blocking) {
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
         }
     }
@@ -465,7 +480,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
     std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsUrmaEnabled()) {
+    if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
         tbb::task_arena limited;
         if (FLAGS_oc_worker_worker_parallel_nums > 0) {
             limited.initialize(FLAGS_oc_worker_worker_parallel_nums);
@@ -521,7 +536,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         }
     }
     pointImpl.Record();
-    // Wait for urma events if the events are created and not already waited.
+    // Wait for fast transport events if the events are created and not already waited.
 
     for (auto &pair : keys) {
         int index = pair.first;
@@ -531,7 +546,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
             rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(status.GetMsg());
             return status;
         };
-        (void)WaitUrmaEvent(pair.second.first, remainingTime, errorHandler);
+        (void)WaitFastTransportEvent(pair.second.first, remainingTime, errorHandler);
         // Early release of ShmGuard.
         pair.second.second.clear();
     }

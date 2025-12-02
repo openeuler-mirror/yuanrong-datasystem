@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: StringPool implementation.
+ * Description: StringPool Define.
  */
 #ifndef DATASYSTEM_COMMON_STRING_INTERN_STRING_POOL_H
 #define DATASYSTEM_COMMON_STRING_INTERN_STRING_POOL_H
@@ -24,24 +24,17 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/string_intern/key_type.h"
 #include "datasystem/common/string_intern/string_ptr.h"
 #include "datasystem/common/string_intern/string_entity.h"
-#include "datasystem/common/log/log.h"
 
 namespace datasystem {
 namespace intern {
 using StringEntityMap = tbb::concurrent_hash_map<StringEntity, bool>;
 
-template <auto I>
 class StringPool {
 public:
-    StringPool() = default;
-    ~StringPool()
-    {
-        if (Size() > 0) {
-            LOG(ERROR) << "Some RCString still in pool: " << Size() << " when pool finalize, may cause segment fault.";
-        }
-    }
+    ~StringPool();
     StringPool(StringPool &&) = delete;                  // Move construct
     StringPool(const StringPool &) = delete;             // Copy construct
     StringPool &operator=(const StringPool &) = delete;  // Copy assign
@@ -51,58 +44,42 @@ public:
      * @brief Get the Singleton StringPool instance.
      * @return StringPool instance.
      */
-    static StringPool &Instance()
-    {
-        static StringPool instance;
-        return instance;
-    }
+    static StringPool &Instance(KeyType keyType);
+
+    static void InitAll();
 
     /**
      * @brief Init the StringPool, use it to control the construction and destruction timing.
      */
-    void Init()
-    {
-        LOG(INFO) << "StringPool init";
-    }
+    void Init() const;
 
     /**
      * @brief Intern the std::string to pool and return the handle of this string.
      * @param[in] val The std::string ready to intern.
      * @param[out] The handle of intern string.
      */
-    StringPtr Intern(const std::string &val)
-    {
-        StringEntity rcStr(val);
-        StringEntityMap::const_accessor readAccessor;
-        (void)pool_.insert(readAccessor, rcStr);
-        return StringPtr(readAccessor->first);
-    }
+    StringPtr Intern(const std::string &val);
 
     /**
      * @brief Try to Erase the StringEntity by handle if its reference count is 0.
      * @param[in] handle The handle whose ptr_ is ready to erase.
      */
-    void Erase(StringPtr &handle)
-    {
-        const auto val = handle.GetEntity();
-        StringEntityMap::accessor accessor;
-        if (val != nullptr && pool_.find(accessor, *val) && accessor->first.DecDelRef()) {
-            (void)pool_.erase(accessor);
-        }
-    }
+    void Erase(StringPtr &handle);
 
     /**
      * @brief Return the size ofStringPool
      * @return The size ofStringPool
      */
-    size_t Size() const
-    {
-        return pool_.size();
-    }
+    size_t Size() const;
 
 private:
+    StringPool(KeyType keyType) : keyType_(keyType)
+    {
+    }
     StringEntityMap pool_;
+    KeyType keyType_;
 };
+
 }  // namespace intern
 }  // namespace datasystem
 #endif

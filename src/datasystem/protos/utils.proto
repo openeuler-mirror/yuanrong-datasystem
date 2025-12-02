@@ -63,5 +63,9 @@ message UrmaRemoteAddrPb {
   HostPortPb request_address = 3;
 }
 
-message RdmaImportSegmentPb {
+message UcpRemoteInfoPb {
+  HostPortPb remote_ip_addr = 1;
+  bytes remote_worker_addr = 2;
+  bytes rkey = 3;
+  uint64 remote_buf = 4;
 }

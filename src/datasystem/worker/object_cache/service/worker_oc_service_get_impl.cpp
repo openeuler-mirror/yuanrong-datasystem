@@ -37,7 +37,7 @@
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/object/object_enum.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
@@ -802,11 +802,61 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 }
 
 template <typename Req>
-Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb,
-                                                       bool &shmUnitAllocated, std::shared_ptr<ShmOwner> shmOwner)
+Status WorkerOcServiceGetImpl::FillGetRequestUrmaInfo(std::shared_ptr<ShmUnit> &shmUnit, uint64_t &metaSz, Req &reqPb)
 {
-    // If URMA is enabled, or if shmOwner is not nullptr, memory distribution/allocation needs to be processed.
-    if (!IsUrmaEnabled() && shmOwner == nullptr) {
+    if (!IsUrmaEnabled()) {
+        return Status::OK();
+    }
+    uint64_t segAddress;
+    uint64_t dataOffset;
+    if (FLAGS_urma_register_whole_arena) {
+        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer()) - shmUnit->GetOffset();
+        dataOffset = shmUnit->GetOffset() + metaSz;
+    } else {
+        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+        dataOffset = metaSz;
+    }
+    auto *urmaInfo = reqPb.mutable_urma_info();
+    urmaInfo->set_seg_va(segAddress);
+    urmaInfo->set_seg_data_offset(dataOffset);
+    auto *remoteAddr = urmaInfo->mutable_request_address();
+    remoteAddr->set_host(localAddress_.Host());
+    remoteAddr->set_port(localAddress_.Port());
+    return Status::OK();
+}
+
+template <typename Req>
+Status WorkerOcServiceGetImpl::FillGetRequestUcpInfo(const std::string &srcIpAddr, std::shared_ptr<ShmUnit> &shmUnit,
+                                                     uint64_t &metaSz, Req &reqPb)
+{
+    if (!IsUcpEnabled()) {
+        return Status::OK();
+    }
+    uint64_t segAddress;
+    uint64_t dataOffset;
+    if (FLAGS_rdma_register_whole_arena) {
+        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer()) - shmUnit->GetOffset();
+        dataOffset = shmUnit->GetOffset() + metaSz;
+    } else {
+        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+        dataOffset = metaSz;
+    }
+    auto *ucpInfo = reqPb.mutable_ucp_info();
+    auto *destIpAddr = ucpInfo->mutable_remote_ip_addr();
+    destIpAddr->set_host(localAddress_.Host());
+    destIpAddr->set_port(localAddress_.Port());
+    RETURN_IF_NOT_OK(FillUcpInfo(segAddress, dataOffset, srcIpAddr, *ucpInfo));
+    return Status::OK();
+}
+
+template <typename Req>
+Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpAddr, uint64_t dataSize,
+                                                       ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated,
+                                                       std::shared_ptr<ShmOwner> shmOwner)
+{
+    // If fast transport is enabled, or if shmOwner is not nullptr, memory distribution/allocation needs to be
+    // processed.
+    if (!IsFastTransportEnabled() && shmOwner == nullptr) {
         return Status::OK();
     }
     reqPb.set_data_size(dataSize);
@@ -836,25 +886,14 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(uint64_t dataSize, ReadOb
         entry->SetShmUnit(shmUnit);
         shmUnitAllocated = true;
     }
-    // Early exit for the urma info.
-    if (!IsUrmaEnabled()) {
+    // Early exit for the urma/ucp info.
+    if (!IsFastTransportEnabled()) {
         return Status::OK();
     }
-    uint64_t segAddress;
-    uint64_t dataOffset;
-    if (FLAGS_urma_register_whole_arena) {
-        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer()) - shmUnit->GetOffset();
-        dataOffset = shmUnit->GetOffset() + metaSz;
-    } else {
-        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
-        dataOffset = metaSz;
-    }
-    auto *urmaInfo = reqPb.mutable_urma_info();
-    urmaInfo->set_seg_va(segAddress);
-    urmaInfo->set_seg_data_offset(dataOffset);
-    auto *remoteAddr = urmaInfo->mutable_request_address();
-    remoteAddr->set_host(localAddress_.Host());
-    remoteAddr->set_port(localAddress_.Port());
+    // Fill in urma info and ucp info
+    RETURN_IF_NOT_OK(FillGetRequestUrmaInfo(shmUnit, metaSz, reqPb));
+    RETURN_IF_NOT_OK(FillGetRequestUcpInfo(srcIpAddr, shmUnit, metaSz, reqPb));
+
     return Status::OK();
 }
 
@@ -902,14 +941,14 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         subReq.set_read_offset(objectKV.GetReadOffset());
         subReq.set_read_size(objectKV.GetReadSize());
         subReq.set_data_size(meta.data_size());
-        // Prepare the protobuf with urma info for data transfer if applicable.
+        // Prepare the protobuf with urma/ucp info for data transfer if applicable.
         // BatchGetObjectHandleIndividualStatus will free ShmUnit upon error, so no need to actually record it here.
         bool shmUnitAllocated = false;
         std::shared_ptr<ShmOwner> shmOwner = nullptr;
         if (shmIndexMapping.size() > objectIndex && shmOwners.size() > shmIndexMapping[objectIndex]) {
             shmOwner = shmOwners[shmIndexMapping[objectIndex]];
         }
-        status = PrepareGetRequestHelper(meta.data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
+        status = PrepareGetRequestHelper(address, meta.data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
         if (status.IsError()) {
             BatchGetObjectHandleIndividualStatus(status, *readKey, successIds, needRetryIds, failedIds);
             infoIter = infos.erase(infoIter);
@@ -960,8 +999,8 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     do {
         dataSizeChange = false;
         bool shmUnitAllocated = false;
-        // Prepare the protobuf with urma info for data transfer if applicable.
-        RETURN_IF_NOT_OK(PrepareGetRequestHelper(dataSize, objectKV, reqPb, shmUnitAllocated));
+        // Prepare the protobuf with urma/ucp info for data transfer if applicable.
+        RETURN_IF_NOT_OK(PrepareGetRequestHelper(address, dataSize, objectKV, reqPb, shmUnitAllocated));
         // If getting data from other AZ, then we leave 3/4 remain time to query from L2 cache in case getting data
         // failed.
         int64_t timeoutMs =
@@ -987,7 +1026,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             dataSize = static_cast<uint64_t>(rspPb.data_size());
             dataSizeChange = true;
         } else {
-            if (IsUrmaEnabled() && rc.IsError() && shmUnitAllocated) {
+            if (IsFastTransportEnabled() && rc.IsError() && shmUnitAllocated) {
                 // memory is allocated but request failed
                 // deallocate the memory here
                 objectKV.GetObjEntry()->SetShmUnit(nullptr);
@@ -1209,7 +1248,7 @@ Status WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(
             }
         }
     };
-    std::apply([&](auto &...sets) { (extractObjectsMayExistInOtherAz(sets), ...); }, objectKeysQueryMetaFailed);
+    std::apply([&](auto &... sets) { (extractObjectsMayExistInOtherAz(sets), ...); }, objectKeysQueryMetaFailed);
 
     RETURN_OK_IF_TRUE(objectKeysMayInOtherAz.empty());
     LOG(INFO) << "Try get some miss objs from other az: " << VectorToString(objectKeysMayInOtherAz);

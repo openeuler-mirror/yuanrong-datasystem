@@ -2,7 +2,7 @@ set(pcre_VERSION 8.45)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
   set(pcre_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/pcre-8.45.tar.gz")
 else()
-  set(pcre_URL "https://nchc.dl.sourceforge.net/project/pcre/pcre/8.45/pcre-8.45.tar.gz")
+  set(pcre_URL "https://mirrors.aliyun.com/exim/pcre/pcre-8.45.tar.gz")
 endif()
 set(pcre_SHA256 "4e6ce03e0336e8b4a3d6c2b70b1c5e18590a5673a98186da90d4f33c23defc09")
 

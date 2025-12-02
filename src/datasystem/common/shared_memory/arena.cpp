@@ -43,7 +43,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
 DS_DEFINE_uint32(
     arena_per_tenant, 16,
@@ -340,7 +340,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         static_cast<uint64_t>(static_cast<long double>(std::numeric_limits<uint64_t>::max()) * rate) > maxSize,
         K_RUNTIME_ERROR, "mmapSize overflow.");
     auto fakeAllocateSize = maxSize;
-    if (IsUrmaEnabled()) {
+    if (IsFastTransportEnabled()) {
         // Here we ensure total allocated memory
         // does not exceed max requested by user
         rate = 1;

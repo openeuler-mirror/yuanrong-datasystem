@@ -1,27 +1,15 @@
-# - Find URMA (urma_types.h, liburma.so, liburma_ip.so)
+# - Find URMA (urma_types.h, liburma.so)
 # This module defines
 #  URMA_INCLUDE_DIR, directory containing urma headers
 #  URMA_LIBRARY, Location of liburma's shared
-#  URMA_IP_LIBRARY, Location of liburma_ip's shared
 #  URMA_FOUND, whether URMA has been found
 
-find_path(URMA_INCLUDE_DIR urma_api.h
-          PATHS ${URMA_INCLUDE_LOCATION}
-          DOC   "Path to the urma api header file"
-          NO_CMAKE_SYSTEM_PATH
-          NO_SYSTEM_ENVIRONMENT_PATH)
-
-find_path(URMA_INCLUDE_DIR urma_types.h
-          PATHS ${URMA_INCLUDE_LOCATION}
-          DOC   "Path to the urma header file"
-          NO_CMAKE_SYSTEM_PATH
-          NO_SYSTEM_ENVIRONMENT_PATH)
+find_path(URMA_INCLUDE_DIR ub/umdk/urma/urma_api.h
+          DOC   "Path to the urma api header file")
 
 find_library(URMA_LIBRARY urma
              PATHS ${URMA_LIB_LOCATION}
-             DOC   "URMA library"
-             NO_CMAKE_SYSTEM_PATH
-             NO_SYSTEM_ENVIRONMENT_PATH)
+             DOC   "URMA library")
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(URMA REQUIRED_VARS URMA_LIBRARY URMA_INCLUDE_DIR)

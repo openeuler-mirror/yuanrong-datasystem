@@ -304,7 +304,32 @@ private:
 
     /**
      * @brief Pull object data from remote worker.
+     * @note The request protobuf needs to contain urma_info fields.
+     * @param[in] shmUnit The shared memory unit.
+     * @param[in] metaSz The metadata size of shared memory.
+     * @param[out] reqPb The remote GetObject rpc req protobuf.
+     * @return Status of the call.
+     */
+    template <typename Req>
+    Status FillGetRequestUrmaInfo(std::shared_ptr<ShmUnit> &shmUnit, uint64_t &metaSz, Req &reqPb);
+
+    /**
+     * @brief Pull object data from remote worker.
+     * @note The request protobuf needs to contain ucp_info fields.
+     * @param[in] srcIpAddr The ip address of object data owner.
+     * @param[in] shmUnit The shared memory unit.
+     * @param[in] metaSz The metadata size of shared memory.cd
+     * @param[out] reqPb The remote GetObject rpc req protobuf.
+     * @return Status of the call.
+     */
+    template <typename Req>
+    Status FillGetRequestUcpInfo(const std::string &srcIpAddr, std::shared_ptr<ShmUnit> &shmUnit, uint64_t &metaSz,
+                                 Req &reqPb);
+
+    /**
+     * @brief Pull object data from remote worker.
      * @note The request protobuf needs to contain data_size and urma_info fields.
+     * @param[in] srcIpAddr The ip address of object data owner.
      * @param[in] dataSize The object data size.
      * @param[in] kv The reserved and locked safe object and its corresponding objectKey.
      * @param[in] reqPb The remote GetObject rpc req protobuf.
@@ -313,8 +338,8 @@ private:
      * @return Status of the call.
      */
     template <typename Req>
-    Status PrepareGetRequestHelper(uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated,
-                                   std::shared_ptr<ShmOwner> shmOwner = nullptr);
+    Status PrepareGetRequestHelper(const std::string &srcIpAddr, uint64_t dataSize, ReadObjectKV &objectKV, Req &reqPb,
+                                   bool &shmUnitAllocated, std::shared_ptr<ShmOwner> shmOwner = nullptr);
 
     /**
      * @brief Pull object data from remote worker.

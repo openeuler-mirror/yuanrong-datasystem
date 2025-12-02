@@ -37,6 +37,7 @@ message GetObjectRemoteReqPb {
   uint64 read_size = 6;
   uint64 data_size = 7;
   UrmaRemoteAddrPb urma_info = 8;
+  UcpRemoteInfoPb ucp_info = 9;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

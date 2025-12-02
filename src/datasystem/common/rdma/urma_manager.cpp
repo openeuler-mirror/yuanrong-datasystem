@@ -19,18 +19,19 @@
  */
 #include "datasystem/common/rdma/urma_manager.h"
 
+#include <ub/umdk/urma/urma_opcode.h>
+
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/utils/status.h"
-#include "urma_opcode.h"
 
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
@@ -640,6 +641,7 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 
 Status UrmaManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
+    (void)event;
     TbbEventMap::accessor mapAccessor;
     auto res = tbbEventMap_.insert(mapAccessor, requestId);
     if (!res) {
@@ -919,7 +921,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     if (blocking) {
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        RETURN_IF_NOT_OK(WaitUrmaEvent(keys, remainingTime, errorHandler));
+        RETURN_IF_NOT_OK(WaitFastTransportEvent(keys, remainingTime, errorHandler));
         keys.clear();
     }
     return Status::OK();
@@ -963,6 +965,7 @@ Status UrmaManager::StrToEid(const std::string &eid, urma_eid_t &out)
 
 Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
 {
+    (void)rsp;
     if (UrmaManager::IsUrmaEnabled()) {
         auto &mgr = UrmaManager::Instance();
         // Register the incoming jfr.

@@ -20,7 +20,6 @@
 #ifndef DATASYSTEM_COMMON_STRING_INTERN_STRING_PTR_H
 #define DATASYSTEM_COMMON_STRING_INTERN_STRING_PTR_H
 
-#include <atomic>
 #include <cstddef>
 #include <string>
 

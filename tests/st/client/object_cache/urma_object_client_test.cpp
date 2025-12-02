@@ -69,6 +69,7 @@ public:
     void SetUp() override
     {
         ImmutableStringPool::Instance().Init();
+        intern::StringPool::InitAll();
         ExternalClusterTest::SetUp();
     }
 

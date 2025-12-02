@@ -41,9 +41,10 @@
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -777,6 +778,7 @@ Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
 Status WorkerOCServer::Init()
 {
     ImmutableStringPool::Instance().Init();
+    intern::StringPool::InitAll();
     RETURN_IF_NOT_OK(InitAkSk());
     // The static members are destructed in the reverse order of their construction,
     // Below call guarantees that the destructor of Env is behind other Rocksdb singletons.
@@ -796,7 +798,8 @@ Status WorkerOCServer::Init()
                                      "Init allocator failed");
     // Call base class to init common service
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CommonServer::Init(), "CommonServer init failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeUrmaManager(hostPort_), "URMA init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_),
+                                     "Fast transport (URMA/RDMA) init failed");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_max_rpc_session_num, hostPort_));
     if (IsSupportL2Storage(GetCurrentStorageType())) {
         persistenceApi_ = std::make_shared<PersistenceApi>();

@@ -19,10 +19,9 @@ source /etc/profile.d/*.sh
 readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
-                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-X on/off] [-e on/off] [-T <thirdparty_versions>]
-                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M \"on|off <urma_mode>\"/off]
-                     [-D \"on|off <ub_url> <ub_sha256>\"/off] [-A on/off]
-                     [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
+                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-X on/off] [-e on/off]
+                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on]
+                     [-A on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
 
 Options:
     -h Output this help and exit.
@@ -33,8 +32,6 @@ Options:
     -o Set the output path of the compilation result. If this parameter is specified, an empty directory
        is recommended to prevent other files from being deleted, default is './output'.
     -j Set the number of threads for compiling source code and compiling open source software, default is 8.
-    -T Set the third party versions if the default version need to be changed, default is ''.
-       Format: '<lib1:version1>;<lib2:version2>...', example: 'protobuf:3.13.0;'
     -i Incremental compilation, choose from: on/off, default: off.
     -n Use Ninja to speed up compilation, the default is to compile using Unix Makefiles, choose from: on/off, default: off.
 
@@ -46,7 +43,6 @@ Options:
 
     For communication layer
     -M Build with URMA framework in addition to ZMQ, choose from on/off, default: off.
-       When on, can also provide the URMA mode, choose from IB/UB, default IB (URMA over IB).
     -D Download UB package that is needed for URMA, choose from on/off. When on, can also provide UB download options, default: off.
        Notes to compile and run with URMA:
        1. The default packages are for EulerOS-V2R10 environment
@@ -109,7 +105,7 @@ Environment:
 
 Example:
 1) Compile a release version and export compilation result to the output directory.
-  $ bash build.sh -r -o ./output
+  $ bash build.sh
 "
 
 readonly BASE_DIR=$(dirname "$(readlink -f "$0")")
@@ -130,10 +126,7 @@ function init_default_opts() {
 
   # For communication layer
   export BUILD_WITH_URMA="off"
-  export URMA_OVER_UB="off"
   export DOWNLOAD_UB="off"
-  export UB_URL=""
-  export UB_SHA256=""
   export BUILD_WITH_RDMA="off"
 
   # For testcase
@@ -221,43 +214,6 @@ function go_die() {
     exit "${ret}"
   else
     exit 1
-  fi
-}
-
-function parse_thirdparty_versions() {
-  local versions_str="$1"
-  IFS=';' read -ra lib_version_pairs <<<"$versions_str"
-  for ((i = 0; i < ${#lib_version_pairs[@]}; i++)); do
-    local str=${lib_version_pairs[i]}
-    IFS=':' read -ra lib_version_pair <<<"$str"
-    if [[ ${#lib_version_pair[@]} -eq 2 ]]; then
-      local lib_name=${lib_version_pair[0]}
-      local version=${lib_version_pair[1]}
-      ADDITIONAL_CMAKE_OPTIONS[${#ADDITIONAL_CMAKE_OPTIONS[@]}]="-D${lib_name}_VERSION=${version}"
-    else
-      go_die "-- Error thirdparty specified: ${versions_str}"
-    fi
-  done
-}
-
-function parse_urma_options() {
-  local args
-  check_on_off "$1" M
-  BUILD_WITH_URMA="$1"
-  if [[ $# -gt 1 ]]; then
-    IFS=',' read -ra parts <<< "$2"
-    for part in "${parts[@]}"; do
-      case $part in
-        "IB")
-          ;;
-        "UB")
-          URMA_OVER_UB="on"
-          ;;
-        *)
-          echo "Invalid URMA mode option: $part"
-          ;;
-      esac
-    done
   fi
 }
 
@@ -522,7 +478,6 @@ function build_datasystem()
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
     "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
-    "-DURMA_OVER_UB:BOOL=${URMA_OVER_UB}"
     "-DBUILD_WITH_RDMA:BOOL=${BUILD_WITH_RDMA}"
     )
 
@@ -531,7 +486,6 @@ function build_datasystem()
       "-DDOWNLOAD_UB:BOOL=${DOWNLOAD_UB}"
       "-DUB_URL:STRING=${UB_URL}"
       "-DUB_SHA256:STRING=${UB_SHA256}"
-      "-DURMA_OVER_UB:BOOL=${URMA_OVER_UB}"
     )
   fi
  
@@ -612,7 +566,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:P:T:X:R:D:C:M:x:m:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:P:X:R:D:C:M:x:m:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -694,11 +648,9 @@ function main() {
       check_on_off "${OPTARG}" p
       ENABLE_PERF="${OPTARG}"
       ;;
-    T)
-      parse_thirdparty_versions "${OPTARG}"
-      ;;
     M)
-      parse_urma_options ${OPTARG}
+      check_on_off "${OPTARG}" M
+      BUILD_WITH_URMA="${OPTARG}"
       ;;
 
     D)

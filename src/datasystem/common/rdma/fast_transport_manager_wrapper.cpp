@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/rdma/urma_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
 namespace datasystem {
 bool IsUrmaEnabled()
@@ -26,7 +26,33 @@ bool IsUrmaEnabled()
 #endif
 }
 
-Status InitializeUrmaManager(const HostPort &hostport)
+bool IsUcpEnabled()
+{
+#ifdef USE_RDMA
+    return UcpManager::IsUcpEnabled();
+#else
+    return false;
+#endif
+}
+
+bool IsFastTransportEnabled()
+{
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        return true;
+    }
+#endif
+
+#ifdef USE_RDMA
+    if (UcpManager::IsUcpEnabled()) {
+        return true;
+    }
+#endif
+
+    return false;
+}
+
+Status InitializeFastTransportManager(const HostPort &hostport)
 {
     (void)hostport;
 #ifdef USE_URMA
@@ -34,10 +60,16 @@ Status InitializeUrmaManager(const HostPort &hostport)
         RETURN_IF_NOT_OK(UrmaManager::Instance().Init(hostport));
     }
 #endif
+
+#ifdef USE_RDMA
+    if (UcpManager::IsUcpEnabled()) {
+        RETURN_IF_NOT_OK(UcpManager::Instance().Init());
+    }
+#endif
     return Status::OK();
 }
 
-Status RemoveRemoteUrmaDevice(const HostPort &remoteAddress)
+Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress)
 {
     (void)remoteAddress;
 #ifdef USE_URMA
@@ -45,10 +77,16 @@ Status RemoveRemoteUrmaDevice(const HostPort &remoteAddress)
         RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(remoteAddress));
     }
 #endif
+
+#ifdef USE_RDMA
+    if (UcpManager::IsUcpEnabled()) {
+        RETURN_IF_NOT_OK(UcpManager::Instance().RemoveEndpoint(remoteAddress));
+    }
+#endif
     return Status::OK();
 }
 
-Status RegisterUrmaMemory(void *segAddress, const uint64_t &segSize)
+Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize)
 {
     (void)segAddress;
     (void)segSize;
@@ -58,11 +96,18 @@ Status RegisterUrmaMemory(void *segAddress, const uint64_t &segSize)
         RETURN_IF_NOT_OK(UrmaManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
     }
 #endif
+
+#ifdef USE_RDMA
+    if (UcpManager::IsUcpEnabled() && UcpManager::IsRegisterWholeArenaEnabled() && segAddress != nullptr) {
+        LOG(INFO) << "Doing UCP memory registration of size " << segSize;
+        RETURN_IF_NOT_OK(UcpManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
+    }
+#endif
     return Status::OK();
 }
 
-Status WaitUrmaEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
-                     std::function<Status(Status &)> errorHandler)
+Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
+                              std::function<Status(Status &)> errorHandler)
 {
     (void)keys;
     (void)remainingTime;
@@ -77,6 +122,17 @@ Status WaitUrmaEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> r
         }
     }
 #endif
+
+#ifdef USE_RDMA
+    if (UcpManager::IsUcpEnabled()) {
+        PerfPoint point(PerfKey::RDMA_TOTAL_WAIT_TO_FINISH);
+        for (auto key : keys) {
+            // Wait for the event until timeout
+            Status rc = UcpManager::Instance().WaitToFinish(key, remainingTime());
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(errorHandler(rc), "Failed to wait for RDMA event.");
+        }
+    }
+#endif
     return Status::OK();
 }
 
@@ -87,12 +143,19 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
     (void)memoryAddress;
     (void)segAddress;
     (void)segSize;
-#ifdef USE_URMA
+#if defined(USE_URMA) || defined(USE_RDMA)
     // If we registered the whole arena to RDMA device,
     // then the segment address is the arena address,
     // and the segment size would be the mmaped size.
     // Otherwise the segment is for per object memory.
-    if (UrmaManager::IsRegisterWholeArenaEnabled()) {
+    bool is_register_whole_arena = false;
+
+#if defined(USE_URMA)
+    is_register_whole_arena = UrmaManager::IsRegisterWholeArenaEnabled();
+#elif defined(USE_RDMA)
+    is_register_whole_arena = UcpManager::IsRegisterWholeArenaEnabled();
+#endif
+    if (is_register_whole_arena) {
         segAddress = memoryAddress - shmUnit->GetOffset();
         segSize = shmUnit->GetMmapSize();
     } else {
@@ -119,6 +182,36 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(urmaInfo, localSegAddress, localSegSize,
                                                               localObjectAddress, readOffset, readSize, metaDataSize,
                                                               blocking, keys));
+#endif
+    return Status::OK();
+}
+
+Status FillUcpInfo(uint64_t segAddress, uint64_t dataOffset, const std::string &srcIpAddr, UcpRemoteInfoPb &ucpInfo)
+{
+    (void)segAddress;
+    (void)dataOffset;
+    (void)srcIpAddr;
+    (void)ucpInfo;
+#ifdef USE_RDMA
+    RETURN_IF_NOT_OK(UcpManager::Instance().FillUcpInfoImpl(segAddress, dataOffset, srcIpAddr, ucpInfo));
+#endif
+    return Status::OK();
+}
+
+Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
+                     const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys)
+{
+    (void)ucpInfo;
+    (void)localObjectAddress;
+    (void)readOffset;
+    (void)readSize;
+    (void)metaDataSize;
+    (void)blocking;
+    (void)keys;
+#ifdef USE_RDMA
+    LOG(INFO) << FormatString("[FastTransportWrapper] Doing Ucp Put Payload (Size = %d)", readSize);
+    RETURN_IF_NOT_OK(UcpManager::Instance().UcpPutPayload(ucpInfo, localObjectAddress, readOffset, readSize,
+                                                          metaDataSize, blocking, keys));
 #endif
     return Status::OK();
 }
