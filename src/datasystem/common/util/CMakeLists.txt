@@ -22,7 +22,8 @@ set(UTIL_SRCS
         ssl_authorization.cpp
         meta_route_tool.cpp
         safe_shm_lock.cpp
-        locks.cpp)
+        locks.cpp
+        string_util.cpp)
 
 set(UTIL_LIBS
         ${ZLIB_LIBRARIES}

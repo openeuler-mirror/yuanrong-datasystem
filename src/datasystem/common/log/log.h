@@ -150,7 +150,9 @@ inline const char *SafeStringOutput(const char *s)
 #define DLOG(severity) \
     while (false)      \
     LOG(severity)
-#define DCHECK(condition) ((void)0)
+#define DCHECK(condition) \
+    while (false)         \
+    CHECK(condition)
 #endif
 
 }  // namespace datasystem

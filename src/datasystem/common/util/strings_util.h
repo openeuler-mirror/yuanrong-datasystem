@@ -30,7 +30,6 @@
 #include <vector>
 
 #include <google/protobuf/util/json_util.h>
-#include <re2/re2.h>
 #include <securec.h>
 
 #include "datasystem/common/util/format.h"
@@ -230,32 +229,7 @@ inline size_t StringToUniquePtrChar(const char *src, std::unique_ptr<char[]> &de
  * @param[in] pattern Regular expression of split.
  * @return Vector of strings.
  */
-static std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern)
-{
-    if (typeStr.empty()) {
-        return {};
-    }
-    re2::StringPiece text(typeStr);
-    re2::RE2 re2Pattern(pattern);
-    std::vector<std::string> types;
-    size_t last_pos = 0;
-
-    re2::StringPiece match;
-    while (re2Pattern.Match(text, last_pos, text.size(), RE2::UNANCHORED, &match, 1)) {
-        uint64_t splitIndex = match.data() - text.data();
-        if (match.data() - (text.data() + last_pos) > 0) {
-            types.push_back(std::string(text.data() + last_pos, match.data() - (text.data() + last_pos)));
-        }
-        last_pos = splitIndex + match.size();
-    }
-
-    if (last_pos < text.size()) {
-        types.push_back(std::string(text.data() + last_pos));
-    }
-    std::set<std::string> typeSet(types.begin(), types.end());
-    types.assign(typeSet.begin(), typeSet.end());
-    return types;
-}
+std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern);
 
 /**
  * @brief Clear the string information in the memory.
@@ -417,18 +391,7 @@ inline std::string GetSubStringBeforeField(const std::string &input, const std::
  * @param str The string to be checked.
  * @return True if the string is a valid integer or float number, false otherwise.
  */
-inline bool IsValidNumber(const std::string &str)
-{
-    if (str.empty()) {
-        return false;
-    }
-
-    re2::RE2 pattern(R"(^([-+])?([1-9][0-9]*|[0])(\.[0-9]+)?$)");
-    if (re2::RE2::FullMatch(str, pattern)) {
-        return true;
-    }
-    return false;
-}
+bool IsValidNumber(const std::string &str);
 
 inline const char *BoolToString(bool val)
 {
