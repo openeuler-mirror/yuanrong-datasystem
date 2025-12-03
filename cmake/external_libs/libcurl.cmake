@@ -4,7 +4,7 @@ if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
 else()
   set(curl_URL "https://gitee.com/mirrors/curl/repository/archive/curl-8_8_0.zip")
 endif()
-set(curl_SHA256 "73c70c94f487c5ae26f9f27094249e40bb1667ae6c0406a75c3b11f86f0c1128")
+set(curl_SHA256 "479697e261e6db6ad438d9eaff1b517161a0bc4450e5d195e4478ccdcae673b8")
 
 set(curl_CMAKE_OPTIONS
     -DCMAKE_CXX_STANDARD=11
