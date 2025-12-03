@@ -577,14 +577,18 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
                                                               std::vector<master::CreateMultiMetaReqPb> &reqs,
                                                               std::vector<CreateMeta2PCRes> &respRes)
 {
+    if (masterAddrs.empty()) {
+        return;
+    }
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
     auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMeta2PCRes>> futures;
     Timer timer;
+    CreateMeta2PCRes lastRc;
     for (size_t i = 0; i < masterAddrs.size(); i++) {
         auto &masterAddrInfo = masterAddrs[i];
         auto &req = reqs[i];
-        futures.emplace_back(threadPool_->Submit([this, &masterAddrInfo, &req, timeout, &traceId, &timer] {
+        auto func = [this, &masterAddrInfo, &req, timeout, &traceId, &timer] {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             const auto &masterAddr = masterAddrInfo.GetAddressAndSaveDbName();
             std::shared_ptr<WorkerMasterOCApi> api;
@@ -603,12 +607,19 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
             PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
             rc = RetryCreateMultiMetaWhenMoving(api, req, rsp);
             return CreateMeta2PCRes{ rc, rsp, masterAddrInfo };
-        }));
+        };
+        if (i == masterAddrs.size() - 1) {
+            // using current thread handle the last task.
+            lastRc = func();
+        } else {
+            futures.emplace_back(threadPool_->Submit(std::move(func)));
+        }
     }
 
     for (auto &future : futures) {
         respRes.emplace_back(future.get());
     }
+    respRes.emplace_back(lastRc);
 }
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const ObjGroupMap &objGroup,
@@ -834,8 +845,9 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     respRes.reserve(createReqs.size());
     CreateMultiMetaParallel(addrs, createReqs, respRes);
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_FILL_RSP);
-    CHECK_FAIL_RETURN_STATUS(respRes.size() == createReqs.size(), K_RUNTIME_ERROR,
-                             "The object size and the versions is not equal");
+    CHECK_FAIL_RETURN_STATUS(
+        respRes.size() == createReqs.size(), K_RUNTIME_ERROR,
+        FormatString("The object size(%d) and the versions(%d) is not equal", createReqs.size(), respRes.size()));
 
     for (size_t index = 0; index < respRes.size(); index++) {
         auto &resp = respRes[index].rsp;
@@ -989,6 +1001,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
                          FormatString("Multiple set fails to delete spilled object %s from disk.", keys[i]));
         }
     }
+    PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_ASYNC_NOTIFY);
     threadPool_->Execute([this, keys]() {
         Status rc;
         for (const auto &key : keys) {

@@ -162,7 +162,7 @@ Status ParallelMemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src,
 }
 
 Status MemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src, uint64_t srcSize,
-                  const std::shared_ptr<ThreadPool> &threadPool)
+                  const std::shared_ptr<ThreadPool> &threadPool, uint64_t threshold)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(dst != nullptr && src != nullptr, K_INVALID,
                                          "dst or src pointer cannot be null.");
@@ -171,7 +171,7 @@ Status MemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src, uint64_
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       FormatString("dst size: %d smaller than src size: %d", dstMaxSize, srcSize));
     }
-    if (srcSize > MEMCOPY_PARALLEL_THRESHOLD) {
+    if (threadPool != nullptr && srcSize > threshold) {
         Status rc = Status::OK();
         try {
             rc = ParallelMemoryCopy(dst, dstMaxSize, src, srcSize, threadPool);

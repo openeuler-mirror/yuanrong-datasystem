@@ -1180,6 +1180,7 @@ private:
 
     bool clientEnableP2Ptransfer_ = false;
     int parallismNum_ = 0;
+    uint64_t memcpyParallelThreshold_ = 0;
 };
 }  // namespace object_cache
 }  // namespace datasystem

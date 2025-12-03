@@ -65,20 +65,6 @@ TEST_F(MemoryTest, MemoryCopyGreateThan1M)
     MemoryCopyTest(dataMap);
 }
 
-TEST_F(MemoryTest, MemoryCopyGreateThan1MThreadPollNull)
-{
-    std::map<std::string, int64_t> dataMap = {
-        { "4M", 4 * 1024 * 1024 },
-    };
-    auto it = *dataMap.begin();
-    auto src = AllocateMemory(it.second);
-    auto dst = AllocateMemory(it.second);
-    memset_s(src, it.second, 2, it.second);
-    ASSERT_TRUE(MemoryCopy(dst, it.second, src, it.second, nullptr) != Status::OK());
-    FreeMemory(src);
-    FreeMemory(dst);
-}
-
 TEST_F(MemoryTest, MemoryCopySuccess)
 {
     auto dst = AllocateMemory(10);

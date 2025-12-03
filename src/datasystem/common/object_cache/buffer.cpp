@@ -156,7 +156,7 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
     Status status = ::datasystem::MemoryCopy(dstData, dataSize, static_cast<const uint8_t *>(data), length,
-                                             clientImpl_->memoryCopyThreadPool_);
+                                             clientImpl_->memoryCopyThreadPool_, clientImpl_->memcpyParallelThreshold_);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
                                          FormatString("Copy data to buffer failed, err: %s", status.ToString()));
     return Status::OK();

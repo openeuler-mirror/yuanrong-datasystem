@@ -843,7 +843,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
         }
     }
     point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_ASYN_EXEC);
-    ExecuteAsyncTask([this, objsFirst]() {
+    ExecuteAsyncTask([this, objsFirst = std::move(objsFirst)]() {
         for (const auto &objKey : objsFirst) {
             std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
             TbbMetaTable::const_accessor accessor;

@@ -102,12 +102,16 @@ public:
         auto task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
         static_assert(std::is_void<RetType>::value, "Return value type must be void!");
 
-        std::unique_lock<std::mutex> lock(mtx_);
-        if (shutDown_) {
-            throw std::runtime_error("Submit after Shutdown Error.");
+        {
+            std::unique_lock<std::mutex> lock(mtx_);
+            if (shutDown_) {
+                throw std::runtime_error("Submit after Shutdown Error.");
+            }
+            taskQ_.emplace(std::move(task));
+            TryToAddThreadIfNeeded();
         }
-        taskQ_.emplace(std::move(task));
-        TryToAddThreadIfNeeded();
+        // Here, impossible to be empty; so no dead wait occurs.
+        // Thus, safe to unprotected by lock(mtx_).
         proceedCV_.notify_one();
     }
 
