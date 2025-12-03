@@ -27,7 +27,8 @@ DS_DEFINE_uint32(rolling_update_timeout_s, 1800,
 namespace datasystem {
 namespace worker {
 void GenerateHashRingUuidMap(const HashRingPb &ringInfo, std::map<std::string, HostPort> &workerUuid2AddrMap,
-                             std::map<std::string, std::string> &workerAddr2UuidMap)
+                             std::map<std::string, std::string> &workerAddr2UuidMap,
+                             std::map<std::string, HostPort> &relatedWorkerMap)
 {
     workerUuid2AddrMap.clear();
     workerAddr2UuidMap.clear();
@@ -44,7 +45,10 @@ void GenerateHashRingUuidMap(const HashRingPb &ringInfo, std::map<std::string, H
         if (kv.second.worker_uuid().empty()) {
             continue;
         }
-        workerUuid2AddrMap[kv.second.worker_uuid()] = workerHostPort;
+        if (ringInfo.update_worker_map().find(kv.first) == ringInfo.update_worker_map().end()) {
+            workerUuid2AddrMap[kv.second.worker_uuid()] = workerHostPort;
+        }
+        relatedWorkerMap[kv.second.worker_uuid()] = workerHostPort;
         workerAddr2UuidMap[workerAddr] = kv.second.worker_uuid();
     }
 }

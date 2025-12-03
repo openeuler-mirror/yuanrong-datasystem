@@ -53,11 +53,13 @@ namespace worker {
 /**
  * @brief Generate the maps between workerUuid and workerAddr.
  * @param[in] ringInfo The ring
- * @param[out] workerUuid2AddrMap The {workerUuid, workerAddr} map of input ringInfo
+ * @param[out] workerUuid2AddrMap The {workerUuid, workerAddr} map of input ringInfo for route
  * @param[out] workerAddr2UuidMap The {workerAddr, workerUuid} map of input ringInfo
+ * @param[out] workerAddr2UuidMap The {workerAddr, workerUuid} map of input ringInfo for relation
  */
 void GenerateHashRingUuidMap(const HashRingPb &ringInfo, std::map<std::string, HostPort> &workerUuid2AddrMap,
-                             std::map<std::string, std::string> &workerAddr2UuidMap);
+                             std::map<std::string, std::string> &workerAddr2UuidMap,
+                             std::map<std::string, HostPort> &relatedWorkerMap);
 
 /**
  * @brief Get the worker address of specific workerUuid for addressing.

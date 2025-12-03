@@ -264,8 +264,6 @@ Status HashRing::InitRing(const std::string &oldValue, std::unique_ptr<std::stri
         // If the reusedUuid is not empty, set the workerPb uuid after the uuid metadata is migrated back.
         if (reusedUuid.empty()) {
             workerPb.set_worker_uuid(workerUuid_);
-        } else {
-            isUpdateNode_ = true;
         }
         workerPb.set_state(WorkerPb::INITIAL);
         (void)newRing.mutable_workers()->insert({ workerAddr_, workerPb });
@@ -1180,7 +1178,6 @@ void HashRing::UpdateLocalState(bool forceUpdate)
 
     auto stateInEtcd = iter->second.state();
     if (stateInEtcd == WorkerPb::ACTIVE) {
-        isUpdateNode_ = false;
         ChangeStateTo(RUNNING);
     } else if (stateInEtcd == WorkerPb::LEAVING) {
         ChangeStateTo(PRE_LEAVING);
@@ -1203,6 +1200,7 @@ void HashRing::UpdateTokenMap()
     decltype(tokenMap_) tmpTokenMap;
     decltype(workerUuidHashMap_) tmpWorkerUuidHashMap;
     decltype(workerUuid2AddrMap_) tmpWorkerId2AddrMap;
+    decltype(relatedWorkerMap_) tmpRelatedWorkerMap;
     decltype(workerAddr2UuidMap_) tmpAddrToWorkerIdMap;
 
     // 1. regenerate
@@ -1220,7 +1218,7 @@ void HashRing::UpdateTokenMap()
         uint32_t hash = hashFunction_(kv.second.worker_uuid());
         tmpWorkerUuidHashMap.insert({ hash, workerId });
     }
-    GenerateHashRingUuidMap(ringInfo_, tmpWorkerId2AddrMap, tmpAddrToWorkerIdMap);
+    GenerateHashRingUuidMap(ringInfo_, tmpWorkerId2AddrMap, tmpAddrToWorkerIdMap, tmpRelatedWorkerMap);
 
     // 2. assign if modify
     std::stringstream log;
@@ -1233,10 +1231,13 @@ void HashRing::UpdateTokenMap()
         workerUuidHashMap_ = std::move(tmpWorkerUuidHashMap);
         log << "Update workerid hash map to size: " << workerUuidHashMap_.size() << ". ";
     }
-    if (tmpAddrToWorkerIdMap != workerAddr2UuidMap_ || tmpWorkerId2AddrMap != workerUuid2AddrMap_) {
+    if (tmpAddrToWorkerIdMap != workerAddr2UuidMap_ || tmpWorkerId2AddrMap != workerUuid2AddrMap_
+        || tmpRelatedWorkerMap != relatedWorkerMap_) {
         workerAddr2UuidMap_ = std::move(tmpAddrToWorkerIdMap);
         workerUuid2AddrMap_ = std::move(tmpWorkerId2AddrMap);
-        log << "Update {workerAddr, workerId} map to size: " << workerAddr2UuidMap_.size() << ". ";
+        relatedWorkerMap_ = std::move(tmpRelatedWorkerMap);
+        log << "Update {workerAddr, workerId} map to size: " << workerAddr2UuidMap_.size() << ". "
+            << "Update {workerId, workerAddr} map for route to size:" << workerUuid2AddrMap_.size() << ". ";
     }
     // 3. print log
     if (log.rdbuf()->in_avail() > 0) {
@@ -1775,18 +1776,18 @@ Status HashRing::GetRelatedWorkerImpl(const std::string &currWorkerUuid,
                                       std::string &outWorkerUuid, std::string &outWorkerAddr)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    CHECK_FAIL_RETURN_STATUS(workerUuid2AddrMap_.size() >= 1, K_NOT_FOUND, "Insufficient number of workers.");
+    CHECK_FAIL_RETURN_STATUS(relatedWorkerMap_.size() >= 1, K_NOT_FOUND, "Insufficient number of workers.");
     // If the uuid is empty, it means that the metadata has been migrated and the data has not yet been migrated. Select
     // the first available node.
-    auto iter = currWorkerUuid.empty() ? workerUuid2AddrMap_.begin() : workerUuid2AddrMap_.find(currWorkerUuid);
+    auto iter = currWorkerUuid.empty() ? relatedWorkerMap_.begin() : relatedWorkerMap_.find(currWorkerUuid);
     // current worker must exists.
-    if (iter == workerUuid2AddrMap_.end()) {
+    if (iter == relatedWorkerMap_.end()) {
         return Status(K_NOT_FOUND, FormatString("The worker %s not found on the ring.", currWorkerUuid));
     }
 
-    for (size_t i = 0; i <= workerUuid2AddrMap_.size(); i++) {
-        iter = getNextNode ? LoopNext(workerUuid2AddrMap_, iter) : LoopPrev(workerUuid2AddrMap_, iter);
-        if (iter == workerUuid2AddrMap_.end()) {
+    for (size_t i = 0; i <= relatedWorkerMap_.size(); i++) {
+        iter = getNextNode ? LoopNext(relatedWorkerMap_, iter) : LoopPrev(relatedWorkerMap_, iter);
+        if (iter == relatedWorkerMap_.end()) {
             continue;
         }
         // 1. check exists in hash ring.
@@ -1810,23 +1811,6 @@ Status HashRing::GetRelatedWorkerImpl(const std::string &currWorkerUuid,
     }
     return Status(K_NOT_FOUND, FormatString("The %s node of worker %s not found on the ring.",
                                             (getNextNode ? "next" : "prev"), currWorkerUuid));
-}
-
-bool HashRing::CheckIsLocalNodeIsUpdate()
-{
-    if (!isUpdateNode_.load()) {
-        return false;
-    }
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    auto worker = ringInfo_.workers().find(workerAddr_);
-    if (worker != ringInfo_.workers().end()
-        && ringInfo_.update_worker_map().find(workerAddr_) != ringInfo_.update_worker_map().end()) {
-        if ((worker->second.state() == WorkerPb::INITIAL && worker->second.worker_uuid().empty())
-            || worker->second.state() == WorkerPb::JOINING) {
-            return true;
-        }
-    }
-    return false;
 }
 
 Status HashRing::GetNextWorker(const std::string &currWorkerUuid, std::string &nextWorkerUuid)

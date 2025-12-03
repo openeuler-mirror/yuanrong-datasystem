@@ -212,12 +212,6 @@ public:
     Status GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAddrs);
 
     /**
-     * @brief Check local node is update node.
-     * @return true if local node is update node.
-     */
-    bool CheckIsLocalNodeIsUpdate(std::string &localAddr);
-
-    /**
      * @brief Returns all of the currently tracked nodes
      * @param[out] nodeAddrs HostPort address of all the nodes
      * @return Status of the call

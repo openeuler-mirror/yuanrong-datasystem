@@ -124,9 +124,8 @@ Status ReadHashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_
         }
     }
 
-    GenerateHashRingUuidMap(newRing, workerUuid2AddrMap_, workerAddr2UuidMap_);
+    GenerateHashRingUuidMap(newRing, workerUuid2AddrMap_, workerAddr2UuidMap_, relatedWorkerMap_);
     HashRing::UpdateTokenMap();
-    VLOG(1) << "The size of workerUuid2AddrMap_ is: " << workerUuid2AddrMap_.size();
     return Status::OK();
 }
 
