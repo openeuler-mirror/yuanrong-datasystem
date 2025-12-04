@@ -51,7 +51,7 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | datasize | 16 | 记录Publish请求接收到的Payload大小。 |
 | request param | 2560 | 记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。 |
 | response param | 1024 | 记录该请求的响应信息。最大长度为1024 Byte，超出则截断。 |
-| shm_info | 47 | 记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %. | 
+| shm_info | 47 | 记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %. | 
 | spill_disk_info | 47 | 记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>1) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>2) physicalSpaceUsage	已使用的物理磁盘大小。<br>3) totalLimit	Spill磁盘总大小。<br>4) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %. | 
 | client nums | 5 | 记录已和worker成功建立连接的Client数。最大值为10000. | 
 | object nums | 9 | 记录worker已缓存对象数。按照1亿对象限制数量。| 

@@ -383,7 +383,7 @@ TEST_F(KVClientVoluntaryScaleDownTest, StartKeyWithWorkerUuid)
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "MigrateByRanges.Delay", "sleep(3000)"));
     }
     VoluntaryScaleDownInject(0);
-    InitTestKVClient(1, client1_, 10000);  // Init client1 to worker 1 with 10000ms timeout
+    InitTestKVClient(1, client1_, 3000);  // Init client1 to worker 1 with 3000ms timeout
     bool stop = false;
     std::thread t1([&stop, &key, &data, this] {
         while (!stop) {
@@ -403,6 +403,35 @@ TEST_F(KVClientVoluntaryScaleDownTest, StartKeyWithWorkerUuid)
     WaitAllNodesJoinIntoHashRing(DEFAULT_WORKER_NUM);
     stop = true;
     t1.join();
+}
+
+TEST_F(KVClientVoluntaryScaleDownTest, SetKeyWithWorkerUuid)
+{
+    InitTestKVClient(0, client0_, 3000);  // Init client1 to worker 1 with 3000ms timeout
+    auto key = client0_->GenerateKey();
+    std::string data = "aaaaaaaaaa";
+    DS_ASSERT_OK(client2_->Set(key, data));
+    for (size_t i = 1; i < DEFAULT_WORKER_NUM; i++) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "MigrateByRanges.Delay", "sleep(5000)"));
+    }
+    VoluntaryScaleDownInject(0);
+    InitTestKVClient(1, client1_, 3000);  // Init client1 to worker 1 with 3000ms timeout
+    WaitAllNodesJoinIntoHashRing(3);  // The number of worker is 3
+    AssertWorkerNum(3);  // The number of worker is 3
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client0_, 3000);  // Init client1 to worker 1 with 3000ms timeout
+    bool stop = false;
+    std::thread t2([&stop, &key, &data, this] {
+        while (!stop) {
+            auto key = client0_->GenerateKey();
+            std::string data = "aaaaaaaaaa";
+            DS_ASSERT_OK(client2_->Set(key, data));
+        }
+    });
+    WaitAllNodesJoinIntoHashRing(DEFAULT_WORKER_NUM);
+    stop = true;
+    t2.join();
 }
 
 TEST_F(KVClientVoluntaryScaleDownTest, LEVEL2_TestNotRemoveFailedWorkerWhenRestart)

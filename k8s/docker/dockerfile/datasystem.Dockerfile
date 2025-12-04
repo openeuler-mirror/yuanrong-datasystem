@@ -28,6 +28,7 @@ ARG TARGET_SYSTEM
 ARG ARCHITECTURE
 
 RUN sed -i 's|repo.openeuler.org|mirrors.huaweicloud.com/openeuler|g' /etc/yum.repos.d/*.repo
+RUN sed -i '/^metalink=/d' /etc/yum.repos.d/*.repo
 
 RUN dnf clean all && \
     dnf makecache && \
@@ -66,7 +67,7 @@ RUN chmod -R 500 ${DATASYSTEM_ROOT}/bin && \
     chmod 400 ${DATASYSTEM_ROOT}/lib/*
 
 RUN if [ -f /etc/sudoers ]; then \
-        sed -i "s|%wheel|#%wheel|g" "/etc/sudoers"; \
+    sed -i "s|%wheel|#%wheel|g" "/etc/sudoers"; \
     fi
 
 USER ${USER_UID}

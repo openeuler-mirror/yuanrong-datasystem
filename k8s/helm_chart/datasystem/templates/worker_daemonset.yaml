@@ -259,6 +259,12 @@ spec:
           terminationGracePeriodSeconds: {{ $.Values.global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds }}
           {{- end }}
         env:
+          - name: POD_MEMORY_LIMIT_MB
+            valueFrom:
+              resourceFieldRef:
+                containerName: {{ $spec.name }}
+                resource: limits.memory
+                divisor: 1Mi
           - name: POD_NAME
             valueFrom:
               fieldRef:

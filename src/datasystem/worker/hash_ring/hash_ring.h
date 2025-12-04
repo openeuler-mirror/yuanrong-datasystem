@@ -111,12 +111,6 @@ public:
     bool IsLeaving(const std::string &workerAddr);
 
     /**
-     * @brief Check local node is update node.
-     * @return true if local node is update node.
-     */
-    bool CheckIsLocalNodeIsUpdate();
-
-    /**
      * @brief Return true if the hash ring is in RUNNING or PRE_RUNNING or PRE_LEAVING state.
      * @return Return true if the hash ring is in RUNNING or PRE_RUNNING or PRE_LEAVING state.
      */
@@ -782,13 +776,14 @@ protected:
     std::atomic<int64_t> baselineModRevisionOfRing_{ 0 };
     int64_t currHashRingVersion_ = 0;
     std::atomic<bool> needForceJoin_{ false };
-    std::atomic<bool> isUpdateNode_{ false };
+
     mutable std::shared_timed_mutex mutex_;  // protect the following variables
     HashRingPb ringInfo_;
     using WorkerAddr = std::string;
     std::map<HashPosition, WorkerAddr> tokenMap_;
     std::map<HashPosition, WorkerAddr> workerUuidHashMap_;
-    std::map<std::string, HostPort> workerUuid2AddrMap_;
+    std::map<std::string, HostPort> workerUuid2AddrMap_; // for route master
+    std::map<std::string, HostPort> relatedWorkerMap_; // for get related worker
     std::map<WorkerAddr, std::string> workerAddr2UuidMap_;
 
     mutable std::mutex hashRangeMutex_;  // for hash range

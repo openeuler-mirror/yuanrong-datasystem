@@ -153,13 +153,6 @@ protected:
             redirect = false;
             return;
         }
-        std::string localAddr;
-        if (etcdCM_->CheckIsLocalNodeIsUpdate(localAddr)) {
-            response.set_meta_is_moving(true);
-            RedirectMetaInfo *info = response.mutable_info();
-            info->set_redirect_meta_address(localAddr);
-            return;
-        }
         CheckNeedToRedirectOrNot(id, redirect, newMetaAddr);
         INJECT_POINT("redirect.create.update.copy.meta", [&newMetaAddr, &redirect](std::string addr) {
             newMetaAddr = addr;
@@ -193,13 +186,6 @@ protected:
     {
         if (!redirect || !FLAGS_enable_redirect) {
             redirect = false;
-            return;
-        }
-        std::string localAddr;
-        if (etcdCM_->CheckIsLocalNodeIsUpdate(localAddr)) {
-            rsp.set_meta_is_moving(true);
-            RedirectMetaInfo *info = rsp.add_info();
-            info->set_redirect_meta_address(localAddr);
             return;
         }
         std::unordered_map<std::string, std::vector<std::string>> redirectQueryObjKeys;

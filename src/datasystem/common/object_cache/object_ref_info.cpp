@@ -45,16 +45,27 @@ Status SharedMemoryRefTable::GetShmUnit(const ShmKey &shmId, std::shared_ptr<Shm
     return Status::OK();
 }
 
+void SharedMemoryRefTable::ClientTableGetOrInsert(const ClientKey &clientId,
+                                                  TbbMemoryClientRefTable::const_accessor &accessor)
+{
+    // return read lock until the end of scope.
+    while (!clientRefTable_.find(accessor, clientId)) {
+        TbbMemoryClientRefTable::accessor writeAccessor;
+        // Add write lock to avoid multiple insertions.
+        if (clientRefTable_.insert(writeAccessor, clientId)) {
+            auto clientInfo = std::make_shared<ObjectRefInfo<ShmKey>>();
+            writeAccessor->second = std::move(clientInfo);
+        }
+    }
+}
+
 void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit)
 {
     const auto &shmId = shmUnit->GetId();
-    TbbMemoryClientRefTable::accessor clientAccessor;
+    TbbMemoryClientRefTable::const_accessor clientAccessor;
     TbbMemoryObjectRefTable::accessor objectAccessor;
 
-    if (!clientRefTable_.find(clientAccessor, clientId)) {
-        auto clientInfo = std::make_shared<ObjectRefInfo<ShmKey>>();
-        clientRefTable_.emplace(clientAccessor, clientId, std::move(clientInfo));
-    }
+    ClientTableGetOrInsert(clientId, clientAccessor);
     if (clientAccessor->second->AddRef(shmId)) {
         shmUnit->IncrementRefCount();
     }
@@ -72,14 +83,12 @@ void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr
     VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
 }
 
-void SharedMemoryRefTable::AddShmUnits(const ClientKey &clientId, std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
+
+void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
+                                       std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
 {
-    TbbMemoryClientRefTable::accessor clientAccessor;
-    if (!clientRefTable_.find(clientAccessor, clientId)) {
-        auto clientInfo = std::make_shared<ObjectRefInfo<ShmKey>>();
-        clientRefTable_.emplace(clientAccessor, clientId, std::move(clientInfo));
-    }
     TbbMemoryObjectRefTable::accessor objectAccessor;
+    const ClientKey &clientId = clientAccessor->first;
     for (auto &shmUnit : shmUnits) {
         if (shmUnit == nullptr) {
             continue;

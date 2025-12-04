@@ -137,6 +137,8 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
     std::vector<Status> results(objectSize);
 
     point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_GET_SHM_UNITS);
+    TbbMemoryClientRefTable::const_accessor clientAccessor;
+    memoryRefTable_->ClientTableGetOrInsert(ClientKey::Intern(req.client_id()), clientAccessor);
     auto createMeta = [&] (int start, int end) {
         std::vector<std::shared_ptr<ShmUnit>> shmUnits(end - start + 1);
         for (int i = start, j = 0; i < end; i++, j++) {
@@ -178,7 +180,8 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             subRsp[i].set_metadata_size(metadataSize);
         }
         PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ADD_SHM_UNITS);
-        memoryRefTable_->AddShmUnits(ClientKey::Intern(req.client_id()), shmUnits);
+
+        memoryRefTable_->AddShmUnits(clientAccessor, shmUnits);
         return Status::OK();
     };
 

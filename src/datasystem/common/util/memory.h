@@ -76,10 +76,11 @@ Status ParallelMemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src,
  * @param[in] src The source address.
  * @param[in] srcSize The length of source buffer.
  * @param[in] threadPool The thread pool.
+ * @param[in] threshold The threshold of parallel memory copy.
  * @return Status of the call.
  */
 Status MemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src, uint64_t srcSize,
-                  const std::shared_ptr<ThreadPool> &threadPool);
+                  const std::shared_ptr<ThreadPool> &threadPool, uint64_t threshold = MEMCOPY_PARALLEL_THRESHOLD);
 
 /**
  * @brief This is a common function which is used to copy huge memory blocks by chunks.

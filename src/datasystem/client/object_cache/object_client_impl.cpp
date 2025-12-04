@@ -78,6 +78,8 @@ const std::string K_SEPARATOR = "$";
 const std::string CLIENT_PARALLEL_THREAD_MIN_NUM_ENV = "CLIENT_PARALLEL_THREAD_MIN_NUM";
 const std::string CLIENT_PARALLEL_THREAD_MAX_NUM_ENV = "CLIENT_PARALLEL_THREAD_MAX_NUM";
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM";
+const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
+const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 
 namespace datasystem {
 inline void ReadFromEnv(std::string &param, std::string env)
@@ -221,7 +223,6 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
                                           enableCrossNodeConnection_, enableExclusiveConnection_);
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(timeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
-    memoryCopyThreadPool_ = std::make_shared<ThreadPool>(0, GetRecommendedMemoryCopyThreadsNum());
     const size_t threadCount = 8;
     asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
     asyncGetCopyPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_copy");
@@ -268,6 +269,16 @@ void ObjectClientImpl::InitParallelFor()
         }
         return result;
     };
+
+    int threadNum = -1;
+    threadNum = getEnvInt(CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV, threadNum);
+    if (threadNum == -1) {
+        memoryCopyThreadPool_ = std::make_shared<ThreadPool>(0, GetRecommendedMemoryCopyThreadsNum());
+    } else if (threadNum > 0) {
+        memoryCopyThreadPool_ = std::make_shared<ThreadPool>(threadNum);
+    }
+    memcpyParallelThreshold_ = getEnvInt(CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV, MEMCOPY_PARALLEL_THRESHOLD);
+
     parallismNum_ = getEnvInt(CLIENT_MEMORY_COPY_THREAD_NUM_ENV, defaultThreadNum);
     int minThreadNum = getEnvInt(CLIENT_PARALLEL_THREAD_MIN_NUM_ENV, defaultThreadNum);
     minThreadNum = minThreadNum < parallismNum_ ? parallismNum_ : minThreadNum;
