@@ -74,3 +74,4 @@ openYuanrong datasystem 的部署视图如上图所示：
   development-guide/index.md
   contributor_guide/contribution.md
   appendix/index.md
+  FAQ/clusterFAQ.md
