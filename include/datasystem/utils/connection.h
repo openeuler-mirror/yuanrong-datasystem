@@ -41,7 +41,7 @@ struct ConnectOptions {
     SensitiveValue secretKey = "";
     std::string tenantId = "";
     bool enableCrossNodeConnection = false;
-    bool enableExclusiveConnection = true;
+    bool enableExclusiveConnection = false;
 };
 }  // namespace datasystem
 
