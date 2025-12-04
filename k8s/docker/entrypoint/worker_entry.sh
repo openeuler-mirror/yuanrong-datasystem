@@ -22,7 +22,28 @@ if [ -n "${WORKER_LOG_DIR}" ] && [ ! -d "${WORKER_LOG_DIR}" ]; then
     mkdir -p ${WORKER_LOG_DIR}
 fi
 
-POD_MEMORY_MB=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes | awk '{print int($1/1024/1024)}')
+if [ -n "${POD_MEMORY_LIMIT_MB}" ]; then
+    POD_MEMORY_MB="${POD_MEMORY_LIMIT_MB}"
+    ilog "Using memory limit from env: ${POD_MEMORY_MB} MB"
+else
+    if [ -f "/sys/fs/cgroup/memory/memory.limit_in_bytes" ]; then
+        POD_MEMORY_MB=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes | awk '{print int($1/1024/1024)}')
+        ilog "Using cgroup v1 memory limit: ${POD_MEMORY_MB} MB"
+    elif [ -f "/sys/fs/cgroup/memory.max" ]; then
+        MEMORY_MAX=$(cat /sys/fs/cgroup/memory.max)
+        if [[ "$MEMORY_MAX" == "max" ]]; then
+            POD_MEMORY_MB=8192
+            ilog "No memory limit set (cgroup v2), using default: ${POD_MEMORY_MB} MB"
+        else
+            POD_MEMORY_MB=$(echo "$MEMORY_MAX" | awk '{print int($1/1024/1024)}')
+            ilog "Using cgroup v2 memory limit: ${POD_MEMORY_MB} MB"
+        fi
+    else
+        elog "ERROR: Cannot determine memory limit. Set POD_MEMORY_LIMIT_MB env variable." >&2
+        exit 1
+    fi
+fi
+
 ilog "check pod memory limit"
 if [[ "${SHARE_MEMORY_SIZE}" -gt "${POD_MEMORY_MB}" ]]; then
     elog "The pod memory (resources.datasystemWorker.limits.memory) is less than\
