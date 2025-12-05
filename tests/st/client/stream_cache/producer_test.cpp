@@ -2937,10 +2937,10 @@ TEST_F(ProducerTest, TestDuplicatedBlockedCreateRequest)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetBlockedCreateRequest.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ClientWorkerSCServiceImpl.HandleBlockedCreateTimeout.sleep",
                                            "sleep(10000)"));
-    DS_ASSERT_OK(inject::Set("client.CreateWritePage", "call()"));  // rpc timeout = timeout below
+    DS_ASSERT_OK(inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs", "call(10)"));
     DS_ASSERT_NOT_OK(producer->Send(element, 10));                  // Timer with less than 10ms
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetBlockedCreateRequest.sleep"));
-    DS_ASSERT_OK(inject::Clear("client.CreateWritePage"));
+    DS_ASSERT_OK(inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs", "call(60000)"));
 
     // Add new BlockedCreateRequest to unordered map, there should be a one exist already for the same producer.
     DS_ASSERT_OK(producer->Send(element, 10));  // Timer with less than 10ms
@@ -2982,10 +2982,9 @@ TEST_F(ProducerTest, TestDuplicatedBlockedCreateRequestOutOfOrder)
     // Client rpc timeout.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UnblockCreators.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "StreamManager.AddBlockCreateRequest.sleep", "sleep(5000)"));
-    DS_ASSERT_OK(inject::Set("client.CreateWritePage", "call()"));  // rpc timeout = timeout below
+    DS_ASSERT_OK(inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs", "call(10)"));
     DS_ASSERT_NOT_OK(producer->Send(element, 10));                  // Timer with less than 10ms
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "StreamManager.AddBlockCreateRequest.sleep"));
-    DS_ASSERT_OK(inject::Clear("client.CreateWritePage"));
+    DS_ASSERT_OK(inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs", "call(60000)"));
 
     // Worker Thread B received CreateSgmPage request B, created and added a new BlockedCreateRequest into blockedList.
     // Worker Thread B stuck at getting the BlockedCreateRequest B out from the blockedList.
@@ -3049,10 +3048,10 @@ TEST_F(ProducerNoKeysTest, TestDuplicatedBlockedCreateRequestNoSignature)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetBlockedCreateRequest.sleep", "sleep(10000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ClientWorkerSCServiceImpl.HandleBlockedCreateTimeout.sleep",
                                            "sleep(10000)"));
-    DS_ASSERT_OK(inject::Set("client.CreateWritePage", "call()"));  // rpc timeout = timeout below
+    DS_ASSERT_OK(inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs", "call(10)"));
     DS_ASSERT_NOT_OK(producer->Send(element, 10));                  // Timer with less than 10ms
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetBlockedCreateRequest.sleep"));
-    DS_ASSERT_OK(inject::Clear("client.CreateWritePage"));
+    DS_ASSERT_OK(inject::Set("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs", "call(60000)"));
 
     // Add new BlockedCreateRequest to unordered map, there should be a one exist already for the same producer.
     DS_ASSERT_OK(producer->Send(element, 10));  // Timer with less than 10ms

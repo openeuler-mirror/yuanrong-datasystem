@@ -143,14 +143,16 @@ public:
 
 private:
     friend class ProducerConsumerWorkerApi;
+
     /**
      * @brief To check and reset the timeout of receive.
      * @param[in] requestedTimeout The client specified timeout value for time spent in the system.
-     * @param[out] rpcTimeout The timeout used for RPC.
-     * @param[out] adjustedTimeout The timeout used in worker.
-     * @return Status of the call.
+     * @param[in] defaultRpcTimeout This is the allowed timeout for this RPC. If 'requestedTimeout' is configured, the
+     * final RPC timeout will be longer than this value.
+     * @return <rpcTimeout, adjustedTimeout>. 'rpcTimeout' is the timeout used for RPC, and 'adjustedTimeout' is the
+     * timeout used in worker.
      */
-    Status SetRpcTimeout(int64_t &requestedTimeout, int32_t &rpcTimeout, int64_t &adjustedTimeout);
+    std::pair<int32_t, int32_t> GetRpcTimeout(int64_t requestedTimeout, int32_t defaultRpcTimeout);
 
     std::unique_ptr<ClientWorkerSCService_Stub> rpcSession_;
 };

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
@@ -1036,6 +1037,8 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         if (timeout > 0) {
             int64_t elapsed = timer.ElapsedMilliSecond();
+            INJECT_POINT_NO_RETURN("ZmqService::RouteToRegBackend",
+                                   [&elapsed](int64_t inElapsed) { elapsed = inElapsed; });
             reqTimeoutDuration.Init(timeout - elapsed);
             scTimeoutDuration.Init(timeout - elapsed);
         } else {

@@ -22,6 +22,7 @@
 #include <memory>
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -31,26 +32,30 @@ namespace client {
 namespace stream_cache {
 ProducerConsumerWorkerApi::ProducerConsumerWorkerApi(const std::string tenantId,
                                                      std::shared_ptr<ClientWorkerApi> workerApi)
-    : tenantId_(tenantId), workerApi_(workerApi){};
+    : tenantId_(tenantId), workerApi_(std::move(workerApi)){};
 
 Status ProducerConsumerWorkerApi::GetDataPage(GetDataPageReqPb &req, ShmView &outPage)
 {
     int64_t timeoutMs = req.timeout_ms();
-    // Compute the rpc timeout and pass in the adjustedTimeout that the worker will use for blocking/waiting.
-    // The adjustedTimeout will be slightly smaller than the regular outer rpc timeout.
-    int32_t rpcTimeout;
-    int64_t adjustedTimeout;
-    RETURN_IF_NOT_OK(workerApi_->SetRpcTimeout(timeoutMs, rpcTimeout, adjustedTimeout));
-    RpcOptions opts;
-    opts.SetTimeout(rpcTimeout);
-    req.set_timeout_ms(adjustedTimeout);
-
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     req.set_client_id(workerApi_->GetClientId());
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
     GetDataPageRspPb rsp;
-
-    RETURN_IF_NOT_OK(workerApi_->rpcSession_->GetDataPage(opts, req, rsp));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        RetryOnError(
+            workerApi_->rpcTimeoutMs_,
+            [this, &req, &rsp, timeoutMs](int32_t currDefaultRpcTimeout) {
+                auto pair = workerApi_->GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
+                RpcOptions opts;
+                opts.SetTimeout(pair.first);
+                reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(opts.GetTimeout()));
+                req.set_timeout_ms(pair.second);
+                RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
+                return workerApi_->rpcSession_->GetDataPage(opts, req, rsp);
+            },
+            []() { return Status::OK(); }, retryCode_),
+        FormatString("[%s, S:%s, C:%s] Get data page failed", workerApi_->LogPrefix(), req.stream_name(),
+                     req.consumer_id()));
     outPage.off = static_cast<ptrdiff_t>(rsp.page_view().offset());
     outPage.sz = rsp.page_view().size();
     outPage.mmapSz = rsp.page_view().mmap_size();
@@ -68,33 +73,33 @@ Status ProducerConsumerWorkerApi::AllocBigElementMemory(const std::string &strea
     req.set_page_size(sizeNeeded);
     req.set_client_id(workerApi_->GetClientId());
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-
     CreateLobPageRspPb rsp;
-    RpcOptions opts;
-    int32_t rpcTimeout;
-    int64_t adjustedTimeout;
-    RETURN_IF_NOT_OK(workerApi_->SetRpcTimeout(timeoutMs, rpcTimeout, adjustedTimeout));
-    opts.SetTimeout(rpcTimeout);
-    req.set_sub_timeout(adjustedTimeout);
-    std::unordered_set<StatusCode> retryCode = { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_UNAVAILABLE,
-                                                 StatusCode::K_RPC_DEADLINE_EXCEEDED };
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_WRITE_PAGE);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RetryOnError(adjustedTimeout,
-        [this, &opts, &req, &rsp](int32_t) {
-            // Set timestamp for worker to determine request order
-            req.set_timestamp(GetSystemClockTimeStampUs());
-            RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
-            return workerApi_->rpcSession_->AllocBigShmMemory(opts, req, rsp);
-        },
-        []() { return Status::OK(); }, retryCode),
-        FormatString("[%s] Client create big element page failed", producerId));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        RetryOnError(
+            workerApi_->rpcTimeoutMs_,
+            [this, &req, &rsp, timeoutMs](int32_t currDefaultRpcTimeout) {
+                auto pair = workerApi_->GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
+                RpcOptions opts;
+                opts.SetTimeout(pair.first);
+                reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(opts.GetTimeout()));
+                req.set_sub_timeout(pair.second);
+                // Even without AKSK authentication, this field should still be set in this scenario because worker
+                // relies on this field to determine the order of requests.
+                req.set_timestamp(GetSystemClockTimeStampUs());
+                RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
+                return workerApi_->rpcSession_->AllocBigShmMemory(opts, req, rsp);
+            },
+            []() { return Status::OK(); }, retryCode_),
+        FormatString("[%s, S:%s, P:%s] Create big element page failed", workerApi_->LogPrefix(), streamName,
+                     producerId));
     point.Record();
     outView.off = static_cast<ptrdiff_t>(rsp.page_view().offset());
     outView.sz = rsp.page_view().size();
     outView.mmapSz = rsp.page_view().mmap_size();
     outView.fd = rsp.page_view().fd();
     LOG(INFO) << FormatString("[%s, S:%s, P:%s] Client created big element page success. ShmView %s",
-        workerApi_->LogPrefix(), streamName, producerId, outView.ToStr());
+                              workerApi_->LogPrefix(), streamName, producerId, outView.ToStr());
     return Status::OK();
 }
 
@@ -116,9 +121,12 @@ Status ProducerConsumerWorkerApi::ReleaseBigElementMemory(const std::string &str
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
     ReleaseLobPageRspPb rsp;
     INJECT_POINT("ProducerConsumerWorkerApi.ReleaseBigElementMemory.preReleaseBigShmMemory");
+    // Fixme: In this scenario, we don't even care about the timeout, but we still need to set this thread_local
+    // variable.
+    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(RpcOptions().GetTimeout()));
     RETURN_IF_NOT_OK(workerApi_->rpcSession_->ReleaseBigShmMemory(req, rsp));
     LOG(INFO) << FormatString("[%s, S:%s, P:%s] Client release big element page success. ShmView %s",
-        workerApi_->LogPrefix(), streamName, producerId, pageView.ToStr());
+                              workerApi_->LogPrefix(), streamName, producerId, pageView.ToStr());
     return Status::OK();
 }
 
@@ -127,26 +135,10 @@ Status ProducerConsumerWorkerApi::CreateWritePage(const std::string &streamName,
 {
     CreateShmPageReqPb req;
     CreateShmPageRspPb rsp;
-
-    // Compute the rpc timeout and pass in the adjustedTimeout that the worker will use for blocking/waiting.
-    // The adjustedTimeout will be slightly smaller than the regular outer rpc timeout.
-    int32_t rpcTimeout;
-    int64_t adjustedTimeout;
-    RETURN_IF_NOT_OK(workerApi_->SetRpcTimeout(timeoutMs, rpcTimeout, adjustedTimeout));
-    INJECT_POINT("client.CreateWritePage", [&rpcTimeout, timeoutMs]() {
-        rpcTimeout = timeoutMs;
-        return Status::OK();
-    });
-
-    RpcOptions opts;
-    opts.SetTimeout(rpcTimeout);
-
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
-    req.set_sub_timeout(adjustedTimeout);
     req.set_client_id(workerApi_->GetClientId());
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-
     ShmViewPb pb;
     pb.set_fd(curView.fd);
     pb.set_mmap_size(curView.mmapSz);
@@ -154,21 +146,27 @@ Status ProducerConsumerWorkerApi::CreateWritePage(const std::string &streamName,
     pb.set_size(curView.sz);
     req.mutable_cur_view()->CopyFrom(pb);
 
-    LOG(INFO) << "Client creating write page. Stream: " << streamName << " producer: " << producerId
-              << " adjusted timeout: " << adjustedTimeout << " user timeout " << timeoutMs
-              << " rpc timeout: " << rpcTimeout;
-    std::unordered_set<StatusCode> retryCode = { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_UNAVAILABLE,
-                                                 StatusCode::K_RPC_DEADLINE_EXCEEDED };
+    LOG(INFO) << "Client creating write page. Stream: " << streamName << " producer: " << producerId;
+    INJECT_POINT_NO_RETURN("ProducerConsumerWorkerApi.CreateWritePage.adjustRpcTimeoutMs",
+                           [this](int timeoutMs) { workerApi_->rpcTimeoutMs_ = timeoutMs; });
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_WRITE_PAGE);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RetryOnError(adjustedTimeout,
-        [this, &opts, &req, &rsp](int32_t) {
-            // Set timestamp for worker to determine request order
-            req.set_timestamp(GetSystemClockTimeStampUs());
-            RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
-            return workerApi_->rpcSession_->CreateShmPage(opts, req, rsp);
-        },
-        []() { return Status::OK(); }, retryCode),
-        "CreateShmPage request error");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        RetryOnError(
+            workerApi_->rpcTimeoutMs_,
+            [this, &req, &rsp, timeoutMs](int32_t currDefaultRpcTimeout) {
+                auto pair = workerApi_->GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
+                RpcOptions opts;
+                opts.SetTimeout(pair.first);
+                reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(opts.GetTimeout()));
+                req.set_sub_timeout(pair.second);
+                // Even without AKSK authentication, this field should still be set in this scenario because worker
+                // relies on this field to determine the order of requests.
+                req.set_timestamp(GetSystemClockTimeStampUs());
+                RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
+                return workerApi_->rpcSession_->CreateShmPage(opts, req, rsp);
+            },
+            []() { return Status::OK(); }, retryCode_),
+        FormatString("[%s, S:%s, C:%s] CreateShmPage request failed", workerApi_->LogPrefix(), streamName, producerId));
     point.Record();
     outPage.off = static_cast<ptrdiff_t>(rsp.last_page_view().offset());
     outPage.sz = rsp.last_page_view().size();
@@ -181,18 +179,18 @@ Status ProducerConsumerWorkerApi::CreateWritePage(const std::string &streamName,
 
 Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, const std::string &producerId)
 {
-    RpcOptions opts;
-    opts.SetTimeout(workerApi_->requestTimeoutMs_);
     CloseProducerReqPb req;
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
     req.set_client_id(workerApi_->GetClientId());
-    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-
-    PerfPoint point(PerfKey::RPC_WORKER_CLOSE_PRODUCER);
-    CloseProducerRspPb rsp;
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
+    CloseProducerRspPb rsp;
+
+    RpcOptions opts;
+    opts.SetTimeout(workerApi_->requestTimeoutMs_);
+    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->requestTimeoutMs_));
+    PerfPoint point(PerfKey::RPC_WORKER_CLOSE_PRODUCER);
     RETURN_IF_NOT_OK_EXCEPT(workerApi_->rpcSession_->CloseProducer(opts, req, rsp),
                             StatusCode::K_SC_PRODUCER_NOT_FOUND);
     point.Record();
@@ -204,19 +202,19 @@ Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, c
 Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, const std::string &subscriptionName,
                                                 const std::string &consumerId)
 {
-    RpcOptions opts;
-    opts.SetTimeout(workerApi_->requestTimeoutMs_);
     CloseConsumerReqPb req;
     req.set_stream_name(streamName);
     req.set_subscription_name(subscriptionName);
     req.set_consumer_id(consumerId);
     req.set_client_id(workerApi_->GetClientId());
-    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->requestTimeoutMs_));
-
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    PerfPoint point(PerfKey::RPC_WORKER_CLOSE_CONSUMER);
-    CloseConsumerRspPb rsp;
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
+    CloseConsumerRspPb rsp;
+
+    RpcOptions opts;
+    opts.SetTimeout(workerApi_->requestTimeoutMs_);
+    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->requestTimeoutMs_));
+    PerfPoint point(PerfKey::RPC_WORKER_CLOSE_CONSUMER);
     RETURN_IF_NOT_OK_EXCEPT(workerApi_->rpcSession_->CloseConsumer(opts, req, rsp),
                             StatusCode::K_SC_CONSUMER_NOT_FOUND);
     point.Record();
@@ -227,15 +225,16 @@ Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, c
 
 Status ProducerConsumerWorkerApi::GetLastAppendCursor(const std::string &streamName, uint64_t &lastAppendCursor)
 {
-    RpcOptions opts;
-    opts.SetTimeout(workerApi_->rpcTimeoutMs_);
     LastAppendCursorReqPb req;
     req.set_stream_name(streamName);
     req.set_client_id(workerApi_->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
     LastAppendCursorRspPb rsp;
+
+    RpcOptions opts;
+    opts.SetTimeout(workerApi_->rpcTimeoutMs_);
+    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->rpcTimeoutMs_));
     RETURN_IF_NOT_OK(workerApi_->rpcSession_->GetLastAppendCursor(opts, req, rsp));
     lastAppendCursor = rsp.last_append_cursor();
     return Status::OK();

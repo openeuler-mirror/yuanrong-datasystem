@@ -120,6 +120,8 @@ public:
 private:
     std::string tenantId_;
     std::shared_ptr<ClientWorkerApi> workerApi_;
+    const std::unordered_set<StatusCode> retryCode_ = { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_UNAVAILABLE,
+                                                        StatusCode::K_RPC_DEADLINE_EXCEEDED };
 };
 }  // namespace stream_cache
 }  // namespace client

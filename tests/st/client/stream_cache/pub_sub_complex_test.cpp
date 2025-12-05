@@ -20,8 +20,13 @@
 #include <math.h>
 
 #include <gtest/gtest.h>
+#include <cstddef>
 
 #include "common.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/thread_local.h"
+#include "datasystem/utils/status.h"
 #include "sc_client_common.h"
 #include "datasystem/stream_client.h"
 #include "datasystem/stream/producer.h"
@@ -309,5 +314,40 @@ TEST_F(PubSubComplexTest, TestSyncSubTableRetry)
     consumer1->Close();
     client1_->DeleteStream(s1);
 }
+
+TEST_F(PubSubComplexTest, TestCreateWritePageTimeout)
+{
+    auto func = [this](int i) -> Status {
+        defaultProducerConf_.pageSize = 4 * 1024;
+        std::string streamName = "stream" + std::to_string(i);
+        std::shared_ptr<Consumer> consumer;
+        SubscriptionConfig config("sub", SubscriptionType::STREAM);
+        RETURN_IF_NOT_OK(client1_->Subscribe(streamName, config, consumer));
+        std::shared_ptr<Producer> producer;
+        RETURN_IF_NOT_OK(client0_->CreateProducer(streamName, producer, defaultProducerConf_));
+
+        const size_t numElements = 100;
+        const uint64_t timeoutMs = 10'000;
+        const size_t minEleSize = 1024;
+        const size_t maxEleSize = 5 * 1024;
+        int residualReqTimeoutDurationTimeoutMs = 10;
+        RETURN_IF_NOT_OK(cluster_->SetInjectAction(WORKER, 0, "ZmqService::RouteToRegBackend",
+                                                   FormatString("call(%d)", residualReqTimeoutDurationTimeoutMs)));
+        for (size_t i = 0; i < numElements; ++i) {
+            const size_t elementSize = randomData_.GetRandomUint64(minEleSize, maxEleSize);
+            std::string data(elementSize, 'a');
+            Element ele(reinterpret_cast<uint8_t *>(data.data()), data.size());
+            reqTimeoutDuration.Init(residualReqTimeoutDurationTimeoutMs);
+            RETURN_IF_NOT_OK(producer->Send(ele));
+        }
+        std::vector<Element> out;
+        out.reserve(numElements);
+        RETURN_IF_NOT_OK(consumer->Receive(numElements, timeoutMs, out));
+        CHECK_FAIL_RETURN_STATUS(out.size() == numElements, K_RUNTIME_ERROR, "");
+        return Status::OK();
+    };
+    DS_ASSERT_OK(func(0));
+}
+
 }  // namespace st
 }  // namespace datasystem
