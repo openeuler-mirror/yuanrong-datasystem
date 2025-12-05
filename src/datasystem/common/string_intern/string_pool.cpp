@@ -55,9 +55,12 @@ StringPool &StringPool::Instance(KeyType keyType)
 #undef KEY_TYPE_DEF
 
 // clang-format off
-#define KEY_TYPE_DEF(keyType, keyEnum) StringPool::Instance(KeyType::keyEnum).Init();
-void StringPool::InitAll()
+#define KEY_TYPE_DEF(keyType, keyEnum) StringPool::Instance(KeyType::keyEnum);
+void StringPool::InitAll(bool printInitLog)
 {
+    if (printInitLog) {
+        LOG(INFO) << "StringPool start init";
+    }
 #include "datasystem/common/string_intern/key_type.def"
 }
 #undef KEY_TYPE_DEF
@@ -69,11 +72,6 @@ StringPool::~StringPool()
         LOG(ERROR) << "Some StringRef of " << GetKeyTypeName(keyType_) << " still in StringPool: " << Size()
                    << " when pool finalize, may cause segment fault.";
     }
-}
-
-void StringPool::Init() const
-{
-    LOG(INFO) << "StringPool init for " << GetKeyTypeName(keyType_);
 }
 
 StringPtr StringPool::Intern(const std::string &val)

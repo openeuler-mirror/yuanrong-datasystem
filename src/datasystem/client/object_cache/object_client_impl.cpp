@@ -137,7 +137,7 @@ namespace object_cache {
 ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
 {
     (void)Provider::Instance();
-    intern::StringPool::InitAll();
+    intern::StringPool::InitAll(false);
     clientStateManager_ = std::make_unique<ClientStateManager>();
     ConnectOptions connectOptions = connectOptions1;
     ReadOptFromEnv(connectOptions);
