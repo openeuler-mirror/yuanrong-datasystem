@@ -40,6 +40,7 @@ class DsClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
+        enable_exclusive_connection=False
     ):
         """Constructor of the DsClient class
 
@@ -56,6 +57,8 @@ class DsClient:
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
+            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+            datasystem_worker.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -86,6 +89,7 @@ class DsClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
+            enable_exclusive_connection
         )
         self._hetero_client = HeteroClient(
             host,
@@ -98,7 +102,8 @@ class DsClient:
             secret_key,
             tenant_id,
             enable_cross_node_connection,
-            req_timeout_ms
+            req_timeout_ms,
+            enable_exclusive_connection
         )
         self._object_client = ObjectClient(
             host,
@@ -110,7 +115,8 @@ class DsClient:
             access_key,
             secret_key,
             tenant_id,
-            req_timeout_ms
+            req_timeout_ms,
+            enable_exclusive_connection
         )
 
     def init(self):

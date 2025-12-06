@@ -67,8 +67,6 @@ fi
 
 if is_on "${BUILD_HETERO}"; then
   CMAKE_FILES_L0+=("ascend.cmake")
-  CMAKE_FILES_L1+=("multipath.cmake")
-  DEPENDENCIES+=("multipath:ascend:securec")
 fi
 
 readonly BASE_DIR=$(dirname "$(readlink -f "$0")")

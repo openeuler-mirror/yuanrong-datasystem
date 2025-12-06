@@ -158,6 +158,7 @@ class KVClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
+        enable_exclusive_connection=False
     ):
         """Constructor of the KVClient class
 
@@ -175,6 +176,8 @@ class KVClient:
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same
             with timeout_ms.
+            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+            datasystem_worker.
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
@@ -186,6 +189,7 @@ class KVClient:
             ["server_public_key", server_public_key, str], ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str], ["enable_cross_node_connection", enable_cross_node_connection, bool],
+            ["enable_exclusive_connection", enable_exclusive_connection, bool]
         ]
         validator.check_args_types(args)
         validator.check_param_range("timeout_ms", timeout_ms, 0, validator.INT32_MAX_SIZE)
@@ -194,13 +198,14 @@ class KVClient:
             port,
             timeout_ms,
             client_public_key,
-            client_private_key,
+        client_private_key,
             server_public_key,
             access_key,
             secret_key,
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
+            enable_exclusive_connection
         )
 
     def init(self):

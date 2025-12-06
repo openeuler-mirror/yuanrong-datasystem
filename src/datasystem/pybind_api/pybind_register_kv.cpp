@@ -185,21 +185,21 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs) {
-            ConnectOptions connectOpts{
-                .host = host,
-                .port = port,
-                .connectTimeoutMs = connectTimeoutMs,
-                .requestTimeoutMs = reqTimeoutMs,
+                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         bool enableExclusiveConnection) {
+            ConnectOptions connectOpts{ .host = host,
+                                        .port = port,
+                                        .connectTimeoutMs = connectTimeoutMs,
+                                        .requestTimeoutMs = reqTimeoutMs,
 
-                .clientPublicKey = clientPublicKey,
-                .clientPrivateKey = clientPrivateKey,
-                .serverPublicKey = serverPublicKey,
-                .accessKey = accessKey,
-                .secretKey = secretKey,
-                .tenantId = tenantId,
-                .enableCrossNodeConnection = enableCrossNodeConnection,
-            };
+                                        .clientPublicKey = clientPublicKey,
+                                        .clientPrivateKey = clientPrivateKey,
+                                        .serverPublicKey = serverPublicKey,
+                                        .accessKey = accessKey,
+                                        .secretKey = secretKey,
+                                        .tenantId = tenantId,
+                                        .enableCrossNodeConnection = enableCrossNodeConnection,
+                                        .enableExclusiveConnection = enableExclusiveConnection };
             return std::make_unique<ObjectClientImpl>(connectOpts);
         }))
         .def("Init",
