@@ -37,17 +37,10 @@ struct UrmaJfrInfo {
     uint32_t uasid{ 0 };
     std::vector<uint32_t> jfrIds;
     HostPort localAddress;
-#ifdef URMA_OVER_UB
-    std::vector<urma_bond_id_info_out_t> bondInfos;
-#endif
 
     std::string ToString() const;
 
     static std::string EidToFmtStr(const urma_eid_t &eid);
-#ifdef URMA_OVER_UB
-    static void UrmaBondIdInfoToProto(const urma_bond_id_info_out &info, JfrBondInfo &proto);
-    static Status UrmaBondIdInfoFromProto(const JfrBondInfo &proto, urma_bond_id_info_out &info);
-#endif
 
     template <class Proto>
     void ToProto(Proto &proto) const
@@ -59,14 +52,6 @@ struct UrmaJfrInfo {
         }
         proto.mutable_address()->set_host(localAddress.Host());
         proto.mutable_address()->set_port(localAddress.Port());
-#ifdef URMA_OVER_UB
-        if (GetUrmaMode() == UrmaMode::UB) {
-            for (auto &bondInfo : bondInfos) {
-                auto info = proto.add_bond_infos();
-                UrmaBondIdInfoToProto(bondInfo, *info);
-            }
-        }
-#endif
     }
 
     template <class Proto>
@@ -78,15 +63,6 @@ struct UrmaJfrInfo {
             jfrIds.emplace_back(jfrId);
         }
         localAddress = HostPort(proto.address().host(), proto.address().port());
-#ifdef URMA_OVER_UB
-        if (GetUrmaMode() == UrmaMode::UB) {
-            auto size = proto.bond_infos_size();
-            for (int i = 0; i < size; i++) {
-                bondInfos.emplace_back();
-                RETURN_IF_NOT_OK(UrmaBondIdInfoFromProto(proto.bond_infos(i), bondInfos[i]));
-            }
-        }
-#endif
         return Status::OK();
     }
 };
@@ -101,17 +77,6 @@ struct UrmaSeg {
     void ToProto(UrmaSegPb &proto) const;
     Status FromProto(const UrmaSegPb &proto);
 };
-
-#ifdef URMA_OVER_UB
-struct UrmaBondSegInfo {
-    urma_bond_seg_info_out raw;
-
-    std::string ToString();
-    void ToProto(UrmaBondSegInfoPb &proto) const;
-    Status FromProto(const UrmaBondSegInfoPb &proto);
-};
-#endif
-
 }  // namespace datasystem
 
 #endif

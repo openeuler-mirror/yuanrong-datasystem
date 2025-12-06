@@ -158,7 +158,6 @@ Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t
     (void)errorHandler;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        PerfPoint point(PerfKey::URMA_TOTAL_WAIT_TO_FINISH);
         for (auto key : keys) {
             // Wait for the event until timeout
             Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime());

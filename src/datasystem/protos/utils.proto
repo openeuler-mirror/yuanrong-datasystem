@@ -54,7 +54,6 @@ message UrmaBondSegInfoPb{
 
 message UrmaImportSegmentPb {
   UrmaSegPb seg = 1;
-  UrmaBondSegInfoPb bond_info = 2;
 }
 
 message UrmaRemoteAddrPb {

@@ -615,6 +615,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     pointImpl.Record();
     // Wait for fast transport events if the events are created and not already waited.
 
+    PerfPoint pointWait(PerfKey::URMA_TOTAL_WAIT_TO_FINISH);
     for (auto &pair : keys) {
         int index = pair.first;
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
@@ -627,6 +628,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         // Early release of ShmGuard.
         pair.second.second.clear();
     }
+    pointWait.Record();
+
     PerfPoint pointWrite(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointWrite.Record();

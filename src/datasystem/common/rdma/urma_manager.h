@@ -356,15 +356,6 @@ public:
      */
     Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
 
-#ifdef URMA_OVER_UB
-    /**
-     * @brief Get the jfr info for UB bond purposes.
-     * @param[out] infoOut A vector of bond info for each created jfr.
-     * @return Status of the call.
-     */
-    Status GetJfrInfoForBond(std::vector<urma_bond_id_info_out_t> &infoOut);
-#endif
-
     const UrmaJfrInfo &GetLocalUrmaInfo()
     {
         return localUrmaInfo_;
