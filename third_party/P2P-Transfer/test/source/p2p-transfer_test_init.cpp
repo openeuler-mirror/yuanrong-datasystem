@@ -89,12 +89,9 @@ int SendDeviceLogic(const char *recvSendFifoPath, uint32_t sendDeviceId, size_t 
         HcclRootInfo rootInfo;
         read(recvSendFd, &rootInfo, sizeof(HcclRootInfo));  // Read from fifo
 
-        NPU_ERROR(PrewarmHccp());
-
         pthread_barrier_wait(barrier);
         P2PComm p2pComm;
-        MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(
-                         &rootInfo, P2P_SENDER, P2P_LINK_ROCE, &p2pComm)),
+        MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(&rootInfo, P2P_SENDER, P2P_LINK_ROCE, &p2pComm)),
                      "Sender P2PCommInitRootInfo");
 #endif
 
@@ -146,8 +143,6 @@ int RecvDeviceLogic(const char *recvSendFifoPath, uint32_t recvDeviceId, size_t 
         write(recvSendFd, &rootInfo, sizeof(HcclRootInfo));  // Send message to FIFO
 #endif
 
-        NPU_ERROR(PrewarmHccp());
-
         pthread_barrier_wait(barrier);
 #ifdef USE_HCCL
         HcclComm hcclComm;
@@ -155,8 +150,7 @@ int RecvDeviceLogic(const char *recvSendFifoPath, uint32_t recvDeviceId, size_t 
                      "Receiver HcclCommInitRootInfo");
 #else
         P2PComm p2pComm;
-        MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(
-                         &rootInfo, P2P_RECEIVER, P2P_LINK_ROCE, &p2pComm)),
+        MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(&rootInfo, P2P_RECEIVER, P2P_LINK_ROCE, &p2pComm)),
                      "Receiver P2PCommInitRootInfo");
 #endif
 

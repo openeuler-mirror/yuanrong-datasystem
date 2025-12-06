@@ -69,3 +69,25 @@ message UcpRemoteInfoPb {
   bytes rkey = 3;
   uint64 remote_buf = 4;
 }
+
+message RemoteHostSegmentPb {
+  bytes name = 1;
+  uint64 seg_va = 2;
+  uint64 seg_len = 3;
+  uint64 seg_data_offset = 4;
+}
+
+message RemoteH2DRootInfoPb {
+  bytes internal = 1;
+}
+
+message RemoteH2DDataInfoPb {
+  uint64 offset = 1;
+  repeated uint64 sizes = 2;
+}
+
+enum DataTransferSource {
+  DATA_IN_PAYLOAD = 0;
+  DATA_ALREADY_TRANSFERRED = 1;
+  DATA_DELAY_TRANSFER = 2;
+}

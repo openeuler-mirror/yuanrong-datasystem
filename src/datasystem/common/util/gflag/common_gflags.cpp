@@ -92,12 +92,31 @@ bool ValidateEnableRdma(const char *flagName, bool value)
     return true;
 #endif
 }
+
+bool ValidateEnableRemoteH2D(const char *flagName, bool value)
+{
+    (void)flagName;
+#ifdef BUILD_HETERO
+    (void)value;
+    // Fixme: Conflict with URMA.
+    return true;
+#else
+    if (value) {
+        LOG(ERROR) << FormatString("Worker not build with Ascend support, but %s set to true", flagName);
+        return false;
+    }
+    return true;
+#endif
+}
 }  // namespace
 
 DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to worker data transfer, default false.");
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_string(urma_mode, "UB", "Option to enable URMA over IB or UB, default UB to run with URMA over UB.");
 DS_DEFINE_validator(urma_mode, &ValidateUrmaMode);
+DS_DEFINE_bool(enable_remote_h2d, false, "Option to turn on Remote H2D, default false.");
+DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
+
 DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time, 16 is the max this device can poll");
 DS_DEFINE_uint32(urma_connection_size, 16, "Number of jfs and jfr pair");
 DS_DEFINE_bool(urma_register_whole_arena, true,

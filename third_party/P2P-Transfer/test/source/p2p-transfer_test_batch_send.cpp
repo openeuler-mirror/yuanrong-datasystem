@@ -216,7 +216,7 @@ int SendDeviceLogic(int serverSocket, uint32_t sendDeviceId, size_t bufferSizeBy
 int Benchmark()
 {
     int batchSize = 512;
-    int nSamples = 100; // todo: ra_send_wr fails when using 1000 samples
+    int nSamples = 100; // ra_send_wr fails when using 1000 samples
     uint32_t sendDeviceId = 2;
     uint32_t nDevices = 2;
     size_t bufferSizeBytes = static_cast<size_t>(4) * 1024 * 1024;

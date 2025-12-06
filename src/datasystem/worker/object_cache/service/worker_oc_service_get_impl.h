@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GET_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GET_IMPL_H
 
+#include <memory>
 #include <unordered_set>
 
 #include "datasystem/common/object_cache/object_base.h"
@@ -630,8 +631,8 @@ private:
     /**
      * @brief Helper function to construct batch get request.
      * @param[in] address The remote worker address.
-     * @param[in] infos The batched object meta info contains remote address and data size and oject lock entries.
-     * @param[in] readKeys The read key info, contain offset, size, objKey.
+     * @param[in] metas The batched object meta info contains remote address and data size and oject lock entries.
+     * @param[in] request Get request instance.
      * @param[out] successIds Succeeded get object keys.
      * @param[out] needRetryIds Need retry get id list.
      * @param[out] failedIds Failed get object keys.
@@ -639,8 +640,9 @@ private:
      * @return Status of the call.
      */
     Status ConstructBatchGetRequest(const std::string &address, std::list<GetObjectInfo> &metas,
-                                    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-                                    std::unordered_set<std::string> &failedIds, BatchGetObjectRemoteReqPb &reqPb);
+                                    const std::shared_ptr<GetRequest> &request, std::vector<std::string> &successIds,
+                                    std::vector<ReadKey> &needRetryIds, std::unordered_set<std::string> &failedIds,
+                                    BatchGetObjectRemoteReqPb &reqPb);
 
     /**
      * @brief Helper function to process the sub response from batched response.

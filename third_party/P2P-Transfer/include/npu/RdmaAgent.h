@@ -6,11 +6,14 @@
 #include <stddef.h>
 #include <array>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include "../tools/Status.h"
 #include "../tools/npu-error.h"
 #include "acl/acl.h"
 #include <arpa/inet.h>
-#include "external/ra.h"
+#include "tools/common.h"
+#include "hccl/hccl_common.h"
 
 constexpr uint32_t DEFAULT_HDC_TYPE = 6;
 
@@ -18,13 +21,20 @@ enum RdmaAgentStatus { RA_INITIALIZED, RA_UNINITIALIZED };
 
 class RdmaAgent {
 public:
-    RdmaAgent(uint32_t phyId) : status(RdmaAgentStatus::RA_UNINITIALIZED), phyId(phyId)
+    static std::shared_ptr<RdmaAgent> instances[MAX_LOCAL_DEVICES];
+    static std::mutex instanceMutex;
+
+    static Status GetInstance(uint32_t deviceId, std::shared_ptr<RdmaAgent> &outAgent);
+
+    static void cleanup()
     {
-        initConfig.phy_id = phyId;
-        initConfig.nic_position = static_cast<uint32_t>(NICDeployment::NIC_DEPLOYMENT_DEVICE);
-        initConfig.hdc_type = DEFAULT_HDC_TYPE;
+        std::lock_guard<std::mutex> lock(instanceMutex);
+        for (int i = 0; i < MAX_LOCAL_DEVICES; ++i) {
+            instances[i].reset();
+        }
     }
 
+    explicit RdmaAgent(uint32_t devId, uint32_t phyId);
     ~RdmaAgent();
 
     RdmaAgent(const RdmaAgent &) = delete;
@@ -36,8 +46,8 @@ public:
 private:
     RdmaAgentStatus status;
     uint32_t phyId;
-
-    struct ra_init_config initConfig {};
+    uint32_t devId;
+    NICDeployment nicDeployment;
 };
 
 #endif  // P2P_RA_H

@@ -131,10 +131,10 @@ Status P2PCommunicator::EstablishConnection(P2PCommArgs &args)
     } else if (channelType == P2PCommChannelType::P2P_COMM_RDMA) {
         if (role == P2P_COMM_RECEIVER) {
             receiver = std::make_unique<RoceReceiver>(args.deviceId, isRoot, args.blockSizeBytes, args.chunkSizeBytes,
-                                                      args.nRecvBuffs);
+                                                      args.nRecvBuffs, args.qpNum);
         } else {
             sender = std::make_unique<RoceSender>(args.deviceId, isRoot, args.blockSizeBytes, args.chunkSizeBytes,
-                                                  args.nRecvBuffs);
+                                                  args.nRecvBuffs, args.qpNum);
         }
     } else {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "Unsupported channeltype");
@@ -166,6 +166,17 @@ Status P2PCommunicator::Receive(void **dstPtrs, uint64_t *sizes, uint32_t count,
     }
 
     CHECK_STATUS(receiver->Receive(dstPtrs, sizes, count, stream));
+
+    return Status::Success();
+}
+
+Status P2PCommunicator::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream)
+{
+    if (role != P2PCommRole::P2P_COMM_RECEIVER) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "P2P Comm is not of type receiver");
+    }
+
+    CHECK_STATUS(receiver->Read(entries, batchSize, stream));
 
     return Status::Success();
 }

@@ -167,7 +167,7 @@ public:
                        << "devPtr content: " << result.substr(0, PRINT_STR_LIMIT)
                        << ", expect content: " << content.substr(0, PRINT_STR_LIMIT);
         }
-        ASSERT_TRUE(isEqual);
+        EXPECT_TRUE(isEqual);
         free(hostPtr);
     }
 

@@ -43,6 +43,7 @@ struct ConnectOptions {
     std::string tenantId = "";
     bool enableCrossNodeConnection = false;
     bool enableExclusiveConnection = false;
+    bool enableRemoteH2D = false;
 };
 }  // namespace datasystem
 

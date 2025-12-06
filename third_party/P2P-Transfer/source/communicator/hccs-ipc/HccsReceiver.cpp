@@ -48,6 +48,11 @@ Status HccsReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     return Status::Success();
 }
 
+Status HccsReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream)
+{
+    return Status::Error(ErrorCode::NOT_SUPPORTED, "HCCS currently doesn't support one sided read");
+}
+
 Status HccsReceiver::Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream)
 {
     if (state != ReceiverStatus::RECEIVER_INITIALIZED) {

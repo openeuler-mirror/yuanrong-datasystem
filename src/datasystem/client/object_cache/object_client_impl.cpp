@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -30,6 +31,7 @@
 #include <string>
 #include <unistd.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -51,6 +53,8 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/parallel/parallel_for.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -64,6 +68,8 @@
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
+#include "datasystem/protos/utils.pb.h"
+#include "datasystem/utils/optional.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
@@ -146,6 +152,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
     LOG_IF_ERROR(authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey),
                  "RpcAuthKeys SetServerKey failed");
+    enableRemoteH2D_ = connectOptions.enableRemoteH2D;
 }
 
 ObjectClientImpl::~ObjectClientImpl()
@@ -263,7 +270,7 @@ void ObjectClientImpl::InitParallelFor()
 {
     static const int defaultThreadNum = 4;
     auto getEnvInt = [](const std::string &envName, int defaultValue) -> int {
-        const char* val = std::getenv(envName.c_str());
+        const char *val = std::getenv(envName.c_str());
         int result = defaultValue;
         if (val && !Uri::StrToInt(val, result)) {
             result = defaultValue;
@@ -590,6 +597,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
                                                           uint64_t timeoutMs)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MGET_H2D);
+    UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+
     auto asyncResource = std::make_shared<MGetAsyncRPCSource>();
     std::shared_future<AsyncResult> future = asyncResource->promise.get_future().share();
 
@@ -603,11 +612,10 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
 
     for (const auto &blockList : devBlobList) {
         if (blockList.srcOffset < 0) {
-            Status err = Status(K_INVALID,
-                __LINE__,
-                __FILE__,
-                FormatString("Invalid srcOffset: %d, which must be non-negative.", blockList.srcOffset));
-            asyncResource->promise.set_value({err, asyncResource->failList});
+            Status err =
+                Status(K_INVALID, __LINE__, __FILE__,
+                       FormatString("Invalid srcOffset: %d, which must be non-negative.", blockList.srcOffset));
+            asyncResource->promise.set_value({ err, asyncResource->failList });
             return future;
         }
     }
@@ -621,7 +629,9 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
             asyncResource->failList.clear();
             std::vector<Optional<Buffer>> &bufferList = asyncResource->bufferList;
 
-            RETURN_IF_NOT_OK(Get(objectKeys, timeoutMs, bufferList, false));
+            // MGetH2D supports RH2D transfer, so if RH2D feature is enabled, it can trigger RH2D.
+            bool isRH2DSupported = true;
+            RETURN_IF_NOT_OK(Get(objectKeys, timeoutMs, bufferList, false, isRH2DSupported));
 
             CHECK_FAIL_RETURN_STATUS(objectKeys.size() == bufferList.size(), K_INVALID,
                                      "The size of objectKeys and bufferList does not match");
@@ -653,13 +663,118 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
     return future;
 }
 
+static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobList,
+                                         std::vector<Buffer *> &existBufferList)
+{
+    (void)devBlobList;
+    (void)existBufferList;
+#ifdef BUILD_HETERO
+    // 1. Initialize communicator connection.
+    // Note that client uses worker side root info as the key.
+    PerfPoint point(PerfKey::CLIENT_IMPORT_SEG_AND_READ);
+    P2pKind kind = P2P_RECEIVER;
+    std::shared_ptr<RemoteH2DContext> p2pComm;
+    // Buffers are grouped by data source, so root info should be the same for these objects.
+    auto &rootInfo = existBufferList[0]->GetRemoteHostInfo()->rootInfo;
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PCommInitRootInfo(rootInfo.internal(), rootInfo, kind, p2pComm));
+
+    // 2. Import the remote host segment.
+    // 3. Read from remote host memory.
+
+    // Initialize vectors to keep entry data in scope
+    std::vector<P2pScatterEntry> entries(existBufferList.size());
+    std::vector<std::vector<void *>> dstBufs(existBufferList.size());
+    std::vector<std::vector<uint64_t>> counts(existBufferList.size());
+
+    // Construct P2pScatterEntries
+    for (size_t i = 0; i < existBufferList.size(); i++) {
+        auto buffer = existBufferList[i];
+        auto remoteHostInfo = buffer->GetRemoteHostInfo();
+        auto &seg = remoteHostInfo->segmentInfo;
+        auto &hostDataInfo = remoteHostInfo->dataInfo;
+        auto &blobs = devBlobList[i]->blobs;
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ImportHostSegment(seg));
+
+        auto &entry = entries[i];
+        CHECK_FAIL_RETURN_STATUS(
+            seg.seg_data_offset() + hostDataInfo.offset() < seg.seg_len(), K_RUNTIME_ERROR,
+            FormatString("The offset overflow, starting point:%zu + blob offset:%zu > segment size:%zu",
+                         seg.seg_data_offset(), hostDataInfo.offset(), seg.seg_len()));
+        entry.ddrBuf = reinterpret_cast<void *>(seg.seg_va() + seg.seg_data_offset() + hostDataInfo.offset());
+        entry.numEl = hostDataInfo.sizes_size();
+        CHECK_FAIL_RETURN_STATUS(
+            entry.numEl == blobs.size() && entry.numEl > 0, K_INVALID,
+            FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
+                         "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
+                         entry.numEl, blobs.size(), i, i));
+        dstBufs[i].resize(entry.numEl);
+        counts[i].resize(entry.numEl);
+
+        for (size_t j = 0; j < entry.numEl; j++) {
+            // Double check the sizes and offsets, and prepare the dstBufs and counts for the Get Scatter.
+            auto hostDataSize = hostDataInfo.sizes(j);
+            auto deviceDataSize = blobs[j].size;
+            CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
+                                     "The data size of device and host is not equal.");
+            dstBufs[i][j] = blobs[j].pointer;
+            counts[i][j] = deviceDataSize;
+        }
+        HcclDataType dataType = HCCL_DATA_TYPE_UINT8;
+        entry.dstBufs = dstBufs[i].data();
+        entry.counts = counts[i].data();
+        entry.dataType = dataType;
+    }
+
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ScatterBatch(entries.data(), entries.size(), p2pComm));
+#endif
+    return Status::OK();
+}
+
 Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlobList,
                                              std::vector<Buffer *> &existBufferList)
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY);
-    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList,
-                                                          aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
-                                                          workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
+    if (!IsRemoteH2DEnabled()) {
+        RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList,
+                                                              aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
+                                                              workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
+    } else {
+        // Group buffers by data source in RH2D scenario
+        std::vector<DeviceBlobList> localSourceDevBlobList;
+        std::vector<Buffer *> localSourceBufferList;
+        std::vector<std::vector<DeviceBlobList *>> remoteSourceDevBlobList;
+        std::vector<std::vector<Buffer *>> remoteSourceBufferList;
+        std::unordered_map<std::string, int> rootInfoToIndexMapping;
+        for (size_t i = 0; i < devBlobList.size(); i++) {
+            auto &buffer = existBufferList[i];
+            // Skip the non-existent buffers
+            if (buffer == nullptr) {
+                continue;
+            }
+            if (buffer->GetRemoteHostInfo() == nullptr) {
+                localSourceDevBlobList.emplace_back(devBlobList[i]);
+                localSourceBufferList.emplace_back(buffer);
+                continue;
+            }
+            std::string rootInternal = buffer->GetRemoteHostInfo()->rootInfo.internal();
+            auto iter = rootInfoToIndexMapping.find(rootInternal);
+            if (iter == rootInfoToIndexMapping.end()) {
+                iter = rootInfoToIndexMapping.emplace(rootInternal, remoteSourceBufferList.size()).first;
+                remoteSourceDevBlobList.emplace_back();
+                remoteSourceBufferList.emplace_back();
+            }
+            remoteSourceDevBlobList[iter->second].emplace_back(&devBlobList[i]);
+            remoteSourceBufferList[iter->second].emplace_back(buffer);
+        }
+        if (!localSourceDevBlobList.empty()) {
+            RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(localSourceDevBlobList, localSourceBufferList,
+                                                                  aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
+                                                                  workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
+        }
+        for (size_t i = 0; i < remoteSourceDevBlobList.size(); i++) {
+            RETURN_IF_NOT_OK(ImportSegAndReadHostMemory(remoteSourceDevBlobList[i], remoteSourceBufferList[i]));
+        }
+    }
 
     // existBufferList same as bufferList
     point.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
@@ -691,8 +806,8 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     filterBufferList.reserve(objectKeys.size());
     filterDevBlobList.reserve(objectKeys.size());
     for (auto idx = 0u; idx < objectKeys.size(); idx++) {
-        CHECK_FAIL_RETURN_STATUS(devBlobList[idx].srcOffset >= 0,
-            K_INVALID,
+        CHECK_FAIL_RETURN_STATUS(
+            devBlobList[idx].srcOffset >= 0, K_INVALID,
             FormatString("Invalid srcOffset: %d, which must be non-negative.", devBlobList[idx].srcOffset));
         if (exists[idx]) {
             continue;
@@ -724,6 +839,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
                                                        const SetParam &setParam)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MSET_D2H);
+    UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+
     std::promise<AsyncResult> promise;
     AsyncResult result;
     std::shared_future<AsyncResult> future = promise.get_future().share();
@@ -975,8 +1092,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
         bufferList.clear();
     });
     point.Reset(PerfKey::CLIENT_MULTI_CREATE_RSP_HANDLE);
-    RETURN_IF_NOT_OK(
-        MutiCreateParallel(skipCheckExistence, param, version, exists, multiCreateParamList, bufferList));
+    RETURN_IF_NOT_OK(MutiCreateParallel(skipCheckExistence, param, version, exists, multiCreateParamList, bufferList));
     isInactive = true;
     return Status::OK();
 }
@@ -1149,8 +1265,7 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 
     bufferInfo->isSeal = false;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false,
-                                        nestedObjectKeys, ttlSecond),
+        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
         FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
@@ -1167,9 +1282,9 @@ Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
 }
 
 Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
-                                       const FullParam &param,
-                                       const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
-                                       const std::shared_ptr<ClientWorkerApi> &workerApi, int existence)
+                                       const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
+                                       uint32_t ttlSecond, const std::shared_ptr<ClientWorkerApi> &workerApi,
+                                       int existence)
 {
     // Create a buffer first.
     auto shmBuf = std::make_shared<ShmUnitInfo>();
@@ -1315,7 +1430,7 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
 }
 
 Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
-                             std::vector<Optional<Buffer>> &buffers, bool queryL2Cache)
+                             std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
     RETURN_IF_NOT_OK(IsClientReady());
@@ -1326,9 +1441,11 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
-    GetParam getParam{
-        .objectKeys = objectKeys, .subTimeoutMs = subTimeoutMs, .readParams = {}, .queryL2Cache = queryL2Cache
-    };
+    GetParam getParam{ .objectKeys = objectKeys,
+                       .subTimeoutMs = subTimeoutMs,
+                       .readParams = {},
+                       .queryL2Cache = queryL2Cache,
+                       .isRH2DSupported = isRH2DSupported };
     Status rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
     buffers.clear();
     for (auto &objectBuffer : objectBuffers) {
@@ -1415,7 +1532,7 @@ Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t of
 std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
     bool isSeal, uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
-    std::shared_ptr<client::MmapTableEntry> mmapEntry)
+    std::shared_ptr<client::MmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo)
 {
     auto bufferInfo = std::make_shared<ObjectBufferInfo>();
     bufferInfo->objectKey = objectKey;
@@ -1431,6 +1548,7 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     bufferInfo->version = version;
     bufferInfo->payloadPointer = payloadPointer;
     bufferInfo->mmapEntry = std::move(mmapEntry);
+    bufferInfo->remoteHostInfo = std::move(remoteHostInfo);
     return bufferInfo;
 }
 
@@ -1443,7 +1561,9 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<ClientWorkerApi> w
     GetRspPb rsp;
     std::vector<RpcMessage> payloads;
     uint32_t version = 0;
+
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Get(getParam, version, rsp, payloads), "Get error");
+
     size_t shmCount = static_cast<size_t>(rsp.objects().size());
     size_t noShmCount = static_cast<size_t>(rsp.payload_info().size());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -1507,7 +1627,10 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
                 failedObjectKey.emplace_back(objectKey);
                 continue;
             }
-            if (readParams.empty()) {
+            // Special case for Remote H2D scenario.
+            if (info.has_remote_host_segment()) {
+                status = SetRemoteHostObjectBuffer(objectKey, info, version, bufferPtr);
+            } else if (readParams.empty()) {
                 status = SetShmObjectBuffer(objectKey, info, version, bufferPtr);
             } else {
                 status = SetOffsetReadObjectBuffer(objectKey, info, version, readParams[index].offset,
@@ -1528,6 +1651,22 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
         }
     }
     return Status::OK();
+}
+
+Status ObjectClientImpl::SetRemoteHostObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
+                                                   uint32_t version, std::shared_ptr<Buffer> &buffer)
+{
+    FullParam param;
+    param.writeMode = WriteMode(info.write_mode());
+    param.consistencyType = ConsistencyType(info.consistency_type());
+    param.cacheType = CacheType(info.cache_type());
+    auto hostInfo = std::make_shared<RemoteH2DHostInfo>();
+    hostInfo->segmentInfo = std::move(info.remote_host_segment());
+    hostInfo->rootInfo = std::move(info.root_info());
+    hostInfo->dataInfo = std::move(info.data_info());
+    auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, info.data_size(), info.metadata_size(), param,
+                                           info.is_seal(), version, {}, nullptr, nullptr, hostInfo);
+    return Buffer::CreateBuffer(bufferInfo, shared_from_this(), buffer);
 }
 
 Status ObjectClientImpl::SetNonShmObjectBuffer(const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo,
@@ -1811,13 +1950,10 @@ void ObjectClientImpl::GDecreaseRefRollback(const std::vector<std::string> &roll
 
 Status ObjectClientImpl::CheckValidObjectKey(const std::string &key)
 {
-    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key),
-        K_INVALID,
-        FormatString("The key contains illegal char(s), allowed regex format: %s "
-                     "or the length of key must be no more than 255. Current key: %s, length: %d.",
-            Validator::objKeyFormat,
-            FormatStringForLog(key),
-            key.size()));
+    CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key), K_INVALID,
+                             FormatString("The key contains illegal char(s), allowed regex format: %s "
+                                          "or the length of key must be no more than 255. Current key: %s, length: %d.",
+                                          Validator::objKeyFormat, FormatStringForLog(key), key.size()));
     return Status::OK();
 }
 
@@ -1924,14 +2060,11 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
         auto &buffer = buffers[i];
         CHECK_FAIL_RETURN_STATUS(buffers[i] != nullptr, K_INVALID, "The buffer should not be empty.");
         RETURN_IF_NOT_OK(buffer->CheckDeprecated());
-        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED,
-                                "Client object is already sealed");
+        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
         bufferInfoList[i] = buffer->bufferInfo_;
     }
     const uint32_t ttl = buffers.front()->bufferInfo_->ttlSecond;
-    PublishParam publishParam{
-        .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl
-    };
+    PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
     return workerApi->MultiPublish(bufferInfoList, publishParam, rsp);
 }
@@ -2026,7 +2159,8 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
                                                const CacheType &cacheType)
 {
     FullParam param;
-    param.writeMode = writeMode, param.consistencyType = ConsistencyType::CAUSAL;
+    param.writeMode = writeMode;
+    param.consistencyType = ConsistencyType::CAUSAL;
     param.cacheType = cacheType;
     int i = 0;
     for (const auto &keyValue : kv) {
@@ -2061,8 +2195,8 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
     return Status::OK();
 }
 
-Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence,
-                                            const FullParam &param, const uint32_t &version, std::vector<bool> &exists,
+Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence, const FullParam &param,
+                                            const uint32_t &version, std::vector<bool> &exists,
                                             std::vector<MultiCreateParam> &multiCreateParamList,
                                             std::vector<std::shared_ptr<Buffer>> &bufferList)
 {
@@ -2112,7 +2246,7 @@ Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence,
 }
 
 Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
-const FullParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
+                                 const FullParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     RETURN_IF_NOT_OK(IsClientReady());
     CHECK_FAIL_RETURN_STATUS(keys.size() > 0, K_INVALID, "The keys should not be empty.");
@@ -2658,8 +2792,8 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
     for (size_t i = 0; i < blob2dList.size(); i++) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ (uint32_t)blob2dList[i].deviceIdx }),
                                          "Check device failed.");
-        CHECK_FAIL_RETURN_STATUS(blob2dList[i].srcOffset >= 0,
-            K_INVALID,
+        CHECK_FAIL_RETURN_STATUS(
+            blob2dList[i].srcOffset >= 0, K_INVALID,
             FormatString("Invalid srcOffset: %d, which must be non-negative.", blob2dList[i].srcOffset));
         std::shared_ptr<DeviceBuffer> devBuff;
         RETURN_IF_NOT_OK(CreateDevBuffer(keys[i], blob2dList[i], createParam, devBuff));
@@ -2672,6 +2806,7 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
 
 Status ObjectClientImpl::CheckDeviceValid(std::vector<uint32_t> deviceId)
 {
+    PerfPoint point(PerfKey::CLIENT_CHECK_DEVICE_VALID);
     return acl::AclDeviceManager::Instance()->VerifyDeviceId(deviceId);
 }
 
@@ -2763,6 +2898,16 @@ Status ObjectClientImpl::GetMetaInfo(const std::vector<std::string> &keys, const
     if (!failKeys.empty() && failKeys.size() == keys.size()) {
         return Status(K_NOT_FOUND, "Key not found");
     }
+    return Status::OK();
+}
+
+Status ObjectClientImpl::UpdateClientRemoteH2DConfig(int32_t devId)
+{
+    if (devId_ >= 0 && devId_ != devId) {
+        LOG(WARNING) << "The client device id is changing from " << devId_ << " to " << devId;
+        devId_ = devId;
+    }
+    SetClientRemoteH2DConfig(enableRemoteH2D_, devId);
     return Status::OK();
 }
 }  // namespace object_cache

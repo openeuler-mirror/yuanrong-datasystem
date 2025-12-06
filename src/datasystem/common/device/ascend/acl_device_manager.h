@@ -330,7 +330,8 @@ public:
      * @brief Initialize P2P with root info.
      *
      * @param rootInfo A struct identifying the p2p root info.
-     * @param kind Identifies whether the current device is a sender and receiver
+     * @param kind Identifies whether the current device is a sender and receiver.
+     * @param link Identifies the communication channel type.
      * @param comm A pointer identifying the initialized communication resource.
      * @return HcclResult
      * @see HcclCommDestroy()
@@ -397,6 +398,12 @@ public:
     virtual Status AclrtProcessReport(int32_t timeout);
     virtual Status AclrtSubscribeReport(uint64_t threadId, aclrtStream stream);
     virtual Status AclrtUnSubscribeReport(uint64_t threadId, aclrtStream stream);
+
+    virtual Status DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segmentInfo,
+                                        P2pSegmentPermissions permissions);
+    virtual Status DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
+    virtual Status DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchSize, P2PComm comm,
+                                                      aclrtStream stream);
 
 private:
     /**
@@ -486,6 +493,10 @@ private:
     REG_METHOD(DSAclrtProcessReport, int, int32_t timeout);
     REG_METHOD(DSAclrtSubscribeReport, int, uint64_t threadId, aclrtStream stream);
     REG_METHOD(DSAclrtUnSubscribeReport, int, uint64_t threadId, aclrtStream stream);
+
+    REG_METHOD(DSP2PRegisterHostMem, int, void *, uint64_t, P2pSegmentInfo *, P2pSegmentPermissions);
+    REG_METHOD(DSP2PImportHostSegment, int, P2pSegmentInfo);
+    REG_METHOD(DSP2PScatterBatchFromRemoteHostMem, int, P2pScatterEntry*, uint32_t, P2PComm, aclrtStream);
 
     static std::once_flag init_;
     static std::once_flag hasLoadPlugin_;

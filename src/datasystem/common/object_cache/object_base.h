@@ -28,6 +28,7 @@
 #include "datasystem/client/mmap_table_entry.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -315,6 +316,16 @@ struct ObjectInterface {
     {
         return GetShmUnit() != nullptr && !stateInfo.IsIncomplete();
     }
+
+    virtual void SetRemoteHostInfo(const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
+    {
+        (void)remoteH2DHostInfo;
+    }
+
+    virtual std::shared_ptr<RemoteH2DHostInfo> GetRemoteHostInfo() const
+    {
+        return nullptr;
+    }
 };
 
 struct ObjectBufferInfo {
@@ -330,6 +341,7 @@ struct ObjectBufferInfo {
     uint32_t version;
     std::shared_ptr<RpcMessage> payloadPointer;
     std::shared_ptr<client::MmapTableEntry> mmapEntry;
+    std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo = nullptr;
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };

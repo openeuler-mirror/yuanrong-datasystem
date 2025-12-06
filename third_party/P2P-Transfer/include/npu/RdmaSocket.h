@@ -14,11 +14,8 @@
 #include <vector>
 #include "external/ra.h"
 
-constexpr uint32_t DEFAULT_INIT_RDMA_CONFIG = 0;
-
 enum RdmaSocketStatus {
     SOCKET_INITIALIZED = 0,
-    RDEV_INITIALIZED,
     SOCKET_LISTENING,
     SOCKET_CONNECTING,
     SOCKET_WHITELISTED,
@@ -47,7 +44,6 @@ public:
     Status connect(union hccp_ip_addr remoteIp, unsigned int remotePort, std::string tag);
     Status getSocketStatus(RdmaSocketStatus *socketStatus);
     Status waitReady(uint32_t timeOutMs);
-    Status getRdmaHandle(void **rdmaHandle);
     Status getFdHandle(void **fdHandle);
     Status addWhitelist(union hccp_ip_addr remoteIp, std::string tag);
     Status removeWhitelist(union hccp_ip_addr remoteIp);
@@ -62,7 +58,6 @@ private:
 
     struct rdev roceDevInfo {};
     void *roceSocketHandle;
-    void *rdmaHandle;
     struct socket_listen_info_t roceConn {};
     std::vector<socket_wlist_info_t> whiteList;
 
@@ -70,7 +65,7 @@ private:
     union hccp_ip_addr remoteIp;
     unsigned int remotePort;
 
-    socket_info_t socketInfo {};
+    socket_info_t socketInfo{};
 };
 
 #endif  // P2P_RDMA_SOCKET_H

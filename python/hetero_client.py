@@ -91,6 +91,7 @@ class HeteroClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
+        enable_remote_h2d=False,
     ):
         """Constructor of the HeteroClient class
 
@@ -111,6 +112,7 @@ class HeteroClient:
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
+            enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -126,6 +128,7 @@ class HeteroClient:
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
+            ["enable_remote_h2d", enable_remote_h2d, bool],
         ]
         validator.check_args_types(args)
         self._client = ds.HeteroClient(
@@ -140,6 +143,7 @@ class HeteroClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
+            enable_remote_h2d
         )
 
     @staticmethod

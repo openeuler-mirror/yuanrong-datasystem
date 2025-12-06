@@ -45,6 +45,16 @@ target_link_libraries(p2p-transfer_test_batch_send PRIVATE p2p-transfer::p2p-tra
 target_compile_features(p2p-transfer_test_batch_send PRIVATE cxx_std_11)
 add_test(NAME p2p-transfer_test_batch_send COMMAND p2p-transfer_test_batch_send)
 
+add_executable(p2p-transfer_test_h2d source/p2p-transfer_test_h2d.cpp)
+target_link_libraries(p2p-transfer_test_h2d PRIVATE p2p-transfer::p2p-transfer ${HCCL_LIBRARY})
+target_compile_features(p2p-transfer_test_h2d PRIVATE cxx_std_11)
+add_test(NAME p2p-transfer_test_h2d COMMAND p2p-transfer_test_h2d)
+
+add_executable(p2p-transfer_test_h2d_yr source/p2p-transfer_test_h2d_yr.cpp)
+target_link_libraries(p2p-transfer_test_h2d_yr PRIVATE p2p-transfer::p2p-transfer ${HCCL_LIBRARY})
+target_compile_features(p2p-transfer_test_h2d_yr PRIVATE cxx_std_11)
+add_test(NAME p2p-transfer_test_h2d_yr COMMAND p2p-transfer_test_h2d_yr)
+
 # ---- End-of-file commands ----
 
 add_folders(Test)

@@ -175,6 +175,7 @@ int SendDeviceLogic(const char *recvSendFifoPath, uint32_t sendDeviceId, size_t 
     // std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
 #ifdef USE_HCCL
+// Use HCCLCommDestroy
 #else
     NPU_ERROR(P2PCommDestroy(p2pComm));
 #endif
@@ -306,6 +307,7 @@ int RecvDeviceLogic(const char *recvSendFifoPath, uint32_t recvDeviceId, size_t 
     }
 
 #ifdef USE_HCCL
+// Use HCCLCommDestroy
 #else
     NPU_ERROR(P2PCommDestroy(p2pComm));
 #endif
@@ -333,11 +335,11 @@ void *CreateSharedMemory(size_t size)
 int Benchmark()
 {
     int batchSize = 2000;
-    int nSamples = 10;  // todo: ra_send_wr fails when using 1000 samples
-    uint32_t sendDeviceId = 0;
-    uint32_t recvDeviceId = 1;
+    int nSamples = 10;  // ra_send_wr fails when using 1000 samples
+    uint32_t sendDeviceId = 6;
+    uint32_t recvDeviceId = 7;
     uint32_t nDevices = 2;
-    size_t bufferSizeBytes = static_cast<size_t>(128) * 1024;
+    size_t bufferSizeBytes = static_cast<size_t>(1024) * 1024;
     unsigned int modeRw = 0666;
 
     // Initialize barrier in shared memory

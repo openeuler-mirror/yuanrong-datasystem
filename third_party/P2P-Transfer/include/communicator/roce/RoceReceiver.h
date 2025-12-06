@@ -9,12 +9,15 @@
 #include "include/communicator/roce/proto/RoceInitMsg.pb.h"
 #include "communication/TcpServer.h"
 #include "communication/TcpClient.h"
-#include "npu/Hccp.h"
 #include "npu/RdmaAgent.h"
+#include "npu/RdmaDev.h"
 #include "npu/RdmaSocket.h"
 #include "npu/RdmaQp.h"
 #include "npu/RdmaNotify.h"
 #include "npu/P2PMem.h"
+#include "npu/P2PNotify.h"
+#include "npu/NotifyValueMem.h"
+#include "communicator/P2PCommunicator.h"
 #include "communicator/CommChannel.h"
 #include "npu/ffts/dispatcher_ffts.h"
 
@@ -27,16 +30,19 @@ enum RoceReceiverStatus {
 
 class RoceReceiver : public ReceiveChannel {
 public:
-    RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes, uint32_t nRecvBuffs);
+    RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes, uint32_t nRecvBuffs,
+                 uint32_t qpNum);
 
     Status Initialize(TCPObjectClient *client, TCPObjectServer *server) override;
     Status Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream) override;
+    Status Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream) override;
 
 private:
-    uint32_t MergeReceivesIntoChunk(void **chunkDstPtrs, size_t *chunkCopySizes, void **dstPtrs, uint64_t *sizes,
-                                    uint32_t dstIdx, uint32_t count);
     Status ReceiveChunk(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream, uint32_t *lastTaskIds,
                         uint32_t &lastTaskCount, bool isLast);
+    Status ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, uint64_t *dstSizes, uint32_t count,
+                     aclrtStream stream, uint32_t &lastRdmaTaskId, uint32_t &lastRdmaTaskCount,
+                     uint32_t *lastSdmaTaskIds, uint32_t &lastSdmaTaskCount, uint32_t srcRkey, bool isLast);
 
     TCPObjectClient *client;
     TCPObjectServer *server;
@@ -46,19 +52,41 @@ private:
     uint32_t nRecvBuffs;
     uint32_t nChunksPerBuff;
 
+    uint32_t curQp = 0;
+    uint32_t qpNum;
+
     int32_t recvDeviceId;
     std::string tag;
 
-    std::unique_ptr<Hccp> hccp;
-    std::unique_ptr<RdmaAgent> rdmaAgent;
+    std::shared_ptr<RdmaDev> rdmaDev;
     std::unique_ptr<RdmaSocket> rdmaSocket;
-    std::unique_ptr<RdmaQp> qp;
+    std::vector<std::unique_ptr<RdmaQp>> qps;
+    std::vector<uint64_t> qpNotifyBaseVas;
+    std::vector<uint64_t> qpNotifyRemoteBaseVas;
+    std::unique_ptr<NotifyValueMem> valueMem;
     std::unique_ptr<p2p::DispatcherFFTS> fftsDispatcher;
 
     std::vector<std::unique_ptr<P2PMem>> recvBuffs;
     std::vector<std::unique_ptr<RdmaNotify>> sendDoneNotifies;
     std::vector<std::unique_ptr<RdmaNotify>> recvReadyNotifies;
     std::unique_ptr<RdmaNotify> recvCompleteNotify;
+
+    void *notifySrcValAddr;
+    uint32_t notifySize;
+
+    // Unify implementation with Send/Recv, later reuse comm buffer across comms
+    bool onesidedStarted = false;
+    uint64_t remotenotifySrcValAddr;
+    std::vector<std::unique_ptr<P2PMem>> oneSidedBuffs;
+    std::vector<std::vector<uint32_t>> oneSidedBuffLkeys;
+    std::vector<std::unique_ptr<RdmaNotify>> readChunkDoneNotifies;
+    std::vector<uint64_t> readChunkDoneNotifyAddrOffsets;
+    std::vector<std::unique_ptr<P2PNotify>> blockAvailableNotifies;  // record first time so usable
+    std::vector<uint64_t> blockAvailableNotifyAddr;
+    std::unique_ptr<RdmaNotify> writeOpFinishNotify;
+    uint32_t curOneSidedChunk = 0;
+    uint32_t curOneSidedBuffer = 0;
+    union hccp_ip_addr remoteIp;
 
     RoceReceiverStatus state = ROCE_RECEIVER_UNINITIALIZED;
     bool isRoot;

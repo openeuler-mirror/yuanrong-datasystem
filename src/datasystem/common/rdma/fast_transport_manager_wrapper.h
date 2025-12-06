@@ -35,6 +35,34 @@
 
 namespace datasystem {
 /**
+ * @brief Get an unique identifier for connection between device and the remote host.
+ * @param[out] commId The uuid in string.
+ * @return Status of the call.
+ */
+Status GetClientCommUuid(std::string &commId);
+
+/**
+ * @brief Client sets global remote h2d configurations according to connect options.
+ * @param[in] enableRemoteH2D Whether to enable remote host to device data transfer.
+ * @param[in] devId The NPU device id.
+ */
+void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId);
+
+/**
+ * @brief Whether remote H2D is enabled according to FLAGS_enable_remote_h2d.
+ * @return true if remote H2D is enabled.
+ */
+bool IsRemoteH2DEnabled();
+
+/**
+ * @brief Register host side memory (shared memory) to NPU device as segment.
+ * @param[in] data The memory address.
+ * @param[in] dataSize The size of the memory segment.
+ * @return Status of the call.
+ */
+Status RegisterHostMemory(void *segAddress, const uint64_t &segSize);
+
+/**
  * @brief Check if fast transport is enabled.
  * @return True if fast transport logic is compiled and the flag is set, else false.
  */

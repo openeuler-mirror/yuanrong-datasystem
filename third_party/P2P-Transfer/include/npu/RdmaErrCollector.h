@@ -10,8 +10,7 @@
 #include "tools/npu-error.h"
 #include "acl/acl.h"
 #include "experiment/msprof/toolchain/prof_api.h"
-
-constexpr uint32_t MAX_LOCAL_DEVICES = 16;
+#include "tools/common.h"
 
 class RdmaErrCollector {
 public:

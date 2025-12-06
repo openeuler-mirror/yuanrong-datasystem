@@ -25,6 +25,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -295,6 +296,10 @@ Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspP
     req.set_sub_timeout(ClientGetRequestTimeout(subTimeoutMs));
     req.set_client_id(GetClientId());
     req.set_return_object_index(true);
+    // Add and fill the request with client communicator root info, if RH2D is both supported and enabled.
+    if (getParam.isRH2DSupported) {
+        RETURN_IF_NOT_OK(GetClientCommUuid(*req.mutable_comm_id()));
+    }
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
 
     int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);

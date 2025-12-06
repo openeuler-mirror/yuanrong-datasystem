@@ -29,6 +29,7 @@
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
@@ -75,6 +76,7 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
     serverApi_ = std::move(api);
     noQueryL2Cache_ = req.no_query_l2cache();
     enableReturnObjectIndex_ = req.return_object_index();
+    clientCommId_ = req.comm_id();
     for (size_t i = 0; i < objectsCount; i++) {
         const auto &objectKey = rawObjectKeys_[i];
         OffsetInfo offsetInfo;
@@ -190,6 +192,11 @@ const std::string &GetRequest::GetClientId() const
 bool GetRequest::NoQueryL2Cache() const
 {
     return noQueryL2Cache_;
+}
+
+const std::string &GetRequest::GetClientCommUuid() const
+{
+    return clientCommId_;
 }
 
 const std::vector<ObjectKey> &GetRequest::GetRawObjectKeys() const
@@ -339,7 +346,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         const auto &params = iter->second.params;
         totalSize += params->dataSize;
         rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, resp, payloads);
-        if (shmEnabled) {
+        if (shmEnabled && !(IsRemoteH2DEnabled() && iter->second.params->remoteH2DHostInfo)) {
             // If object is shm, we increase the refCnt for client.
             // The client will be using this object and be responsible for releasing this object.
             shmRefTable_->AddShmUnit(clientId_, params->shmUnit);
@@ -368,7 +375,7 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
                                        bool shmEnabled, GetRspPb &resp, std::vector<RpcMessage> &outPayloads)
 {
     const auto &params = objectInfo.params;
-    if (shmEnabled) {
+    if (shmEnabled || (IsRemoteH2DEnabled() && objectInfo.params->remoteH2DHostInfo)) {
         GetRspPb::ObjectInfoPb *object = resp.add_objects();
         SetShmObjectInfoPb(objectKeyUri, objectIndex, *params, *object);
         return Status::OK();
@@ -402,7 +409,6 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
 void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
                                     GetRspPb::ObjectInfoPb &info)
 {
-    auto &shmUnit = safeEntry.shmUnit;
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
     } else {
@@ -410,16 +416,28 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t object
         TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
         info.set_object_key(objectKey);
     }
-    info.set_store_fd(shmUnit->GetFd());
-    info.set_offset(static_cast<int64_t>(shmUnit->GetOffset()));
+    if (IsRemoteH2DEnabled() && safeEntry.remoteH2DHostInfo) {
+        *(info.mutable_remote_host_segment()) = std::move(safeEntry.remoteH2DHostInfo->segmentInfo);
+        *(info.mutable_root_info()) = std::move(safeEntry.remoteH2DHostInfo->rootInfo);
+        *(info.mutable_data_info()) = std::move(safeEntry.remoteH2DHostInfo->dataInfo);
+        // Leave the shm unit stuff empty to be clearer.
+        info.set_store_fd(0);
+        info.set_offset(0);
+        info.set_mmap_size(0);
+        info.set_shm_id(std::string{});
+    } else {
+        auto &shmUnit = safeEntry.shmUnit;
+        info.set_store_fd(shmUnit->GetFd());
+        info.set_offset(static_cast<int64_t>(shmUnit->GetOffset()));
+        info.set_mmap_size(static_cast<int64_t>(shmUnit->GetMmapSize()));
+        info.set_shm_id(shmUnit->id);
+    }
     info.set_data_size(static_cast<int64_t>(safeEntry.dataSize));
     info.set_metadata_size(static_cast<int64_t>(safeEntry.metaSize));
-    info.set_mmap_size(static_cast<int64_t>(shmUnit->GetMmapSize()));
     info.set_version(static_cast<int64_t>(safeEntry.createTime));
     info.set_is_seal(safeEntry.isSealed);
     info.set_write_mode(static_cast<uint32_t>(safeEntry.objectMode.GetWriteMode()));
     info.set_consistency_type(static_cast<uint32_t>(safeEntry.objectMode.GetConsistencyType()));
-    info.set_shm_id(shmUnit->id);
 }
 
 void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,

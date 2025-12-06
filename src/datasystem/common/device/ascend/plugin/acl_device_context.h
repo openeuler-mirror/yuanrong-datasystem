@@ -373,7 +373,8 @@ int DSP2PGetRootInfo(HcclRootInfo *rootInfo);
  * @brief Initialize P2P with root info.
  *
  * @param rootInfo A struct identifying the p2p root info.
- * @param kind Identifies whether the current device is a sender and receiver
+ * @param kind Identifies whether the current device is a sender and receiver.
+ * @param link Identifies the communication channel type.
  * @param comm A pointer identifying the initialized communication resource.
  * @return HcclResult
  * @see HcclCommDestroy()
@@ -439,6 +440,10 @@ int DSAclrtLaunchCallback(aclrtCallback fn, void *userData, aclrtCallbackBlockTy
 int DSAclrtProcessReport(int32_t timeout);
 int DSAclrtSubscribeReport(uint64_t threadId, aclrtStream stream);
 int DSAclrtUnSubscribeReport(uint64_t threadId, aclrtStream stream);
+
+int DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segmentInfo, P2pSegmentPermissions permissions);
+int DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
+int DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchSize, P2PComm comm, aclrtStream stream);
 
 #ifdef __cplusplus
 };

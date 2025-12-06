@@ -22,12 +22,13 @@
 #include "npu/P2PStream.h"
 
 RoceSender::RoceSender(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes,
-                       uint32_t nSendBuffs)
+                       uint32_t nSendBuffs, uint32_t qpNum)
     : sendDeviceId(deviceId),
       isRoot(isRoot),
       blockSizeBytes(blockSizeBytes),
       chunkSizeBytes(chunkSizeBytes),
-      nSendBuffs(nSendBuffs)
+      nSendBuffs(nSendBuffs),
+      qpNum(qpNum)
 {
     nChunksPerBuff = blockSizeBytes / chunkSizeBytes;  // Should be divisible
 }
@@ -36,19 +37,13 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
 {
     int32_t visibleDevId = 0;
     uint32_t phyId = 0;
-    tag = "2DG0E8/W*1HjhYj};LZ-2FtcYreCri";
 
     ACL_CHECK_STATUS(rtGetVisibleDeviceIdByLogicDeviceId(sendDeviceId, &visibleDevId));
     ACL_CHECK_STATUS(rtGetDevicePhyIdByIndex(sendDeviceId, &phyId));
 
-    hccp = std::make_unique<Hccp>(visibleDevId);
-    CHECK_STATUS(hccp->start());
-
-    rdmaAgent = std::make_unique<RdmaAgent>(phyId);
-    CHECK_STATUS(rdmaAgent->init());
-
+    CHECK_STATUS(RdmaDev::GetInstance(phyId, rdmaDev));
     union hccp_ip_addr ipv4Addr;
-    CHECK_STATUS(rdmaAgent->getDeviceIpv4(&ipv4Addr));
+    CHECK_STATUS(rdmaDev->getIpv4(&ipv4Addr));
 
     rdmaSocket = std::make_unique<RdmaSocket>(phyId, ipv4Addr, CLIENT);
     CHECK_STATUS(rdmaSocket->init());
@@ -77,18 +72,35 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
 
     void *rdmaHandle;
     void *fdHandle;
-    CHECK_STATUS(rdmaSocket->getRdmaHandle(&rdmaHandle));
+    CHECK_STATUS(rdmaDev->getRdmaHandle(&rdmaHandle));
     CHECK_STATUS(rdmaSocket->getFdHandle(&fdHandle));
 
-    qp = std::make_unique<RdmaQp>();
-    CHECK_STATUS(qp->create(rdmaHandle));
+    valueMem = std::make_unique<NotifyValueMem>();
+    CHECK_STATUS(valueMem->alloc());
+    CHECK_STATUS(valueMem->get(&notifySrcValAddr, &notifySize));
 
     for (int i = 0; i < nSendBuffs; i++) {
         std::unique_ptr<P2PMem> mem = std::make_unique<P2PMem>();
         CHECK_STATUS(mem->alloc(blockSizeBytes, ACL_MEM_MALLOC_HUGE_FIRST_P2P));
-        qp->registerMemoryRegion(mem->get(), blockSizeBytes);
         sendBuffs.push_back(std::move(mem));
     }
+
+    for (int q = 0; q < qpNum; q++) {
+        std::unique_ptr<RdmaQp> qp = std::make_unique<RdmaQp>();
+        CHECK_STATUS(qp->create(rdmaHandle));
+
+        CHECK_STATUS(qp->registerMemoryRegion(notifySrcValAddr, notifySize));
+
+        for (int i = 0; i < nSendBuffs; i++) {
+            CHECK_STATUS(qp->registerMemoryRegion(sendBuffs[i]->get(), blockSizeBytes));
+        }
+
+        CHECK_STATUS(qp->connect(fdHandle));
+        CHECK_STATUS(qp->waitReady(0));
+        qps.push_back(std::move(qp));
+    }
+
+    CHECK_STATUS(rdmaSocket->close());
 
     for (int i = 0; i < nSendBuffs; i++) {
         std::unique_ptr<RdmaNotify> notify = std::make_unique<RdmaNotify>();
@@ -105,10 +117,6 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
         sendReadyNotifies.push_back(std::move(notify));
     }
 
-    CHECK_STATUS(qp->connect(fdHandle));
-    CHECK_STATUS(qp->waitReady(0));
-    CHECK_STATUS(rdmaSocket->close());
-
     ReceiverNpuResources receiverResources;
     if (isRoot) {
         CHECK_STATUS(server->ReceiveObject(receiverResources));
@@ -120,20 +128,29 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
         remoteRecvBuffAddrs.push_back(receiverResources.recvbuffaddrs(i));
     }
 
-    // Get notify addresses
-    unsigned long long notifyBaseVa;
-    CHECK_STATUS(qp->getNotifyBaseAddress(&notifyBaseVa));
+    for (int i = 0; i < qpNum; i++) {
+        qpNotifyRemoteBaseVas.push_back(receiverResources.qpbaseaddrs(i));
+    }
 
+    // Get notify addresses
     SenderNpuResources senderResources;
+    for (int q = 0; q < qpNum; q++) {
+        unsigned long long notifyBaseVa;
+        CHECK_STATUS(qps[q]->getNotifyBaseAddress(&notifyBaseVa));
+        senderResources.add_qpbaseaddrs(static_cast<uint64_t>(notifyBaseVa));
+    }
+
     for (auto &notify : recvReadyNotifies) {
         uint64_t recvReadyNotifyAddrOffset;
         CHECK_STATUS(notify->getAddrOffset(&recvReadyNotifyAddrOffset));
-        senderResources.add_recvreadynotifyaddrs(static_cast<uint64_t>(notifyBaseVa) + recvReadyNotifyAddrOffset);
+        senderResources.add_recvreadynotifyaddroffsets(recvReadyNotifyAddrOffset);
     }
 
     uint64_t recvCompleteNotifyAddrOffset;
     CHECK_STATUS(recvCompleteNotify->getAddrOffset(&recvCompleteNotifyAddrOffset));
-    senderResources.set_recvcompletenotifyaddr(static_cast<uint64_t>(notifyBaseVa) + recvCompleteNotifyAddrOffset);
+    senderResources.set_recvcompletenotifyaddroffset(recvCompleteNotifyAddrOffset);
+
+    senderResources.set_notifysrcvaladdr(reinterpret_cast<uint64_t>(notifySrcValAddr));
 
     if (isRoot) {
         CHECK_STATUS(server->SendObject(senderResources));
@@ -141,9 +158,9 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
         CHECK_STATUS(client->SendObject(senderResources));
     }
 
-    for (int i = 0; i < receiverResources.senddonenotifyaddrs_size(); i++) {
+    for (int i = 0; i < receiverResources.senddonenotifyaddroffsets_size(); i++) {
         std::unique_ptr<RdmaNotify> notify = std::make_unique<RdmaNotify>();
-        CHECK_STATUS(notify->open(receiverResources.senddonenotifyaddrs(i)));
+        CHECK_STATUS(notify->open(receiverResources.senddonenotifyaddroffsets(i)));
         sendDoneNotifies.push_back(std::move(notify));
     }
 
@@ -204,24 +221,22 @@ Status RoceSender::SendChunk(void **srcPtrs, uint64_t *sizes, uint32_t count, ac
         lastMemcpyTaskIds[i % SENDER_MAX_PARALLEL_TASKS] = memcpyTaskId;
     }
 
-    uint64_t notifySrcAddr;
     uint64_t notifyDstAddr;
-    uint32_t notifyWriteLength;
-
-    CHECK_STATUS(sendDoneNotifies[curBuffer * nChunksPerBuff + curChunk]->getRecordInfo(
-        qp.get(), &notifySrcAddr, &notifyDstAddr, &notifyWriteLength));
+    CHECK_STATUS(sendDoneNotifies[curBuffer * nChunksPerBuff + curChunk]->getRecordInfo(&notifyDstAddr));
+    notifyDstAddr += qpNotifyRemoteBaseVas[0];
     uint32_t rdmaWriteTaskId = 0;
 
-    CHECK_STATUS(qp->rdmaWriteFfts(fftsDispatcher.get(), reinterpret_cast<uint64_t>(chunkMid), chunkDst, curChunkOffset,
-                                   &rdmaWriteTaskId));
+    CHECK_STATUS(qps[0]->dispatchRdmaOpFfts(fftsDispatcher.get(), reinterpret_cast<uint64_t>(chunkMid), chunkDst,
+                                            curChunkOffset, RA_OP_WRITE, RA_SEND_SIGNALED, &rdmaWriteTaskId));
 
     for (int i = 0; i < numLastMemcpyTaskIds; i++) {
         fftsDispatcher->AddTaskDependency(lastMemcpyTaskIds[i], rdmaWriteTaskId);
     }
 
     uint32_t rdmaNotifyTaskId = 0;
-    CHECK_STATUS(
-        qp->rdmaWriteFfts(fftsDispatcher.get(), notifySrcAddr, notifyDstAddr, notifyWriteLength, &rdmaNotifyTaskId));
+    CHECK_STATUS(qps[0]->dispatchRdmaOpFfts(fftsDispatcher.get(), reinterpret_cast<uint64_t>(notifySrcValAddr),
+                                            notifyDstAddr, notifySize, RA_OP_WRITE, RA_SEND_SIGNALED | RA_SEND_FENCE,
+                                            &rdmaNotifyTaskId));
     fftsDispatcher->AddTaskDependency(rdmaWriteTaskId, rdmaNotifyTaskId);
 
     if (isLast) {
@@ -274,10 +289,12 @@ Status RoceSender::SendChunk(void **srcPtrs, uint64_t *sizes, uint32_t count, ac
     roceDstAddrs[0] = chunkDst;
     roceLengths[0] = curChunkOffset;
 
-    CHECK_STATUS(sendDoneNotifies[curBuffer * nChunksPerBuff + curChunk]->getRecordInfo(
-        qp.get(), &roceSrcAddrs[1], &roceDstAddrs[1], &roceLengths[1]));
+    CHECK_STATUS(sendDoneNotifies[curBuffer * nChunksPerBuff + curChunk]->getRecordInfo(&roceDstAddrs[1]));
+    roceDstAddrs[1] += qpNotifyRemoteBaseVas[0];
+    roceSrcAddrs[1] = reinterpret_cast<uint64_t>(notifySrcValAddr);
+    roceLengths[1] = notifySize;
 
-    CHECK_STATUS(qp->rdmaWrite(roceSrcAddrs, roceDstAddrs, roceLengths, stream));
+    CHECK_STATUS(qps[0]->execRdmaOp(roceSrcAddrs, roceDstAddrs, roceLengths, RA_OP_WRITE, RA_SEND_SIGNALED, stream));
 
     if (isLast) {
         CHECK_STATUS(recvCompleteNotify->wait(stream));
@@ -291,31 +308,6 @@ Status RoceSender::SendChunk(void **srcPtrs, uint64_t *sizes, uint32_t count, ac
     return Status::Success();
 }
 #endif
-
-uint32_t RoceSender::MergeTransfersIntoChunk(void **chunkSrcPtrs, size_t *chunkCopySizes, void **srcPtrs,
-                                             uint64_t *sizes, uint32_t srcIdx, uint32_t count)
-{
-    uint64_t chunkSize = 0;
-    uint32_t numMerged = 0;
-
-    for (uint32_t i = srcIdx; i < count; ++i) {
-        if (sizes[i] > chunkSizeBytes) {
-            break;
-        }
-
-        uint64_t alignedSize = RoundUp(sizes[i], PAGE_SIZE_BYTES);
-        if (chunkSize + alignedSize <= chunkSizeBytes) {
-            chunkSrcPtrs[i - srcIdx] = srcPtrs[i];
-            chunkCopySizes[i - srcIdx] = sizes[i];
-            chunkSize += alignedSize;
-            numMerged++;
-        } else {
-            break;
-        }
-    }
-
-    return numMerged;
-}
 
 Status RoceSender::Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream)
 {
@@ -344,10 +336,26 @@ Status RoceSender::Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtSt
                 CHECK_STATUS(SendChunk(chunkSrcPtrs, chunkCopySizes, 1, stream, lastTaskId, isLast));
             }
             srcIdx++;
-        } else {  // Transfer fits in a chunk, try to fit as many subsequent chunks in transfer as possible
-            uint32_t numMerged = MergeTransfersIntoChunk(
-                chunkSrcPtrs, chunkCopySizes, srcPtrs, sizes, srcIdx, count
-            );
+        } else {
+            // Transfer fits in a chunk, try to fit as many subsequent chunks in transfer as possible
+            uint64_t chunkSize = 0;
+            uint32_t numMerged = 0;
+
+            for (uint32_t i = srcIdx; i < count; ++i) {
+                if (sizes[i] > chunkSizeBytes) {
+                    break;
+                }
+
+                uint64_t alignedSize = RoundUp(sizes[i], PAGE_SIZE_BYTES);
+                if (chunkSize + alignedSize <= chunkSizeBytes) {
+                    chunkSrcPtrs[i - srcIdx] = srcPtrs[i];
+                    chunkCopySizes[i - srcIdx] = sizes[i];
+                    chunkSize += alignedSize;
+                    numMerged++;
+                } else {
+                    break;
+                }
+            }
             bool isLast = (srcIdx + numMerged == count);
             if (srcIdx == 0 && curChunk != 0) {
                 numTasks = std::min(SENDER_MAX_PARALLEL_TASKS, numMerged);

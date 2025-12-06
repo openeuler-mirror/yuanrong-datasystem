@@ -26,65 +26,69 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <regex>
-#include <cctype>
+
+static constexpr int DECIMAL = 10;
+static constexpr int IPV4_LIMIT = 255;
 
 std::vector<std::string> split(const std::string &s, char delimiter)
 {
-    std::vector<std::string> tokens;
-    std::string token;
-    for (char c : s) {
-        if (c == delimiter) {
-            if (!token.empty()) {
-                tokens.push_back(token);
-                token.clear();
-            }
-        } else {
-            token += c;
-        }
+    std::vector<std::string> segments;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delimiter)) {
+        segments.push_back(item);
     }
-    if (!token.empty()) {
-        tokens.push_back(token);
-    }
-    return tokens;
+    return segments;
 }
 
-bool IsValidIPv4(const std::string &ip)
+int convertToInt(const std::string &str)
 {
-    std::vector<std::string> parts = split(ip, '.');
-    const size_t kIPv4PartCount = 4;
-    if (parts.size() != kIPv4PartCount) {
+    int result = 0;
+
+    // Convert string to integer, checking for non-digit characters
+    for (char ch : str) {
+        if (!std::isdigit(ch)) {
+            return -1;  // Invalid character found
+        }
+
+        result = result * DECIMAL + (ch - '0');
+
+        // Early return if value exceeds 255
+        if (result > IPV4_LIMIT) {
+            return result;
+        }
+    }
+
+    return result;
+}
+
+// Checks whether a IP address is a valid IPv4 address
+bool IsValidIPv4(const std::string &ipString)
+{
+    // IPv4 cannot be empty or end with a dot
+    if (ipString.empty() || ipString.back() == '.') {
         return false;
     }
 
-    const int kMaxIPv4Value = 255;
-    const int kMinIPv4Value = 0;
+    // Split the string by dots
+    std::vector<std::string> segments = split(ipString, '.');
 
-    for (const std::string &part : parts) {
-        if (part.empty()) {
+    // IPv4 must have exactly 4 segments
+    const size_t kIPv4PartCount = 4;
+    if (segments.size() != kIPv4PartCount) {
+        return false;
+    }
+
+    // Validate each segment
+    for (const std::string &segment : segments) {
+        // Segment cannot be empty or have leading zeros (except for "0" itself)
+        if (segment.empty() || (segment.size() > 1 && segment[0] == '0')) {
             return false;
         }
 
-        for (char c : part) {
-            if (!isdigit(c)) {
-                return false;
-            }
-        }
-
-        if (part.size() > 1 && part[0] == '0') {
-            return false;
-        }
-
-        int num = 0;
-        const int kBase10 = 10;
-        for (char c : part) {
-            num = num * kBase10 + (c - '0');
-            if (num > kMaxIPv4Value) {
-                return false;
-            }
-        }
-
-        if (num < kMinIPv4Value || num > kMaxIPv4Value) {
+        // Convert segment to integer and validate range [0, 255]
+        int value = convertToInt(segment);
+        if (value < 0 || value > IPV4_LIMIT) {
             return false;
         }
     }

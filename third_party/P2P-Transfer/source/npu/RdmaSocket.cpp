@@ -3,24 +3,19 @@
  */
 #include "npu/RdmaSocket.h"
 #include "npu/RaWrapper.h"
-#include <cstdio>
 #include <thread>
 #include <unistd.h>
 
 RdmaSocket::~RdmaSocket()
 {
-  if (status == RdmaSocketStatus::SOCKET_LISTENING) {
-    STATUS_ERROR(RaSocketListenStop(&roceConn, 1));
-  }
+    if (status == RdmaSocketStatus::SOCKET_LISTENING) {
+        STATUS_ERROR(RaSocketListenStop(&roceConn, 1));
+    }
 
     if (status >= RdmaSocketStatus::SOCKET_LISTENING) {
         for (int i = 0; i < whiteList.size(); i++) {
             RaSocketWhiteListDel(roceSocketHandle, &whiteList[i], 1);
         }
-    }
-
-    if (status >= RdmaSocketStatus::SOCKET_INITIALIZED) {
-        RaRdevDeinit(rdmaHandle, EVENTID);
     }
 
     if (status >= RdmaSocketStatus::SOCKET_INITIALIZED) {
@@ -37,25 +32,17 @@ Status RdmaSocket::init()
     ACL_CHECK_STATUS(ra_socket_init(NETWORK_OFFLINE, roceDevInfo, &roceSocketHandle));
     status = RdmaSocketStatus::SOCKET_INITIALIZED;
 
-    rdev_init_info roceInitInfo = {DEFAULT_INIT_RDMA_CONFIG};
-    roceInitInfo.mode = NETWORK_OFFLINE;
-    roceInitInfo.notify_type = EVENTID;
-
-    CHECK_STATUS(RaRdevInitV2(roceInitInfo, roceDevInfo, &rdmaHandle));
-    status = RdmaSocketStatus::RDEV_INITIALIZED;
-
     return Status::Success();
 }
 
 Status RdmaSocket::listenFirstAvailable(unsigned int startPort, unsigned int endPort)
 {
-    if (status != RdmaSocketStatus::RDEV_INITIALIZED) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma rdev is not initialized");
+    if (status != RdmaSocketStatus::SOCKET_INITIALIZED) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "socket is not initialized");
     }
-    
-    unsigned int tryPort = startPort;
+
     roceConn.socket_handle = roceSocketHandle;
-    roceConn.port = tryPort;
+    roceConn.port = 0;
 
     Status res;
     while (true) {
@@ -63,14 +50,13 @@ Status RdmaSocket::listenFirstAvailable(unsigned int startPort, unsigned int end
         if (res.IsSuccess()) {
             break;
         } else if (res.Code() == ErrorCode::ERR_SOCK_EADDRINUSE) {
-            tryPort++;
-            roceConn.port = tryPort;
+            roceConn.port = 0;  // Try again
         } else {
             return res;
         }
     }
-    
-    this->listenPort = tryPort;
+
+    this->listenPort = roceConn.port;
 
     status = RdmaSocketStatus::SOCKET_LISTENING;
     return Status::Success();
@@ -78,8 +64,7 @@ Status RdmaSocket::listenFirstAvailable(unsigned int startPort, unsigned int end
 
 Status RdmaSocket::getListenPort(unsigned int &listenPort)
 {
-    if (status == RdmaSocketStatus::SOCKET_UNINITIALIZED || status == RdmaSocketStatus::RDEV_INITIALIZED
-        || status == RdmaSocketStatus::SOCKET_UNINITIALIZED) {
+    if (status == RdmaSocketStatus::SOCKET_UNINITIALIZED || status == RdmaSocketStatus::SOCKET_UNINITIALIZED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "listen port cannot be obtained in current state");
     }
 
@@ -88,18 +73,14 @@ Status RdmaSocket::getListenPort(unsigned int &listenPort)
     return Status::Success();
 }
 
-Status RdmaSocket::connect(union hccp_ip_addr remoteIp,
-                           unsigned int remotePort,
-                           std::string tag)
+Status RdmaSocket::connect(union hccp_ip_addr remoteIp, unsigned int remotePort, std::string tag)
 {
     if (socketRole != socket_role::CLIENT) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "connect only supported for client socket");
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "connect only supported for client socket");
     }
 
-    if (status != RdmaSocketStatus::RDEV_INITIALIZED) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "socket must be initialized to connect");
+    if (status != RdmaSocketStatus::SOCKET_INITIALIZED) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "socket must be initialized to connect");
     }
 
     struct socket_connect_info_t connectInfo {};
@@ -121,7 +102,7 @@ Status RdmaSocket::connect(union hccp_ip_addr remoteIp,
     return Status::Success();
 }
 
-Status RdmaSocket::getSocketStatus(RdmaSocketStatus* socketStatus)
+Status RdmaSocket::getSocketStatus(RdmaSocketStatus *socketStatus)
 {
     if (status == RdmaSocketStatus::SOCKET_CONNECTING || status == RdmaSocketStatus::SOCKET_WHITELISTED) {
         uint32_t numConnected = 0;
@@ -139,8 +120,7 @@ Status RdmaSocket::getSocketStatus(RdmaSocketStatus* socketStatus)
 Status RdmaSocket::waitReady(uint32_t timeOutMs)
 {
     if (status == RdmaSocketStatus::SOCKET_UNINITIALIZED) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "socket has not been initialized yet");
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "socket has not been initialized yet");
     }
 
     auto startTime = std::chrono::steady_clock::now();
@@ -159,23 +139,10 @@ Status RdmaSocket::waitReady(uint32_t timeOutMs)
     return Status::Success();
 }
 
-Status RdmaSocket::getRdmaHandle(void** rdmaHandle)
-{
-    if (status < RdmaSocketStatus::RDEV_INITIALIZED) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "rdev is not yet initialized");
-    }
-
-    *rdmaHandle = this->rdmaHandle;
-
-    return Status::Success();
-}
-
-Status RdmaSocket::getFdHandle(void** fdHandle)
+Status RdmaSocket::getFdHandle(void **fdHandle)
 {
     if (status != RdmaSocketStatus::SOCKET_CONNECTED) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "socket is not yet connected");
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "socket is not yet connected");
     }
 
     *fdHandle = socketInfo.fd_handle;
@@ -200,13 +167,11 @@ Status RdmaSocket::close()
 Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
 {
     if (socketRole != socket_role::SERVER) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "whitelist only supported for server socket");
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "whitelist only supported for server socket");
     }
 
     if (status != RdmaSocketStatus::SOCKET_LISTENING) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED,
-                             "socket is not listening");
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "socket is not listening");
     }
 
     socket_wlist_info_t whiteListEntry = {};
@@ -223,7 +188,7 @@ Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
 
     socketInfo.remote_ip = remoteIp;
     socketInfo.socket_handle = roceSocketHandle;
-    
+
     snprintf(socketInfo.tag, sizeof(socketInfo.tag), "%s", tag.c_str());
 
     status = RdmaSocketStatus::SOCKET_WHITELISTED;

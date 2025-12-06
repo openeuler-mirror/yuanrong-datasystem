@@ -29,6 +29,7 @@
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
@@ -45,7 +46,15 @@ Buffer::Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo, std::shared_ptr<obj
 Status Buffer::Init()
 {
     RETURN_IF_NOT_OK(CheckDeprecated());
-    if (bufferInfo_->pointer == nullptr && bufferInfo_->payloadPointer == nullptr) {  // non-shared memory Create or Put
+
+    // Special check for Remote H2D. If the remote host info exists,
+    // then the data is neither in local shared memory nor in payload, but rather still on remote worker.
+    if (bufferInfo_->remoteHostInfo != nullptr) {
+        bufferInfo_->pointer = nullptr;
+        isShm_ = false;
+        latch_ = std::make_shared<object_cache::CommonLock>();
+    } else if (bufferInfo_->pointer == nullptr
+               && bufferInfo_->payloadPointer == nullptr) {  // non-shared memory Create or Put
         auto mallocSize = bufferInfo_->dataSize + 1;
         auto memPtr = static_cast<uint8_t *>(malloc(mallocSize));
         if (memPtr == nullptr) {
@@ -250,6 +259,11 @@ Status Buffer::InvalidateBuffer()
     RETURN_IF_NOT_OK(CheckDeprecated());
     RETURN_IF_NOT_OK(clientImpl_->InvalidateBuffer(bufferInfo_->objectKey));
     return Status::OK();
+}
+
+RemoteH2DHostInfo *Buffer::GetRemoteHostInfo()
+{
+    return bufferInfo_->remoteHostInfo.get();
 }
 
 Status Buffer::CheckDeprecated()

@@ -100,8 +100,7 @@ int SendDeviceLogic(const char *recvSendFifoPath, uint32_t sendDeviceId, size_t 
 
     bar.Wait();
     P2PComm p2pComm;
-    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(
-                     &rootInfo, P2P_SENDER, P2P_LINK_HCCS, &p2pComm)),
+    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(&rootInfo, P2P_SENDER, P2P_LINK_HCCS, &p2pComm)),
                  "Sender P2PCommInitRootInfo");
 #endif
 
@@ -202,8 +201,7 @@ int RecvDeviceLogic(const char *recvSendFifoPath, uint32_t recvDeviceId, size_t 
 #else
     P2PComm p2pComm;
     std::cout << "Init receiver" << std::endl;
-    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(
-                     &rootInfo, P2P_RECEIVER, P2P_LINK_HCCS, &p2pComm)),
+    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(&rootInfo, P2P_RECEIVER, P2P_LINK_HCCS, &p2pComm)),
                  "Receiver P2PCommInitRootInfo");
 #endif
 
@@ -243,11 +241,8 @@ int RecvDeviceLogic(const char *recvSendFifoPath, uint32_t recvDeviceId, size_t 
         }
 
         for (int i = 0; i < batchSize; i++) {
-            NPU_ERROR(aclrtMemcpy(hostBuffs[i],
-                                  bufferSizeBytes,
-                                  dRecvBuffs[i],
-                                  bufferSizeBytes,
-                                  ACL_MEMCPY_DEVICE_TO_HOST));
+            NPU_ERROR(
+                aclrtMemcpy(hostBuffs[i], bufferSizeBytes, dRecvBuffs[i], bufferSizeBytes, ACL_MEMCPY_DEVICE_TO_HOST));
             Verify(hostBuffs[i], transferSizeBytes / sizeof(float));
         }
 

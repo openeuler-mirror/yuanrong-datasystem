@@ -13,43 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef FIFO_H
-#define FIFO_H
+#ifndef P2P_COMMON_H
+#define P2P_COMMON_H
 
-#include <unistd.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <iostream>
-#include <string>
+#include <cstdint>
 
-class Fifo {
-public:
-    Fifo(const std::string &path, __mode_t mode) : path_(path)
-    {
-        unlink(path_.c_str());
-        if (mkfifo(path_.c_str(), mode) == -1) {
-            throw std::runtime_error("Failed to create FIFO");
-        }
-    }
+constexpr uint32_t MAX_LOCAL_DEVICES = 16;
 
-    std::string GetPath()
-    {
-        return path_;
-    }
-
-    ~Fifo()
-    {
-        unlink(path_.c_str());
-    }
-
-    int GetFd() const
-    {
-        return fd_;
-    }
-
-private:
-    std::string path_;
-    int fd_;
-};
-
-#endif  // FIFO_H
+#endif  // P2P_COMMON_H

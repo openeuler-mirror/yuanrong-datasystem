@@ -156,6 +156,7 @@ class DsTensorClient:
         server_public_key(str): The worker server's public key, for curve authentication.
         req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
         connect_timeout_ms.
+        enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
         RuntimeError: Raise a runtime error if the client failed to invoke api.
@@ -172,6 +173,7 @@ class DsTensorClient:
         client_private_key="",
         server_public_key="",
         req_timeout_ms=0,
+        enable_remote_h2d=False
     ):
         args = [
             ["host", host, str],
@@ -194,6 +196,7 @@ class DsTensorClient:
             client_private_key,
             server_public_key,
             req_timeout_ms,
+            enable_remote_h2d=enable_remote_h2d
         )
         self._device_id = device_id
 

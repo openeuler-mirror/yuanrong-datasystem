@@ -20,13 +20,18 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
 #include <cstdint>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/thread_local.h"
@@ -39,7 +44,6 @@
 
 DS_DEFINE_int64(batch_get_threshold_mb, 100, "The payload threshold to batch get objects");
 DS_DEFINE_validator(batch_get_threshold_mb, &Validator::ValidateBatchGetThreshold);
-DS_DECLARE_bool(enable_urma);
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -284,12 +288,23 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
             meta->set_data_size(subResp.data_size());
         }
         tryGetFromElsewhere = false;
-    } else {
-        if (subRc.IsOk() && !subResp.data_in_payload()) {
+    } else if (subRc.IsOk()) {
+        // Successful logics
+        // Payload data handling
+        if (subResp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
             // At this point, we haven't materialized the payload which is still sitting in the tcp/ip buffers.
             // We either receive payload directly into shared memory or fall back to the old behavior to save
             // the payload in ZMQ private memory
             subRc = BatchGetRetrieveRemotePayload(subResp.data_size(), objectKV, payloads, payloadIndex);
+        }
+
+        if (IsRemoteH2DEnabled() && (subResp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER)
+            && subResp.has_remote_host_segment() && subResp.has_root_info()) {
+            auto hostInfo = std::make_shared<RemoteH2DHostInfo>();
+            hostInfo->segmentInfo = std::move(subResp.remote_host_segment());
+            hostInfo->rootInfo = std::move(subResp.root_info());
+            hostInfo->dataInfo = std::move(subResp.data_info());
+            objectKV.GetObjEntry()->SetRemoteHostInfo(hostInfo);
         }
     }
     return subRc;
@@ -451,7 +466,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                                      FormatString("Fail to get objects from remote worker, no object copy exists."));
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
-            RETURN_IF_NOT_OK(ConstructBatchGetRequest(address, infos, successIds, needRetryIds, failedIds, reqPb));
+            RETURN_IF_NOT_OK(
+                ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;

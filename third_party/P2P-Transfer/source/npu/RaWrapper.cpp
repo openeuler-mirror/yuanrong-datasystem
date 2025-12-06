@@ -80,6 +80,8 @@ Status RaSocketListenStart(struct socket_listen_info_t conn[], uint32_t num)
                 return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_socket_listen_start: timed out");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else if (ret == SOCK_EADDRINUSE) {
+            return Status::Error(ErrorCode::ERR_SOCK_EADDRINUSE, "Port already in use");
         } else {
             return Status::Error(ErrorCode::ACL_ERROR,
                                  "Failed to perform ra_socket_listen_start: return " + std::to_string(ret));
@@ -230,6 +232,18 @@ Status RaMrDeReg(void *qp_handle, struct mr_info *info)
     return Status::Success();
 }
 
+Status RaGlobalMrReg(void *rdma_handle, struct mr_info *info, void **mr_handle)
+{
+    ACL_CHECK_STATUS(ra_register_mr(rdma_handle, info, mr_handle));
+    return Status::Success();
+}
+
+Status RaGlobalMrDeReg(void *rdma_handle, void *mr_handle)
+{
+    ACL_CHECK_STATUS(ra_deregister_mr(rdma_handle, mr_handle));
+    return Status::Success();
+}
+
 Status RaQpConnectAsync(void *qp_handle, const void *fd_handle)
 {
     int32_t ret = 0;
@@ -296,6 +310,31 @@ Status RaSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
         ret = ra_send_wr(qp_handle, wr, op_rsp);
+        if (!ret) {
+            break;
+        } else if ((ret == SOCK_ENOENT) || (ret == SOCK_EAGAIN)
+                   || (ret
+                       == ROCE_ENOMEM)) {  // Not sure if we should do the last one, or maybe we should do it only once.
+                                           // But fixes our error. Or maybe need to have rate limiting somewhere else
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform RaSendWr: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform RaSendWr: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaTypicalSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = ra_typical_send_wr(qp_handle, wr, op_rsp);
         if (!ret) {
             break;
         } else if ((ret == SOCK_ENOENT) || (ret == SOCK_EAGAIN)

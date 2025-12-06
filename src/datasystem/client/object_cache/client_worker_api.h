@@ -78,6 +78,7 @@ struct GetParam {
     int64_t subTimeoutMs;
     const std::vector<ReadParam> &readParams;
     bool queryL2Cache;
+    bool isRH2DSupported = false;
 };
 
 class ClientWorkerApi : public client::ClientWorkerCommonApi, public std::enable_shared_from_this<ClientWorkerApi> {

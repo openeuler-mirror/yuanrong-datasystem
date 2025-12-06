@@ -38,6 +38,7 @@
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
@@ -48,8 +49,11 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/master/meta_addr_info.h"
+#include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/protos/object_posix.pb.h"
+#include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/common/util/meta_route_tool.h"
@@ -367,7 +371,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
         // protect remoteObjectKeys and lastRc
         std::mutex mutex;
         auto batchHandler = [&parallelTaskList, &func, &remoteObjectKeys, &mutex, &lastRc, &needEvictKeys](size_t start,
-                                                                                                       size_t end) {
+                                                                                                           size_t end) {
             Status status;
             std::set<ReadKey> remoteKeys;
             std::vector<std::string> evictKeys;
@@ -404,7 +408,7 @@ void WorkerOcServiceGetImpl::SubmitAsyncAddEvictTask(std::vector<std::string> ob
     PerfPoint point(PerfKey::ASYNC_EVICT_TASK_ADD);
     static const size_t isAsyncThreshold = 64;
     if (objectIds.size() > isAsyncThreshold) {
-        threadPool_->Execute([ids = std::move(objectIds), this] () {
+        threadPool_->Execute([ids = std::move(objectIds), this]() {
             for (const auto &id : ids) {
                 evictionManager_->Add(id);
             }
@@ -907,6 +911,7 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpA
 }
 
 Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &address, std::list<GetObjectInfo> &infos,
+                                                        const std::shared_ptr<GetRequest> &request,
                                                         std::vector<std::string> &successIds,
                                                         std::vector<ReadKey> &needRetryIds,
                                                         std::unordered_set<std::string> &failedIds,
@@ -919,7 +924,13 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
     // Pre-allocate an aggregated chunk of shared memory as ShmOwner, to reduce the number of allocation calls.
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
     std::vector<uint32_t> shmIndexMapping(infos.size(), std::numeric_limits<uint32_t>::max());
-    RETURN_IF_NOT_OK(AggregateAllocateHelper(infos, shmOwners, shmIndexMapping));
+    // Skip early allocate if the request is both RH2D enabled and supported.
+    if (!IsRemoteH2DEnabled() || request->GetClientCommUuid().empty()) {
+        RETURN_IF_NOT_OK(AggregateAllocateHelper(infos, shmOwners, shmIndexMapping));
+    } else {
+        // Assume the client works with only one device id, so only one connection is needed.
+        (*reqPb.mutable_comm_id()) = request->GetClientCommUuid();
+    }
 
     bool requestReady = false;
     uint32_t objectIndex = 0;
@@ -936,12 +947,18 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         // Re-set object entry in the case of looped for data size change.
         SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
         const auto &readKey = infoIter->readKey;
-        ReadObjectKV objectKV(*readKey, *entry);
-        Status status = objectKV.CheckReadOffset();
-        if (status.IsError()) {
+
+        // Function to handle individual status
+        auto handleIndividualStatus = [&](Status &status) {
             BatchGetObjectHandleIndividualStatus(status, *readKey, successIds, needRetryIds, failedIds);
             infoIter = infos.erase(infoIter);
             lastRc = status;
+        };
+
+        ReadObjectKV objectKV(*readKey, *entry);
+        Status status = objectKV.CheckReadOffset();
+        if (status.IsError()) {
+            handleIndividualStatus(status);
             continue;
         }
         GetObjectRemoteReqPb subReq;
@@ -959,11 +976,10 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         }
         status = PrepareGetRequestHelper(address, meta.data_size(), objectKV, subReq, shmUnitAllocated, shmOwner);
         if (status.IsError()) {
-            BatchGetObjectHandleIndividualStatus(status, *readKey, successIds, needRetryIds, failedIds);
-            infoIter = infos.erase(infoIter);
-            lastRc = status;
+            handleIndividualStatus(status);
             continue;
         }
+
         reqPb.mutable_requests()->Add(std::move(subReq));
         if (objectKV.IsOffsetRead()) {
             objectKV.GetObjEntry()->stateInfo.SetIncompleted(true);
@@ -1003,6 +1019,10 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     if (objectKV.IsOffsetRead()) {
         objectKV.GetObjEntry()->stateInfo.SetIncompleted(true);
     }
+    if (objectKV.commId_) {
+        (*reqPb.mutable_comm_id()) = (*objectKV.commId_);
+    }
+
     bool dataSizeChange;
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> clientApi;
     do {
@@ -1046,10 +1066,22 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     // At this point, we haven't materialized the payload which is still sitting in the tcp/ip buffers.
     // We either receive payload directly into shared memory or fall back to the old behavior to save
     // the payload in ZMQ private memory
-    if (!rspPb.data_in_payload()) {
+    if (rspPb.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
         PerfPoint retrieveRemotePayloadPoint(PerfKey::WORKER_RETRIEVE_REMOTE_PAYLOAD);
         RETURN_IF_NOT_OK(RetrieveRemotePayload(objectKV, clientApi, rspPb));
     }
+
+    if (IsRemoteH2DEnabled() && (rspPb.data_source() == DataTransferSource::DATA_DELAY_TRANSFER)
+        && rspPb.has_remote_host_segment() && rspPb.has_root_info()) {
+        // Return the remote host segment info back to client, so client can import the segment.
+        // Also the root info for communicator connection, and the offsets for get scattered.
+        auto hostInfo = std::make_shared<RemoteH2DHostInfo>();
+        hostInfo->segmentInfo = std::move(rspPb.remote_host_segment());
+        hostInfo->rootInfo = std::move(rspPb.root_info());
+        hostInfo->dataInfo = std::move(rspPb.data_info());
+        objectKV.GetObjEntry()->SetRemoteHostInfo(hostInfo);
+    }
+
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,
                             objectKV.GetObjKey());
     rpcPoint.Record();
@@ -1257,7 +1289,7 @@ Status WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(
             }
         }
     };
-    std::apply([&](auto &... sets) { (extractObjectsMayExistInOtherAz(sets), ...); }, objectKeysQueryMetaFailed);
+    std::apply([&](auto &...sets) { (extractObjectsMayExistInOtherAz(sets), ...); }, objectKeysQueryMetaFailed);
 
     RETURN_OK_IF_TRUE(objectKeysMayInOtherAz.empty());
     LOG(INFO) << "Try get some miss objs from other az: " << VectorToString(objectKeysMayInOtherAz);
@@ -1769,12 +1801,22 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
         // If a local publish or remote get finished between QueryMeta and ReserveGetAndLock,
         // we will get a valid object here.
         ReadObjectKV objectKV(readKey, *entry);
-        RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
-        RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
-        return Status::OK();
+        Status rc = KeepObjectDataInMemory(objectKV);
+        if (rc.IsOk()) {
+            RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
+            return Status::OK();
+        } else if (!IsRemoteH2DEnabled()) {
+            return rc;
+        }
+        // For RemoteH2D scenario, data never reaches shared memory, so need to re-do get entirely.
     }
     SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
-    ReadObjectKV objectKV(readKey, *entry);
+    // Assume the client work with only one device id.
+    std::shared_ptr<std::string> commId = nullptr;
+    if (IsRemoteH2DEnabled()) {
+        commId = std::make_shared<std::string>(request->GetClientCommUuid());
+    }
+    ReadObjectKV objectKV(readKey, *entry, commId);
     Status status = queryMeta.payload_indexs_size() == 0
                         ? GetObjectFromRemoteOnLock(meta, request, address, queryMeta.single_copy(), objectKV)
                         : GetObjectFromQueryMetaResultOnLock(request, queryMeta, payloads, objectKV);

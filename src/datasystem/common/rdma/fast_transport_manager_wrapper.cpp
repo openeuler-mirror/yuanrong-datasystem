@@ -16,7 +16,51 @@
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
+
 namespace datasystem {
+Status GetClientCommUuid(std::string &commId)
+{
+    (void)commId;
+#ifdef BUILD_HETERO
+    if (IsRemoteH2DEnabled()) {
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetClientCommUuid(commId));
+    }
+#endif
+    return Status::OK();
+}
+
+void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId)
+{
+    (void)enableRemoteH2D;
+    (void)devId;
+#ifdef BUILD_HETERO
+    RemoteH2DManager::SetClientRemoteH2DConfig(enableRemoteH2D, devId);
+#endif
+}
+
+bool IsRemoteH2DEnabled()
+{
+#ifdef BUILD_HETERO
+    return RemoteH2DManager::IsRemoteH2DEnabled();
+#else
+    return false;
+#endif
+}
+
+Status RegisterHostMemory(void *segAddress, const uint64_t &segSize)
+{
+    (void)segAddress;
+    (void)segSize;
+#ifdef BUILD_HETERO
+    if (IsRemoteH2DEnabled() && FLAGS_urma_register_whole_arena && segAddress != nullptr) {
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().RegisterHostMemory(segAddress, segSize));
+    }
+#endif
+    return Status::OK();
+}
+
 bool IsUrmaEnabled()
 {
 #ifdef USE_URMA
@@ -139,16 +183,11 @@ Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t
 void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memoryAddress, uint64_t &segAddress,
                                uint64_t &segSize)
 {
-    (void)shmUnit;
-    (void)memoryAddress;
-    (void)segAddress;
-    (void)segSize;
-#if defined(USE_URMA) || defined(USE_RDMA)
     // If we registered the whole arena to RDMA device,
     // then the segment address is the arena address,
     // and the segment size would be the mmaped size.
     // Otherwise the segment is for per object memory.
-    bool is_register_whole_arena = false;
+    bool is_register_whole_arena = FLAGS_urma_register_whole_arena;
 
 #if defined(USE_URMA)
     is_register_whole_arena = UrmaManager::IsRegisterWholeArenaEnabled();
@@ -162,7 +201,6 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
         segAddress = memoryAddress;
         segSize = shmUnit->GetSize();
     }
-#endif
 }
 
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
