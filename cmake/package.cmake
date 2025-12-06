@@ -1,7 +1,7 @@
 ############################################################
 # Datasystem targets and config files.
 ############################################################
-set(DATASYSTEM_CONFIG_PATH sdk/cpp/lib/cmake/${PROJECT_NAME})
+set(DATASYSTEM_CONFIG_PATH datasystem/sdk/cpp/lib/cmake/${PROJECT_NAME})
 
 configure_package_config_file(cmake/config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
@@ -28,8 +28,8 @@ endif()
 ############################################################
 # Datasystem header files and share libraries.
 ############################################################
-set(DATASYSTEM_SDK_USER_INCLUDEDIR sdk/cpp/include)
-set(DATASYSTEM_SDK_USER_LIBPATH sdk/cpp/lib)
+set(DATASYSTEM_SDK_USER_INCLUDEDIR datasystem/sdk/cpp/include)
+set(DATASYSTEM_SDK_USER_LIBPATH datasystem/sdk/cpp/lib)
 
 if (NOT ENABLE_PERF)
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
@@ -115,68 +115,16 @@ if (BUILD_PYTHON_API)
 
     package_python(datasystem
             PYTHON_SRC_DIR ${CMAKE_SOURCE_DIR}/python
-            CMAKE_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}/sdk
+            CMAKE_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}/datasystem/sdk
             DEPEND_TARGETS ${DEPEND_TARGETS}
             THIRDPATRY_LIBS_PATTERN ${PYTHON_LIB_PATTERNS})
 endif ()
 
 ############################################################
-# Datasystem go header files and share libraries.
-############################################################
-if (BUILD_GO_API)
-    set(DATASYSTEM_GO_INCLUDEDIR sdk/go/include)
-    set(DATASYSTEM_GO_LIBPATH sdk/go/lib)
-    set(DATASYSTEM_GO_PATH sdk)
-
-    install(DIRECTORY ${CMAKE_SOURCE_DIR}/go
-            DESTINATION ${DATASYSTEM_GO_PATH}
-            FILES_MATCHING PATTERN "*")
-
-    install(FILES ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/status_definition.h
-            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/state_cache_c_wrapper.h
-            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/stream_cache_c_wrapper.h
-            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/object_cache_c_wrapper.h
-            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/utilC.h
-            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/cipher.h
-            DESTINATION ${DATASYSTEM_GO_INCLUDEDIR}/datasystem/c_api)
-
-    set(datasystem_c_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
-    install_datasystem_target(datasystem_c)
-
-    set(datasystem_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
-    install_datasystem_target(datasystem)
-
-    set(GO_LIB_PATTERNS
-            ${SDK_SPDLOG_LIB}
-            ${SDK_PROTOBUF_LIB}
-            ${SDK_PROTOC_LIB}
-           "${SecureC_LIB_PATH}/libsecurec.so"
-           "${TBB_LIB_PATH}/libtbb.so*"
-           "${OpenSSL_LIB_PATH}/libssl.so*"
-           "${OpenSSL_LIB_PATH}/libcrypto.so*"
-           "${gRPC_LIB_PATH}/libgrpc.so*"
-           "${gRPC_LIB_PATH}/libgrpc++.so*"
-           "${gRPC_LIB_PATH}/libgpr.so*"
-           "${gRPC_LIB_PATH}/libupb*"
-           "${gRPC_LIB_PATH}/libutf8*"
-           "${gRPC_LIB_PATH}/libaddress_sorting.so*"
-           "${SPDLOG_LIB_PATH}/libds-spdlog.so*"
-           ${RPC_LIB_PATH}
-    )
-
-    install_file_pattern(
-            PATH_PATTERN ${GO_LIB_PATTERNS}
-            DEST_DIR ${DATASYSTEM_GO_LIBPATH}
-    )
-endif ()
-
-
-
-############################################################
 # Datasystem bin and depends libs.
 ############################################################
-set(DATASYSTEM_SERVICE_BINPATH service)
-set(DATASYSTEM_SERVICE_LIBPATH service/lib)
+set(DATASYSTEM_SERVICE_BINPATH datasystem/service)
+set(DATASYSTEM_SERVICE_LIBPATH datasystem/service/lib)
 
 set(datasystem_worker_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
 install_datasystem_target(datasystem_worker)

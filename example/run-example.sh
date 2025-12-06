@@ -52,7 +52,7 @@ trap cleanup EXIT INT TERM
 
 # run cpp example
 echo -e "---- Running cpp example..."
-export LD_LIBRARY_PATH="${ds_output_dir}/sdk/cpp/lib:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${ds_output_dir}/datasystem/sdk/cpp/lib:${LD_LIBRARY_PATH}"
 echo "Set LD_LIBRARY_PATH=${LD_LIBRARY_PATH} before cpp example test."
 ${example_cpp_dir}/stream_client_example "127.0.0.1" "${worker_port}"
 ${example_cpp_dir}/datasystem_example "127.0.0.1" "${worker_port}"
