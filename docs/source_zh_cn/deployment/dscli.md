@@ -120,7 +120,7 @@ python --version
     --advertise-client-urls http://0.0.0.0:2379 \
     --listen-peer-urls http://0.0.0.0:2380 \
     --initial-advertise-peer-urls http://0.0.0.0:2380 \
-    --initial-cluster etcd-single=http://0.0.0.0:2380
+    --initial-cluster etcd-single=http://0.0.0.0:2380 &
     ```
 
     参数说明：
