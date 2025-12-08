@@ -262,7 +262,7 @@ spec:
           - name: POD_MEMORY_LIMIT_MB
             valueFrom:
               resourceFieldRef:
-                containerName: {{ $spec.name }}
+                containerName: ds-worker
                 resource: limits.memory
                 divisor: 1Mi
           - name: POD_NAME

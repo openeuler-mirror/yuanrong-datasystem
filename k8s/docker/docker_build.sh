@@ -72,8 +72,10 @@ function image_build() {
   [[ -d "${BUILD_DIR}" ]] && rm -rf "${BUILD_DIR}"
   mkdir -p "${BUILD_DIR}/bin"
   mkdir -p "${BUILD_DIR}/lib"
-  cp -ar "${INPUT_DIR}/service/datasystem_worker" "${BUILD_DIR}/bin"
-  cp -ar "${INPUT_DIR}/service/lib"/* "${BUILD_DIR}/lib"
+  [[ -d "${INPUT_DIR}/datasystem}" ]] && rm -rf "${INPUT_DIR}/datasystem"
+  tar -zxf ${INPUT_DIR}/yr-datasystem-v$(cat "${BASE_DIR}/../../VERSION").tar.gz -C ${INPUT_DIR}
+  cp -ar "${INPUT_DIR}/datasystem/service/datasystem_worker" "${BUILD_DIR}/bin"
+  cp -ar "${INPUT_DIR}/datasystem/service/lib"/* "${BUILD_DIR}/lib"
 
   cp -ar "${BASE_DIR}/entrypoint/worker_entry.sh" "${BUILD_DIR}"
   cp -ar "${BASE_DIR}/entrypoint/install.sh" "${BUILD_DIR}"
