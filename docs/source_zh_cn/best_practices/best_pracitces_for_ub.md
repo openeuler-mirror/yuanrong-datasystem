@@ -266,7 +266,7 @@ global:
     # 开启UB能力
     enableUrma: true
     # 开启大页内存
-    enableHugeTlb: false
+    enableHugeTlb: true
 ```
 
 
