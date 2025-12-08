@@ -134,7 +134,7 @@ etcd \
   --advertise-client-urls http://0.0.0.0:2379 \
   --listen-peer-urls http://0.0.0.0:2380 \
   --initial-advertise-peer-urls http://0.0.0.0:2380 \
-  --initial-cluster etcd-single=http://0.0.0.0:2380
+  --initial-cluster etcd-single=http://0.0.0.0:2380 &
 ```
 参数说明：
 - --name：节点名称，单机可以随便命名。
@@ -378,7 +378,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
     如果需要从源码构建镜像，需要先完成 [源码编译](../installation/installation_linux.md)。源码编译完成之后执行如下命令：
 
     ```bash
-    cd yuanrong-datasystem/docker
+    cd yuanrong-datasystem/k8s/docker
     bash docker_build.sh \
         -b <base_image_name>:<base_image_tag> \
         -n <image_name> \

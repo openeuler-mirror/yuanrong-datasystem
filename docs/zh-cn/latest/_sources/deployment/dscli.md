@@ -120,7 +120,7 @@ python --version
     --advertise-client-urls http://0.0.0.0:2379 \
     --listen-peer-urls http://0.0.0.0:2380 \
     --initial-advertise-peer-urls http://0.0.0.0:2380 \
-    --initial-cluster etcd-single=http://0.0.0.0:2380
+    --initial-cluster etcd-single=http://0.0.0.0:2380 &
     ```
 
     参数说明：
@@ -399,7 +399,7 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
     > **注意事项**：
     >
     > - 在不同节点执行 dscli start 命令时，需要保证连接的是同一个ETCD，即 `--etcd_address` 的值需要保持一致。
-    > - 如果涉及到需要指定 az name 的情况，即需要传 `--az_name` 参数，那么 `--az_name` 的值也需要保持一致。
+    > - 如果涉及到需要指定 cluster name 的情况，即需要传 `--cluster_name` 参数，那么 `--cluster_name` 的值也需要保持一致。
 
 #### 多机卸载
 
@@ -658,6 +658,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | zmq_client_io_context | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | zmq_chunk_sz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
 | max_rpc_session_num | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
+| remote_send_thread_num | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
+| stream_idle_time_s | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
 
 #### ETCD相关配置
 
@@ -703,6 +705,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_monitor_exporter | string | `"harddisk"` | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
 | log_monitor_interval_ms | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
+| logfile_mode | int | `416` | 设置日志文件模式/权限，值为八进制数 |
 
 #### 二级缓存相关配置
 
@@ -716,12 +719,14 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | obs_bucket | string | `""` | 对象存储服务(OBS) 桶的名称 |
 | obs_https_enabled | bool | `false` | 是否启用HTTPS连接对象存储服务（OBS），默认为HTTP |
 | sfs_path | string | `""` | 挂载的SFS路径 |
+| enable_cloud_service_token_rotation | bool | `false` | 启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS |
 
-#### AZ相关配置
+#### 多集群相关配置
+注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：[多集群模式FAQ](../FAQ/clusterFAQ.md)
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| other_az_names | string | `""` | 指定其他可用区的名称，如果需要指定多个可用区通过','进行分隔 |
+| other_cluster_names | string | `""` | 指定其他可用区的名称，如果需要指定多个可用区通过','进行分隔 |
 | cross_az_get_data_from_worker | bool | `true` | 是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 `false`，则将直接从二级缓存中检索数据 |
 | cross_az_get_meta_from_worker | bool | `false` | 是否从其他可用区的datasystem-worker获取元数据，如果为 `false`，则从本地可用区获取元数据 |
 
@@ -732,6 +737,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | rocksdb_store_dir | string | `"./yr_datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | rocksdb_background_threads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | rocksdb_max_open_file | int | `128` | RocksDB可使用的最大打开文件个数 |
+| rocksdb_write_mode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
+| enable_meta_replica | bool | `false` | 控制是否启用多个元数据副本 |
 
 #### 可靠性相关配置
 
@@ -746,6 +753,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | enable_hash_ring_self_healing | bool | `false` | 是否启用哈希环自愈功能，如果该值为 `true`，当哈希环状态异常时会启用自愈修复哈希环 |
 | add_node_wait_time_s | int | `60` | 新节点加入哈希环的等待超时时间 |
 | auto_del_dead_node | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
+| enable_distributed_master | bool | `true` | 是否启用分布式主节点，默认值为true |
 
 #### 优雅退出相关配置
 
@@ -766,6 +774,19 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | arena_per_tenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
 | memory_reclamation_time_second | int | `600` | 释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率 |
 | async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
+| enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
+| enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
+| enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输 |
+| urma_connection_size | int | `16` | jfs和jfr对的数量 |
+| urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
+| urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
+| urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
+| enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
+| rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
+| oc_shm_transfer_threshold_kb | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
+| shared_disk_arena_per_tenant | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
+| shared_disk_directory | sting | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
+| shared_disk_size_mb | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
 
 #### AK/SK相关配置
 

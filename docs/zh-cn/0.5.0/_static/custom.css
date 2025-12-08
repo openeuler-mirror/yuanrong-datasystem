@@ -1,0 +1,16 @@
+html {
+    --pst-font-family-base: 'Microsoft Yahei', 'Inter', sans-serif;
+}
+
+.bd-page-width {
+    max-width: 100%;
+    min-width: 100%;
+}
+
+.bd-content .sd-tab-set>input:checked+label {
+    border-color: #d3d3d3 #d3d3d3 transparent;
+}
+
+.bd-content .sd-tab-set .sd-tab-content {
+    border-color: #d3d3d3;
+}

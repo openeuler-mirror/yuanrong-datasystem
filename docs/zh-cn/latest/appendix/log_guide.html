@@ -55,6 +55,7 @@
     <script>DOCUMENTATION_OPTIONS.pagename = 'appendix/log_guide';</script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="大页内存配置指南" href="hugepage_guide.html" />
     <link rel="prev" title="附录" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -175,6 +176,10 @@
 <li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l3"><a class="reference internal" href="../development-guide/example/hetero.html">异构对象</a></li>
@@ -227,6 +232,7 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.exist.html">datasystem.hetero_client.HeteroClient.exist</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -296,20 +302,59 @@
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.html">datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.init.html">datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.create_producer.html">datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.subscribe.html">datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.delete_stream.html">datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.query_global_producer_num.html">datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.query_global_consumer_num.html">datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Producer.html">datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Producer.send.html">datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Producer.close.html">datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.html">datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.receive.html">datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.receive_any.html">datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.ack.html">datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.close.html">datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.SubconfigType.html">datasystem.stream_client.SubconfigType</a></li>
 </ul>
 </details></li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/ObjectClient.html">ObjectClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Consumer.html">Consumer</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-WriteMode.html">WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StringView.html">StringView</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Optional.html">Optional</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
 </ul>
 </details></li>
@@ -320,8 +365,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">附录</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
 </ul>
 
     </div>
@@ -565,23 +612,23 @@ document.write(`
 <tbody>
 <tr class="row-even"><td><p>1</p></td>
 <td><p>运行日志</p></td>
-<td><p>Time | level | filename | pod_name | pid:tid | trace_id | az_name | message</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | message</p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
 <td><p>访问日志</p></td>
-<td><p>Time | level | filename | pod_name | pid:tid | trace_id | az_name | status_code | action | cost | data size | request param| response param</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | status_code | action | cost | data size | request param| response param</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p>访问第三方日志</p></td>
-<td><p>Time | level | filename | pod_name | pid:tid | trace_id | az_name | status_code | action | cost | data size | request param| response param</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | status_code | action | cost | data size | request param| response param</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>资源日志</p></td>
-<td><p>Time | level | filename | pod_name | pid:tid | trace_id | az_name | shm_info | spill_disk_info | client nums | object nums | object total datasize | WorkerOcService threadpool | WorkerWorkerOcService threadpool | MasterWokrerOcService threadpool | MasterOcService threadpool | write ETCD queue | ETCDrequest success rate | OBSrequest success rate | Master AsyncTask threadpool</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | shm_info | spill_disk_info | client nums | object nums | object total datasize | WorkerOcService threadpool | WorkerWorkerOcService threadpool | MasterWokrerOcService threadpool | MasterOcService threadpool | write ETCD queue | ETCDrequest success rate | OBSrequest success rate | Master AsyncTask threadpool |Cache Hit Info |</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
 <td><p>容器运行日志</p></td>
-<td><p>Time | level | filename | pod_name | pid:tid | trace_id | az_name | message</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | message</p></td>
 </tr>
 </tbody>
 </table>
@@ -621,7 +668,7 @@ document.write(`
 <td><p>36</p></td>
 <td><p>请求的traceid。</p></td>
 </tr>
-<tr class="row-even"><td><p>az_name</p></td>
+<tr class="row-even"><td><p>cluster_name</p></td>
 <td><p>128</p></td>
 <td><p>输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。</p></td>
 </tr>
@@ -655,7 +702,7 @@ document.write(`
 </tr>
 <tr class="row-even"><td><p>shm_info</p></td>
 <td><p>47</p></td>
-<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %.</p></td>
+<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %.</p></td>
 </tr>
 <tr class="row-odd"><td><p>spill_disk_info</p></td>
 <td><p>47</p></td>
@@ -704,6 +751,10 @@ document.write(`
 <tr class="row-even"><td><p>Master AsyncTask threadpool</p></td>
 <td><p>21</p></td>
 <td><p>threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
+</tr>
+<tr class="row-odd"><td><p>Cache Hit Info</p></td>
+<td><p>9</p></td>
+<td><p>缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。<br>2) diskHitNum	本地磁盘命中次数. <br>3) l2HitNum	二级缓存命中次数。<br>4) remoteHitNum 远端worker命中次数。<br>5) missNum 未命中次数。</p></td>
 </tr>
 </tbody>
 </table>
@@ -813,6 +864,15 @@ document.write(`
         <p class="prev-next-subtitle">previous</p>
         <p class="prev-next-title">附录</p>
       </div>
+    </a>
+    <a class="right-next"
+       href="hugepage_guide.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">大页内存配置指南</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
     </a>
 </div>
                 </footer>

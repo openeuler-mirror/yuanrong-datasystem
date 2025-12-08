@@ -55,7 +55,7 @@
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/KVClient';</script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="Buffer" href="Buffer.html" />
+    <link rel="next" title="StreamClient" href="StreamClient.html" />
     <link rel="prev" title="C++" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -176,6 +176,10 @@
 <li class="toctree-l2"><a class="reference internal" href="../../../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2 has-children"><a class="reference internal" href="../../example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l3"><a class="reference internal" href="../../example/hetero.html">异构对象</a></li>
@@ -228,6 +232,7 @@
 <li class="toctree-l5"><a class="reference internal" href="../python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.hetero_client.HeteroClient.exist.html">datasystem.hetero_client.HeteroClient.exist</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -297,20 +302,59 @@
 <li class="toctree-l4"><a class="reference internal" href="../python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.html">datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.init.html">datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.create_producer.html">datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.subscribe.html">datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.delete_stream.html">datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.query_global_producer_num.html">datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.StreamClient.query_global_consumer_num.html">datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/datasystem.stream_client.Producer.html">datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.Producer.send.html">datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.Producer.close.html">datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/datasystem.stream_client.Consumer.html">datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.Consumer.receive.html">datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.Consumer.receive_any.html">datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.Consumer.ack.html">datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/datasystem.stream_client.Consumer.close.html">datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/datasystem.stream_client.SubconfigType.html">datasystem.stream_client.SubconfigType</a></li>
 </ul>
 </details></li>
 <li class="toctree-l3 current active has-children"><a class="reference internal" href="index.html">C++</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l4 current active"><a class="current reference internal" href="#">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ObjectClient.html">ObjectClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Consumer.html">Consumer</a></li>
 <li class="toctree-l4"><a class="reference internal" href="struct-ConnectOptions.html">ConnectOptions</a></li>
 <li class="toctree-l4"><a class="reference internal" href="struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
 <li class="toctree-l4"><a class="reference internal" href="enum-WriteMode.html">WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="enum-ConsistencyType.html">ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-SubscriptionType.html">SubscriptionType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="SensitiveValue.html">SensitiveValue</a></li>
 <li class="toctree-l4"><a class="reference internal" href="StringView.html">StringView</a></li>
 <li class="toctree-l4"><a class="reference internal" href="Optional.html">Optional</a></li>
 <li class="toctree-l4"><a class="reference internal" href="Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="enum-StatusCode.html">StatusCode</a></li>
 </ul>
 </details></li>
@@ -321,8 +365,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
 </ul>
 
     </div>
@@ -490,7 +536,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient3DelERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Del()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient6DelAllEv"><code class="docutils literal notranslate"><span class="pre">KVClient::DelAll()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient11HealthCheckEv"><code class="docutils literal notranslate"><span class="pre">KVClient::HealthCheck()</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Expire()</span></code></a></li>
 </ul>
 </li>
@@ -526,7 +572,7 @@ document.write(`
 <dd><p>构造KV缓存客户端实例。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>connectOptions</strong> - 配置连接选项，包括IP地址和端口，详见 cpp:class:<cite>ConnectOptions</cite> 章节</p></li>
+<li><p><strong>connectOptions</strong> - 配置连接选项，包括IP地址和端口，详见 <a class="reference internal" href="struct-ConnectOptions.html#_CPPv414ConnectOptions" title="ConnectOptions"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ConnectOptions</span></code></a> 章节</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>KV缓存客户端实例。</p>
@@ -545,7 +591,7 @@ document.write(`
 <span id="_CPPv3N8KVClient4InitEv"></span><span id="_CPPv2N8KVClient4InitEv"></span><span id="KVClient::Init"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient4InitEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>建立与数据系统 Worker 之间的连接并完成初始化。</p>
 <dl class="simple">
-<dt>返回：</dt><dd><p>返回值状态码为 StatusCode::K_OK 时表示初始化成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示初始化成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -555,7 +601,7 @@ document.write(`
 <span id="_CPPv3N8KVClient8ShutDownEv"></span><span id="_CPPv2N8KVClient8ShutDownEv"></span><span id="KVClient::ShutDown"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">ShutDown</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient8ShutDownEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>断开与数据系统 Worker 之间的连接。</p>
 <dl class="simple">
-<dt>返回:</dt><dd><p>返回值状态码为 StatusCode::K_OK 时表示断链成功，否则返回其他错误码。</p>
+<dt>返回:</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示断链成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -572,7 +618,7 @@ document.write(`
 <li><p><strong>buffer</strong> - 传出参数，表示创建好的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -586,7 +632,7 @@ document.write(`
 <li><p><strong>buffer</strong> - 共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 。</p></li>
 </ul>
 </dd>
-<dt>返回值</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回值</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -602,7 +648,7 @@ document.write(`
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -619,7 +665,7 @@ document.write(`
 <li><p><strong>buffers</strong> - 传出参数，表示创建好的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 数组，该数组的长度与 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 相等，索引位置一一对应，即每个 <code class="docutils literal notranslate"><span class="pre">buffers[i]</span></code> 的值与 <code class="docutils literal notranslate"><span class="pre">keys[i]</span></code> 相对应。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -633,7 +679,7 @@ document.write(`
 <li><p><strong>buffers</strong> - 需要缓存到数据系统的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 数组。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -650,7 +696,7 @@ document.write(`
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -798,8 +844,8 @@ document.write(`
 </dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">
-<span id="_CPPv3N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"></span><span id="_CPPv2N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"></span><span id="KVClient::KVClient::Exist__std::vector:ss:CR.std::vector:b:R"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-prename descclassname"><a class="reference internal" href="#_CPPv4N8KVClient8KVClientERK14ConnectOptions" title="KVClient::KVClient"><span class="n"><span class="pre">KVClient</span></span></a><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">Exist</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">keys</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">exists</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">
+<span id="_CPPv3N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"></span><span id="_CPPv2N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"></span><span id="KVClient::Exist__std::vector:ss:CR.std::vector:b:R"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Exist</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">keys</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">exists</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE" title="Link to this definition">#</a><br /></dt>
 <dd><p>批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多10000个键的查询。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
@@ -866,11 +912,11 @@ document.write(`
       </div>
     </a>
     <a class="right-next"
-       href="Buffer.html"
+       href="StreamClient.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Buffer</p>
+        <p class="prev-next-title">StreamClient</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -909,7 +955,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient3DelERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Del()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient6DelAllEv"><code class="docutils literal notranslate"><span class="pre">KVClient::DelAll()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient11HealthCheckEv"><code class="docutils literal notranslate"><span class="pre">KVClient::HealthCheck()</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Expire()</span></code></a></li>
 </ul>
 </li>
