@@ -37,6 +37,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 
 DS_DEFINE_bool(enable_fallocate, true,
                "Due to Kubernetes' (k8s) resource calculation policies, "
@@ -82,6 +83,8 @@ Status MemMmap::Initialize(uint64_t size, bool populate, bool hugepage)
     if (rc.IsOk()) {
         // If urma or rdma is enabled, register the memory.
         RETURN_IF_NOT_OK(RegisterFastTransportMemory(pointer_, mmapSize_));
+        // If Remote H2D is enabled, pin and register the npu memory
+        RETURN_IF_NOT_OK(RegisterHostMemory(pointer_, mmapSize_));
     }
     return rc;
 }
@@ -128,8 +131,8 @@ bool MemMmap::Commit(void *addr, size_t offset, size_t length)
 
 bool MemMmap::Decommit(void *addr, size_t offset, size_t length)
 {
-    if (IsFastTransportEnabled()) {
-        // if urma/rdma is enabled memory is pinned
+    if (IsFastTransportEnabled() || IsRemoteH2DEnabled()) {
+        // if urma/rdma/RH2D is enabled memory is pinned
         // Decommit is a noop
         return false;
     }

@@ -24,6 +24,13 @@ if (BUILD_WITH_URMA)
     target_link_libraries(common_stub_rdma PRIVATE ${TBB_LIBRARY})
 endif()
 
+if (BUILD_HETERO)
+    list(APPEND URMA_DEPEND_LIBS
+        common_acl_device
+        common_shared_memory)
+    list(APPEND URMA_SRCS npu/remote_h2d_manager.cpp)
+endif()
+
 if (BUILD_WITH_RDMA)
     list(APPEND RDMA_SRCS ucp_manager.cpp ucp_worker_pool.cpp ucp_worker.cpp ucp_endpoint.cpp ucp_segment.cpp)
     list(APPEND RDMA_DEPEND_LIBS ${UCX_LIBRARIES})

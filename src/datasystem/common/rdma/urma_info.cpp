@@ -48,70 +48,8 @@ std::string UrmaJfrInfo::ToString() const
         }
         oss << jfr_id;
     }
-    oss << "]";
-    oss << " bondInfos [";
-    first = true;
-#ifdef URMA_OVER_UB
-    for (auto bondInfo : bondInfos) {
-        if (first) {
-            first = false;
-        } else {
-            oss << ",";
-        }
-        oss << "base_id:" << EidToFmtStr(bondInfo.base_id.eid) << "+" << bondInfo.base_id.uasid << "+"
-            << bondInfo.base_id.id << " ";
-        for (size_t index = 0; index < URMA_UBAGG_DEV_MAX_NUM; index++) {
-            if (bondInfo.slave_id[index].id > 0) {
-                oss << "slave_id[" << index << "]:" << EidToFmtStr(bondInfo.slave_id[index].eid) << "+"
-                    << bondInfo.slave_id[index].uasid << "+" << bondInfo.slave_id[index].id << " ";
-            }
-        }
-        oss << "dev_num:" << bondInfo.dev_num << " ";
-        oss << "is_in_matrix_server:" << bondInfo.is_in_matrix_server << " ";
-        oss << "is_multipath:" << bondInfo.is_multipath;
-    }
-#endif
-    oss << "]";
     return oss.str();
 }
-
-#ifdef URMA_OVER_UB
-void UrmaJfrInfo::UrmaBondIdInfoToProto(const urma_bond_id_info_out &info, JfrBondInfo &proto)
-{
-    auto baseId = proto.mutable_base_id();
-    baseId->set_eid(UrmaManager::EidToStr(info.base_id.eid));
-    baseId->set_uasid(info.base_id.uasid);
-    baseId->set_id(info.base_id.id);
-    for (int index = 0; index < URMA_UBAGG_DEV_MAX_NUM; index++) {
-        auto slaveId = proto.add_slave_ids();
-        slaveId->set_eid(UrmaManager::EidToStr(info.slave_id[index].eid));
-        slaveId->set_uasid(info.slave_id[index].uasid);
-        slaveId->set_id(info.slave_id[index].id);
-    }
-    proto.set_dev_num(info.dev_num);
-    proto.set_is_in_matrix_server(info.is_in_matrix_server);
-    proto.set_is_multipath(info.is_multipath);
-}
-
-Status UrmaJfrInfo::UrmaBondIdInfoFromProto(const JfrBondInfo &proto, urma_bond_id_info_out &info)
-{
-    const auto &baseId = proto.base_id();
-    RETURN_IF_NOT_OK(UrmaManager::StrToEid(baseId.eid(), info.base_id.eid));
-    info.base_id.uasid = baseId.uasid();
-    info.base_id.id = baseId.id();
-    auto slaveSize = proto.slave_ids_size();
-    for (int index = 0; index < slaveSize; index++) {
-        const auto &slaveId = proto.slave_ids(index);
-        RETURN_IF_NOT_OK(UrmaManager::StrToEid(slaveId.eid(), info.slave_id[index].eid));
-        info.slave_id[index].uasid = slaveId.uasid();
-        info.slave_id[index].id = slaveId.id();
-    }
-    info.dev_num = proto.dev_num();
-    info.is_in_matrix_server = proto.is_in_matrix_server();
-    info.is_multipath = proto.is_multipath();
-    return Status::OK();
-}
-#endif
 
 void UrmaSeg::ToProto(const urma_seg_t &seg, UrmaSegPb &proto)
 {
@@ -162,41 +100,4 @@ Status UrmaSeg::FromProto(const UrmaSegPb &proto)
 {
     return UrmaSeg::FromProto(proto, raw);
 }
-
-#ifdef URMA_OVER_UB
-std::string UrmaBondSegInfo::ToString()
-{
-    std::stringstream ss;
-    ss << "base: {" << UrmaSeg::ToString(raw.base) << "}";
-    for (int index = 0; index < URMA_UBAGG_DEV_MAX_NUM; index++) {
-        ss << ", slaves[" << index << "]: {" << UrmaSeg::ToString(raw.slaves[index]) << "}";
-    }
-    ss << ", dev_num: " << raw.dev_num;
-    return ss.str();
-}
-
-void UrmaBondSegInfo::ToProto(UrmaBondSegInfoPb &proto) const
-{
-    auto base = proto.mutable_base();
-    UrmaSeg::ToProto(raw.base, *base);
-    for (int index = 0; index < URMA_UBAGG_DEV_MAX_NUM; index++) {
-        auto slave = proto.add_slaves();
-        UrmaSeg::ToProto(raw.slaves[index], *slave);
-    }
-    proto.set_dev_num(raw.dev_num);
-}
-
-Status UrmaBondSegInfo::FromProto(const UrmaBondSegInfoPb &proto)
-{
-    const auto &base = proto.base();
-    RETURN_IF_NOT_OK(UrmaSeg::FromProto(base, raw.base));
-    auto slaveSize = proto.slaves_size();
-    for (int index = 0; index < slaveSize; index++) {
-        const auto &slave = proto.slaves(index);
-        RETURN_IF_NOT_OK(UrmaSeg::FromProto(slave, raw.slaves[index]));
-    }
-    raw.dev_num = proto.dev_num();
-    return Status::OK();
-}
-#endif
 }  // namespace datasystem

@@ -87,26 +87,11 @@ message PayloadDirectGetRspPb {
     uint64 sz = 2;
 }
 
-// Exchange of jfr. Send our local jfr and host port
-message JfrBondInfo {
-    message JettyId {
-        bytes eid = 1;
-        uint32 uasid = 2;
-        uint32 id = 3;
-    }
-    JettyId base_id = 1;
-    repeated JettyId slave_ids = 2;
-    int32 dev_num = 3;
-    bool is_in_matrix_server = 4;
-    bool is_multipath = 5;
-}
-
 message UrmaHandshakeReqPb {
     bytes eid = 1;
     uint32 uasid = 2;
     repeated uint32 jfr_ids = 3;
     HostPortPb address = 4;
-    repeated JfrBondInfo bond_infos = 5;
     repeated UrmaImportSegmentPb seg_infos = 6;
 }
 

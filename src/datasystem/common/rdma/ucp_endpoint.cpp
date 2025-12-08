@@ -21,13 +21,19 @@
 
 #include "datasystem/common/rdma/ucp_endpoint.h"
 
+#include <chrono>
+#include <thread>
+
 #include "ucp/api/ucp_def.h"
+
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 
 UcpEndpoint::UcpEndpoint(const ucp_worker_h &localWorker, const std::string &remoteWorkerAddr)
-    : worker_(localWorker),
-      remoteWorkerData_(remoteWorkerAddr)
+    : worker_(localWorker), remoteWorkerData_(remoteWorkerAddr)
 {
 }
 
@@ -42,9 +48,20 @@ Status UcpEndpoint::Init()
     epParams.field_mask =
         UCP_EP_PARAM_FIELD_REMOTE_ADDRESS | UCP_EP_PARAM_FIELD_ERR_HANDLING_MODE | UCP_EP_PARAM_FIELD_ERR_HANDLER;
     epParams.address = reinterpret_cast<ucp_address_t *>(remoteWorkerData_.data());
+    epParams.err_mode = UCP_ERR_HANDLING_MODE_PEER;
 
-    if (ucp_ep_create(worker_, &epParams, &ep_) != UCS_OK) {
-        return Status(K_RDMA_ERROR, "[UcpEndpoint] ucp_ep_create failed");
+    static ucp_err_handler_cb_t errCb = [](void *arg, ucp_ep_h ep, ucs_status_t status) {
+        (void)arg;
+        (void)ep;
+        LOG(ERROR) << "[UcpEndpoint] error: " << ucs_status_string(status);
+    };
+    epParams.err_handler.cb = errCb;
+    epParams.err_handler.arg = nullptr;
+
+    ucs_status_t status = ucp_ep_create(worker_, &epParams, &ep_);
+    if (status != UCS_OK) {
+        LOG(ERROR) << "[UcpEndpoint] ucp_ep_create failed with status " << ucs_status_string(status);
+        RETURN_STATUS(K_RDMA_ERROR, "[UcpEndpoint] ucp_ep_create failed");
     }
 
     return Status::OK();
@@ -52,8 +69,10 @@ Status UcpEndpoint::Init()
 
 Status UcpEndpoint::UnpackRkey(const std::string &remoteRkey)
 {
-    if (ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_) != UCS_OK) {
-        return Status(K_RDMA_ERROR, "[UcpEndpoint] Failed to unpack rkey");
+    ucs_status_t status = ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);
+    if (status != UCS_OK) {
+        LOG(ERROR) << "[UcpEndpoint] Failed to unpack rkey with status " << ucs_status_string(status);
+        RETURN_STATUS(K_RDMA_ERROR, "[UcpEndpoint] Failed to unpack rkey");
     }
 
     return Status::OK();
@@ -69,7 +88,10 @@ void UcpEndpoint::Clean()
 
     // clean up ep_
     if (ep_ != nullptr) {
-        ucp_ep_destroy(ep_);
+        ucp_request_param_t param = {};
+        param.op_attr_mask = UCP_OP_ATTR_FIELD_FLAGS;
+        param.flags = UCP_EP_CLOSE_FLAG_FORCE;
+        ucp_ep_close_nbx(ep_, &param);
         ep_ = nullptr;
     }
 }

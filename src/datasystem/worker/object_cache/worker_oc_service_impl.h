@@ -593,6 +593,12 @@ public:
      * @return size_t The total object size.
      */
     size_t GetTotalObjectSize() const;
+
+    /**
+     * @brief Get the hit info statistic data.
+     * @return The data string.
+     */
+    std::string GetHitInfo() const;
     /*
      * @brief Get the usage of the asynchronous task queue of L2Cache.
      * @note currentSize: the number of tasks in the current queue.

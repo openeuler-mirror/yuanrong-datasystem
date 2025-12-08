@@ -27,6 +27,7 @@ struct P2PCommArgs {
     uint32_t blockSizeBytes;  // Buff size
     // Buffer transmission granularity (transmitted and pipelined in chunkSizeBytes chunks)
     uint32_t chunkSizeBytes;
+    uint32_t qpNum;
 };
 
 #define ROOTHANDLE_IP_ADDRESS_BUFFER_LEN 64
@@ -52,8 +53,9 @@ public:
     Status GetRootHandle(P2PRootHandle &rootHandle);
     Status GetChannelType(P2PCommChannelType &channelType);
     Status EstablishConnection(P2PCommArgs &args);
-    Status Receive(void **dstPtrs, uint64_t* sizes, uint32_t count, aclrtStream stream);
-    Status Send(void **srcPtrs, uint64_t* sizes, uint32_t count, aclrtStream stream);
+    Status Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
+    Status Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
+    Status Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream);
 
 private:
     Status CreateServer();

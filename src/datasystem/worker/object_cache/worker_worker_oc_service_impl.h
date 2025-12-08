@@ -204,10 +204,24 @@ private:
     Status GetSafeObjectEntry(const std::string &objectKey, bool tryLock, uint64_t version,
                               std::shared_ptr<SafeObjType> &safeEntry);
 
+    /**
+     * @brief Establish P2P Communicator connection and also fill in the segment info.
+     * @param[in] commId The client communicator uuid for unique connection.
+     * @param[in] localSegAddress The local segment address.
+     * @param[in] localSegSize The local segment size.
+     * @param[in] shmUnit The object shared memory unit.
+     * @param[in] metadataSize The metadata size of the object.
+     * @param[out] rsp The remote get response.
+     */
+    Status EstablishConnAndFillSeg(const std::string &commId, const uint64_t &localSegAddress,
+                                   const uint64_t &localSegSize, std::shared_ptr<ShmUnit> shmUnit,
+                                   uint64_t metadataSize, GetObjectRemoteRspPb &rsp);
+
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;  // pointer to EtcdStore
     EtcdClusterManager *etcdCm_;
+    std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
 };
 }  // namespace object_cache
 }  // namespace datasystem

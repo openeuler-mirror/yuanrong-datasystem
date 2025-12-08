@@ -24,7 +24,6 @@
 #include <runtime/event.h>
 #include <runtime/rt_stars.h>
 
-
 const int DEFAULT_HCCL_BUFFSIZE = 10;  //  Config the buff size of hccl comm
 
 int MallocDeviceMemory(size_t dataSize, void *&deviceData)
@@ -295,4 +294,19 @@ int DSAclrtSubscribeReport(uint64_t threadId, aclrtStream stream)
 int DSAclrtUnSubscribeReport(uint64_t threadId, aclrtStream stream)
 {
     return aclrtUnSubscribeReport(threadId, stream);
+}
+
+int DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segmentInfo, P2pSegmentPermissions permissions)
+{
+    return P2PRegisterHostMem(hostBuf, size, segmentInfo, permissions);
+}
+
+int DSP2PImportHostSegment(P2pSegmentInfo segmentInfo)
+{
+    return P2PImportHostSegment(segmentInfo);
+}
+
+int DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchSize, P2PComm comm, aclrtStream stream)
+{
+    return P2PScatterBatchFromRemoteHostMem(entries, batchSize, comm, stream);
 }

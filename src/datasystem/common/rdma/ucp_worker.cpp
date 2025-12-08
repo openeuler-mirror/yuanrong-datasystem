@@ -22,19 +22,24 @@
 
 #include "datasystem/common/rdma/ucp_worker.h"
 
-#include <cstring>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <iostream>
+#include <poll.h>
 
 #include "ucp/api/ucp_def.h"
 
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/ucp_manager.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 
-UcpWorker::UcpWorker(const ucp_context_h &ucpContext, UcpManager *manager, const uint32_t &workerId)
+UcpWorker::UcpWorker(const ucp_context_h &ucpContext, UcpManager *manager, const uint32_t workerId)
     : context_(ucpContext),
       manager_(manager),
       workerId_(workerId),
@@ -56,14 +61,16 @@ Status UcpWorker::Init()
 
     ucs_status_t status = ucp_worker_create(context_, &workerParams, &worker_);
     if (status != UCS_OK) {
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to create worker.");
+        LOG(ERROR) << errorMsgHead_ << " Failed to create worker. Status: " << ucs_status_string(status);
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to create worker.");
     }
 
     size_t workerAddrLen;
 
     status = ucp_worker_get_address(worker_, &localWorkerAddr_, &workerAddrLen);
     if (status != UCS_OK) {
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to get worker address.");
+        LOG(ERROR) << errorMsgHead_ << " Failed to get worker address. Status: " << ucs_status_string(status);
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to get worker address.");
     }
 
     localWorkerAddrStr_ = std::string(reinterpret_cast<const char *>(localWorkerAddr_), workerAddrLen);
@@ -74,29 +81,29 @@ Status UcpWorker::Init()
     return Status::OK();
 }
 
-Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                        const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t &localSegAddr,
+Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
+                        const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t localSegAddr,
                         size_t localSegSize, uint64_t requestID)
 {
     PerfPoint point(PerfKey::RDMA_UCP_WORKER_WRITE);
     const auto &ucpEp = GetOrCreateEndpoint(ipAddr, remoteWorkerAddr);
     if (ucpEp == nullptr) {
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to create Endpoint.");
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to create Endpoint.");
     }
     const ucp_ep_h &ep = ucpEp->GetEp();
     if (ep == nullptr) {
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " UcpEndpoint contained an empty endpoint?");
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " UcpEndpoint contained an empty endpoint?");
     }
     point.RecordAndReset(PerfKey::RDMA_UCP_WORKER_WRITE);
 
     Status status = ucpEp->UnpackRkey(remoteRkey);
-    if (status != Status::OK()) {
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
+    if (status.IsError()) {
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
     }
     const ucp_rkey_h &rkey = ucpEp->GetUnpackedRkey();
 
     if (rkey == nullptr) {
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
     }
 
     ucp_request_param_t param{};
@@ -116,7 +123,7 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
         ucs_status_t status = UCS_PTR_STATUS(request);
         CallBack(request, status, ctx);
         ucp_request_free(request);
-        return Status(K_RDMA_ERROR, errorMsgHead_ + " Failed to send data immediately.");
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to send data immediately.");
     } else if (request == nullptr) {
         CallBack(nullptr, UCS_OK, ctx);
         return Status::OK();
@@ -125,13 +132,14 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t &remoteSe
     return Status::OK();
 }
 
-Status UcpWorker::RmEpByIp(const std::string &ipAddr)
+Status UcpWorker::RemoveEndpointByIp(const std::string &ipAddr)
 {
     std::unique_lock writeLock(mapLock_);
     if (remoteEndpointMap_.erase(ipAddr) > 0) {
         return Status::OK();
     }
-    return Status(K_RDMA_ERROR, errorMsgHead_ + " No endpoint found to IP " + ipAddr);
+    LOG(WARNING) << errorMsgHead_ << " No endpoint found to IP " << ipAddr;
+    return Status::OK();
 }
 
 void UcpWorker::StartProgressThread()
@@ -141,6 +149,7 @@ void UcpWorker::StartProgressThread()
     }
     running_.store(true);
     progressThread_ = std::make_unique<Thread>(&UcpWorker::ProgressLoop, this);
+    progressThread_->set_name("UcpWorker_" + std::to_string(workerId_) + "_Progress");
 }
 
 void UcpWorker::StopProgressThread()
@@ -158,10 +167,39 @@ void UcpWorker::StopProgressThread()
 
 void UcpWorker::ProgressLoop()
 {
-    const int UCP_WORKER_PROGRESS_INTERVAL_MS = 100;
+    int fd;
+    ucs_status_t status = ucp_worker_get_efd(worker_, &fd);
+    if (status != UCS_OK) {
+        LOG(ERROR) << errorMsgHead_ << " Failed to get efd. Status: " << ucs_status_string(status);
+    }
+
     while (running_.load()) {
-        ucp_worker_progress(worker_);
-        std::this_thread::sleep_for(std::chrono::microseconds(UCP_WORKER_PROGRESS_INTERVAL_MS));
+        bool innerBreak = false;
+        while (ucp_worker_progress(worker_)) {
+            if (!running_.load()) {
+                innerBreak = true;
+                break;
+            }
+        };
+
+        if (innerBreak) {
+            break;
+        }
+
+        status = ucp_worker_arm(worker_);
+        if (status == UCS_ERR_BUSY) {
+            // meaning there are new jobs in QP again, just restart the while loop
+            continue;
+        }
+        if (status != UCS_OK) {
+            LOG(ERROR) << errorMsgHead_ << " Failed to arm worker. Status: " << ucs_status_string(status);
+        }
+
+        struct pollfd pfd = { fd, POLLIN, 0 };
+        int ret = poll(&pfd, 1, WORKER_PROGRESS_SLEEP_TIMEOUT_MS);
+        if (ret < 0 && errno != EINTR) {
+            LOG(ERROR) << errorMsgHead_ << " Progress thread failed to poll. Error: " << strerror(errno);
+        }
     }
 }
 
@@ -187,6 +225,7 @@ std::shared_ptr<UcpEndpoint> UcpWorker::GetOrCreateEndpoint(const std::string &i
     std::shared_ptr<UcpEndpoint> ep = std::make_shared<UcpEndpoint>(worker_, remoteWorkerAddr);
     Status status = ep->Init();
     if (status.IsError()) {
+        LOG(ERROR) << "In " << errorMsgHead_ << ": " << status.ToString();
         return nullptr;
     }
     remoteEndpointMap_.emplace(ipAddr, std::move(ep));
@@ -224,6 +263,7 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
     if (status == UCS_OK) {
         ctx->worker->manager_->InsertSuccessfulEvent(ctx->request_id);
     } else {
+        LOG(ERROR) << ctx->worker->errorMsgHead_ << " Put failed. Status: " << ucs_status_string(status);
         ctx->worker->manager_->InsertFailedEvent(ctx->request_id);
     }
 

@@ -100,8 +100,7 @@ int SendDeviceLogic(const char *recvSendFifoPath, uint32_t sendDeviceId, size_t 
 
     pthread_barrier_wait(barrier);
     P2PComm p2pComm;
-    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(
-                     &rootInfo, P2P_SENDER, LINK_TYPE, &p2pComm)),
+    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(&rootInfo, P2P_SENDER, LINK_TYPE, &p2pComm)),
                  "Sender P2PCommInitRootInfo");
 #endif
 
@@ -195,8 +194,7 @@ int RecvDeviceLogic(const char *recvSendFifoPath, uint32_t recvDeviceId, size_t 
 #else
     P2PComm p2pComm;
     std::cout << "Init receiver" << std::endl;
-    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(
-                     &rootInfo, P2P_RECEIVER, LINK_TYPE, &p2pComm)),
+    MEASURE_TIME(NPU_ERROR(P2PCommInitRootInfo(&rootInfo, P2P_RECEIVER, LINK_TYPE, &p2pComm)),
                  "Receiver P2PCommInitRootInfo");
 #endif
 

@@ -9,8 +9,8 @@
 
 RdmaQp::~RdmaQp()
 {
-    for (int i = 0; i < registeredMrs.size(); i++) {
-        RaMrDeReg(qpHandle, &registeredMrs[i]);
+    for (auto it = registeredMrs.begin(); it != registeredMrs.end(); ++it) {
+        RaMrDeReg(qpHandle, &it->second);
     }
 
     if (status >= RdmaQpStatus::QP_INITIALIZED) {
@@ -63,9 +63,6 @@ Status RdmaQp::create(void *rdmaHandle)
     CHECK_STATUS(RaSetQpAttrRetryCnt(qpHandle, &retryCount));
 
     status = RdmaQpStatus::QP_INITIALIZED;
-    NotifyValueMem::get(&notifySrcValAddr, &notifySize);
-
-    CHECK_STATUS(this->registerMemoryRegion(notifySrcValAddr, notifySize));
 
     return Status::Success();
 }
@@ -79,10 +76,22 @@ Status RdmaQp::registerMemoryRegion(void *addr, uint32_t size)
     struct mr_info inMrInfo {};
     inMrInfo.addr = addr;
     inMrInfo.size = size;
-    inMrInfo.access = RA_ACCESS_LOCAL_WRITE | RA_ACCESS_REMOTE_WRITE;
+    inMrInfo.access = RA_ACCESS_LOCAL_WRITE | RA_ACCESS_REMOTE_WRITE | RA_ACCESS_REMOTE_READ;
     CHECK_STATUS(RaMrReg(qpHandle, &inMrInfo));
 
-    registeredMrs.push_back(inMrInfo);
+    registeredMrs[addr] = inMrInfo;
+
+    return Status::Success();
+}
+
+Status RdmaQp::getMemoryRegionInfo(void *startAddr, struct mr_info *info)
+{
+    auto it = registeredMrs.find(startAddr);
+    if (it == registeredMrs.end()) {
+        return Status::Error(ErrorCode::NOT_FOUND, "memory region not registered");
+    }
+
+    *info = it->second;
 
     return Status::Success();
 }
@@ -172,20 +181,8 @@ Status RdmaQp::getNotifyBaseAddress(unsigned long long *notifyBaseAddr)
     return Status::Success();
 }
 
-Status RdmaQp::getSrcValInfo(void **notifySrcValAddr, uint32_t *notifySize)
-{
-    if (status == RdmaQpStatus::QP_UNINITIALIZED) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not initialized");
-    }
-
-    *notifySrcValAddr = this->notifySrcValAddr;
-    *notifySize = this->notifySize;
-
-    return Status::Success();
-}
-
-Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, uint64_t srcAddr, uint64_t dstAddr, uint32_t length,
-                             uint32_t *rdmaTaskId)
+Status RdmaQp::dispatchRdmaOpFfts(p2p::DispatcherFFTS *dispatcher, uint64_t srcAddr, uint64_t dstAddr, uint32_t length,
+                                  uint32_t op, int32_t flag, uint32_t *rdmaTaskId)
 {
     if (status != RdmaQpStatus::QP_CONNECTED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not connected");
@@ -199,8 +196,8 @@ Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, uint64_t srcAddr, 
     notWr.buf_list = &list;
     notWr.buf_num = 1;
     notWr.dst_addr = dstAddr;
-    notWr.op = 0; /* RDMA_WRITE: 0 */
-    notWr.send_flag = RA_SEND_SIGNALED;
+    notWr.op = op;
+    notWr.send_flag = flag;
 
     struct send_wr_rsp notWrRsp {};
 
@@ -210,7 +207,8 @@ Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, uint64_t srcAddr, 
     return Status::Success();
 }
 
-Status RdmaQp::rdmaWrite(uint64_t srcAddr, uint64_t dstAddr, uint32_t length, rtStream_t stm)
+Status RdmaQp::execRdmaOp(uint64_t srcAddr, uint64_t dstAddr, uint32_t length, uint32_t op, int32_t flag,
+                          rtStream_t stm)
 {
     if (status != RdmaQpStatus::QP_CONNECTED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not connected");
@@ -224,8 +222,8 @@ Status RdmaQp::rdmaWrite(uint64_t srcAddr, uint64_t dstAddr, uint32_t length, rt
     notWr.buf_list = &list;
     notWr.buf_num = 1;
     notWr.dst_addr = dstAddr;
-    notWr.op = 0; /* RDMA_WRITE: 0 */
-    notWr.send_flag = RA_SEND_SIGNALED;
+    notWr.op = op;
+    notWr.send_flag = flag;
 
     struct send_wr_rsp notWrRsp {};
 
@@ -235,8 +233,66 @@ Status RdmaQp::rdmaWrite(uint64_t srcAddr, uint64_t dstAddr, uint32_t length, rt
     return Status::Success();
 }
 
-Status RdmaQp::rdmaWrite(std::vector<uint64_t> srcAddrs, std::vector<uint64_t> dstAddrs, std::vector<uint32_t> lengths,
-                         rtStream_t stm)
+Status RdmaQp::dispatchTypicalRdmaOpFfts(p2p::DispatcherFFTS *dispatcher, uint64_t srcAddr, uint64_t dstAddr,
+                                         uint32_t length, uint32_t op, int32_t flag, uint32_t lkey, uint32_t rkey,
+                                         uint32_t *rdmaTaskId)
+{
+    if (status != RdmaQpStatus::QP_CONNECTED) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not connected");
+    }
+
+    struct sg_list list = { 0 };
+    list.addr = srcAddr;
+    list.len = length;
+    list.lkey = lkey;
+
+    struct send_wr notWr {};
+    notWr.buf_list = &list;
+    notWr.buf_num = 1;
+    notWr.dst_addr = dstAddr;
+    notWr.op = op;
+    notWr.rkey = rkey;
+    notWr.send_flag = flag;
+
+    struct send_wr_rsp notWrRsp {};
+
+    CHECK_STATUS(RaTypicalSendWr(qpHandle, &notWr, &notWrRsp));
+
+    dispatcher->RdmaSend(notWrRsp.db.db_index, notWrRsp.db.db_info, notWr, rdmaTaskId);
+    return Status::Success();
+}
+
+Status RdmaQp::execTypicalRdmaOp(uint64_t srcAddr, uint64_t dstAddr, uint32_t length, uint32_t op, int32_t flag,
+                                 uint32_t lkey, uint32_t rkey, rtStream_t stm)
+{
+    if (status != RdmaQpStatus::QP_CONNECTED) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not connected");
+    }
+
+    struct sg_list list = { 0 };
+    list.addr = srcAddr;
+    list.len = length;
+    list.lkey = lkey;
+
+    struct send_wr notWr {};
+    notWr.buf_list = &list;
+    notWr.buf_num = 1;
+    notWr.dst_addr = dstAddr;
+    notWr.op = op;
+    notWr.rkey = rkey;
+    notWr.send_flag = flag;
+
+    struct send_wr_rsp notWrRsp {};
+
+    CHECK_STATUS(RaTypicalSendWr(qpHandle, &notWr, &notWrRsp));
+    ACL_CHECK_STATUS(rtRDMADBSend(notWrRsp.db.db_index, notWrRsp.db.db_info, stm));
+
+    return Status::Success();
+}
+
+Status RdmaQp::execRdmaOps(std::vector<uint64_t> srcAddrs, std::vector<uint64_t> dstAddrs,
+                           std::vector<uint32_t> lengths, std::vector<uint32_t> ops, std::vector<int32_t> flags,
+                           rtStream_t stm)
 {
     if (status != RdmaQpStatus::QP_CONNECTED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not connected");
@@ -255,8 +311,8 @@ Status RdmaQp::rdmaWrite(std::vector<uint64_t> srcAddrs, std::vector<uint64_t> d
 
     for (int i = 0; i < numWrites; i++) {
         wrs[i].dst_addr = dstAddrs[i];
-        wrs[i].op = 0; /* RDMA_WRITE: 0 */
-        wrs[i].send_flags = RA_SEND_SIGNALED;
+        wrs[i].op = ops[i];
+        wrs[i].send_flags = flags[i];
         wrs[i].mem_list.addr = srcAddrs[i];  // unsafe, don't use in prod ;)
         wrs[i].mem_list.len = lengths[i];
     }
@@ -275,8 +331,9 @@ Status RdmaQp::rdmaWrite(std::vector<uint64_t> srcAddrs, std::vector<uint64_t> d
     return Status::Success();
 }
 
-Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, std::vector<uint64_t> srcAddrs,
-                             std::vector<uint64_t> dstAddrs, std::vector<uint32_t> lengths)
+Status RdmaQp::dispatchRdmaOpsFfts(p2p::DispatcherFFTS *dispatcher, std::vector<uint64_t> srcAddrs,
+                                   std::vector<uint64_t> dstAddrs, std::vector<uint32_t> lengths,
+                                   std::vector<uint32_t> ops, std::vector<int32_t> flags, uint32_t *lastTaskId)
 {
     if (status != RdmaQpStatus::QP_CONNECTED) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not connected");
@@ -295,8 +352,8 @@ Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, std::vector<uint64
 
     for (int i = 0; i < numWrites; i++) {
         wrs[i].dst_addr = dstAddrs[i];
-        wrs[i].op = 0; /* RDMA_WRITE: 0 */
-        wrs[i].send_flags = RA_SEND_SIGNALED;
+        wrs[i].op = ops[i];
+        wrs[i].send_flags = flags[i];
         wrs[i].mem_list.addr = srcAddrs[i];  // unsafe, don't use in prod ;)
         wrs[i].mem_list.len = lengths[i];
     }
@@ -308,6 +365,7 @@ Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, std::vector<uint64
         return Status::Error(ErrorCode::NOT_SUPPORTED, "Not all writes were submitted successfully");
     }
 
+    uint32_t prevTaskId = 0;
     for (int i = 0; i < completeNum; i++) {
         struct sg_list list = { 0 };
         list.addr = wrs[i].mem_list.addr;
@@ -318,12 +376,17 @@ Status RdmaQp::rdmaWriteFfts(p2p::DispatcherFFTS *dispatcher, std::vector<uint64
         wr.buf_list = &list;
         wr.buf_num = 1;
         wr.dst_addr = wrs[i].dst_addr;
-        wr.op = 0; /* RDMA_WRITE: 0 */
-        wr.send_flag = RA_SEND_SIGNALED;
+        wr.op = wrs[i].op;
+        wr.send_flag = wrs[i].send_flags;
 
-        uint32_t ignoreTaskId;
-        dispatcher->RdmaSend(wrRsps[i].db.db_index, wrRsps[i].db.db_info, wr, &ignoreTaskId);
+        uint32_t taskId;
+        dispatcher->RdmaSend(wrRsps[i].db.db_index, wrRsps[i].db.db_info, wr, &taskId);
+        if (i > 0) {
+            dispatcher->AddTaskDependency(prevTaskId, taskId);
+        }
+        prevTaskId = taskId;
     }
 
+    *lastTaskId = prevTaskId;
     return Status::Success();
 }

@@ -57,47 +57,34 @@ Status RdmaNotify::wait(aclrtStream stream)
     return Status::Success();
 }
 
-Status RdmaNotify::open(uint64_t notifyRemoteAddr)
+Status RdmaNotify::open(uint64_t notifyRemoteAddrOfset)
 {
     if (type != RdmaNotifyType::UNINITIALIZED_RDMA_NOTIFY) {
         return Status::Error(ErrorCode::REPEAT_INITIALIZE, "Notify already initialized");
     }
 
-    notifyAddr = notifyRemoteAddr;
+    notifyAddrOffset = notifyRemoteAddrOfset;
 
     type = RdmaNotifyType::REMOTE_RDMA_NOTIFY;
     return Status::Success();
 }
 
-Status RdmaNotify::record(aclrtStream stream, RdmaQp* qp)
+Status RdmaNotify::record(uint64_t notifyBaseAddr, void *notifySrcValAddr, uint32_t notifySize, aclrtStream stream,
+                          RdmaQp *qp)
 {
     if (type != RdmaNotifyType::REMOTE_RDMA_NOTIFY) {
-        return Status::Error(ErrorCode::NOT_INITIALIZED,
-                             "Record only supported on remote notify");
+        return Status::Error(ErrorCode::NOT_INITIALIZED, "Record only supported on remote notify");
     }
 
-    void* notifySrcValAddr;
-    uint32_t notifySize;
-    CHECK_STATUS(qp->getSrcValInfo(&notifySrcValAddr, &notifySize));
-
-    CHECK_STATUS(qp->rdmaWrite(reinterpret_cast<uint64_t>(notifySrcValAddr),
-                               notifyAddr,
-                               notifySize,
-                               stream));
+    CHECK_STATUS(qp->execRdmaOp(reinterpret_cast<uint64_t>(notifySrcValAddr), notifyBaseAddr + notifyAddrOffset,
+                                notifySize, RA_OP_WRITE, RA_SEND_SIGNALED | RA_SEND_FENCE, stream));
 
     return Status::Success();
 }
 
-Status RdmaNotify::getRecordInfo(RdmaQp* qp,
-                                 uint64_t* srcAddr,
-                                 uint64_t* dstAddr,
-                                 uint32_t* length)
+Status RdmaNotify::getRecordInfo(uint64_t *addrOffset)
 {
-    void* notifySrcValAddr;
-    CHECK_STATUS(qp->getSrcValInfo(&notifySrcValAddr, length));
-
-    *srcAddr = reinterpret_cast<uint64_t>(notifySrcValAddr);
-    *dstAddr = notifyAddr;
+    *addrOffset = notifyAddrOffset;
     return Status::Success();
 }
 

@@ -22,6 +22,8 @@ using HcclRtNotify = void *;
 namespace p2p {
 constexpr uint32_t CONTEXT_MAX_NUM = 128;
 
+enum class DeviceType { Dev910B, Dev910C, Unsupported };
+
 class DispatcherFFTS {
 public:
     DispatcherFFTS(uint32_t devLogID) : devLogID(devLogID)
@@ -53,7 +55,6 @@ private:
     HcclResult InitFftsDescMemcpy(void *dst, const void *src, uint64_t size);
     HcclResult InitFftsDescRdmaSend(uint32_t dbindex, uint64_t dbinfo);
     bool FftsCtxReady();
-    HcclResult PrintFFTSDebugDetails(rtFftsPlusSqe_t &fftsPlusSqe, rtFftsPlusTaskInfo_t &task);
     HcclResult ConstructFftsSqe(rtFftsPlusSqe_t &fftsPlusSqe, uint16_t readyContextNum);
     HcclResult ConstructFftsTask(rtFftsPlusTaskInfo_t &task, rtFftsPlusSqe_t &fftsPlusSqe);
     HcclResult RdmaSendInternal(uint32_t dbindex, uint64_t dbinfo);
@@ -71,6 +72,7 @@ private:
     std::vector<void *> argsHandleList;
     int32_t devLogID;
     int64_t chipId;
+    DeviceType deviceType = DeviceType::Unsupported;
 };
 }  // namespace p2p
 #endif  // P2P_DISPATCHER_FFTS_PUB_H

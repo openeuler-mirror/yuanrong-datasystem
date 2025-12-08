@@ -42,7 +42,9 @@
 namespace datasystem {
 namespace object_cache {
 ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
-    : devInterImpl_(acl::AclDeviceManager::Instance()), objClientImpl_(impl), clientDevOJTimeoutMs_(impl->timeoutMs_)
+    : devInterImpl_(acl::AclDeviceManager::Instance()),
+      objClientImpl_(impl),
+      clientDevOJTimeoutMs_(impl->requestTimeoutMs_)
 {
 }
 
@@ -288,7 +290,6 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
     if (copyKind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST) {
         auto policy = aclResourceMgr_.GetD2HPolicy();
         if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
-            PrintGetPerfInfo(helper);
             return swapOutPool_->AclMemcpyBatchD2H(deviceId, helper.dstBuffers, helper.srcBuffers, helper.bufferMetas);
         } else {
             return swapOutPool_->AclMemcpyBatch(deviceId, helper.dstList, helper.dataSizeList, helper.srcList,
@@ -297,6 +298,7 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
     }
     auto policy = aclResourceMgr_.GetH2DPolicy();
     if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
+        PrintGetPerfInfo(helper);
         return swapInPool_->AclMemcpyBatchH2D(deviceId, helper.srcBuffers, helper.dstBuffers, helper.bufferMetas);
     } else {
         return swapInPool_->AclMemcpyBatch(deviceId, helper.dstList, helper.dataSizeList, helper.srcList,

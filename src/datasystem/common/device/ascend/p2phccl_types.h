@@ -44,7 +44,34 @@ typedef enum P2pKind {
 typedef enum P2pLink {
     P2P_LINK_HCCS,
     P2P_LINK_ROCE,
+    P2P_LINK_AUTO,  // Uses the host IP (environment variable / detected) to determine whether 2 NPUs are on the same
+                    // machine
 } P2pLink;
+
+typedef enum P2pSegmentPermissions {
+    P2P_SEGMENT_READ_WRITE = 0,
+    P2P_SEGMETN_READ_ONLY,
+    P2P_SEGMENT_WRITE_ONLY,
+} P2pSegmentPermissions;
+
+const uint32_t P2P_SEGMENT_INFO_BYTES = 48;
+/**
+ * @brief P2P Segment Info
+ */
+typedef struct P2pSegmentInfoDef {
+    char internal[P2P_SEGMENT_INFO_BYTES];
+} P2pSegmentInfo;
+
+/**
+ * @brief P2P Segment Info
+ */
+typedef struct P2pScatterEntry {
+    void *ddrBuf;
+    void **dstBufs;
+    uint64_t *counts;
+    HcclDataType dataType;
+    uint32_t numEl;
+} P2pScatterEntry;
 
 }  // namespace datasystem
 #ifdef __cplusplus

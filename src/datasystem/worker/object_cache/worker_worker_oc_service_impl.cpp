@@ -19,7 +19,10 @@
  */
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 
+#include <cstdint>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 #include "datasystem/utils/status.h"
 #include "tbb/blocked_range.h"
@@ -29,9 +32,11 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/utils.pb.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -63,6 +68,8 @@ Status WorkerWorkerOCServiceImpl::Init()
 {
     CHECK_FAIL_RETURN_STATUS(ocClientWorkerSvc_ != nullptr, StatusCode::K_NOT_READY,
                              "ClientWorkerService must be initialized before WorkerWorkerService construction");
+    constexpr uint32_t commThrdNum = 4;
+    RETURN_IF_EXCEPTION_OCCURS(communicatorThreadPool_ = std::make_shared<ThreadPool>(0, commThrdNum, "CommInit"));
     return WorkerWorkerOCService::Init();
 }
 
@@ -87,10 +94,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     pointWrite.Record();
     PerfPoint pointSendPayload(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
 
-    if (rsp.data_in_payload()) {
+    if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
+        || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload({}, FLAGS_oc_worker_worker_direct_port > 0),
                                          "GetObjectRemote send payload error");
-    } else {
+    } else if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                          "GetObjectRemote send payload error");
     }
@@ -321,6 +329,58 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
     return Status::OK();
 }
 
+Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &commId, const uint64_t &localSegAddress,
+                                                          const uint64_t &localSegSize,
+                                                          std::shared_ptr<ShmUnit> shmUnit, uint64_t metadataSize,
+                                                          GetObjectRemoteRspPb &rsp)
+{
+    (void)commId;
+    (void)localSegAddress;
+    (void)localSegSize;
+    (void)shmUnit;
+    (void)metadataSize;
+    (void)rsp;
+#ifdef BUILD_HETERO
+    // Send root info to client
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PGetRootInfo(commId, rsp.mutable_root_info()));
+
+    // Initialize communicator connection (accept client).
+    // Fixme: error handling
+    auto traceId = Trace::Instance().GetTraceID();
+    communicatorThreadPool_->Execute([rootInfo = rsp.root_info(), commId = commId, traceId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        std::shared_ptr<RemoteH2DContext> p2pComm;
+        LOG_IF_ERROR(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, rootInfo, P2P_SENDER, p2pComm),
+                     "P2PCommInitRootInfo failed.");
+    });
+
+    // Send segment info to client
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(localSegSize, shmUnit->GetOffset() + metadataSize,
+                                                                  localSegAddress, *rsp.mutable_remote_host_segment()));
+
+    // Send offset info to client
+    auto *dataInfoPb = rsp.mutable_data_info();
+    uint64_t *dataPtr = reinterpret_cast<uint64_t *>(static_cast<uint8_t *>(shmUnit->GetPointer()) + metadataSize);
+
+    // Get number of data sizes
+    uint64_t sz = *dataPtr;
+
+    // Get the first offset
+    dataPtr++;
+    uint64_t firstOffset = *dataPtr;
+    dataInfoPb->set_offset(firstOffset);
+
+    // Calculate sizes of data
+    for (uint64_t i = 0; i < sz; i++) {
+        uint64_t offsetX = *dataPtr;
+        dataPtr++;
+        uint64_t offsetY = *dataPtr;
+        dataInfoPb->add_sizes(offsetY - offsetX);
+    }
+#endif
+    return Status::OK();
+}
+
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
                                                       std::vector<uint64_t> &keys,
@@ -390,6 +450,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         INJECT_POINT("worker.LoadObjectData.AddPayload");
 
         PerfPoint p(PerfKey::WORKER_REMOTE_GET_PAYLOAD);
+
+        auto shmUnit = entry->GetShmUnit();
+        const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+        uint64_t localSegAddress;
+        uint64_t localSegSize;
+        GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
+
         // Support send payload exceed 2GB
         if (isFastTransportEnabled) {
             if (batchPtr) {
@@ -425,8 +492,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                                                entry->GetMetadataSize(), blocking, keys),
                                                  "Failed in single data ucp put");
             }
-            rsp.set_data_in_payload(true);
+            rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);
         }
+
+        // For compatibility, only trigger RH2D if this client request both supports and enables RH2D.
+        if (IsRemoteH2DEnabled() && !req.comm_id().empty()) {
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(EstablishConnAndFillSeg(req.comm_id(), localSegAddress, localSegSize,
+                                                                     shmUnit, entry->GetMetadataSize(), rsp),
+                                             "");
+            rsp.set_data_source(datasystem::DataTransferSource::DATA_DELAY_TRANSFER);
+        }
+        
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
         if (!IsFastTransportEnabled() || !blocking) {
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
@@ -532,12 +608,14 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         for (int i = 0; i < req.requests_size(); i++) {
             std::vector<ParallelRes> emptyRes = {};
             auto *subReq = req.mutable_requests(i);
+            *(subReq->mutable_comm_id()) = req.comm_id();
             GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, emptyRes);
         }
     }
     pointImpl.Record();
     // Wait for fast transport events if the events are created and not already waited.
 
+    PerfPoint pointWait(PerfKey::URMA_TOTAL_WAIT_TO_FINISH);
     for (auto &pair : keys) {
         int index = pair.first;
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
@@ -550,6 +628,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         // Early release of ShmGuard.
         pair.second.second.clear();
     }
+    pointWait.Record();
+
     PerfPoint pointWrite(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointWrite.Record();

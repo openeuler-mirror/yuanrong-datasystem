@@ -158,6 +158,7 @@ message GetReqPb {
   repeated uint64 read_size_list = 7;
   bool no_query_l2cache = 8 ;
   bool return_object_index = 9;
+  string comm_id = 10;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -181,6 +182,9 @@ message GetRspPb {
     string shm_id = 12;
     uint32 cache_type = 13;
     uint32 object_index = 14;
+    RemoteHostSegmentPb remote_host_segment = 15;
+    RemoteH2DRootInfoPb root_info = 16;
+    RemoteH2DDataInfoPb data_info = 17;
   }
   message PayloadInfoPb {
   	string object_key = 1;

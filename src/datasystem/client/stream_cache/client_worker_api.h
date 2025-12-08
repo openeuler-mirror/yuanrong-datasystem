@@ -57,11 +57,12 @@ public:
 
     /**
      * @brief Initialize the ClientWorkerApi Object.
-     * @param[in] timeoutMs Timeout milliseconds.
+     * @param[in] requestTimeoutMs Request milliseconds.
+     * @param[in] connectTimeoutMs Connect timeout milliseconds.
      * @return K_OK on success; the error code otherwise.
      *         K_INVALID: the input ip or port is invalid.
      */
-    Status Init(int32_t timeoutMs);
+    Status Init(int32_t timeoutMs, int32_t connectTimeoutMs);
 
     /**
      * @brief Send rpc request to worker to create one producer.

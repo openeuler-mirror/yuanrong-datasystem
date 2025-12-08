@@ -38,7 +38,8 @@ class StreamClient:
                  server_public_key: str = "",
                  access_key="",
                  secret_key="",
-                 tenant_id=""):
+                 tenant_id="",
+                 enable_exclusive_connection=False):
         """ Constructor of the StreamClient class
 
         Args:
@@ -50,6 +51,8 @@ class StreamClient:
             access_key(str): The access key used by AK/SK authorize.
             secret_key(str): The secret key for AK/SK authorize.
             tenant_id(str): The tenant ID.
+            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+            datasystem_worker.
         """
 
         if isinstance(client_private_key, str):
@@ -57,7 +60,7 @@ class StreamClient:
         if isinstance(secret_key, str):
             secret_key = str.encode(secret_key)
         self._client = ds.StreamClient(host, port, client_public_key, client_private_key, server_public_key, access_key,
-                                       secret_key, tenant_id)
+                                       secret_key, tenant_id, enable_exclusive_connection)
 
     def init(self):
         """ Init a stream client to connect to a worker.

@@ -104,7 +104,7 @@ void RemotePushTest::InitTest()
     ASSERT_EQ(producerClient_->CreateProducer(streamName_, producer_, conf), Status::OK());
 
     auto api = std::make_unique<ClientWorkerApi>(pubWorkerAddress_, RpcCredential(), signature_.get());
-    ASSERT_EQ(api->Init(CLIENT_RPC_TIMEOUT), Status::OK());
+    ASSERT_EQ(api->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT), Status::OK());
 
     InitStreamClient(1, consumerClient_);
     SubscriptionConfig config("sub1", SubscriptionType::STREAM);

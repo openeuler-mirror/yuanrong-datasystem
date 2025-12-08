@@ -126,16 +126,21 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId) {
-            ConnectOptions connectOpts{ .host = host,
-                                        .port = port,
-                                        .connectTimeoutMs = connectTimeoutMs,
-                                        .clientPublicKey = clientPublicKey,
-                                        .clientPrivateKey = clientPrivateKey,
-                                        .serverPublicKey = serverPublicKey,
-                                        .accessKey = accessKey,
-                                        .secretKey = secretKey,
-                                        .tenantId = tenantId};
+                         const std::string &tenantId, int32_t reqTimeoutMs, bool enableExclusiveConnection) {
+            ConnectOptions connectOpts{
+                .host = host,
+                .port = port,
+                .connectTimeoutMs = connectTimeoutMs,
+                .requestTimeoutMs = reqTimeoutMs,
+                .clientPublicKey = clientPublicKey,
+                .clientPrivateKey = clientPrivateKey,
+                .serverPublicKey = serverPublicKey,
+                .accessKey = accessKey,
+                .secretKey = secretKey,
+                .tenantId = tenantId,
+                .enableCrossNodeConnection = false,
+                .enableExclusiveConnection = enableExclusiveConnection
+            };
             return std::make_unique<ObjectClient>(connectOpts);
         }))
 
@@ -146,8 +151,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
              })
 
         .def("create",
-             [](ObjectClient &client, const std::string &objectKey, uint64_t size,
-                ConsistencyType consistency) {
+             [](ObjectClient &client, const std::string &objectKey, uint64_t size, ConsistencyType consistency) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  std::shared_ptr<Buffer> buffer;
                  CreateParam param{ .consistencyType = consistency };
@@ -156,8 +160,8 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
              })
 
         .def("put",
-             [](ObjectClient &client, const std::string &objectKey, py::buffer value,
-                ConsistencyType consistency, const std::vector<std::string> &refIds) {
+             [](ObjectClient &client, const std::string &objectKey, py::buffer value, ConsistencyType consistency,
+                const std::vector<std::string> &refIds) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  CreateParam param{ .consistencyType = consistency };
                  py::buffer_info info(value.request());

@@ -50,6 +50,10 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
 
+if (NOT BUILD_WITH_RDMA)
+    list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/rdma/.*\\.cpp$")
+endif()
+
 list(APPEND DS_UT_STREAM_SRCS)
 
 add_executable(ds_ut ${DS_TEST_UT_SRCS})
@@ -65,12 +69,19 @@ set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(ds_ut PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_stream PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_object PRIVATE ${BIN_PATH_LIST})
-set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
-CACHE STRING "")
+
+if (BUILD_OBSERVABILITY)
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+        CACHE STRING "")
+else()
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+        CACHE STRING "")
+endif()
+
 add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
-target_link_libraries(flags_ut ds_flags GTest::gtest GTest::gmock re2::re2)
+target_link_libraries(flags_ut ds_flags GTest::gtest GTest::gmock)
 add_datasystem_test(flags_ut)

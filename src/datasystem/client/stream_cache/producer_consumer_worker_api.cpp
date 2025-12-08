@@ -182,12 +182,12 @@ Status ProducerConsumerWorkerApi::CreateWritePage(const std::string &streamName,
 Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, const std::string &producerId)
 {
     RpcOptions opts;
-    opts.SetTimeout(workerApi_->timeoutMs_);
+    opts.SetTimeout(workerApi_->requestTimeoutMs_);
     CloseProducerReqPb req;
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
     req.set_client_id(workerApi_->GetClientId());
-    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->timeoutMs_));
+    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_CLOSE_PRODUCER);
@@ -205,13 +205,13 @@ Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, c
                                                 const std::string &consumerId)
 {
     RpcOptions opts;
-    opts.SetTimeout(workerApi_->timeoutMs_);
+    opts.SetTimeout(workerApi_->requestTimeoutMs_);
     CloseConsumerReqPb req;
     req.set_stream_name(streamName);
     req.set_subscription_name(subscriptionName);
     req.set_consumer_id(consumerId);
     req.set_client_id(workerApi_->GetClientId());
-    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->timeoutMs_));
+    reqTimeoutDuration.Init(workerApi_->ClientGetRequestTimeout(workerApi_->requestTimeoutMs_));
 
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     PerfPoint point(PerfKey::RPC_WORKER_CLOSE_CONSUMER);

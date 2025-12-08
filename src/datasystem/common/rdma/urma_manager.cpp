@@ -149,11 +149,6 @@ Status UrmaManager::InitLocalUrmaInfo(const HostPort &hostport)
     localUrmaInfo_.uasid = GetUasid();
     localUrmaInfo_.jfrIds = GetJfrIds();
     localUrmaInfo_.localAddress = hostport;
-#ifdef URMA_OVER_UB
-    if (GetUrmaMode() == UrmaMode::UB) {
-        RETURN_IF_NOT_OK(GetJfrInfoForBond(localUrmaInfo_.bondInfos));
-    }
-#endif
     LOG(INFO) << "local urma info: " << localUrmaInfo_.ToString();
     return Status::OK();
 }
@@ -162,8 +157,7 @@ Status UrmaManager::UrmaInit()
 {
     LOG(INFO) << "UrmaManager::UrmaInit()";
     LOG_IF_ERROR(RegisterUrmaLog(), "Failed to register urma log to datasystem, may check log in /var/log/umdk/urma");
-    urma_init_attr_t urmaInitAttribute = { 0 };
-    urmaInitAttribute.uasid = 0;
+    urma_init_attr_t urmaInitAttribute = { 0, 0 };
     urma_status_t ret = urma_init(&urmaInitAttribute);
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma init, ret = %d", ret));
@@ -477,38 +471,6 @@ Status UrmaManager::RegisterSegment(const uint64_t &segAddress, const uint64_t &
     return Status::OK();
 }
 
-namespace {
-#ifdef URMA_OVER_UB
-Status GetUbBondSegInfo(urma_target_seg_t *tseg, urma_bond_seg_info_out_t &segInfoOut)
-{
-    urma_bond_seg_info_in_t segInfoIn;
-    segInfoIn.tseg = tseg;
-    urma_user_ctl_in_t userCtlIn;
-    userCtlIn.opcode = URMA_USER_CTL_BOND_GET_SEG_INFO;
-    userCtlIn.addr = (uint64_t)&segInfoIn;
-    userCtlIn.len = sizeof(urma_bond_seg_info_in_t);
-    urma_user_ctl_out_t userCtlOut;
-    userCtlOut.addr = (uint64_t)&segInfoOut;
-    userCtlOut.len = sizeof(urma_bond_seg_info_out_t);
-    CHECK_FAIL_RETURN_STATUS(urma_user_ctl(tseg->urma_ctx, &userCtlIn, &userCtlOut) == 0, K_RUNTIME_ERROR,
-                             "Get segment UB bond info failed.");
-    return Status::OK();
-}
-
-Status AddUbBondSegInfo(urma_context_t *ctx, urma_bond_add_remote_seg_info_in_t &segInfo)
-{
-    urma_user_ctl_in_t userCtlIn;
-    userCtlIn.opcode = URMA_USER_CTL_BOND_ADD_REMOTE_SEG_INFO;
-    userCtlIn.addr = (uint64_t)&segInfo;
-    userCtlIn.len = sizeof(urma_bond_add_remote_seg_info_in_t);
-    urma_user_ctl_out_t userCtlOut{ 0 };
-    CHECK_FAIL_RETURN_STATUS(urma_user_ctl(ctx, &userCtlIn, &userCtlOut) == 0, K_RUNTIME_ERROR,
-                             "Failed to add seg info");
-    return Status::OK();
-}
-#endif
-}  // namespace
-
 Status UrmaManager::GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq)
 {
     PerfPoint point(PerfKey::WORKER_URMA_GET_SEGMENT);
@@ -520,16 +482,6 @@ Status UrmaManager::GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq)
         auto segPb = segInfo->mutable_seg();
         UrmaSeg::ToProto(localSegment->seg, *segPb);
         LOG(INFO) << "local seg info: " << UrmaSeg::ToString(localSegment->seg);
-#ifdef URMA_OVER_UB
-        // UB bond prehandling for segment.
-        if (GetUrmaMode() == UrmaMode::UB) {
-            UrmaBondSegInfo info;
-            RETURN_IF_NOT_OK(GetUbBondSegInfo(localSegment.get(), info.raw));
-            auto *bondInfo = segInfo->mutable_bond_info();
-            info.ToProto(*bondInfo);
-            LOG(INFO) << "local bond seg info: " << info.ToString();
-        }
-#endif
     }
     return Status::OK();
 }
@@ -782,23 +734,6 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
         device.Clear();
     }
     device.urmaInfo_ = urmaInfo;
-    // UB bond handling before import jfr.
-#ifdef URMA_OVER_UB
-    if (GetUrmaMode() == UrmaMode::UB) {
-        for (auto &bondInfo : urmaInfo.bondInfos) {
-            urma_user_ctl_in_t userCtlIn;
-            userCtlIn.opcode = URMA_USER_CTL_BOND_ADD_RJFR_ID_INFO;
-            userCtlIn.addr = (uint64_t)&bondInfo;
-            userCtlIn.len = sizeof(urma_bond_add_rjfr_id_info_in_t);
-            urma_user_ctl_out_t userCtlOut;
-            userCtlOut.addr = 0;
-            userCtlOut.len = 0;
-            if (urma_user_ctl(urmaContext_, &userCtlIn, &userCtlOut)) {
-                return Status(K_RUNTIME_ERROR, FormatString("Failed to add rjfr info, %s", urmaInfo.ToString()));
-            }
-        }
-    }
-#endif
 
     // Now we import a new jfr
     urma_rjfr_t remoteJfr;
@@ -811,6 +746,9 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     remoteJfr.jfr_id.eid = eid;
     remoteJfr.jfr_id.uasid = urmaInfo.uasid;
     remoteJfr.trans_mode = URMA_TM_RM;
+    LOG(INFO) << "tp_type:" << remoteJfr.tp_type;
+    remoteJfr.tp_type = URMA_CTP;
+
     std::vector<urma_target_jetty_t *> tjfrs;
     for (uint i = 0; i < FLAGS_urma_connection_size; ++i) {
         remoteJfr.jfr_id.id = urmaInfo.jfrIds[i];
@@ -981,31 +919,6 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
     return Status::OK();
 }
 
-#ifdef URMA_OVER_UB
-Status UrmaManager::GetJfrInfoForBond(std::vector<urma_bond_id_info_out_t> &infoOut)
-{
-    auto size = urmaJfrVec_.size();
-    infoOut.resize(size);
-    for (size_t i = 0; i < size; i++) {
-        // UB bond prehandling for jfr.
-        urma_bond_id_info_in_t in;
-        in.jfr = urmaJfrVec_[i].get();
-        in.type = URMA_JFR;
-        urma_user_ctl_in_t userCtlIn;
-        userCtlIn.opcode = URMA_USER_CTL_BOND_GET_ID_INFO;
-        userCtlIn.addr = (uint64_t)&in;
-        userCtlIn.len = sizeof(urma_bond_id_info_in_t);
-        urma_user_ctl_out_t userCtlOut;
-        userCtlOut.addr = (uint64_t)&infoOut[i];
-        userCtlOut.len = sizeof(urma_bond_id_info_out_t);
-        if (urma_user_ctl(urmaJfrVec_[i]->urma_ctx, &userCtlIn, &userCtlOut)) {
-            return Status(K_RUNTIME_ERROR, "Failed to urma user ctl");
-        }
-    }
-    return Status::OK();
-}
-#endif
-
 Segment::~Segment()
 {
     Clear();
@@ -1061,6 +974,7 @@ Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &con
 
 Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &importSegmentInfo)
 {
+    (void) urmaContext;
     SegmentMap::Accessor accessor;
     auto segVa = importSegmentInfo.seg().va();
     if (!remoteSegments_.Find(accessor, segVa)) {
@@ -1071,15 +985,6 @@ Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImpo
                     remoteSegments_.BlockingErase(accessor);
                 }
             });
-            // UB bond handling before import segment.
-#ifdef URMA_OVER_UB
-            if (GetUrmaMode() == UrmaMode::UB) {
-                UrmaBondSegInfo info;
-                RETURN_IF_NOT_OK(info.FromProto(importSegmentInfo.bond_info()));
-                LOG(INFO) << "add bond remote seg info: " << info.ToString();
-                RETURN_IF_NOT_OK(AddUbBondSegInfo(urmaContext, info.raw));
-            }
-#endif
 
             // Import segment
             UrmaSeg remoteSegment;

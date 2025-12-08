@@ -26,6 +26,7 @@ class Fifo {
 public:
     Fifo(const std::string &path, __mode_t mode) : path_(path)
     {
+        unlink(path_.c_str());
         if (mkfifo(path_.c_str(), mode) == -1) {
             throw std::runtime_error("Failed to create FIFO");
         }

@@ -25,6 +25,9 @@ constexpr int32_t HCCL_EXEC_TIME_OUT_S =
 constexpr int32_t HCCL_EXEC_TIME_OUT_S_V81 =
     NOTIFY_MAX_WAIT_TIME_V81;  // 910B和910C HCCL默认的Notify wait超时时间设置为最大超时时间
 
+constexpr uint32_t HCCL_FFTS_CAPACITY = 65535;  // FFTS+子图最大容量
+constexpr uint32_t FFTS_TIMEOUT_MAX = 65535;    // FFTS+子图最大容量
+
 // V71: 910B, v81: 910c
 // s32 HcclExecTimeout = (deviceType == DevType::DEV_TYPE_V81 || deviceType == DevType::DEV_TYPE_V71) ?\
 //        HCCL_EXEC_TIME_OUT_S_V81 : HCCL_EXEC_TIME_OUT_S;

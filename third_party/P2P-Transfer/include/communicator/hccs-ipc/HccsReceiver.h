@@ -12,6 +12,7 @@
 #include "include/communicator/hccs-ipc/proto/HccsIpcInitMsg.pb.h"
 #include "communication/TcpServer.h"
 #include "communication/TcpClient.h"
+#include "communicator/P2PCommunicator.h"
 #include "communicator/CommChannel.h"
 #include "npu/ffts/dispatcher_ffts.h"
 
@@ -28,6 +29,7 @@ public:
 
     Status Initialize(TCPObjectClient *client, TCPObjectServer *server) override;
     Status Receive(void **dstPtrs, uint64_t* sizes, uint32_t count, aclrtStream stream) override;
+    Status Read(P2PIScatterEntry* entries, uint32_t batchSize, aclrtStream stream) override;
 
 private:
     Status initializeRootReceiver();

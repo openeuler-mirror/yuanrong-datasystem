@@ -297,6 +297,8 @@ class ObjectClient:
         access_key(str): The access key used by AK/SK authorize.
         secret_key(str): The secret key for AK/SK authorize.
         tenant_id(str): The tenant ID.
+        enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+        datasystem_worker
 
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
@@ -316,9 +318,12 @@ class ObjectClient:
         server_public_key="",
         access_key="",
         secret_key="",
-        tenant_id=""
+        tenant_id="",
+        req_timeout_ms=0,
+        enable_exclusive_connection=False
     ):
-        """Constructor of the ObjectClient class
+        """
+        Constructor of the ObjectClient class
 
         Args:
             host(str): The host of the worker address.
@@ -334,6 +339,10 @@ class ObjectClient:
             oauth_client_secret(str): The client secret for tenant.
             oauth_url(str): The auth url of IAM.
             tenant_id(str): The tenant ID.
+            req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+            connect_timeout_ms.
+            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+            datasystem_worker.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -347,7 +356,8 @@ class ObjectClient:
             ["server_public_key", server_public_key, str],
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
-            ["tenant_id", tenant_id, str]
+            ["tenant_id", tenant_id, str],
+            ["enable_exclusive_connection", enable_exclusive_connection, bool]
         ]
         validator.check_args_types(args)
         self.client = ds.ObjectClient(
@@ -359,7 +369,9 @@ class ObjectClient:
             server_public_key,
             access_key,
             secret_key,
-            tenant_id
+            tenant_id,
+            req_timeout_ms,
+            enable_exclusive_connection
         )
 
     @staticmethod

@@ -35,14 +35,12 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
-
-DS_DECLARE_bool(enable_urma);
-DS_DECLARE_bool(urma_register_whole_arena);
 
 namespace datasystem {
 template <typename T>
@@ -357,15 +355,6 @@ public:
      * @return Status of the call.
      */
     Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
-
-#ifdef URMA_OVER_UB
-    /**
-     * @brief Get the jfr info for UB bond purposes.
-     * @param[out] infoOut A vector of bond info for each created jfr.
-     * @return Status of the call.
-     */
-    Status GetJfrInfoForBond(std::vector<urma_bond_id_info_out_t> &infoOut);
-#endif
 
     const UrmaJfrInfo &GetLocalUrmaInfo()
     {

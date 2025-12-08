@@ -38,6 +38,7 @@ message GetObjectRemoteReqPb {
   uint64 data_size = 7;
   UrmaRemoteAddrPb urma_info = 8;
   UcpRemoteInfoPb ucp_info = 9;
+  string comm_id = 10;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -49,12 +50,16 @@ message GetObjectRemoteRspPb {
   int64 data_size = 1;
   int64 create_time = 3;
   uint32 life_state = 4;
-  bool data_in_payload = 5;
+  DataTransferSource data_source = 5;
   ErrorInfoPb error = 6;
+  RemoteHostSegmentPb remote_host_segment = 7;
+  RemoteH2DRootInfoPb root_info = 8;
+  RemoteH2DDataInfoPb data_info = 9;
 }
 
 message BatchGetObjectRemoteReqPb {
   repeated GetObjectRemoteReqPb requests = 1;
+  string comm_id = 2;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

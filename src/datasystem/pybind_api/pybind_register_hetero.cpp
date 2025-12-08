@@ -102,17 +102,23 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId, const bool enableCrossNodeConnection) {
-            ConnectOptions connectOpts{ .host = host,
-                                        .port = port,
-                                        .connectTimeoutMs = connectTimeoutMs,
-                                        .clientPublicKey = clientPublicKey,
-                                        .clientPrivateKey = clientPrivateKey,
-                                        .serverPublicKey = serverPublicKey,
-                                        .accessKey = accessKey,
-                                        .secretKey = secretKey,
-                                        .tenantId = tenantId,
-                                        .enableCrossNodeConnection = enableCrossNodeConnection };
+                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         bool enableExclusiveConnection, bool enableRemoteH2D) {
+            ConnectOptions connectOpts{
+                .host = host,
+                .port = port,
+                .connectTimeoutMs = connectTimeoutMs,
+                .requestTimeoutMs = reqTimeoutMs,
+                .clientPublicKey = clientPublicKey,
+                .clientPrivateKey = clientPrivateKey,
+                .serverPublicKey = serverPublicKey,
+                .accessKey = accessKey,
+                .secretKey = secretKey,
+                .tenantId = tenantId,
+                .enableCrossNodeConnection = enableCrossNodeConnection,
+                .enableExclusiveConnection = enableExclusiveConnection,
+                .enableRemoteH2D = enableRemoteH2D
+            };
             return std::make_unique<HeteroClient>(connectOpts);
         }))
         .def("init",

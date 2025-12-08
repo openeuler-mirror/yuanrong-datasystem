@@ -42,16 +42,12 @@ public:
 
     /**
      * @brief Get the Singleton StringPool instance.
+     * @param[in] printInitLog Whether to print initialization logs.
      * @return StringPool instance.
      */
     static StringPool &Instance(KeyType keyType);
 
-    static void InitAll();
-
-    /**
-     * @brief Init the StringPool, use it to control the construction and destruction timing.
-     */
-    void Init() const;
+    static void InitAll(bool printInitLog = true);
 
     /**
      * @brief Intern the std::string to pool and return the handle of this string.

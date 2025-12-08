@@ -63,6 +63,14 @@ inline Status convertStatus(aclError ret, const char *file, int line)
         }                          \
     } while (0)
 
+#define CHECK_HCCL(ans)            \
+    do {                           \
+        HcclResult ret = (ans);    \
+        if (ret != HCCL_SUCCESS) { \
+            return ret;            \
+        }                          \
+    } while (0)
+
 #define LOG_STATUS(ans)                                   \
     do {                                                  \
         Status status = (ans);                            \

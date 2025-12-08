@@ -40,6 +40,7 @@
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -55,6 +56,7 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
+#include "datasystem/utils/optional.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
 
@@ -169,8 +171,8 @@ public:
      *         K_RUNTIME_ERROR: client fd mmap failed.
      *         K_DUPLICATED: the object already exists, no need to create.
      */
-    Status MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
-                    const FullParam &param, std::vector<std::shared_ptr<Buffer>> &buffers);
+    Status MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes, const FullParam &param,
+                   std::vector<std::shared_ptr<Buffer>> &buffers);
 
     /**
      * @brief Batch setter for multiple buffers.
@@ -270,10 +272,11 @@ public:
      * required. 0 means no waiting time allowed.
      * @param[out] buffers The return vector of the objects.
      * @param[in] queryL2Cache whether query l2cache.
+     * @param[in] isRH2DSupported whether the get request supports RH2D.
      * @return Status of the result.
      */
     Status Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs, std::vector<Optional<Buffer>> &buffers,
-               bool queryL2Cache = true);
+               bool queryL2Cache = true, bool isRH2DSupported = false);
 
     /**
      * @brief Some data in an object can be read based on the specified key and parameters.
@@ -308,7 +311,7 @@ public:
      *         K_INVALID: the key or val is empty.
      */
     Status Set(const std::string &key, const StringView &val, const SetParam &setParam);
-    
+
     /**
      * @brief Invoke worker client to set the value of a key.
      * @param[in] val The value for the key.
@@ -776,6 +779,17 @@ private:
                               std::shared_ptr<Buffer> &buffer);
 
     /**
+     * @brief Set Remote H2D remote host object buffer.
+     * @param[in] objectKey The object key of the cache object.
+     * @param[in] info The protobuf object info.
+     * @param[in] version Object version.
+     * @param[out] buffer The object buffer.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status SetRemoteHostObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info, uint32_t version,
+                                     std::shared_ptr<Buffer> &buffer);
+
+    /**
      * @brief Batch release buffers.
      * @param[in] buffers The object buffers.
      */
@@ -818,13 +832,15 @@ private:
      * @param[in] payLoadPointer For non_shared memory, the Get interface will pass in a pointer to initialize
      * @param[in] mmapEntry For shared memory, keep mmap entry to avoid it unmap.
      * the bufferInfo->pointer; other cases will pass in a nullptr.
+     * @param[in] remoteHostInfo The remote host info for RH2D data transfer.
      * @return ObjectBufferInfo The struct which stores buffer info.
      */
     static std::shared_ptr<ObjectBufferInfo> MakeObjectBufferInfo(
         const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
         bool isSeal, uint32_t version, const ShmKey &shmId = {},
         const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
-        std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
+        std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr,
+        std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo = nullptr);
 
     /**
      * @brief Make the buffer invalid.
@@ -884,8 +900,7 @@ private:
     {
         CHECK_FAIL_RETURN_STATUS(nullable || !vec.empty(), K_INVALID, "The keys are empty");
         if (!vec.empty()) {
-            CHECK_FAIL_RETURN_STATUS(!vec.begin()->empty(), K_INVALID,
-                                     FormatString("keys[%d] can not be empty", 0));
+            CHECK_FAIL_RETURN_STATUS(!vec.begin()->empty(), K_INVALID, FormatString("keys[%d] can not be empty", 0));
             RETURN_IF_NOT_OK(CheckValidObjectKey(*vec.begin()));
         }
         return Status::OK();
@@ -1073,9 +1088,8 @@ private:
      * @param[out] multiCreateParamList create param list
      * @param[out] bufferList buffer list
      */
-    Status MutiCreateParallel(const bool skipCheckExistence, const FullParam &param,
-                              const uint32_t &version, std::vector<bool> &exists,
-                              std::vector<MultiCreateParam> &multiCreateParamList,
+    Status MutiCreateParallel(const bool skipCheckExistence, const FullParam &param, const uint32_t &version,
+                              std::vector<bool> &exists, std::vector<MultiCreateParam> &multiCreateParamList,
                               std::vector<std::shared_ptr<Buffer>> &bufferList);
 
     /**
@@ -1115,6 +1129,13 @@ private:
      */
     Status CheckDeviceValid(std::vector<uint32_t> deviceId);
 
+    /**
+     * @brief Update the client's remoteH2D config
+     * @param[in] devId The device id used by the client
+     * @return K_OK on success; an error code otherwise.
+     */
+    Status UpdateClientRemoteH2DConfig(int32_t devId);
+
     void StartPerfThread();
     void ShutdownPerfThread();
 
@@ -1136,7 +1157,8 @@ private:
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
-    int32_t timeoutMs_;
+    int32_t requestTimeoutMs_;
+    int32_t connectTimeoutMs_;
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
     bool enableExclusiveConnection_ = false;
@@ -1146,6 +1168,8 @@ private:
     std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
     std::unique_ptr<client::MmapManager> mmapManager_{ nullptr };
     std::unique_ptr<ClientDeviceObjectManager> devOcImpl_{ nullptr };
+    bool enableRemoteH2D_;
+    int32_t devId_ = -1;
 
     // Protect tbb map memoryRefCount_, use unique_lock in for/while loop.
     mutable std::shared_timed_mutex memoryRefMutex_;

@@ -27,12 +27,15 @@ Status RaSetQpAttrRetryCnt(void *qp_handle, uint32_t *retry_cnt);
 Status RaGetQpnByQpHandle(void *qp_handle, uint32_t *qpn);
 Status RaMrReg(void *qp_handle, struct mr_info *info);
 Status RaMrDeReg(void *qp_handle, struct mr_info *info);
+Status RaGlobalMrReg(void *rdma_handle, struct mr_info *info, void **mr_handle);
+Status RaGlobalMrDeReg(void *rdma_handle, void *mr_handle);
 Status RaQpConnectAsync(void *qp_handle, const void *fd_handle);
 Status RaGetQpStatus(void *qp_handle, ra_qp_status *status);
 Status RaSendWrlistExt(void *qp_handle, struct send_wrlist_data_ext wr[], struct send_wr_rsp op_rsp[],
                        uint32_t send_num, uint32_t *complete_num);
 Status RaGetNotifyBaseAddr(void *rdev_handle, unsigned long long *va, unsigned long long *size);
 Status RaSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
+Status RaTypicalSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
 Status RaGetIfaddrs(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num);
 Status RaGetIfNum(struct ra_get_ifattr *config, unsigned int *num);
 

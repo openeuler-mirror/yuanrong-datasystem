@@ -31,6 +31,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/request_table.h"
@@ -55,6 +56,7 @@ struct GetObjEntryParams {
         params->shmUnit = safeObj->GetShmUnit();
         params->isSealed = safeObj->IsSealed();
         params->version = safeObj->GetCreateTime();
+        params->remoteH2DHostInfo = safeObj->GetRemoteHostInfo();
         VLOG(1) << "Create GetObjEntryParams for objectKey " << objectKey << ", dataSize: " << params->dataSize
                 << ", metaSize: " << params->metaSize;
         return params;
@@ -72,6 +74,7 @@ struct GetObjEntryParams {
         params->shmUnit = shmUnit;
         params->isSealed = isSealed;
         params->version = version;
+        params->remoteH2DHostInfo = remoteH2DHostInfo;
         return params;
     }
 
@@ -84,6 +87,7 @@ struct GetObjEntryParams {
     std::shared_ptr<ShmUnit> shmUnit;
     bool isSealed;
     uint64_t version;
+    std::shared_ptr<RemoteH2DHostInfo> remoteH2DHostInfo;
 };
 
 struct GetObjInfo {
@@ -181,6 +185,7 @@ public:
     bool AlreadyReturn() const;
     const std::string &GetClientId() const;
     bool NoQueryL2Cache() const;
+    const std::string &GetClientCommUuid() const;
 
     std::vector<ObjectKey> GetUniqueObjectkeys() const;
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> GetServerApi() const;
@@ -221,6 +226,7 @@ private:
     bool noQueryL2Cache_ = false;
     bool enableReturnObjectIndex_ = false;
     std::shared_ptr<ThreadPool> threadPool_;
+    std::string clientCommId_;
 };
 
 class WorkerRequestManager {

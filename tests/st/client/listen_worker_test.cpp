@@ -76,7 +76,7 @@ TEST_F(ShmWorkerTest, SHM_THRESHOLD)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::UDS_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
     auto threshold = 100 * 1024u;
     DS_ASSERT_TRUE(workerApi->GetShmThreshold(), threshold);
 }
@@ -85,7 +85,7 @@ TEST_F(ListenWorkerTest, TestUDSHeartbeatCallback)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::UDS_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
     bool called = false;
 
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
@@ -108,7 +108,7 @@ TEST_F(ListenWorkerTest, LEVEL1_TestUDSHeartbeatReconnect)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::UDS_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
 
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
     DS_ASSERT_OK(listenWorker.StartListenWorker(workerApi->GetSocketFd()));
@@ -124,7 +124,7 @@ TEST_F(ListenWorkerTest, TestRPCHeartheat)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
     bool called = false;
 
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
@@ -152,7 +152,7 @@ TEST_F(ListenWorkerTest, LEVEL1_TestRPCHeartheatReconnect)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
 
     cluster_->ShutdownNodes(WORKER);
     sleep(1);  // Wait until the client detects that the worker is disconnected and performs callback.
@@ -164,7 +164,7 @@ TEST_F(ListenWorkerTest, TestNoHeartbeatTransformRPCHeartbeat)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::NO_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
 
     ASSERT_TRUE(workerApi->GetHeartbeatType() == HeartbeatType::RPC_HEARTBEAT);
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
@@ -180,7 +180,7 @@ TEST_F(ListenWorkerTest, TestRemoveCallback)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::UDS_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
 
     bool called1 = false;
@@ -210,7 +210,7 @@ TEST_F(ListenWorkerTest, DISABLED_TestClientDetectWorkerCrashTwiceWithUDS)
 {
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::UDS_HEARTBEAT, signature_.get());
-    DS_ASSERT_OK(workerApi->Init(initTimeoutMs));
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
 
     ASSERT_TRUE(workerApi->GetHeartbeatType() == HeartbeatType::UDS_HEARTBEAT);
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
@@ -292,7 +292,7 @@ TEST_F(ListenWorkerWithUDSTest, TestNoHeartbeat)
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::NO_HEARTBEAT, signature_.get());
     int timeoutMs = 5000;
-    DS_ASSERT_OK(workerApi->Init(timeoutMs));
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
 
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
     DS_ASSERT_OK(listenWorker.StartListenWorker());
@@ -308,7 +308,7 @@ TEST_F(ListenWorkerWithUDSTest, TestHeartbeatTimeout)
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, signature_.get());
     int timeoutMs = 5000;
-    DS_ASSERT_OK(workerApi->Init(timeoutMs));
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
 
     ListenWorker listenWorker(workerApi, workerApi->GetHeartbeatType());
     DS_ASSERT_OK(listenWorker.StartListenWorker());
@@ -348,7 +348,7 @@ TEST_F(ListenWorkerSwitchTest, SwitchTest)
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, signature_.get());
     int timeoutMs = 5000;
-    DS_ASSERT_OK(workerApi->Init(timeoutMs));
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
     auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
     datasystem::inject::Set("TrySwitchBackToLocalWorker", "sleep(10000)");
     std::unique_ptr<ListenWorker> listenWorker =
@@ -368,7 +368,7 @@ TEST_F(ListenWorkerSwitchTest, TestStandbyConnectionShutdownAndRestartConcurrent
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, signature_.get());
     int timeoutMs = 5000;
-    DS_ASSERT_OK(workerApi->Init(timeoutMs));
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
     auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
     auto listenWorker =
         std::make_shared<ListenWorker>(workerApi, workerApi->GetHeartbeatType(), 0, asyncSwitchWorkerPool.get());

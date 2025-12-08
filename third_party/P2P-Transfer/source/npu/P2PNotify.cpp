@@ -83,9 +83,6 @@ Status P2PNotify::record(aclrtStream stream)
         return Status::Error(ErrorCode::NOT_INITIALIZED, "Record called on uninitialized notify");
     }
 
-    if (type == NotifyType::P2P_LOCAL_NOTIFY) {
-        return Status::Error(ErrorCode::NOT_SUPPORTED, "Record cannot be called on local P2P notify");
-    }
     ACL_CHECK_STATUS(rtNotifyRecord(notify, stream));
     return Status::Success();
 }

@@ -65,7 +65,8 @@ StreamClientImpl::StreamClientImpl(const ConnectOptions &connectOptions)
     clientStateManager_ = std::make_unique<ClientStateManager>();
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     tenantId_ = connectOptions.tenantId;
-    timeoutMs_ = connectOptions.connectTimeoutMs;
+    connectTimeoutMs_ = connectOptions.connectTimeoutMs;
+    requestTimeoutMs_ = connectOptions.requestTimeoutMs > 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
     authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
     authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey);
@@ -121,7 +122,7 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred));
 
     clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, cred, signature_.get(), tenantId_);
-    RETURN_IF_NOT_OK(clientWorkerApi_->Init(timeoutMs_));
+    RETURN_IF_NOT_OK(clientWorkerApi_->Init(requestTimeoutMs_, connectTimeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(
         std::dynamic_pointer_cast<ClientWorkerCommonApi>(clientWorkerApi_));

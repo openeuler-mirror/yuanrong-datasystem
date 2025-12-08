@@ -24,18 +24,18 @@
 #define DATASYSTEM_COMMON_RDMA_UCP_WORKER_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
-#include <string>
-#include <cstdint>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 
 #include "ucp/api/ucp.h"
 
-#include "datasystem/utils/status.h"
-#include "datasystem/common/util/thread.h"
 #include "datasystem/common/rdma/ucp_endpoint.h"
+#include "datasystem/common/util/thread.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 
@@ -45,7 +45,7 @@ class UcpWorker {
 public:
     UcpWorker() = default;
 
-    explicit UcpWorker(const ucp_context_h &ucpContext, UcpManager *manager, const uint32_t &workerId);
+    explicit UcpWorker(const ucp_context_h &ucpContext, UcpManager *manager, const uint32_t workerId);
     virtual ~UcpWorker();
 
     /**
@@ -68,22 +68,22 @@ public:
      * Description: This function will create a worker on the node based on context created by initUCPContextLocal.
      *   It will assign worker address to worker_addr_ and the address length to workerAddrLen_ for later use.
      */
-    virtual Status Write(const std::string &remoteRkey, const uintptr_t &remoteSegAddr,
-                         const std::string &remoteWorkerAddr, const std::string &ipAddr,
-                         const uintptr_t &localSegAddr, size_t localSegSize, uint64_t requestID);
+    virtual Status Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
+                         const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t localSegAddr,
+                         size_t localSegSize, uint64_t requestID);
 
     /**
      * @brief remove ep tied to a remote worker
      * @param[in] ipAddr IP address of the remote server
      * @return Status::OK() if successful, otherwise Status with error message
      */
-    virtual Status RmEpByIp(const std::string &ipAddr);
+    virtual Status RemoveEndpointByIp(const std::string &ipAddr);
 
     /**
      * @brief return a worker address to be sent to remote for receiving
      * @return a worker address in the form of a string.
      */
-    virtual std::string GetLocalWorkerAddr() const
+    virtual const std::string &GetLocalWorkerAddr() const
     {
         return localWorkerAddrStr_;
     }
@@ -137,7 +137,10 @@ private:
 
     // locks
     std::shared_mutex mapLock_;  // protect Ep map
-    std::mutex writeLock_; // protect write method
+    std::mutex writeLock_;       // protect write method
+
+    // Worker Progress max sleep time
+    static constexpr int WORKER_PROGRESS_SLEEP_TIMEOUT_MS = 5;  // ms
 };
 
 }  // namespace datasystem

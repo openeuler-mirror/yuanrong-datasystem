@@ -78,6 +78,7 @@ struct GetParam {
     int64_t subTimeoutMs;
     const std::vector<ReadParam> &readParams;
     bool queryL2Cache;
+    bool isRH2DSupported = false;
 };
 
 class ClientWorkerApi : public client::ClientWorkerCommonApi, public std::enable_shared_from_this<ClientWorkerApi> {
@@ -99,11 +100,12 @@ public:
 
     /**
      * @brief Initialize ClientWorkerApi.
-     * @param[in] timeoutMs Timeout milliseconds, if value is -1 means wait infinitely.
+     * @param[in] requestTimeoutMs Request Timeout milliseconds.
+     * @param[in] connectTimeoutMs Connect Timeout milliseconds.
      * @return K_OK on success; the error code otherwise.
      *         K_INVALID: the input ip or port is invalid.
      */
-    Status Init(int32_t timeoutMs) override;
+    Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
 
     /**
      * @brief Reconnect worker.

@@ -19,7 +19,6 @@ P2PMem::~P2PMem()
 {
     if (type == MemType::LOCAL_MEM) {
         aclrtFree(mem);
-        rtIpcDestroyMemoryName(memName.data());
     } else if (type == MemType::REMOTE_MEM) {
         rtIpcCloseMemory(mem);
     }

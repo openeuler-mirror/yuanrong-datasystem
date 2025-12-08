@@ -109,7 +109,7 @@ struct DeviceBatchCopyHelper {
             CHECK_FAIL_RETURN_STATUS(
                 sz == blobs.size() && sz > 0, K_INVALID,
                 FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
-                             "receiver count is: %ld, mismatch devBlobList index: %s, mismatch key index: %s",
+                             "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
                              sz, blobs.size(), i, i));
             size_t dataSize = buffer->GetSize() - offsets[0];
             bufferMetas.emplace_back(

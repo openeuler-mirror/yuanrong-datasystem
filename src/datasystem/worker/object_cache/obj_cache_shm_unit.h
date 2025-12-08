@@ -21,8 +21,10 @@
 #define DATASYSTEM_WORKER_OBJECT_CACHE_OBJ_CACHE_SHM_UNIT_H
 
 #include <sys/mman.h>
+#include <memory>
 
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -135,6 +137,16 @@ public:
      * @param newAddress The new address.
      */
     void SetAddress(const std::string &newAddress) override;
+    
+    void SetRemoteHostInfo(const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo) override
+    {
+        remoteH2DHostInfo_ = remoteH2DHostInfo;
+    }
+
+    std::shared_ptr<RemoteH2DHostInfo> GetRemoteHostInfo() const override
+    {
+        return remoteH2DHostInfo_;
+    }
 
 private:
     std::shared_ptr<ShmUnit> shmUnit_{ nullptr };
@@ -147,6 +159,8 @@ private:
     std::string address_;
     // The life state of object.
     ObjectLifeState lifeState_ = ObjectLifeState::OBJECT_INVALID;
+    // This means the data is not local, and only metadata is here. So the shm unit shall be nullptr.
+    std::shared_ptr<RemoteH2DHostInfo> remoteH2DHostInfo_{ nullptr };
 };
 
 /**

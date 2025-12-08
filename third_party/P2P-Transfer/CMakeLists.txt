@@ -30,11 +30,14 @@ find_package(Ascend REQUIRED)
  
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR})
 # Starting from CANN 8, runtime and dependencies are available in include/experiment
+include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/runtime)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/msprof)
+include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/msprof)
+include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/slog/toolchain)
 
 # ---- Libraries ----
-set(DEPENDS_LIBS pthread dl m ${ASCENDCL_LIBRARY} ${ASCEND_RUNTIME_LIBRARY} ${ASCEND_RA_LIBRARY} ${ASCEND_TSD_CLIENT_LIBRARY})
+set(DEPENDS_LIBS pthread dl m ${ASCENDCL_LIBRARY} ${ASCEND_RUNTIME_LIBRARY} ${ASCEND_HCCL_TRANSFER_LIBRARY} ${ASCEND_RA_LIBRARY})
 
 # ---- Proto ----
 add_custom_target(p2p_proto_lib_depend)
@@ -119,8 +122,8 @@ add_library(
     source/npu/PeerManager.cpp
     source/npu/P2PStream.cpp
     source/npu/ffts/dispatcher_ffts.cpp
-    source/npu/Hccp.cpp
     source/npu/RdmaAgent.cpp
+    source/npu/RdmaDev.cpp
     source/npu/RdmaNotify.cpp
     source/npu/RdmaQp.cpp
     source/npu/RdmaSocket.cpp
@@ -150,7 +153,14 @@ generate_export_header(
 )
 
 if(NOT BUILD_SHARED_LIBS)
-  target_compile_definitions(p2p-transfer_p2p-transfer PUBLIC P2P_TRANSFER_STATIC_DEFINE)
+    target_compile_definitions(p2p-transfer_p2p-transfer PUBLIC 
+        P2P_TRANSFER_STATIC_DEFINE
+        OPEN_BUILD_PROJECT
+    )
+else()
+    target_compile_definitions(p2p-transfer_p2p-transfer PUBLIC 
+        OPEN_BUILD_PROJECT
+    )
 endif()
 
 set_target_properties(

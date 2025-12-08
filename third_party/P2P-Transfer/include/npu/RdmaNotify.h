@@ -11,15 +11,13 @@
 #include "acl/acl.h"
 #include "npu/RdmaQp.h"
 
-enum RdmaNotifyType {
-    LOCAL_RDMA_NOTIFY = 0,
-    REMOTE_RDMA_NOTIFY,
-    UNINITIALIZED_RDMA_NOTIFY
-};
+enum RdmaNotifyType { LOCAL_RDMA_NOTIFY = 0, REMOTE_RDMA_NOTIFY, UNINITIALIZED_RDMA_NOTIFY };
 
 class RdmaNotify {
 public:
-    RdmaNotify() : type(RdmaNotifyType::UNINITIALIZED_RDMA_NOTIFY) {}
+    RdmaNotify() : type(RdmaNotifyType::UNINITIALIZED_RDMA_NOTIFY), isIdSet(false)
+    {
+    }
     ~RdmaNotify();
 
     RdmaNotify(const RdmaNotify &) = delete;
@@ -31,9 +29,9 @@ public:
     Status getAddrOffset(uint64_t *notifyAddrOffset);
     Status wait(aclrtStream stream);
 
-    Status open(uint64_t notifyRemoteAddr);
-    Status record(aclrtStream stream, RdmaQp *qp);
-    Status getRecordInfo(RdmaQp *qp, uint64_t *srcAddr, uint64_t *dstAddr, uint32_t *length);
+    Status open(uint64_t notifyRemoteAddrOffset);
+    Status record(uint64_t notifyBaseAddr, void *notifySrcValAddr, uint32_t notifySize, aclrtStream stream, RdmaQp *qp);
+    Status getRecordInfo(uint64_t *dstAddr);
     Status getId(uint32_t *notifyID);
 
 private:
@@ -43,7 +41,7 @@ private:
     bool isIdSet;
     uint32_t notifyID;
 
-    uint64_t notifyAddr;
+    uint64_t notifyAddrOffset;
 };
 
 #endif  // P2P_RDMA_NOTIFY_H

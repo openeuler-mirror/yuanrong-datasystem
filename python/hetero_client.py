@@ -81,13 +81,22 @@ class HeteroClient:
         host(str): The host of the worker address.
         port(int): The port of the worker address.
         connect_timeout_ms(int): The timeout_ms interval for the connection between the client and worker.
+        token(str): A string used for authentication.
         client_public_key(str): The client's public key, for curve authentication.
         client_private_key(str): The client's private key, for curve authentication.
         server_public_key(str): The worker server's public key, for curve authentication.
         access_key(str): The access key used by AK/SK authorize.
         secret_key(str): The secret key for AK/SK authorize.
+        oauth_client_id(str): The client id for tenant.
+        oauth_client_secret(str): The client secret for tenant.
+        oauth_url(str): The auth url of IAM.
         tenant_id(str): The tenant ID.
         enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
+        req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+        connect_timeout_ms.
+        enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+        datasystem_worker.
+        enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
@@ -105,6 +114,9 @@ class HeteroClient:
         secret_key="",
         tenant_id="",
         enable_cross_node_connection=False,
+        req_timeout_ms=0,
+        enable_exclusive_connection=False,
+        enable_remote_h2d=False
     ):
         """Constructor of the HeteroClient class
 
@@ -123,6 +135,11 @@ class HeteroClient:
             oauth_url(str): The auth url of IAM.
             tenant_id(str): The tenant ID.
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
+            req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+            connect_timeout_ms.
+            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
+            datasystem_worker.
+            enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -138,6 +155,8 @@ class HeteroClient:
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
+            ["enable_exclusive_connection", enable_exclusive_connection, bool],
+            ["enable_remote_h2d", enable_remote_h2d, bool],
         ]
         validator.check_args_types(args)
         self._client = ds.HeteroClient(
@@ -151,6 +170,9 @@ class HeteroClient:
             secret_key,
             tenant_id,
             enable_cross_node_connection,
+            req_timeout_ms,
+            enable_exclusive_connection,
+            enable_remote_h2d
         )
 
     @staticmethod

@@ -24,15 +24,15 @@
 #define DATASYSTEM_COMMON_RDMA_UCP_SEGMENT_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <cstdint>
 
 #include "ucp/api/ucp.h"
 #include "ucp/api/ucp_def.h"
 
-#include "datasystem/utils/status.h"
 #include "datasystem/common/util/lock_map.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 

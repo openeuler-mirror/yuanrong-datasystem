@@ -227,7 +227,8 @@ private:
 
     RpcAuthKeys authKeys_;
     std::string tenantId_;
-    int32_t timeoutMs_ = RPC_TIMEOUT;
+    int32_t requestTimeoutMs_ = RPC_TIMEOUT;
+    int32_t connectTimeoutMs_ = RPC_TIMEOUT;
     // verify object key format.
     re2::RE2 idRe_{ "^[a-zA-Z0-9\\~\\.\\-\\/_!@#%\\^\\&\\*\\(\\)\\+\\=\\:;]*$" };
 };

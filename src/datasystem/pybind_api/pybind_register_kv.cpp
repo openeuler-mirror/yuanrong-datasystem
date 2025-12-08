@@ -185,18 +185,21 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId,
-                         const bool enableCrossNodeConnection) {
+                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         bool enableExclusiveConnection) {
             ConnectOptions connectOpts{ .host = host,
                                         .port = port,
                                         .connectTimeoutMs = connectTimeoutMs,
+                                        .requestTimeoutMs = reqTimeoutMs,
+
                                         .clientPublicKey = clientPublicKey,
                                         .clientPrivateKey = clientPrivateKey,
                                         .serverPublicKey = serverPublicKey,
                                         .accessKey = accessKey,
                                         .secretKey = secretKey,
                                         .tenantId = tenantId,
-                                        .enableCrossNodeConnection = enableCrossNodeConnection };
+                                        .enableCrossNodeConnection = enableCrossNodeConnection,
+                                        .enableExclusiveConnection = enableExclusiveConnection };
             return std::make_unique<ObjectClientImpl>(connectOpts);
         }))
         .def("Init",
@@ -421,11 +424,11 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                  return std::make_pair(rc, std::move(exists));
              })
         .def("expire", [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t ttlSecond) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-                 std::vector<std::string> failedKeys;
-                 Status rc = client.Expire(keys, ttlSecond, failedKeys);
-                 return std::make_pair(rc, std::move(failedKeys));
-             });
+            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            std::vector<std::string> failedKeys;
+            Status rc = client.Expire(keys, ttlSecond, failedKeys);
+            return std::make_pair(rc, std::move(failedKeys));
+        });
 });
 
 PybindDefineRegisterer g_pybind_define_f_ReadParam("ReadParam", PRIORITY_LOW, [](const py::module *m) {

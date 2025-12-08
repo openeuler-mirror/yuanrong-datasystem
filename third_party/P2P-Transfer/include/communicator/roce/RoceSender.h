@@ -9,14 +9,16 @@
 #include "include/communicator/roce/proto/RoceInitMsg.pb.h"
 #include "communication/TcpServer.h"
 #include "communication/TcpClient.h"
-#include "npu/Hccp.h"
 #include "npu/RdmaAgent.h"
+#include "npu/RdmaDev.h"
 #include "npu/RdmaSocket.h"
 #include "npu/RdmaQp.h"
 #include "npu/RdmaNotify.h"
 #include "npu/LocalNotify.h"
 #include "npu/P2PMem.h"
 #include "npu/P2PStream.h"
+#include "npu/NotifyValueMem.h"
+#include "communicator/P2PCommunicator.h"
 #include "communicator/CommChannel.h"
 #include "npu/ffts/dispatcher_ffts.h"
 
@@ -27,16 +29,16 @@ enum RoceSenderStatus {
     ROCE_SENDER_INITIALIZED,
 };
 
+// Later make sure nSendBuffs matches with remote nRecvBuffs
 class RoceSender : public SendChannel {
 public:
-    RoceSender(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes, uint32_t nSendBuffs);
+    RoceSender(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes, uint32_t nSendBuffs,
+               uint32_t qpNum);
 
     Status Initialize(TCPObjectClient *client, TCPObjectServer *server) override;
     Status Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream) override;
 
 private:
-    uint32_t MergeTransfersIntoChunk(void **chunkSrcPtrs, size_t *chunkCopySizes, void **srcPtrs, uint64_t *sizes,
-                                     uint32_t srcIdx, uint32_t count);
     Status SendChunk(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream, uint32_t &lastTaskId,
                      bool isLast);
     TCPObjectClient *client;
@@ -46,14 +48,17 @@ private:
     uint32_t chunkSizeBytes;  // bytes
     uint32_t nSendBuffs;
     uint32_t nChunksPerBuff;
+    uint32_t qpNum;
 
     std::string tag;
     int32_t sendDeviceId;
 
-    std::unique_ptr<Hccp> hccp;
-    std::unique_ptr<RdmaAgent> rdmaAgent;
+    std::shared_ptr<RdmaDev> rdmaDev;
     std::unique_ptr<RdmaSocket> rdmaSocket;
-    std::unique_ptr<RdmaQp> qp;
+    std::vector<std::unique_ptr<RdmaQp>> qps;
+    std::vector<uint64_t> qpNotifyRemoteBaseVas;
+
+    std::unique_ptr<NotifyValueMem> valueMem;
     std::unique_ptr<p2p::DispatcherFFTS> fftsDispatcher;
 
     std::vector<uint64_t> remoteRecvBuffAddrs;
@@ -63,6 +68,9 @@ private:
     std::vector<std::unique_ptr<RdmaNotify>> sendDoneNotifies;
     std::vector<std::unique_ptr<RdmaNotify>> recvReadyNotifies;
     std::unique_ptr<RdmaNotify> recvCompleteNotify;
+
+    void *notifySrcValAddr;
+    uint32_t notifySize;
 
     RoceSenderStatus state = ROCE_SENDER_UNINITIALIZED;
     bool isRoot;

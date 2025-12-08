@@ -12,6 +12,7 @@
 #include "securec.h"
 #include <algorithm>
 #include <mutex>
+#include "hccl/log.h"
 
 namespace p2p {
 HcclResult hrtFftsPlusTaskLaunchWithFlag(rtFftsPlusTaskInfo_t *fftsPlusTaskInfo, rtStream_t stm, uint32_t flag)
@@ -41,18 +42,69 @@ HcclResult hrtGetDeviceInfo(uint32_t deviceId, int32_t moduleType, int32_t infoT
 }
 
 #define RT_INFO_TYPE_PHY_CHIP_ID 18
-#define MAX_DEV_LOGIC_ID 7
-
-HcclResult hrtGetRdmaDoorbellAddr(int32_t devLogID, int64_t chipID, uint32_t dbIndex, uint64_t &dbAddr)
+#define CHIP_VERSION_MAX_LEN 32
+ 
+HcclResult hrtGetRdmaDoorbellAddr(int32_t devLogID, int64_t chipID, uint32_t dbIndex, uint64_t &dbAddr,
+                                  DeviceType deviceType)
 {
-    const uint64_t roceBaseAddr = 0x2000000000ULL;
-    const uint64_t roceVfDbCfg0Reg = 0x230ULL;
-    const uint64_t chipAddrOffset = 0x80000000000ULL;
-    const uint64_t dieAddrOffset = 0x10000000000ULL;
-    const uint32_t dbDieIdMask = 0x00ff0000;
+    uint64_t roceBaseAddr;
+    uint64_t roceVfDbCfg0Reg;
+    uint64_t chipAddrOffset;
+    uint64_t dieAddrOffset;
+    uint32_t dbDieIdMask;
     const uint32_t dbDieIdShift = 16;
+    if (deviceType == DeviceType::Dev910C) {
+        roceBaseAddr = 0x202000000000ULL;
+        roceVfDbCfg0Reg = 0x230ULL;
+        chipAddrOffset = 0x20000000000ULL;
+        dieAddrOffset = 0x10000000000ULL;
+        dbDieIdMask = 0x00ff0000;
+    } else if (deviceType == DeviceType::Dev910B) {
+        roceBaseAddr = 0x2000000000ULL;
+        roceVfDbCfg0Reg = 0x230ULL;
+        chipAddrOffset = 0x80000000000ULL;
+        dieAddrOffset = 0x10000000000ULL;
+        dbDieIdMask = 0x00ff0000;
+    } else {
+        std::cerr << "Unsupported device type." << std::endl;
+        return HCCL_E_RUNTIME;
+    }
+
     dbAddr = roceBaseAddr + roceVfDbCfg0Reg + chipAddrOffset * chipID
              + dieAddrOffset * ((dbIndex & dbDieIdMask) >> dbDieIdShift);
+    return HCCL_SUCCESS;
+}
+
+DeviceType parseDeviceType(const std::string &deviceString)
+{
+    std::cout << "parsing " << deviceString << std::endl;
+    if (deviceString == "Ascend910B1" || deviceString == "Ascend910B2" || deviceString == "Ascend910B2C"
+        || deviceString == "Ascend910B3" || deviceString == "Ascend910B4" || deviceString == "Ascend910B4-1") {
+        return DeviceType::Dev910B;
+    } else if (deviceString == "Ascend910_9391" || deviceString == "Ascend910_9381" || deviceString == "Ascend910_9392"
+               || deviceString == "Ascend910_9382" || deviceString == "Ascend910_9372"
+               || deviceString == "Ascend910_9362") {
+        return DeviceType::Dev910C;
+    } else {
+        return DeviceType::Unsupported;
+    }
+}
+
+HcclResult hrtGetDeviceType(DeviceType *type)
+{
+    int8_t chipVer[CHIP_VERSION_MAX_LEN] = { 0 };
+    rtError_t ret = rtGetSocVersion(reinterpret_cast<char *>(chipVer), CHIP_VERSION_MAX_LEN);
+    if (ret != RT_ERROR_NONE) {
+        std::cerr << "hrtGetDeviceType failed." << std::endl;
+        return HCCL_E_RUNTIME;
+    }
+    std::string chipVerStr(reinterpret_cast<char *>(chipVer));
+    *type = parseDeviceType(chipVerStr);
+    if (*type == DeviceType::Unsupported) {
+        std::cerr << "Unsupported device type." << std::endl;
+        return HCCL_E_RUNTIME;
+    }
+
     return HCCL_SUCCESS;
 }
 
@@ -63,6 +115,7 @@ DispatcherFFTS::~DispatcherFFTS()
 HcclResult DispatcherFFTS::Init()
 {
     CHK_RET(hrtGetDeviceInfo(devLogID, RT_MODULE_TYPE_SYSTEM, RT_INFO_TYPE_PHY_CHIP_ID, this->chipId));
+    CHK_RET(hrtGetDeviceType(&this->deviceType));
     return HCCL_SUCCESS;
 }
 
@@ -109,7 +162,7 @@ HcclResult DispatcherFFTS::ClearFftsCtx()
 
 HcclResult DispatcherFFTS::ReuseCtx(int index)
 {
-    if (index > fftsCtxs.size()) {
+    if (index >= fftsCtxs.size()) {
         std::cerr << "Context does not exist." << std::endl;
         return HCCL_E_RUNTIME;
     }
@@ -133,6 +186,11 @@ HcclResult DispatcherFFTS::LaunchFftsTask(rtStream_t stm, uint16_t readyContextN
         fftsCtxsPtr->completed = true;
     }
 
+    if (fftsCtxsPtr->ctxNum > HCCL_FFTS_CAPACITY) {
+        HCCL_ERROR("CtxNum[%u] exceeds the limit of FFTS+ graph.", fftsCtxsPtr->ctxNum);
+        return HCCL_E_NOT_SUPPORT;
+    }
+
     if (fftsCtxsPtr->refreshIndex != fftsCtxsPtr->ctxNum) {
         HCCL_ERROR("ffts context num is invaild, expected:%u, actual:%u.", fftsCtxsPtr->ctxNum,
                    fftsCtxsPtr->refreshIndex);
@@ -153,7 +211,6 @@ HcclResult DispatcherFFTS::LaunchFftsTask(rtStream_t stm, uint16_t readyContextN
 
     // Create FFTS+ task which can be launched
     rtFftsPlusTaskInfo_t task{};
-
     task.argsHandleInfoNum = 0;
     task.argsHandleInfoPtr = nullptr;
     ConstructFftsTask(task, fftsPlusSqe);
@@ -172,9 +229,9 @@ HcclResult DispatcherFFTS::ConstructFftsSqe(rtFftsPlusSqe_t &fftsPlusSqe, uint16
     fftsPlusSqe.totalContextNum = fftsCtxsPtr->ctxNum;  // Amount of "tasks"
     fftsPlusSqe.readyContextNum = readyContextNum;
     fftsPlusSqe.preloadContextNum =
-        (fftsPlusSqe.readyContextNum <= CONTEXT_MAX_NUM ? fftsPlusSqe.readyContextNum : CONTEXT_MAX_NUM);
+        (fftsPlusSqe.totalContextNum <= CONTEXT_MAX_NUM ? fftsPlusSqe.totalContextNum : CONTEXT_MAX_NUM);
 
-    fftsPlusSqe.timeout = 0;
+    fftsPlusSqe.timeout = FFTS_TIMEOUT_MAX;
     fftsPlusSqe.subType =
         argsHandleList.empty()
             ? 0x5A
@@ -193,31 +250,6 @@ HcclResult DispatcherFFTS::ConstructFftsTask(rtFftsPlusTaskInfo_t &task, rtFftsP
         task.argsHandleInfoPtr = argsHandleList.data();
         argsHandleList.clear();
     }
-    return HCCL_SUCCESS;
-}
-
-HcclResult DispatcherFFTS::PrintFFTSDebugDetails(rtFftsPlusSqe_t &fftsPlusSqe, rtFftsPlusTaskInfo_t &task)
-{
-    std::cout << "totalContextNum " << fftsPlusSqe.totalContextNum << std::endl;
-    printf("-------------------------------");
-    printf("totalContextNum:0x%04x", fftsPlusSqe.totalContextNum);
-    printf("readyContextNum:0x%04x", fftsPlusSqe.readyContextNum);
-    printf("preloadContextNum:0x%04x", fftsPlusSqe.preloadContextNum);
-    printf("descBuf:%p", task.descBuf);
-    printf("descBufLen:%u", task.descBufLen);
-    printf("descAddrType:%u", task.descAddrType);
-    const uint32_t printLineNum = 32;
-    const uint32_t printBytePreLine = sizeof(rtFftsPlusComCtx_t) / printLineNum;
-    const uint32_t byte3Offset = 3;
-    const uint32_t byte2Offset = 2;
-    const uint32_t byte1Offset = 1;
-    const uint32_t byte0Offset = 0;
-    for (uint32_t i = 0; i < fftsCtxsPtr->ctxNum; i++) {
-        printf("-------------------------------");
-        printf("index:0x%02x", i);
-    }
-    printf("-------------------------------");
-
     return HCCL_SUCCESS;
 }
 
@@ -318,7 +350,8 @@ HcclResult DispatcherFFTS::ConstructFftsSdmaCtx(void *dst, const void *src, uint
 {
     ctx->threadDim = 1;
 
-    ctx->contextType = (cnt == 0) ? RT_CTX_TYPE_LABEL : RT_CTX_TYPE_SDMA;
+    ctx->contextType = (cnt == 0 || src == dst) ? RT_CTX_TYPE_LABEL : RT_CTX_TYPE_SDMA;
+    ctx->res3 = 0x5A;  // 0x5A tell mcu that it is an HCCL label ctx.
     ctx->sdmaSqeHeader = sdmaSqeHeader;
 
     const uint64_t uint64_tHighMask = 0xffffffff00000000;
@@ -358,7 +391,7 @@ HcclResult DispatcherFFTS::ConstructFftsWriteValueCtx(uint32_t dbindex, uint64_t
     uint64_t dbAddr = 0;
 
     if (!IsInvalidRdmaParam(dbindex, dbinfo)) {
-        CHK_RET(hrtGetRdmaDoorbellAddr(devLogID, chipId, dbindex, dbAddr));
+        CHK_RET(hrtGetRdmaDoorbellAddr(devLogID, chipId, dbindex, dbAddr, this->deviceType));
     }
 
     ctx->contextType = IsInvalidRdmaParam(dbindex, dbinfo) ? RT_CTX_TYPE_LABEL : RT_CTX_TYPE_WRITE_VALUE;
@@ -378,10 +411,17 @@ HcclResult DispatcherFFTS::InitFftsDescMemcpy(void *dst, const void *src, uint64
     return HCCL_SUCCESS;
 }
 
+// Each task can have at most 26 successors. Make sure not exceeded.
+#define RT_CTX_SUCCESSOR_NUM 26
 HcclResult DispatcherFFTS::AddTaskDependency(uint32_t predecessorId, uint32_t successorId)
 {
     if (FftsCtxReady()) {
         std::cerr << "Launch has already been called for the current context" << std::endl;
+        return HCCL_E_RUNTIME;
+    }
+
+    if (fftsCtxsPtr->contexts[predecessorId].successorNum == RT_CTX_SUCCESSOR_NUM) {
+        std::cerr << "Context cannot have more than 26 successors" << std::endl;
         return HCCL_E_RUNTIME;
     }
 

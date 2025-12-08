@@ -44,8 +44,6 @@ extern "C" {
 
 #define SOCK_CONN_TAG_SIZE 192
 
-enum class NICDeployment { NIC_DEPLOYMENT_HOST = 0, NIC_DEPLOYMENT_DEVICE, NIC_DEPLOYMENT_RESERVED };
-
 enum network_mode {
     NETWORK_PEER_ONLINE = 0,  // Peer mode
     NETWORK_OFFLINE,          // HDC mode
@@ -225,6 +223,11 @@ enum ra_send_flags {
     RA_SEND_INLINE = 1 << 3,    /**< RDMA operation with inline */
 };
 
+enum ra_op {
+    RA_OP_WRITE = 0, /**< RDMA Write operation */
+    RA_OP_READ = 4,  /**< RDMA Read operation */
+};
+
 struct sg_list {
     uint64_t addr;     /**< address of buf */
     unsigned int len;  /**< len of buf */
@@ -260,7 +263,7 @@ struct send_wr_rsp {
         struct db_info db;       /**< doorbell info  Single-operator mode */
     };
 };
-
+#define MAX_SGE_NUM 16
 struct send_wr {
     struct sg_list *buf_list; /**< list of sg */
     uint16_t buf_num;         /**< num of buf_list 最大规格为 MAX_SGE_NUM  */
@@ -317,6 +320,9 @@ int ra_set_qp_attr_retry_cnt(void *qp_handle, uint32_t *retry_cnt);
 int ra_mr_reg(void *qp_handle, struct mr_info *info);
 int ra_mr_dereg(void *qp_handle, struct mr_info *info);
 
+int ra_register_mr(const void *rdma_handle, struct mr_info *info, void **mr_handle);
+int ra_deregister_mr(const void *rdma_handle, void *mr_handle);
+
 int ra_qp_connect_async(void *qp_handle, const void *fd_handle);
 
 int ra_get_qp_status(void *qp_handle, ra_qp_status *status);
@@ -327,6 +333,8 @@ int ra_send_wrlist_ext(void *qp_handle, struct send_wrlist_data_ext wr[], struct
 int ra_get_notify_base_addr(void *rdev_handle, unsigned long long *va, unsigned long long *size);
 
 int ra_send_wr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
+
+int ra_typical_send_wr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
 
 int ra_get_ifaddrs(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num);
 

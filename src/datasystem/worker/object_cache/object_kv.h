@@ -31,6 +31,7 @@
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/utils.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/object_cache/device/device_obj_cache.h"
 
@@ -118,8 +119,11 @@ struct ReadKey : public OffsetInfo {
 
 class ReadObjectKV : public ObjectKV, protected OffsetInfo {
 public:
-    ReadObjectKV(const ReadKey &readKey, SafeObjType &entry)
-        : ObjectKV(readKey.objectKey, entry), OffsetInfo(readKey.readOffset, readKey.readSize)
+    ReadObjectKV(const ReadKey &readKey, SafeObjType &entry,
+                 std::shared_ptr<std::string> commId = nullptr)
+        : ObjectKV(readKey.objectKey, entry),
+          OffsetInfo(readKey.readOffset, readKey.readSize),
+          commId_(std::move(commId))
     {
         // update when cache is valid.
         if (!GetObjEntry()->stateInfo.IsCacheInvalid()) {
@@ -155,6 +159,9 @@ public:
         }
         RETURN_STATUS(K_OUT_OF_RANGE, FormatString("Read offset %zu out of range [0, %zu)", readOffset, dataSize));
     }
+
+    // Hold the client communicator root info so it can be passed to the remote worker.
+    std::shared_ptr<std::string> commId_{ nullptr };
 };
 
 struct ObjEntryParams {

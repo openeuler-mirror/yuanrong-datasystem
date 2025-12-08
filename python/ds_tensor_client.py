@@ -154,22 +154,26 @@ class DsTensorClient:
         client_public_key(str): The client's public key, for curve authentication.
         client_private_key(str): The client's private key, for curve authentication.
         server_public_key(str): The worker server's public key, for curve authentication.
-
+        req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
+        connect_timeout_ms.
+        enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
         RuntimeError: Raise a runtime error if the client failed to invoke api.
     """
 
     def __init__(
-            self,
-            host,
-            port,
-            device_id,
-            connect_timeout_ms=60000,
-            token="",
-            client_public_key="",
-            client_private_key="",
-            server_public_key=""
+        self,
+        host,
+        port,
+        device_id,
+        connect_timeout_ms=60000,
+        token="",
+        client_public_key="",
+        client_private_key="",
+        server_public_key="",
+        req_timeout_ms=0,
+        enable_remote_h2d=False
     ):
         args = [
             ["host", host, str],
@@ -179,7 +183,8 @@ class DsTensorClient:
             ["token", token, str],
             ["client_public_key", client_public_key, str],
             ["client_private_key", client_private_key, str],
-            ["server_public_key", server_public_key, str]
+            ["server_public_key", server_public_key, str],
+            ["req_timeout_ms", req_timeout_ms, int],
         ]
         validator.check_args_types(args)
         self._hetero_client = HeteroClient(
@@ -189,7 +194,9 @@ class DsTensorClient:
             token,
             client_public_key,
             client_private_key,
-            server_public_key
+            server_public_key,
+            req_timeout_ms,
+            enable_remote_h2d=enable_remote_h2d
         )
         self._device_id = device_id
 
