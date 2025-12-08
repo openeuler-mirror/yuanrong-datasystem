@@ -75,6 +75,7 @@ public:
      *         K_RUNTIME_ERROR: fail to init mmap memory for producer.
      *         K_NOT_READY: the worker is not ready.
      *         K_IO_ERROR: can not open curve key from file.
+     *         K_SC_STREAM_RESOURCE_ERROR: reserve memory failed.
      */
     Status CreateProducer(const std::string &streamName, std::shared_ptr<Producer> &outProducer,
                           ProducerConf producerConf = {});
@@ -91,6 +92,7 @@ public:
      *         K_NOT_FOUND: the id of stream is not found.
      *         K_RUNTIME_ERROR: add pub node in global scope fail on master process.
      *         K_NOT_READY: the worker is not ready.
+     *         K_SC_STREAM_RESOURCE_ERROR: reserve memory failed.
      */
     Status Subscribe(const std::string &streamName, const struct SubscriptionConfig &config,
                      std::shared_ptr<Consumer> &outConsumer, bool autoAck = false);
