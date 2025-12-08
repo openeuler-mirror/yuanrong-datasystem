@@ -18,7 +18,8 @@
  * Description: Acquire and prepare a local buffer for Ucp communication. Tool
  * for Ucp tests.
  */
-
+#ifndef COMMON_RDMA_PREPARE_LOCAL_SERVER_H
+#define COMMON_RDMA_PREPARE_LOCAL_SERVER_H
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -55,3 +56,4 @@ private:
 };
 
 }  // namespace datasystem
+#endif
