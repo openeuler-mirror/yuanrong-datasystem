@@ -27,11 +27,11 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 
 | 序号 | 日志 | 日志格式 |
 |-----|-----|------------------------|
-| 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| message |
-| 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| status_code \| action \| cost \| data size \| request param\| response param
-| 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| status_code \| action \| cost \| data size \| request param\| response param
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| shm_info \| spill_disk_info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWokrerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool |
-| 5 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| az_name \| message |
+| 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
+| 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param
+| 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm_info \| spill_disk_info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWokrerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \|Cache Hit Info \|
+| 5 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 
 ### 日志字段
 
@@ -43,7 +43,7 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | pod_name | 128 | 输出当前worker所属的POD名称，超出长度则截断。示例：ds-worker-hs5qm |
 | pid:tid | 11 | 该日志所属的进程ID和线程ID。进程号最大值为32757，该字段最大长度11.示例：9:177 |
 | traceid | 36 | 请求的traceid。 |
-| az_name | 128 | 输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。 |
+| cluster_name | 128 | 输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。 |
 | Message | 1024 | 自定义消息内容 |
 | status_code | 5 | 该请求的状态，不同消息类型状态值不一样。SDK/datasystem_worker 访问日志，0表示成功，其他表示失败。 |
 | action | 64 | 表示该请求所访问的接口名称。约定前缀：SDK接口：DS_STATE_CLINET、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path} |
@@ -51,7 +51,7 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | datasize | 16 | 记录Publish请求接收到的Payload大小。 |
 | request param | 2560 | 记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。 |
 | response param | 1024 | 记录该请求的响应信息。最大长度为1024 Byte，超出则截断。 |
-| shm_info | 47 | 记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %. | 
+| shm_info | 47 | 记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %. | 
 | spill_disk_info | 47 | 记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>1) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>2) physicalSpaceUsage	已使用的物理磁盘大小。<br>3) totalLimit	Spill磁盘总大小。<br>4) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %. | 
 | client nums | 5 | 记录已和worker成功建立连接的Client数。最大值为10000. | 
 | object nums | 9 | 记录worker已缓存对象数。按照1亿对象限制数量。| 
@@ -64,7 +64,7 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | ETCDrequest success rate | 6 | 请求使用率，单位 %,保留3位有效数字 | 
 | OBSrequest success rate | 6 | 请求使用率，单位 %,保留3位有效数字 | 
 | Master AsyncTask threadpool | 21 |  threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-
+|Cache Hit Info | 9 | 缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。<br>2) diskHitNum	本地磁盘命中次数. <br>3) l2HitNum	二级缓存命中次数。<br>4) remoteHitNum 远端worker命中次数。<br>5) missNum 未命中次数。
 
 #### SDK与worker访问日志关键请求参数
 

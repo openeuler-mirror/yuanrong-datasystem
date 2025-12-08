@@ -1,7 +1,7 @@
 datasystem.hetero_client.HeteroClient
 =====================================
 
-.. py:class:: datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
+.. py:class:: datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, enable_exclusive_connection=False)
 
     异构对象客户端。
 
@@ -16,6 +16,7 @@ datasystem.hetero_client.HeteroClient
         - **secret_key** (str) - AK/SK 授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户 ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统 Worker 连接异常时自动切换到备用节点。默认值： ``False`` 。
+        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。
 
     输出：
         HeteroClient
@@ -56,6 +57,8 @@ datasystem.hetero_client.HeteroClient
          - 生成一个带数据系统 Worker UUID 的 key。
        * - :doc:`get_meta_info <datasystem.hetero_client.HeteroClient.get_meta_info>`
          - 获取keys 对应的元数据信息。
+       * - :doc:`exist <datasystem.hetero_client.HeteroClient.exist>`
+         - 检查给定的键在数据系统中是否存在。
 
 .. toctree::
     :maxdepth: 1
@@ -76,3 +79,4 @@ datasystem.hetero_client.HeteroClient
     datasystem.hetero_client.HeteroClient.async_dev_delete
     datasystem.hetero_client.HeteroClient.generate_key
     datasystem.hetero_client.HeteroClient.get_meta_info
+    datasystem.hetero_client.HeteroClient.exist

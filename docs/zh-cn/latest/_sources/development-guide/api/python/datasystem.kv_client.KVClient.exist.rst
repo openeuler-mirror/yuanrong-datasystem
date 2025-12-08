@@ -3,7 +3,7 @@ datasystem.kv_client.KVClient.exist
 
 .. py:method:: datasystem.kv_client.KVClient.exist(self, keys)
 
-    批量查询一组键是否存在，并返回每个键的存在性状态。
+    批量查询一组键是否存在。
 
     参数：
         - **keys** (str) - 待查询的键列表，最大支持10000个键。

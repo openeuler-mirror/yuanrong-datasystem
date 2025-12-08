@@ -1,7 +1,7 @@
 datasystem.object_client.ObjectClient
 =====================================
 
-.. py:class:: datasystem.object_client.ObjectClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="")
+.. py:class:: datasystem.object_client.ObjectClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_exclusive_connection=False)
 
     对象缓存客户端。
 
@@ -15,6 +15,7 @@ datasystem.object_client.ObjectClient
         - **access_key** (str) - AK/SK授权使用的访问密钥。默认值： ``""`` 。
         - **secret_key** (str) - AK/SK授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户ID。默认值： ``""`` 。
+        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。
 
     输出：
         ObjectClient

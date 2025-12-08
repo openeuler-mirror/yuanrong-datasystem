@@ -15,7 +15,7 @@ KVClient
        构造KV缓存客户端实例。
 
        参数：
-            - **connectOptions** - 配置连接选项，包括IP地址和端口，详见 cpp:class:`ConnectOptions` 章节
+            - **connectOptions** - 配置连接选项，包括IP地址和端口，详见 :cpp:class:`ConnectOptions` 章节
  
        返回：
            KV缓存客户端实例。
@@ -29,14 +29,14 @@ KVClient
        建立与数据系统 Worker 之间的连接并完成初始化。
  
        返回：
-           返回值状态码为 StatusCode::K_OK 时表示初始化成功，否则返回其他错误码。
+           返回值状态码为 ``StatusCode::K_OK`` 时表示初始化成功，否则返回其他错误码。
 
     .. cpp:function:: Status ShutDown()
 
         断开与数据系统 Worker 之间的连接。
 
         返回:
-            返回值状态码为 StatusCode::K_OK 时表示断链成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示断链成功，否则返回其他错误码。
 
 
     .. cpp:function:: Status Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
@@ -50,7 +50,7 @@ KVClient
             - **buffer** - 传出参数，表示创建好的共享内存 :cpp:class:`Buffer` 。
 
         返回：
-            返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
     .. cpp:function:: Status Set(const std::shared_ptr<Buffer> &buffer)
 
@@ -60,7 +60,7 @@ KVClient
             - **buffer** - 共享内存 :cpp:class:`Buffer` 。
 
         返回值
-            返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
     .. cpp:function:: Status Set(const std::string &key, const StringView &val, const SetParam &param)
 
@@ -72,7 +72,7 @@ KVClient
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
 
         返回：
-            返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
     .. cpp:function:: Status MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes, const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 
@@ -85,7 +85,7 @@ KVClient
             - **buffers** - 传出参数，表示创建好的共享内存 :cpp:class:`Buffer` 数组，该数组的长度与 ``keys`` 相等，索引位置一一对应，即每个 ``buffers[i]`` 的值与 ``keys[i]`` 相对应。
 
         返回：
-            返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
     .. cpp:function:: Status MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 
@@ -95,7 +95,7 @@ KVClient
             - **buffers** - 需要缓存到数据系统的共享内存 :cpp:class:`Buffer` 数组。
 
         返回：
-            返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
     .. cpp:function:: Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals, std::vector<std::string> &outFailedKeys, const SetParam &param)
 
@@ -108,7 +108,7 @@ KVClient
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
 
         返回：
-            返回值状态码为 `K_OK` 时表示设置成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
     
     .. cpp:function:: Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)
 
@@ -214,7 +214,7 @@ KVClient
         返回：
             返回值状态码为 `K_OK` 时表示 Worker 健康，否则返回其他错误码。
 
-    .. cpp:function:: Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
+    .. cpp:function:: Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 
         批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多10000个键的查询。
 

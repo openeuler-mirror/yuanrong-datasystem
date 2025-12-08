@@ -1,7 +1,7 @@
 datasystem.kv_client.KVClient
 =============================
 
-.. py:class:: datasystem.kv_client.KVClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
+.. py:class:: datasystem.kv_client.KVClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, enable_exclusive_connection=False)
 
     KV缓存客户端。
 
@@ -16,6 +16,7 @@ datasystem.kv_client.KVClient
         - **secret_key** (str) - AK/SK授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统Worker连接异常时自动切换到备用节点。默认值： ``False`` 。
+        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。
 
     输出：
         KVClient

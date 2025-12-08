@@ -176,6 +176,10 @@
 <li class="toctree-l2"><a class="reference internal" href="../../../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2 has-children"><a class="reference internal" href="../../example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l3"><a class="reference internal" href="../../example/hetero.html">异构对象</a></li>
@@ -228,6 +232,7 @@
 <li class="toctree-l5"><a class="reference internal" href="datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
 <li class="toctree-l5 current active"><a class="current reference internal" href="#">datasystem.hetero_client.HeteroClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.hetero_client.HeteroClient.exist.html">datasystem.hetero_client.HeteroClient.exist</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -297,20 +302,59 @@
 <li class="toctree-l4"><a class="reference internal" href="datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="datasystem.stream_client.StreamClient.html">datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.StreamClient.init.html">datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.StreamClient.create_producer.html">datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.StreamClient.subscribe.html">datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.StreamClient.delete_stream.html">datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.StreamClient.query_global_producer_num.html">datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.StreamClient.query_global_consumer_num.html">datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="datasystem.stream_client.Producer.html">datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.Producer.send.html">datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.Producer.close.html">datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="datasystem.stream_client.Consumer.html">datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.Consumer.receive.html">datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.Consumer.receive_any.html">datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.Consumer.ack.html">datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="datasystem.stream_client.Consumer.close.html">datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="datasystem.stream_client.SubconfigType.html">datasystem.stream_client.SubconfigType</a></li>
 </ul>
 </details></li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/ObjectClient.html">ObjectClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/Consumer.html">Consumer</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/enum-WriteMode.html">WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/SensitiveValue.html">SensitiveValue</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/StringView.html">StringView</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/Optional.html">Optional</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/enum-StatusCode.html">StatusCode</a></li>
 </ul>
 </details></li>
@@ -321,8 +365,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
 </ul>
 
     </div>

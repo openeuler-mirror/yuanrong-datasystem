@@ -23,6 +23,10 @@ Python
    datasystem.object_client.ConsistencyType
    datasystem.object_client.WriteMode
    datasystem.object_client.CacheType
+   datasystem.stream_client.StreamClient
+   datasystem.stream_client.Producer
+   datasystem.stream_client.Consumer
+   datasystem.stream_client.SubconfigType
 
 DsClient：聚合各语义的客户端
 -----------------------------------
@@ -179,3 +183,36 @@ KV接口
      - 查询对象全局引用计数。
    * - :doc:`datasystem.object_client.ObjectClient.generate_object_key <datasystem.object_client.ObjectClient.generate_object_key>`
      - 生成一个带数据系统Worker UUID的对象 key。
+
+  
+流缓存接口
+-----------------
+
+.. list-table::
+   :header-rows: 0
+   :widths: 30 70
+  
+   * - :doc:`datasystem.stream_client.StreamClient.init <datasystem.stream_client.StreamClient.init>`
+     - 初始化流缓存客户端。
+   * - :doc:`datasystem.stream_client.StreamClient.create_producer <datasystem.stream_client.StreamClient.create_producer>`
+     - 创建生产者, 创建生产者时会创建流。
+   * - :doc:`datasystem.stream_client.StreamClient.subscribe <datasystem.stream_client.StreamClient.subscribe>`
+     - 创建消费者，创建消费者时会创建流。
+   * - :doc:`datasystem.stream_client.StreamClient.delete_stream <datasystem.stream_client.StreamClient.delete_stream>`
+     - 删除数据流。
+   * - :doc:`datasystem.stream_client.StreamClient.query_global_producer_num <datasystem.stream_client.StreamClient.query_global_producer_num>`
+     - 指定流的名称，查询流的生产者数量。
+   * - :doc:`datasystem.stream_client.StreamClient.query_global_consumer_num <datasystem.stream_client.StreamClient.query_global_consumer_num>`
+     - 指定流的名称，查询流的消费者数量。
+   * - :doc:`datasystem.stream_client.Producer.send <datasystem.stream_client.Producer.send>`
+     - 生产者发送数据。
+   * - :doc:`datasystem.stream_client.Producer.close <datasystem.stream_client.Producer.close>`
+     - 关闭生产者。一旦关闭后，生产者不可再用。
+   * - :doc:`datasystem.stream_client.Producer.receive <datasystem.stream_client.Consumer.receive>`
+     - 消费者接收数据带有订阅功能，接收数据会等待接收expectNum个elements的时候返回成功，或者当超时时间timeoutMs到达返回成功。
+   * - :doc:`datasystem.stream_client.Producer.receive_any <datasystem.stream_client.Consumer.receive_any>`
+     - 消费者获取到element后立刻返回。如果没有element，将等待直到超时时间到达。
+   * - :doc:`datasystem.stream_client.Producer.ack <datasystem.stream_client.Consumer.ack>`
+     - 消费者接收完某elementId标识的element后，需要确认已消费完，使得各个worker上可以获取到是否所有消费者都已经消费完的信息，若所有消费者都消费完某个Page， 可以触发内部的内存回收机制。若不Ack，则在消费者退出时候才会自动Ack。
+   * - :doc:`datasystem.stream_client.Producer.close <datasystem.stream_client.Consumer.close>`
+     - 关闭消费者，关闭消费者后，它将不再允许调用receive和ack。对已关闭的消费者调用 Close() 方法将返回 ``StatusCode::K_OK``。

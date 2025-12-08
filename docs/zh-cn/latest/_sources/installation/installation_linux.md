@@ -44,6 +44,7 @@ pip install openyuanrong-datasystem-sdk
 |openEuler|22.03|运行/编译openYuanrong datasystem的操作系统|
 |[Python](#安装-python)|3.9-3.11|openYuanrong datasystem的运行/编译依赖Python环境|
 |[CANN](#安装-cann)|8.2.RC1|运行/编译异构相关特性的依赖库|
+|rdma-core|35.1|运行/编译RDMA特性的依赖库|
 
 
 #### 安装 Python
@@ -113,6 +114,33 @@ Toolkit:  Ascend-cann-toolkit_<version>_linux-<arch> install success
 ```bash
 source ${HOME}/Ascend/ascend-toolkit/set_env.sh
 ```
+</details>
+
+#### 安装 rdma-core
+
+> 如无需运行/编译RDMA特性，可跳过 rdma-core 安装步骤
+
+<details>
+<summary>rdma-core安装步骤（点我展开）</summary>
+
+[rdma-core](https://github.com/linux-rdma/rdma-core)可通过yum进行安装。
+
+安装rdma-core:
+```bash
+sudo yum install rdma-core-devel
+```
+
+安装完成后，可通过以下命令查看软件是否安装成功：
+```bash
+ls -l /usr/lib64/libibverbs.so
+ls -l /usr/lib64/librdmacm.so
+```
+若输出类似以下内容则说明安装成功：
+```bash
+lrwxrwxrwx. 1 root root 15 Mar 23  2022 /usr/lib64/libibverbs.so -> libibverbs.so.1
+lrwxrwxrwx. 1 root root 14 Mar 23  2022 /usr/lib64/librdmacm.so -> librdmacm.so.1
+```
+
 </details>
 
 ### 源码编译额外依赖

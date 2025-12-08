@@ -3,7 +3,9 @@ datasystem.DsTensorClient.dev_send
 
 .. py:method:: datasystem.DsTensorClient.dev_send(keys, tensors)
 
-    将 device 上的内存发布为数据系统的异构对象。发布后的异构对象可通过 dev_recv 获取。dev_send 和 dev_recv 需配套使用。
+    将 device 上的内存发布为数据系统的异构对象。发布后的异构对象可通过 dev_recv 获取。
+
+    dev_send 和 dev_recv 需配套使用。dev_send 和 dev_recv 传入的 Device 内存地址不能归属于同一张 NPU 卡。
 
     通过 dev_recv 获取数据成功后，数据系统会自动删除此异构对象，不再管理此对象对应的 device 内存。
 

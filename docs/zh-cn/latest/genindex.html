@@ -175,6 +175,10 @@
 <li class="toctree-l2"><a class="reference internal" href="deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2 has-children"><a class="reference internal" href="development-guide/example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l3"><a class="reference internal" href="development-guide/example/hetero.html">异构对象</a></li>
@@ -227,6 +231,7 @@
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.hetero_client.HeteroClient.exist.html">datasystem.hetero_client.HeteroClient.exist</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="development-guide/api/python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -296,20 +301,59 @@
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.html">datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.init.html">datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.create_producer.html">datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.subscribe.html">datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.delete_stream.html">datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.query_global_producer_num.html">datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.StreamClient.query_global_consumer_num.html">datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Producer.html">datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Producer.send.html">datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Producer.close.html">datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Consumer.html">datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Consumer.receive.html">datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Consumer.receive_any.html">datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Consumer.ack.html">datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.Consumer.close.html">datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/python/datasystem.stream_client.SubconfigType.html">datasystem.stream_client.SubconfigType</a></li>
 </ul>
 </details></li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="development-guide/api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/ObjectClient.html">ObjectClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/Consumer.html">Consumer</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/enum-WriteMode.html">WriteMode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/StringView.html">StringView</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/Optional.html">Optional</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
 </ul>
 </details></li>
@@ -320,8 +364,10 @@
 <li class="toctree-l1"><a class="reference internal" href="contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="appendix/hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1"><a class="reference internal" href="FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
 </ul>
 
     </div>
@@ -433,6 +479,7 @@ document.write(`
  | <a href="#C"><strong>C</strong></a>
  | <a href="#D"><strong>D</strong></a>
  | <a href="#E"><strong>E</strong></a>
+ | <a href="#F"><strong>F</strong></a>
  | <a href="#G"><strong>G</strong></a>
  | <a href="#H"><strong>H</strong></a>
  | <a href="#I"><strong>I</strong></a>
@@ -450,6 +497,8 @@ document.write(`
 <h2 id="A">A</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Consumer.ack.html#stream_client.Consumer.ack">ack() (stream_client.Consumer method)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.async_dev_delete.html#datasystem.DsTensorClient.async_dev_delete">async_dev_delete() (datasystem.DsTensorClient method)</a>
 
       <ul>
@@ -470,24 +519,36 @@ document.write(`
         <li><a href="development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mset_d2h.html#datasystem.hetero_client.HeteroClient.async_mset_d2h">(datasystem.hetero_client.HeteroClient method)</a>
 </li>
       </ul></li>
+      <li><a href="development-guide/api/cpp/struct-AsyncResult.html#_CPPv411AsyncResult">AsyncResult (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-AsyncResult.html#_CPPv4N11AsyncResult10failedListE">AsyncResult::failedList (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-AsyncResult.html#_CPPv4N11AsyncResult6statusE">AsyncResult::status (C++ member)</a>
+</li>
   </ul></td>
 </tr></table>
 
 <h2 id="B">B</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/struct-Blob.html#_CPPv44Blob">Blob (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-Blob.html#_CPPv4N4Blob7pointerE">Blob::pointer (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-Blob.html#_CPPv4N4Blob4sizeE">Blob::size (C++ member)</a>
+</li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv46Buffer">Buffer (C++ class)</a>
 </li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer6BufferERR6Buffer">Buffer::Buffer (C++ function)</a>, <a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer6BufferEv">[1]</a>
 </li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer7GetDataEv">Buffer::GetData (C++ function)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4NK6Buffer7GetSizeEv">Buffer::GetSize (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer10MemoryCopyEPKv8uint64_t">Buffer::MemoryCopy (C++ function)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer6RLatchE8uint64_t">Buffer::RLatch (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer8UnRLatchEv">Buffer::UnRLatch (C++ function)</a>
@@ -506,6 +567,12 @@ document.write(`
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/enum-CacheType.html#_CPPv49CacheType">CacheType (C++ class)</a>
 </li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Producer.close.html#datasystem.stream_client.Producer.close">close() (datasystem.stream_client.Producer method)</a>
+
+      <ul>
+        <li><a href="development-guide/api/python/datasystem.stream_client.Consumer.close.html#stream_client.Consumer.close">(stream_client.Consumer method)</a>
+</li>
+      </ul></li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv414ConnectOptions">ConnectOptions (C++ class)</a>
 </li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions9accessKeyE">ConnectOptions::accessKey (C++ member)</a>
@@ -518,23 +585,47 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE">ConnectOptions::enableCrossNodeConnection (C++ member)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions4hostE">ConnectOptions::host (C++ member)</a>
 </li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions4portE">ConnectOptions::port (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions16requestTimeoutMsE">ConnectOptions::requestTimeoutMs (C++ member)</a>
 </li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions9secretKeyE">ConnectOptions::secretKey (C++ member)</a>
 </li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions15serverPublicKeyE">ConnectOptions::serverPublicKey (C++ member)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions11SetAkSkAuthERKNSt6stringERK14SensitiveValueRKNSt6stringE">ConnectOptions::SetAkSkAuth (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/struct-ConnectOptions.html#_CPPv4N14ConnectOptions8tenantIdE">ConnectOptions::tenantId (C++ member)</a>
 </li>
       <li><a href="development-guide/api/cpp/enum-ConsistencyType.html#_CPPv415ConsistencyType">ConsistencyType (C++ class)</a>
 </li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv48Consumer">Consumer (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv4N8Consumer3AckE8uint64_t">Consumer::Ack (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv4N8Consumer5CloseEv">Consumer::Close (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv4N8Consumer8ConsumerEv">Consumer::Consumer (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv4N8Consumer20GetStatisticsMessageER8uint64_tR8uint64_t">Consumer::GetStatisticsMessage (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv4N8Consumer7ReceiveE8uint32_t8uint32_tRNSt6vectorI7ElementEE">Consumer::Receive (C++ function)</a>, <a href="development-guide/api/cpp/Consumer.html#_CPPv4N8Consumer7ReceiveE8uint32_tRNSt6vectorI7ElementEE">[1]</a>
+</li>
+      <li><a href="development-guide/api/cpp/Consumer.html#_CPPv4N8ConsumerD0Ev">Consumer::~Consumer (C++ function)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.object_client.ObjectClient.create.html#datasystem.object_client.ObjectClient.create">create() (datasystem.object_client.ObjectClient method)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.create_producer.html#datasystem.stream_client.StreamClient.create_producer">create_producer() (datasystem.stream_client.StreamClient method)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-CreateParam.html#_CPPv411CreateParam">CreateParam (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-CreateParam.html#_CPPv4N11CreateParam9cacheTypeE">CreateParam::cacheType (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-CreateParam.html#_CPPv4N11CreateParam15consistencyTypeE">CreateParam::consistencyType (C++ member)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -578,13 +669,21 @@ document.write(`
 </li>
       <li><a href="development-guide/api/python/datasystem.object_client.CacheType.html#datasystem.object_client.CacheType">datasystem.object_client.CacheType (built-in class)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/python/datasystem.object_client.ConsistencyType.html#datasystem.object_client.ConsistencyType">datasystem.object_client.ConsistencyType (built-in class)</a>
 </li>
       <li><a href="development-guide/api/python/datasystem.object_client.ObjectClient.html#datasystem.object_client.ObjectClient">datasystem.object_client.ObjectClient (built-in class)</a>
 </li>
       <li><a href="development-guide/api/python/datasystem.object_client.WriteMode.html#datasystem.object_client.WriteMode">datasystem.object_client.WriteMode (built-in class)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Consumer.html#datasystem.stream_client.Consumer">datasystem.stream_client.Consumer (built-in class)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Producer.html#datasystem.stream_client.Producer">datasystem.stream_client.Producer (built-in class)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.html#datasystem.stream_client.StreamClient">datasystem.stream_client.StreamClient (built-in class)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.SubconfigType.html#datasystem.stream_client.SubconfigType">datasystem.stream_client.SubconfigType (built-in class)</a>
 </li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.delete.html#datasystem.DsTensorClient.delete">delete() (datasystem.DsTensorClient method)</a>
 
@@ -594,6 +693,8 @@ document.write(`
         <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.delete.html#datasystem.kv_client.KVClient.delete">(datasystem.kv_client.KVClient method)</a>
 </li>
       </ul></li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.delete_stream.html#datasystem.stream_client.StreamClient.delete_stream">delete_stream() (datasystem.stream_client.StreamClient method)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.dev_delete.html#datasystem.DsTensorClient.dev_delete">dev_delete() (datasystem.DsTensorClient method)</a>
 
       <ul>
@@ -626,17 +727,53 @@ document.write(`
 </li>
       <li><a href="development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_subscribe.html#datasystem.hetero_client.HeteroClient.dev_subscribe">dev_subscribe() (datasystem.hetero_client.HeteroClient method)</a>
 </li>
+      <li><a href="development-guide/api/cpp/struct-DeviceBlobList.html#_CPPv414DeviceBlobList">DeviceBlobList (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-DeviceBlobList.html#_CPPv4N14DeviceBlobList5blobsE">DeviceBlobList::blobs (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-DeviceBlobList.html#_CPPv4N14DeviceBlobList9deviceIdxE">DeviceBlobList::deviceIdx (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-DeviceBlobList.html#_CPPv4N14DeviceBlobList9srcOffsetE">DeviceBlobList::srcOffset (C++ member)</a>
+</li>
   </ul></td>
 </tr></table>
 
 <h2 id="E">E</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.exist.html#datasystem.kv_client.KVClient.exist">exist() (datasystem.kv_client.KVClient method)</a>
+      <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv47Element">Element (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7Element7ElementEP7uint8_t8uint64_t8uint64_t">Element::Element (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7Element2idE">Element::id (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7Element3ptrE">Element::ptr (C++ member)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7Element4sizeE">Element::size (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7ElementD0Ev">Element::~Element (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.hetero_client.HeteroClient.exist.html#datasystem.hetero_client.HeteroClient.exist">exist() (datasystem.hetero_client.HeteroClient method)</a>
+
+      <ul>
+        <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.exist.html#datasystem.kv_client.KVClient.exist">(datasystem.kv_client.KVClient method)</a>
+</li>
+      </ul></li>
       <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.expire.html#datasystem.kv_client.KVClient.expire">expire() (datasystem.kv_client.KVClient method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="F">F</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/Future.html#_CPPv46Future">Future (C++ class)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/Future.html#_CPPv4N6Future3GetE8uint64_t">Future::Get (C++ function)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -682,6 +819,50 @@ document.write(`
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/python/datasystem.DsClient.hetero.html#datasystem.DsClient.hetero">hetero() (datasystem.DsClient method)</a>
 </li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv412HeteroClient">HeteroClient (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient14AsyncDevDeleteERKNSt6vectorINSt6stringEEE">HeteroClient::AsyncDevDelete (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient12AsyncMGetH2DERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEE8uint64_t">HeteroClient::AsyncMGetH2D (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient12AsyncMSetD2HERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERK8SetParam">HeteroClient::AsyncMSetD2H (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient6DeleteERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">HeteroClient::Delete (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient9DevDeleteERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">HeteroClient::DevDelete (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient14DevLocalDeleteERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">HeteroClient::DevLocalDelete (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient7DevMGetERKNSt6vectorINSt6stringEEERNSt6vectorI14DeviceBlobListEERNSt6vectorINSt6stringEEE7int32_t">HeteroClient::DevMGet (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient7DevMSetERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERNSt6vectorINSt6stringEEE">HeteroClient::DevMSet (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient10DevPublishERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERNSt6vectorI6FutureEE">HeteroClient::DevPublish (C++ function)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient12DevSubscribeERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERNSt6vectorI6FutureEE">HeteroClient::DevSubscribe (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">HeteroClient::Exist (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient11GenerateKeyERKNSt6stringERNSt6stringE">HeteroClient::GenerateKey (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient11GetMetaInfoERKNSt6vectorINSt6stringEEEbRNSt6vectorI8MetaInfoEERNSt6vectorINSt6stringEEE">HeteroClient::GetMetaInfo (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient11HealthCheckER11ServerState">HeteroClient::HealthCheck (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient12HeteroClientERK14ConnectOptions">HeteroClient::HeteroClient (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient4InitEv">HeteroClient::Init (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient7MGetH2DERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERNSt6vectorINSt6stringEEE7int32_t">HeteroClient::MGetH2D (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient7MSetD2HERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERK8SetParam">HeteroClient::MSetD2H (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClient8ShutDownEv">HeteroClient::ShutDown (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/HeteroClient.html#_CPPv4N12HeteroClientD0Ev">HeteroClient::~HeteroClient (C++ function)</a>
+</li>
   </ul></td>
 </tr></table>
 
@@ -705,6 +886,8 @@ document.write(`
 </li>
         <li><a href="development-guide/api/python/datasystem.object_client.ObjectClient.init.html#datasystem.object_client.ObjectClient.init">(datasystem.object_client.ObjectClient method)</a>
 </li>
+        <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.init.html#datasystem.stream_client.StreamClient.init">(datasystem.stream_client.StreamClient method)</a>
+</li>
       </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
@@ -726,19 +909,19 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient6DelAllEv">KVClient::DelAll (C++ function)</a>
 </li>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">KVClient::Exist (C++ function)</a>
+</li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE">KVClient::Expire (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringER8OptionalI6BufferE7int32_t">KVClient::Get (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t">[1]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorI8OptionalI6BufferEEE7int32_t">[2]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE7int32_t">[3]</a>
 </li>
-      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient11HealthCheckEv">KVClient::HealthCheck (C++ function)</a>
-</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient11HealthCheckEv">KVClient::HealthCheck (C++ function)</a>
+</li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient4InitEv">KVClient::Init (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient8KVClientERK14ConnectOptions">KVClient::KVClient (C++ function)</a>
-</li>
-      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">KVClient::KVClient::Exist (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient7MCreateERKNSt6vectorINSt6stringEEERKNSt6vectorI8uint64_tEERK8SetParamRNSt6vectorINSt10shared_ptrI6BufferEEEE">KVClient::MCreate (C++ function)</a>
 </li>
@@ -758,6 +941,10 @@ document.write(`
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/python/datasystem.object_client.Buffer.memory_copy.html#datasystem.object_client.Buffer.memory_copy">memory_copy() (datasystem.object_client.Buffer method)</a>
 </li>
+      <li><a href="development-guide/api/cpp/struct-MetaInfo.html#_CPPv48MetaInfo">MetaInfo (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-MetaInfo.html#_CPPv4N8MetaInfo12blobSizeListE">MetaInfo::blobSizeList (C++ member)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.mget_h2d.html#datasystem.DsTensorClient.mget_h2d">mget_h2d() (datasystem.DsTensorClient method)</a>
 
       <ul>
@@ -766,10 +953,10 @@ document.write(`
       </ul></li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html#datasystem.DsTensorClient.mget_page_attn_blockwise_h2d">mget_page_attn_blockwise_h2d() (datasystem.DsTensorClient method)</a>
 </li>
-      <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.mset.html#datasystem.kv_client.KVClient.mset">mset() (datasystem.kv_client.KVClient method)</a>
-</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.mset.html#datasystem.kv_client.KVClient.mset">mset() (datasystem.kv_client.KVClient method)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.mset_d2h.html#datasystem.DsTensorClient.mset_d2h">mset_d2h() (datasystem.DsTensorClient method)</a>
 
       <ul>
@@ -790,10 +977,46 @@ document.write(`
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/python/datasystem.DsClient.object.html#datasystem.DsClient.object">object() (datasystem.DsClient method)</a>
 </li>
-      <li><a href="development-guide/api/cpp/Optional.html#_CPPv48Optional">Optional (C++ class)</a>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv412ObjectClient">ObjectClient (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient6CreateERKNSt6stringE8uint64_tRK11CreateParamRNSt10shared_ptrI6BufferEE">ObjectClient::Create (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient12GDecreaseRefERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">ObjectClient::GDecreaseRef (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient11GenerateKeyERKNSt6stringERNSt6stringE">ObjectClient::GenerateKey (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient3GetERKNSt6vectorINSt6stringEEE7int32_tRNSt6vectorI8OptionalI6BufferEEE">ObjectClient::Get (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient14GetObjMetaInfoERKNSt6stringERKNSt6vectorINSt6stringEEERNSt6vectorI11ObjMetaInfoEE">ObjectClient::GetObjMetaInfo (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient9GetPrefixERKNSt6stringERNSt6stringE">ObjectClient::GetPrefix (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient12GIncreaseRefERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">ObjectClient::GIncreaseRef (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient11HealthCheckEv">ObjectClient::HealthCheck (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient4InitEv">ObjectClient::Init (C++ function)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient12ObjectClientERK14ConnectOptions">ObjectClient::ObjectClient (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient3PutERKNSt6stringEPK7uint8_t8uint64_tRK11CreateParamRKNSt13unordered_setINSt6stringEEE">ObjectClient::Put (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient17QueryGlobalRefNumERKNSt6stringE">ObjectClient::QueryGlobalRefNum (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClient8ShutDownEv">ObjectClient::ShutDown (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/ObjectClient.html#_CPPv4N12ObjectClientD0Ev">ObjectClient::~ObjectClient (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ObjMetaInfo.html#_CPPv411ObjMetaInfo">ObjMetaInfo (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ObjMetaInfo.html#_CPPv4N11ObjMetaInfo9locationsE">ObjMetaInfo::locations (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ObjMetaInfo.html#_CPPv4N11ObjMetaInfo7objSizeE">ObjMetaInfo::objSize (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Optional.html#_CPPv48Optional">Optional (C++ class)</a>
+</li>
       <li><a href="development-guide/api/cpp/Optional.html#_CPPv4N8OptionalaSERK8Optional">Optional::operator= (C++ function)</a>, <a href="development-guide/api/cpp/Optional.html#_CPPv4N8OptionalaSERR8Optional">[1]</a>
 </li>
       <li><a href="development-guide/api/cpp/Optional.html#_CPPv4IDpEN8Optional8OptionalEDpRR4Args">Optional::Optional (C++ function)</a>, <a href="development-guide/api/cpp/Optional.html#_CPPv4N8Optional8OptionalERK8Optional">[1]</a>, <a href="development-guide/api/cpp/Optional.html#_CPPv4N8Optional8OptionalERR8Optional">[2]</a>, <a href="development-guide/api/cpp/Optional.html#_CPPv4N8Optional8OptionalEv">[3]</a>
@@ -806,10 +1029,38 @@ document.write(`
 <h2 id="P">P</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="development-guide/api/python/datasystem.object_client.Buffer.publish.html#datasystem.object_client.Buffer.publish">publish() (datasystem.object_client.Buffer method)</a>
+      <li><a href="development-guide/api/cpp/Producer.html#_CPPv48Producer">Producer (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Producer.html#_CPPv4N8Producer5CloseEv">Producer::Close (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Producer.html#_CPPv4N8Producer8ProducerEv">Producer::Producer (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Producer.html#_CPPv4N8Producer4SendERK7Element">Producer::Send (C++ function)</a>, <a href="development-guide/api/cpp/Producer.html#_CPPv4N8Producer4SendERK7Element7int64_t">[1]</a>
+</li>
+      <li><a href="development-guide/api/cpp/Producer.html#_CPPv4N8ProducerD0Ev">Producer::~Producer (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv412ProducerConf">ProducerConf (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf11autoCleanupE">ProducerConf::autoCleanup (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf14delayFlushTimeE">ProducerConf::delayFlushTime (C++ member)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf13encryptStreamE">ProducerConf::encryptStream (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf13maxStreamSizeE">ProducerConf::maxStreamSize (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf8pageSizeE">ProducerConf::pageSize (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf11reserveSizeE">ProducerConf::reserveSize (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf21retainForNumConsumersE">ProducerConf::retainForNumConsumers (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-ProducerConf.html#_CPPv4N12ProducerConf10streamModeE">ProducerConf::streamMode (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.object_client.Buffer.publish.html#datasystem.object_client.Buffer.publish">publish() (datasystem.object_client.Buffer method)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.object_client.ObjectClient.put.html#datasystem.object_client.ObjectClient.put">put() (datasystem.object_client.ObjectClient method)</a>
 </li>
       <li><a href="development-guide/api/python/datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html#datasystem.DsTensorClient.put_page_attn_layerwise_d2d">put_page_attn_layerwise_d2d() (datasystem.DsTensorClient method)</a>
@@ -820,6 +1071,12 @@ document.write(`
 <h2 id="Q">Q</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.query_global_consumer_num.html#datasystem.stream_client.StreamClient.query_global_consumer_num">query_global_consumer_num() (datasystem.stream_client.StreamClient method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.query_global_producer_num.html#datasystem.stream_client.StreamClient.query_global_producer_num">query_global_producer_num() (datasystem.stream_client.StreamClient method)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.object_client.ObjectClient.query_global_ref_num.html#datasystem.object_client.ObjectClient.query_global_ref_num">query_global_ref_num() (datasystem.object_client.ObjectClient method)</a>
 </li>
   </ul></td>
@@ -830,8 +1087,12 @@ document.write(`
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/python/datasystem.kv_client.KVClient.read.html#datasystem.kv_client.KVClient.read">read() (datasystem.kv_client.KVClient method)</a>
 </li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Consumer.receive.html#stream_client.Consumer.receive">receive() (stream_client.Consumer method)</a>
+</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Consumer.receive_any.html#stream_client.Consumer.receive_any">receive_any() (stream_client.Consumer method)</a>
+</li>
       <li><a href="development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.rlatch.html#datasystem.kv_client.ReadOnlyBuffer.rlatch">rlatch() (datasystem.kv_client.ReadOnlyBuffer method)</a>
 
       <ul>
@@ -845,6 +1106,8 @@ document.write(`
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/python/datasystem.object_client.Buffer.seal.html#datasystem.object_client.Buffer.seal">seal() (datasystem.object_client.Buffer method)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.Producer.send.html#datasystem.stream_client.Producer.send">send() (datasystem.stream_client.Producer method)</a>
 </li>
       <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv414SensitiveValue">SensitiveValue (C++ class)</a>
 </li>
@@ -876,8 +1139,6 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv46Status">Status (C++ class)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6Status9AppendMsgERKNSt6stringE">Status::AppendMsg (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4NK6Status7GetCodeEv">Status::GetCode (C++ function)</a>
@@ -900,6 +1161,30 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/enum-StatusCode.html#_CPPv410StatusCode">StatusCode (C++ class)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv412StreamClient">StreamClient (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf">StreamClient::CreateProducer (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient12DeleteStreamERKNSt6stringE">StreamClient::DeleteStream (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient4InitEb">StreamClient::Init (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t">StreamClient::QueryGlobalConsumersNum (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t">StreamClient::QueryGlobalProducersNum (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient8ShutDownEv">StreamClient::ShutDown (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient12StreamClientEK14ConnectOptions">StreamClient::StreamClient (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb">StreamClient::Subscribe (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClientD0Ev">StreamClient::~StreamClient (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/enum-StreamMode.html#_CPPv410StreamMode">StreamMode (C++ class)</a>
+</li>
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv410StringView">StringView (C++ class)</a>
 </li>
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv4NK10StringView4dataEv">StringView::data (C++ function)</a>
@@ -911,6 +1196,30 @@ document.write(`
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEPKc">StringView::StringView (C++ function)</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEPKc6size_t">[1]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewERKNSt6stringE">[2]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEv">[3]</a>
 </li>
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringViewD0Ev">StringView::~StringView (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/python/datasystem.stream_client.StreamClient.subscribe.html#datasystem.stream_client.StreamClient.subscribe">subscribe() (datasystem.stream_client.StreamClient method)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv418SubscriptionConfig">SubscriptionConfig (C++ class)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig13cacheCapacityE">SubscriptionConfig::cacheCapacity (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig16cachePrefetchLWME">SubscriptionConfig::cachePrefetchLWM (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4NK18SubscriptionConfigneERK18SubscriptionConfig">SubscriptionConfig::operator!= (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfigaSERK18SubscriptionConfig">SubscriptionConfig::operator= (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4NK18SubscriptionConfigeqERK18SubscriptionConfig">SubscriptionConfig::operator== (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig12SC_CACHE_LWME">SubscriptionConfig::SC_CACHE_LWM (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig18SubscriptionConfigENSt6stringEK16SubscriptionType">SubscriptionConfig::SubscriptionConfig (C++ function)</a>, <a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig18SubscriptionConfigENSt6stringEK16SubscriptionType8uint32_t8uint16_t">[1]</a>, <a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig18SubscriptionConfigERK18SubscriptionConfig">[2]</a>, <a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig18SubscriptionConfigERR18SubscriptionConfig">[3]</a>, <a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig18SubscriptionConfigEv">[4]</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig16subscriptionNameE">SubscriptionConfig::subscriptionName (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/struct-SubscriptionConfig.html#_CPPv4N18SubscriptionConfig16subscriptionTypeE">SubscriptionConfig::subscriptionType (C++ member)</a>
+</li>
+      <li><a href="development-guide/api/cpp/enum-SubscriptionType.html#_CPPv416SubscriptionType">SubscriptionType (C++ class)</a>
 </li>
   </ul></td>
 </tr></table>
