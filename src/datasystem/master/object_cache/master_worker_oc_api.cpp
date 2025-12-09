@@ -99,7 +99,6 @@ Status MasterRemoteWorkerOCApi::PublishMeta(PublishMetaReqPb &req, PublishMetaRs
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(timeoutDuration, opts);
-    req.set_timeout(MasterGetRequestTimeout(timeoutDuration.CalcRemainingTime()));
     return RetryOnErrorRepent(
         timeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &req, &resp](int32_t rpcTimeout) {
@@ -280,7 +279,6 @@ Status MasterLocalWorkerOCApi::Init()
 
 Status MasterLocalWorkerOCApi::PublishMeta(PublishMetaReqPb &req, PublishMetaRspPb &resp)
 {
-    req.set_timeout(MasterGetRequestTimeout(timeoutDuration.CalcRemainingTime()));
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return workerOC_->PublishMeta(req, resp);
 }
