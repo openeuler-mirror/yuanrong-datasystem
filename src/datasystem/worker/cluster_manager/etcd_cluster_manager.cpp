@@ -791,7 +791,7 @@ Status EtcdClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey
     LOG(INFO) << "Detected network recovery.";
     std::string nodeAddr = recoverNodeKey.ToString();
 
-    const int64_t timestamp = std::atol(recoverNode->GetTimeEpoch().c_str());
+    const int64_t timestamp = std::atol(eventNode->GetTimeEpoch().c_str());
     const std::string &err = "The timestamp of an event triggering reconciliation should be greater than 0";
     if (recoverNode->IsTimedOut()) {
         CHECK_FAIL_RETURN_STATUS(timestamp > 0, K_INVALID, err);
