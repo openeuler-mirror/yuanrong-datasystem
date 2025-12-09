@@ -87,7 +87,7 @@ struct GetObjEntryParams {
     std::shared_ptr<ShmUnit> shmUnit;
     bool isSealed;
     uint64_t version;
-    std::shared_ptr<RemoteH2DHostInfo> remoteH2DHostInfo;
+    std::shared_ptr<RemoteH2DHostInfoMap> remoteH2DHostInfo;
 };
 
 struct GetObjInfo {

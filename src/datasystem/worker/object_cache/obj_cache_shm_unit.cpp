@@ -44,6 +44,11 @@ DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 namespace datasystem {
 namespace object_cache {
 
+ObjCacheShmUnit::ObjCacheShmUnit()
+{
+    remoteH2DHostInfoMap_ = std::make_shared<RemoteH2DHostInfoMap>();
+}
+
 Status ObjCacheShmUnit::FreeResources()
 {
     // Call super class to release our memory resources.
@@ -114,6 +119,19 @@ std::string ObjCacheShmUnit::GetAddress() const
 void ObjCacheShmUnit::SetAddress(const std::string &newAddress)
 {
     address_ = newAddress;
+}
+
+void ObjCacheShmUnit::SetRemoteHostInfo(const std::string &clientCommId,
+                                        const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
+{
+    RemoteH2DHostInfoMap::accessor accessor;
+    remoteH2DHostInfoMap_->insert(accessor, clientCommId);
+    accessor->second = remoteH2DHostInfo;
+}
+
+std::shared_ptr<RemoteH2DHostInfoMap> ObjCacheShmUnit::GetRemoteHostInfo() const
+{
+    return remoteH2DHostInfoMap_;
 }
 
 Status CopyAndSplitBuffer(const std::string &tenantId, const void *data, size_t size, std::vector<RpcMessage> &messages)
@@ -247,25 +265,25 @@ Status AggregateAllocate(
     uint64_t currentBatchSize = 0;
     uint64_t currentKeyCount = 0;
 
-    std::function<void(uint64_t, uint64_t, uint32_t)> aggregateCollector =
-        [&](uint64_t dataSz, uint64_t shmSize, uint32_t objectIndex) {
-            // Skip any object that has size beyond 1MB.
-            if (dataSz >= batchLimitSingleSize) {
-                return;
-            }
+    std::function<void(uint64_t, uint64_t, uint32_t)> aggregateCollector = [&](uint64_t dataSz, uint64_t shmSize,
+                                                                               uint32_t objectIndex) {
+        // Skip any object that has size beyond 1MB.
+        if (dataSz >= batchLimitSingleSize) {
+            return;
+        }
 
-            // Seal the last batch and start the new batch.
-            uint64_t ceilingSize = Align4BitsCeiling(shmSize);
-            if (currentKeyCount >= batchLimitKeys || (currentBatchSize + ceilingSize) > batchLimitTotalSize) {
-                aggreatedSizes.emplace_back(currentBatchSize);
-                currentBatchSize = 0;
-                currentKeyCount = 0;
-            }
-            // Record the size and num, and also map from object key to ShmOwners index.
-            currentBatchSize += ceilingSize;
-            currentKeyCount++;
-            shmIndexMapping[objectIndex] = aggreatedSizes.size();
-        };
+        // Seal the last batch and start the new batch.
+        uint64_t ceilingSize = Align4BitsCeiling(shmSize);
+        if (currentKeyCount >= batchLimitKeys || (currentBatchSize + ceilingSize) > batchLimitTotalSize) {
+            aggreatedSizes.emplace_back(currentBatchSize);
+            currentBatchSize = 0;
+            currentKeyCount = 0;
+        }
+        // Record the size and num, and also map from object key to ShmOwners index.
+        currentBatchSize += ceilingSize;
+        currentKeyCount++;
+        shmIndexMapping[objectIndex] = aggreatedSizes.size();
+    };
 
     traversalHelper(aggregateCollector, needAggregate);
 

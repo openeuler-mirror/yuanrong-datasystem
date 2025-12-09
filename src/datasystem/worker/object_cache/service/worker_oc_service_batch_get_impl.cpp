@@ -167,8 +167,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
 
-        auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds,
-                     &tempFailedIds, &tempFailedMetas, index, traceId] {
+        auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
+                     &tempFailedMetas, index, traceId] {
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
@@ -302,7 +302,7 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
             hostInfo->segmentInfo = std::move(subResp.remote_host_segment());
             hostInfo->rootInfo = std::move(subResp.root_info());
             hostInfo->dataInfo = std::move(subResp.data_info());
-            objectKV.GetObjEntry()->SetRemoteHostInfo(hostInfo);
+            objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
         }
     }
     return subRc;
@@ -360,6 +360,10 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     uint64_t payloadIndex = 0;
     auto iter = infos.begin();
     std::vector<std::string> needEvictObjs;
+    std::shared_ptr<std::string> commId = nullptr;
+    if (IsRemoteH2DEnabled()) {
+        commId = std::make_shared<std::string>(request->GetClientCommUuid());
+    }
     for (int i = 0; iter != infos.end(); i++) {
         bool isFromL2 = false;
         auto metaIter = iter->queryMeta->mutable_meta();
@@ -371,7 +375,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         auto entry = lockEntry->safeObj;
         const auto &readKey = iter->readKey;
-        ReadObjectKV objectKV(*readKey, *entry);
+        ReadObjectKV objectKV(*readKey, *entry, commId);
         Status subRc = status;
         bool tryGetFromElsewhere = true;
         bool dataSizeChanged = false;

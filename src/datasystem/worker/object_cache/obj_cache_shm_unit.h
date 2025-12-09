@@ -37,9 +37,10 @@ namespace object_cache {
 class ObjCacheShmUnit : public ObjectInterface {
 public:
     /**
-     * @brief Default constructor.
+     * @brief ObjCacheShmUnit constructor.
      */
-    ObjCacheShmUnit() = default;
+    ObjCacheShmUnit();
+
     /**
      * @brief Default destructor.
      */
@@ -137,16 +138,20 @@ public:
      * @param newAddress The new address.
      */
     void SetAddress(const std::string &newAddress) override;
-    
-    void SetRemoteHostInfo(const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo) override
-    {
-        remoteH2DHostInfo_ = remoteH2DHostInfo;
-    }
 
-    std::shared_ptr<RemoteH2DHostInfo> GetRemoteHostInfo() const override
-    {
-        return remoteH2DHostInfo_;
-    }
+    /**
+     * @brief Record the remote host info for the client.
+     * @param[in] clientCommId The client communicator identifier uuid.
+     * @param[in] remoteH2DHostInfo The remote H2D host info, containing segment info, roor info and data info.
+     */
+    void SetRemoteHostInfo(const std::string &clientCommId,
+                           const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo) override;
+
+    /**
+     * @brief Get the remote host info.
+     * @return The entire map for remote h2d host info.
+     */
+    std::shared_ptr<RemoteH2DHostInfoMap> GetRemoteHostInfo() const override;
 
 private:
     std::shared_ptr<ShmUnit> shmUnit_{ nullptr };
@@ -160,7 +165,7 @@ private:
     // The life state of object.
     ObjectLifeState lifeState_ = ObjectLifeState::OBJECT_INVALID;
     // This means the data is not local, and only metadata is here. So the shm unit shall be nullptr.
-    std::shared_ptr<RemoteH2DHostInfo> remoteH2DHostInfo_{ nullptr };
+    std::shared_ptr<RemoteH2DHostInfoMap> remoteH2DHostInfoMap_{ nullptr };
 };
 
 /**

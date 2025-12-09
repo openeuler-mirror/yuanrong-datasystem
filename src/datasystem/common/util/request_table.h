@@ -113,7 +113,8 @@ public:
         const std::string &objectKey, std::shared_ptr<EntryParam> entryParam, Status lastRc,
         std::function<void(std::shared_ptr<Request>)> doneRequestCallBack,
         const std::shared_ptr<Request> &specRequset = nullptr, bool isUpdateSubRecvEventRequest = false,
-        std::function<bool(const std::string &objKey, const std::shared_ptr<Request> &req)> checkOffsetMatch = nullptr)
+        std::function<bool(const std::string &objKey, const std::shared_ptr<Request> &req)> checkOffsetMatch = nullptr,
+        std::function<bool(const std::shared_ptr<Request> &req)> satisfiedCheck = nullptr)
     {
         std::vector<std::shared_ptr<Request>> requests;
         {
@@ -136,6 +137,9 @@ public:
                     LOG(INFO) << "param offset and size is not match request, not return to client";
                     continue;
                 }
+            }
+            if (satisfiedCheck && !satisfiedCheck(req)) {
+                continue;
             }
             if (req->objects_.emplace(objectKey, entryParam)) {
                 req->SetStatus(lastRc);

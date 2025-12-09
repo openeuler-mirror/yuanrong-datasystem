@@ -2229,6 +2229,78 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestCompatilibity2)
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
 
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiProcess1)
+{
+    // Test that multiple client processes get the same keys is supported.
+    const int objPerProcess = 40;
+    const int clientNum = 4;
+    const size_t blkSz = 28800;
+    const size_t blksPerObj = 1;
+    std::vector<int> pids;
+    std::vector<std::vector<std::string>> inObjectIds(clientNum);
+    std::vector<std::vector<std::string>> verifyList;
+    std::vector<std::string> inObjectIdsConcat;
+    for (uint32_t i = 0; i < clientNum * objPerProcess; i++) {
+        verifyList.emplace_back();
+        for (uint32_t j = 0; j < blksPerObj; j++) {
+            verifyList[i].emplace_back(RandomData().GetRandomString(blkSz));
+        }
+    }
+    for (int i = 0; i < clientNum; i++) {
+        for (int j = 0ul; j < objPerProcess; j++) {
+            inObjectIds[i].emplace_back(GetStringUuid());
+        }
+        inObjectIdsConcat.insert(inObjectIdsConcat.end(), inObjectIds[i].begin(), inObjectIds[i].end());
+        pids.emplace_back(ForkForTest([&, devId = i]() {
+            InitAcl(devId);
+            std::shared_ptr<DsClient> client;
+            InitTestDsClientForRemoteH2D(0, client);
+            std::vector<DeviceBlobList> setBlobList;
+            for (auto i = devId * objPerProcess; i < devId * objPerProcess + objPerProcess; i++) {
+                DeviceBlobList blobList;
+                blobList.deviceIdx = devId;
+                for (uint32_t j = 0; j < blksPerObj; j++) {
+                    void *devPtr = nullptr;
+                    AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
+                    AclDeviceManager::Instance()->MemCopyH2D(devPtr, blkSz, verifyList[i][j].data(), blkSz);
+                    blobList.blobs.emplace_back(Blob{ devPtr, blkSz });
+                }
+                setBlobList.emplace_back(blobList);
+            }
+            DS_ASSERT_OK(client->Hetero()->MSetD2H(inObjectIds[devId], setBlobList));
+        }));
+    }
+    for (auto pid : pids) {
+        DS_ASSERT_TRUE(WaitForChildFork(pid), 0);
+    }
+    pids.clear();
+
+    for (int i = 0; i < clientNum; i++) {
+        pids.emplace_back(ForkForTest([&, devId = i + clientNum]() {
+            InitAcl(devId);
+            std::shared_ptr<DsClient> client;
+            InitTestDsClientForRemoteH2D(1, client);
+            std::vector<DeviceBlobList> setBlobListUseless;
+            std::vector<DeviceBlobList> getBlobList;
+            PrePareDevData(inObjectIdsConcat.size(), blksPerObj, blkSz, setBlobListUseless, getBlobList, devId);
+
+            std::vector<std::string> failedList;
+            DS_ASSERT_OK(client->Hetero()->MGetH2D(inObjectIdsConcat, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+            ASSERT_TRUE(failedList.empty());
+            for (size_t j = 0; j < inObjectIdsConcat.size(); j++) {
+                for (size_t k = 0; k < blksPerObj; k++) {
+                    LOG(INFO) << "Check object " << j << ", blob " << k;
+                    CheckDevPtrContent(getBlobList[j].blobs[k].pointer, getBlobList[j].blobs[k].size, verifyList[j][k]);
+                }
+            }
+            LOG(INFO) << "MGet done for devId = " << devId;
+        }));
+    }
+    for (auto pid : pids) {
+        DS_ASSERT_TRUE(WaitForChildFork(pid), 0);
+    }
+}
+
 TEST_F(DevObjectHeteroRH2DMismatchTest, DISABLED_RemoteH2DTestDirection1)
 {
     // Test that MGetH2D still works with mismatching RH2D configurations.

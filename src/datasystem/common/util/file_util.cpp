@@ -60,12 +60,12 @@
 static thread_local bool ifPrintwriteFailLog = true;
 
 namespace datasystem {
-off_t FileSize(const std::string &filename)
+off_t FileSize(const std::string &filename, bool logError)
 {
     struct stat st{};
     errno = 0;
     if (stat(filename.c_str(), &st) < 0) {
-        LOG(ERROR) << "Get file size failed, file: " << filename << ", errno: " << errno;
+        LOG_IF(ERROR, logError) << "Get file size failed, file: " << filename << ", errno: " << errno;
         return -1;
     };
     return st.st_size;
