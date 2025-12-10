@@ -201,7 +201,7 @@ public:
     static bool IsValidIPv6HostPortString(const char *flagName, const std::string &value)
     {
         // Future: A regex can be created to make a more comprehensive IPv6 validator
-        // For now, do manual some condition checks.
+        // For now, do some simpler condition checks that catch most of the cases.
         // First character must be [
         if (value[0] != '[') {
             return false;
@@ -218,6 +218,13 @@ public:
         if (value[pos - 1] != ']') {
             LOG(INFO) << FormatString("The value of %s flag is %s, which is an illegal [IPv6]:Port address format.",
                                       flagName, value);
+            return false;
+        }
+        const int addrPrefixLen = 4;
+        std::string addrPrefix = value.substr(1, addrPrefixLen);
+        if ((addrPrefix == "fe80" || addrPrefix == "FE80") && value.find('%') == std::string::npos) {
+            LOG(INFO) << "The value of " << flagName << " flag is " << value
+                      << ", is an illegal [IPv6]:Port address format. Link local address require %interface_name.";
             return false;
         }
 

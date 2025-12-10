@@ -186,7 +186,8 @@ public:
      */
     Status AllocDataPage(BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb> *);
 
-    Status AllocDataPageInternalReq(uint64_t timeoutMs, const ShmView &curView, ShmView &outView);
+    Status AllocDataPageInternalReq(uint64_t timeoutMs, const ShmView &curView, ShmView &outView,
+                                    const std::string &producerId);
 
     /**
      * @brief Create a BigElement page
@@ -196,7 +197,7 @@ public:
      */
     Status AllocBigShmMemory(BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb> *);
 
-    Status AllocBigShmMemoryInternalReq(uint64_t timeoutMs, size_t sz, ShmView &outView);
+    Status AllocBigShmMemoryInternalReq(uint64_t timeoutMs, size_t sz, ShmView &outView, const std::string &producerId);
 
     /**
      * @brief Release a BigElement page
@@ -853,6 +854,13 @@ public:
     {
         return pageQueueHandler_->GetStreamMetaShm();
     }
+
+    Status MarkMemAllocFinish(
+        const std::string &streamName, BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb> *blockedReq,
+        std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> &outblockedReq);
+    Status MarkMemAllocFinish(
+        const std::string &streamName, BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb> *blockedReq,
+        std::shared_ptr<BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>> &outblockedReq);
 
 protected:
     /**

@@ -107,8 +107,7 @@ private:
     Status CreateExclusiveConn(std::unique_ptr<ExclusiveConn> &conn, const std::string &sockPath);
 
     std::unordered_map<int32_t, std::unique_ptr<ExclusiveConn>> sockMap_;
-    pid_t pid_;
-    pid_t tid_;
+    std::string name_;
 };
 
 extern thread_local ExclusiveConnMgr gExclusiveConnMgr;

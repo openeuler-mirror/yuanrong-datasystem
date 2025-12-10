@@ -398,7 +398,7 @@ bool BufferPool::HaveTasksToProcess()
 
 void BufferPool::AsyncFlushEntry(int partitionID)
 {
-    VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("AsyncFlush thread %d starts up", partitionID);
+    VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s]AsyncFlush thread %d starts up", name_, partitionID);
     auto &part = partitionList_[partitionID];
     auto &dirtyList = part->dirtyList_;
     const uint64_t timeoutMs = 10;

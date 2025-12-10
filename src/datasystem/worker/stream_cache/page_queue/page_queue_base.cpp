@@ -403,7 +403,7 @@ Status PageQueueBase::Ack(uint64_t cursor, StreamMetaShm *streamMetaShm)
     }
     rc = ProcessBigElementPages(bigElementPage, streamMetaShm);
     status.emplace_back(rc);
-    rc = ProcessAckedPages(cursor, freeList);
+    rc = ProcessAckedPages(cursor, std::move(freeList));
     status.emplace_back(rc);
     rc = AfterAck();
     status.emplace_back(rc);
@@ -820,7 +820,7 @@ std::pair<size_t, bool> PageQueueBase::GetNextBlockedRequestSize()
     return std::make_pair(0, false);
 }
 
-Status PageQueueBase::ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> &freeList)
+Status PageQueueBase::ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> freeList)
 {
     // Some locking orders to consider
     // StreamManager::UnblockCreators can hold this locks in this order
@@ -840,9 +840,22 @@ Status PageQueueBase::ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> 
     {
         WriteLockHelper xlock3(STREAM_COMMON_LOCK_ARGS(ackMutex_));
         RETURN_OK_IF_TRUE(freeList.empty() && pendingFreePages_.empty());
-        // Clear all pages back to empty
-        for (auto &e : freeList) {
-            RETURN_IF_NOT_OK(e.second->ResetToEmpty());
+        {
+            // Clear all pages back to empty
+            ReadLockHelper rlock(STREAM_COMMON_LOCK_ARGS(poolMutex_));
+            for (auto it = freeList.begin(); it != freeList.end();) {
+                auto pageId = it->second->GetPageId();
+                ShmPagesMap::accessor accessor;
+                bool exist = shmPool_.find(accessor, pageId);
+                if (!exist) {
+                    // This page may be released prematurely by "EarlyReclaim" and therefore may not be found here.
+                    VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s] Page %s not found", LogPrefix(), pageId);
+                    it = freeList.erase(it);
+                    continue;
+                }
+                RETURN_IF_NOT_OK(it->second->ResetToEmpty());
+                ++it;
+            }
         }
         if (bigElement && (CheckHadEnoughMem(nextReqSz).GetCode() == K_OUT_OF_MEMORY)
             && (!freeList.empty() || !pendingFreePages_.empty())) {
@@ -898,8 +911,9 @@ Status PageQueueBase::FreePages(std::vector<ShmKey> &pages, bool bigElementPage,
         pages.pop_back();
         ShmPagesMap::accessor accessor;
         bool exist = shmPool_.find(accessor, pageId);
+        // This page may be released prematurely by "EarlyReclaim" and therefore may not be found here.
         if (!exist) {
-            LOG(ERROR) << FormatString("[%s] Page %s not found", LogPrefix(), pageId);
+            VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("[%s] Page %s not found", LogPrefix(), pageId);
             continue;
         }
         auto &pageUnit = accessor->second->pageUnit;

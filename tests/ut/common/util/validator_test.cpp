@@ -71,6 +71,8 @@ TEST_F(ValidatorTest, TestValidateHostPortString)
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:65535"));
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[::1]:65535"));
     EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"));
+    EXPECT_TRUE(Validator::ValidateHostPortString("FlagName", "[fe80::361e:6bff:fe49:4f40%enp4s0f0]:54321"));
+    EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "[fe80::361e:6bff:fe49:4f40]:54321"));
     EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "::1:65535"));
     EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.255: 65535"));
     EXPECT_FALSE(Validator::ValidateHostPortString("FlagName", "255.255.255.255:65535 "));

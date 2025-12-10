@@ -144,7 +144,7 @@ public:
         return serviceName_;
     }
 
-    Status DirectExecInternalMethod(int fd, EventType type, ZmqMetaMsgFrames &inFrames, ZmqMetaMsgFrames &outFrames);
+    Status DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaMsgFrames &outFrames);
 
 protected:
     /**
@@ -253,6 +253,7 @@ private:
     void AddRoute(MetaPb &meta, int fd);
     void DeleteRoute(int fd);
     Status InitThreadPool();
+    Status SendErrorMaxExclusive(WorkAgent *workAgent, const ThreadPool::ThreadPoolUsage &poolUsage);
 
     std::unique_ptr<ThreadPool> thrdPool_{ nullptr };
     std::map<int32_t, std::shared_ptr<WorkerCB>> workerCBs_;

@@ -27,6 +27,7 @@
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/stream_cache/stream_data_pool.h"
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
@@ -342,7 +343,8 @@ Status ExclusivePageQueue::ReserveAdditionalMemory()
 }
 
 Status ExclusivePageQueue::InsertBigElement(void *buf, size_t sz, std::pair<size_t, size_t> &res, uint64_t timeoutMs,
-                                            const bool headerBit, StreamMetaShm *streamMetaShm)
+                                            const bool headerBit, StreamMetaShm *streamMetaShm,
+                                            const std::string &producerId)
 {
     RaiiPlus raiiP;
     if (streamMetaShm) {
@@ -354,7 +356,7 @@ Status ExclusivePageQueue::InsertBigElement(void *buf, size_t sz, std::pair<size
 
     auto flags = InsertFlags::REMOTE_ELEMENT | InsertFlags::BIG_ELEMENT;
     ShmView outView;
-    RETURN_IF_NOT_OK(streamMgr_->AllocBigShmMemoryInternalReq(timeoutMs, sz, outView));
+    RETURN_IF_NOT_OK(streamMgr_->AllocBigShmMemoryInternalReq(timeoutMs, sz, outView, producerId));
     std::shared_ptr<ShmUnitInfo> pageUnitInfo;
     RETURN_IF_NOT_OK(LocatePage(outView, pageUnitInfo));
     // From now on make sure we free the memory on error exit
@@ -384,7 +386,8 @@ Status ExclusivePageQueue::InsertBigElement(void *buf, size_t sz, std::pair<size
     std::vector<bool> headerBits;
     headerBits.push_back(headerBit);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        BatchInsertImpl(pointerString.data(), v, res, flags, timeoutMs, headerBits, streamMetaShm), "Insert pointer");
+        BatchInsertImpl(pointerString.data(), v, res, flags, timeoutMs, headerBits, streamMetaShm, GetStringUuid()),
+        "Insert pointer");
     res.second = sz;
     needRollback = false;
     raiiP.ClearAllTask();
@@ -394,7 +397,7 @@ Status ExclusivePageQueue::InsertBigElement(void *buf, size_t sz, std::pair<size
 
 Status ExclusivePageQueue::BatchInsertImpl(void *buf, std::vector<size_t> &sz, std::pair<size_t, size_t> &res,
                                            InsertFlags flags, uint64_t timeoutMs, const std::vector<bool> &headerBits,
-                                           StreamMetaShm *streamMetaShm)
+                                           StreamMetaShm *streamMetaShm, const std::string &producerId)
 {
     // This is a special form of batch insert. The data is sent from a remote worker
     // and the elements are already in the correct reverse order.
@@ -423,7 +426,7 @@ Status ExclusivePageQueue::BatchInsertImpl(void *buf, std::vector<size_t> &sz, s
         std::vector<size_t> remaining(sz.begin() + res.first, sz.end());
         ShmView outView;
         RETURN_IF_NOT_OK(streamMgr_->AllocDataPageInternalReq(
-            timeoutMs, lastPage == nullptr ? ShmView() : lastPage->GetShmView(), outView));
+            timeoutMs, lastPage == nullptr ? ShmView() : lastPage->GetShmView(), outView, producerId));
         std::shared_ptr<ShmUnitInfo> pageUnitInfo;
         RETURN_IF_NOT_OK(LocatePage(outView, pageUnitInfo));
         lastPage = std::make_shared<StreamDataPage>(pageUnitInfo, 0, false, isSharedPage_);
@@ -454,14 +457,15 @@ Status ExclusivePageQueue::BatchInsertImpl(void *buf, std::vector<size_t> &sz, s
 
 Status ExclusivePageQueue::BatchInsert(void *buf, std::vector<size_t> &sz, std::pair<size_t, size_t> &res,
                                        uint64_t timeoutMs, const std::vector<bool> &headerBits,
-                                       StreamMetaShm *streamMetaShm)
+                                       StreamMetaShm *streamMetaShm, const std::string &producerId)
 {
     // Check if it is a big element. If it is a big element, remote manager will send
     // it separately in its own PV.
     if (sz.size() == 1 && sz.at(0) > static_cast<size_t>(streamFields_.pageSize_ - StreamDataPage::PageOverhead())) {
-        return InsertBigElement(buf, sz.at(0), res, timeoutMs, headerBits.at(0), streamMetaShm);
+        return InsertBigElement(buf, sz.at(0), res, timeoutMs, headerBits.at(0), streamMetaShm, producerId);
     } else {
-        return BatchInsertImpl(buf, sz, res, InsertFlags::REMOTE_ELEMENT, timeoutMs, headerBits, streamMetaShm);
+        return BatchInsertImpl(buf, sz, res, InsertFlags::REMOTE_ELEMENT, timeoutMs, headerBits, streamMetaShm,
+                               producerId);
     }
 }
 

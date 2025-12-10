@@ -176,5 +176,125 @@ TEST_F(ThreadPoolTest, GetTaskLastFinishTime)
     ASSERT_EQ(usage.threadPoolUsage, 1);
     ASSERT_TRUE(usage.taskLastFinishTime > currentTime) << usage.taskLastFinishTime << "," << currentTime;
 }
+
+TEST_F(ThreadPoolTest, TestMaxThreads)
+{
+    const int spinLockSleep = 500;
+    std::atomic<int> threadsIn = 0;
+    int maxThreads = 4;
+    bool workDone = false;
+
+    ThreadPool threadPool(0, maxThreads, "", false);
+
+    // deploy the max number of threads and givem them a task that sleeps.
+    // Thus, these threads will all be in use.
+    for (int i = 0; i < maxThreads; ++i) {
+        threadPool.Execute([&threadsIn, &spinLockSleep] {
+            LOG(INFO) << "User thread starting.";
+            ++threadsIn;
+            // Spin until parent wakes us up by setting to 0
+            while (threadsIn != 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+            }
+            LOG(INFO) << "User thread quitting now.";
+        });
+
+        // This sleep is just so that LOG(INFO) doesn't get jumbled due to concurrency
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+
+    // Parent wait until all threads are in
+    LOG(INFO) << "Parent waiting for child threads to get into the pool and use their thread";
+    while (threadsIn != maxThreads) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+
+    ThreadPool::ThreadPoolUsage poolUsage = threadPool.GetThreadPoolUsage();
+    LOG(INFO) << "Before extra thread added usage:  " << poolUsage.ToString();
+
+    // Then, create one more thread. This will exceed the maximum. It is queued but it is
+    // not executed yet until some other thread is freed
+    threadPool.Execute([&threadsIn, &workDone] {
+        LOG(INFO) << "Extra thread starting.";
+        workDone = true;
+        LOG(INFO) << "Extra thread quitting.";
+    });
+
+    poolUsage = threadPool.GetThreadPoolUsage();
+    LOG(INFO) << "After extra thread added usage:  " << poolUsage.ToString();
+
+    // unblock all the threads so they can quit. This frees up a thread that can be used
+    // by the extra thread which then executes.
+    threadsIn = 0;
+
+    // After other threads quit, the new thread can get in and run the task. Wait for it.
+    while (!workDone) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+
+    LOG(INFO) << "Extra thread did work: " << workDone;
+    ASSERT_EQ(workDone, true);
+}
+
+TEST_F(ThreadPoolTest, TestMaxThreadsNoWait)
+{
+    const int spinLockSleep = 500;
+    std::atomic<int> threadsIn = 0;
+    int maxThreads = 4;
+    bool workDone = false;
+    bool threadCreated = false;
+
+    ThreadPool threadPool(0, maxThreads, "", false);
+
+    // deploy the max number of threads and givem them a task that sleeps.
+    // Thus, these threads will all be in use.
+    for (int i = 0; i < maxThreads; ++i) {
+        threadCreated =
+            threadPool.ExecuteNoWait([&threadsIn, &spinLockSleep] {
+                LOG(INFO) << "User thread starting.";
+                ++threadsIn;
+                // Spin until parent wakes us up by setting to 0
+                while (threadsIn != 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+                }
+                LOG(INFO) << "User thread quitting now.";
+            });
+
+        ASSERT_EQ(threadCreated, true);
+
+        // This sleep is just so that LOG(INFO) doesn't get jumbled due to concurrency
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+
+    // Parent wait until all threads are in
+    LOG(INFO) << "Parent waiting for child threads to get into the pool and use their thread";
+    while (threadsIn != maxThreads) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+
+    ThreadPool::ThreadPoolUsage poolUsage = threadPool.GetThreadPoolUsage();
+    LOG(INFO) << "Before extra thread added usage:  " << poolUsage.ToString();
+
+    // Then, create one more thread. This will exceed the maximum.
+    // ExecuteNoWait will return false to indicate that it did not create the thread and
+    // the task was not enqueued. Thus, workDone should remain false.
+    threadCreated =
+        threadPool.ExecuteNoWait([&threadsIn, &workDone] {
+            LOG(INFO) << "Extra thread starting.";
+            workDone = true;
+            LOG(INFO) << "Extra thread quitting.";
+        });
+
+    poolUsage = threadPool.GetThreadPoolUsage();
+    LOG(INFO) << "After extra thread added usage:  " << poolUsage.ToString();
+
+    ASSERT_EQ(threadCreated, false);
+
+    // unblock all the threads so they can quit. The extra thread/task should not have been enqueued at all.
+    threadsIn = 0;
+
+    LOG(INFO) << "Extra thread did work: " << workDone;
+    ASSERT_EQ(workDone, false);
+}
 }  // namespace ut
 }  // namespace datasystem

@@ -38,9 +38,12 @@ thread_local ExclusiveConnMgr gExclusiveConnMgr;
 
 ExclusiveConnMgr::ExclusiveConnMgr()
 {
-    pid_ = getpid();
-    tid_ = gettid();
-    LOG(INFO) << "A user thread " << tid_ << " in process " << pid_ << " created an exclusive connection manager.";
+    std::ostringstream ss;
+    auto pid = getpid();
+    auto tid = gettid();
+    ss << pid << ":" << tid;
+    name_ = ss.str();
+    LOG(INFO) << "A user thread " << tid << " in process " << pid << " created an exclusive connection manager.";
 }
 
 Status ExclusiveConnMgr::CreateExclusiveConnection(int32_t exclusiveId, int64_t timeoutMs, const std::string &sockPath)
@@ -101,9 +104,7 @@ Status ExclusiveConnMgr::CreateExclusiveConn(std::unique_ptr<ExclusiveConn> &con
 
 std::string ExclusiveConnMgr::GetExclusiveConnMgrName() const
 {
-    std::ostringstream ss;
-    ss << pid_ << ":" << tid_;
-    return ss.str();
+    return name_;
 }
 
 Status ExclusiveConnMgr::CloseExclusiveConn(int32_t exclusiveId)

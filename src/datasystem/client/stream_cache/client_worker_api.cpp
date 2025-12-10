@@ -18,6 +18,7 @@
  * Description: Implement client to worker api.
  */
 #include "datasystem/client/stream_cache/client_worker_api.h"
+#include <cstdint>
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -132,13 +133,11 @@ Status ClientWorkerApi::Subscribe(const std::string &streamName, const std::stri
     return Status::OK();
 }
 
-Status ClientWorkerApi::SetRpcTimeout(int64_t &requestedTimeout, int32_t &rpcTimeout, int64_t &adjustedTimeout)
+std::pair<int32_t, int32_t> ClientWorkerApi::GetRpcTimeout(int64_t requestedTimeout, int32_t defaultRpcTimeout)
 {
     // User do not want to wait, but rpc request still takes time
     if (requestedTimeout == 0) {
-        rpcTimeout = rpcTimeoutMs_;
-        adjustedTimeout = requestedTimeout;
-        return Status::OK();
+        return { defaultRpcTimeout, requestedTimeout };
     }
 
     // Make sure the timeout value does not overflow
@@ -147,12 +146,11 @@ Status ClientWorkerApi::SetRpcTimeout(int64_t &requestedTimeout, int32_t &rpcTim
     }
 
     // Adjust time already spent in the client, so less time for the worker
-    adjustedTimeout = ClientGetRequestTimeout(requestedTimeout);
+    auto adjustedTimeout = ClientGetRequestTimeout(requestedTimeout);
 
     // Include request processing because this is a rpc round trip
-    rpcTimeout = (rpcTimeoutMs_ + adjustedTimeout < INT_MAX) ? rpcTimeoutMs_ + adjustedTimeout : INT_MAX;
-
-    return Status::OK();
+    auto rpcTimeout = (defaultRpcTimeout + adjustedTimeout < INT_MAX) ? defaultRpcTimeout + adjustedTimeout : INT_MAX;
+    return { rpcTimeout, adjustedTimeout };
 }
 
 Status ClientWorkerApi::DeleteStream(const std::string &streamName)

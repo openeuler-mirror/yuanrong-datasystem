@@ -264,7 +264,7 @@ protected:
     Status AppendFreePages(std::list<PageShmUnit> &freeList, const bool updateLocalPubLastPage = true);
     Status ProcessBigElementPages(std::vector<ShmView> &bigElementId, StreamMetaShm *streamMetaShm);
     Status LocatePage(const ShmView &v, std::shared_ptr<ShmUnitInfo> &out);
-    Status ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> &freeList);
+    Status ProcessAckedPages(uint64_t cursor, std::list<PageShmUnit> freeList);
     Status FreePages(std::vector<ShmKey> &pages, bool bigElementPage = false,
                      StreamMetaShm *streamMetaShm = nullptr);
     Status FreePendingList();

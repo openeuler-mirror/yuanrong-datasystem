@@ -116,6 +116,10 @@ Status InitializeFastTransportManager(const HostPort &hostport)
 Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress)
 {
     (void)remoteAddress;
+    if (!remoteAddress.Empty()) {
+        // Disconnections will not be cleared immediately; connection solutions will be considered later.
+        return Status::OK();
+    }
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(remoteAddress));

@@ -1,0 +1,8 @@
+cc_library(
+    name = "datasystem",
+    hdrs = glob(["include/**/*.h"]),
+    srcs = ["lib/libdatasystem.so"],
+    data = glob(["lib/*.so*"]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)

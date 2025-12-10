@@ -357,7 +357,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
                       << ", max_log_size: " << FLAGS_max_log_size << ", max_log_file_num: " << FLAGS_max_log_file_num
                       << ", log_compress: " << FLAGS_log_compress << ", log_retention_day: " << FLAGS_log_retention_day
                       << ", log_async: " << FLAGS_log_async << ", log_async_queue_size: " << FLAGS_log_async_queue_size
-                      << std::endl;
+                      << ", log_v: " << FLAGS_v << std::endl;
         }
     } else {
         FLAGS_log_monitor = false;

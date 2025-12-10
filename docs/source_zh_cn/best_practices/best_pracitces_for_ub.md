@@ -291,3 +291,4 @@ dscli start \
 ```
 
 表示绑定到 NUMA 节点 0 的 CPU，并在节点 NUMA 0 分配内存。
+更多 dscli绑定numa节点 部署详细信息请参考：[dscli命令参数说明](../deployment/dscli.md#命令行参数说明)。

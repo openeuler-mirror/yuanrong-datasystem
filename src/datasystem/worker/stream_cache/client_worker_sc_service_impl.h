@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_WORKER_STREAM_CACHE_CLIENT_WORKER_SC_SERVICE_IMPL_H
 #define DATASYSTEM_WORKER_STREAM_CACHE_CLIENT_WORKER_SC_SERVICE_IMPL_H
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -63,7 +64,8 @@ public:
      * @param[in] serverApi The UnaryWriterReader api to associate with the request.
      */
     BlockedCreateRequest(std::string streamName, const R &req, size_t reqSz,
-                         std::shared_ptr<ServerUnaryWriterReader<W, R>> serverApi, BlockedCreateReqFn fn);
+                         std::shared_ptr<ServerUnaryWriterReader<W, R>> serverApi, BlockedCreateReqFn fn,
+                         std::weak_ptr<StreamManager> streamMgr = {});
 
     /**
      * @brief default destructor
@@ -138,6 +140,7 @@ public:
     WaitPost wp_;               // If serverApi is null
     WaitPost ackWp_;            // Handshake
     std::atomic_uint32_t ack_;  // Handshake
+    std::weak_ptr<StreamManager> streamMgr_;
 
 private:
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
@@ -1024,7 +1027,8 @@ template <typename W, typename R>
 class MemAllocRequestList {
 public:
     Status AddBlockedCreateRequest(ClientWorkerSCServiceImpl *scSvc,
-                                   std::shared_ptr<BlockedCreateRequest<W, R>> blockedReq);
+                                   std::shared_ptr<BlockedCreateRequest<W, R>> blockedReq,
+                                   std::shared_ptr<BlockedCreateRequest<W, R>> *out = nullptr);
     void RemoveBlockedCreateRequestFromQueueLocked(const BlockedCreateRequest<W, R> *blockedReqPtr);
     void HandleBlockedCreateTimeout(const std::string &streamName, const std::string &producerId, int64_t subTimeout,
                                     const std::chrono::steady_clock::time_point &startTime);
@@ -1041,6 +1045,12 @@ public:
     }
     void ClearBlockedList();
 
+    Status MarkMemAllocFinish(const std::string &streamName, const std::string &producerId,
+                              std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq);
+
+    Status GetOrCreate(ClientWorkerSCServiceImpl *scSvc, std::shared_ptr<BlockedCreateRequest<W, R>> inblockedReq,
+                     std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq);
+
 private:
     std::shared_timed_mutex blockedListMutex_;
     struct Compare {
@@ -1049,6 +1059,7 @@ private:
             return a->startTime_ > b->startTime_;
         }
     };
+    std::unordered_map<std::string, std::shared_ptr<BlockedCreateRequest<W, R>>> processingBlockedList_;
     std::unordered_map<std::string, std::shared_ptr<BlockedCreateRequest<W, R>>> blockedList_;
     std::priority_queue<BlockedCreateRequest<W, R> *, std::vector<BlockedCreateRequest<W, R> *>, Compare> queue_;
 };

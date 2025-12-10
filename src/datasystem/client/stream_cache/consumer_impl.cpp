@@ -27,6 +27,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/queue/circular_queue.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -413,7 +414,8 @@ Status ConsumerImpl::ReceiveImpl(Optional<uint32_t> expectNum, uint32_t timeoutM
 
     // x0 = expectNum - curCacheNum
     auto expectElementNum = receiveNum - cacheLength;
-    VLOG(SC_NORMAL_LOG_LEVEL) << "Cache did not satisfy receive requirement. Invoke worker receive.";
+    VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("%s, cache did not satisfy receive requirement. Invoke worker receive.",
+                                              LogPrefix());
     RETURN_IF_NOT_OK(PrefetchEntry(expectElementNum, timeoutMs));
     INJECT_POINT("consumer_after_get_datapage");
     // Log status
