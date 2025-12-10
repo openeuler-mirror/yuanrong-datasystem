@@ -30,6 +30,10 @@ endif()
 ############################################################
 set(DATASYSTEM_SDK_USER_INCLUDEDIR datasystem/sdk/cpp/include)
 set(DATASYSTEM_SDK_USER_LIBPATH datasystem/sdk/cpp/lib)
+set(DATASYSTEM_BAZEL_LIBPATH datasystem/sdk/cpp)
+set(DATASYSTEM_SDK_USER_NEW_INCLUDEDIR cpp/include)
+set(DATASYSTEM_SDK_USER_NEW_LIBPATH cpp/lib)
+set(DATASYSTEM_BAZEL_NEW_LIBPATH cpp)
 
 if (NOT ENABLE_PERF)
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
@@ -37,9 +41,18 @@ if (NOT ENABLE_PERF)
             FILES_MATCHING
             PATTERN "*.h"
             PATTERN "perf_client.h" EXCLUDE)
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
+            DESTINATION ${DATASYSTEM_SDK_USER_NEW_INCLUDEDIR}
+            FILES_MATCHING
+            PATTERN "*.h"
+            PATTERN "perf_client.h" EXCLUDE)
 else()
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
             DESTINATION ${DATASYSTEM_SDK_USER_INCLUDEDIR})
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
+            DESTINATION ${DATASYSTEM_SDK_USER_NEW_INCLUDEDIR})
 endif ()
 
 
@@ -88,6 +101,23 @@ install_file_pattern(
         PATH_PATTERN ${SDK_USER_LIB_PATTERNS}
         DEST_DIR ${DATASYSTEM_SDK_USER_LIBPATH}
 )
+
+install_file_pattern(
+        PATH_PATTERN ${SDK_USER_LIB_PATTERNS}
+        DEST_DIR ${DATASYSTEM_SDK_USER_NEW_LIBPATH}
+)
+
+############################################################
+# Datasystem bazel support files.
+############################################################
+
+install(FILES ${CMAKE_SOURCE_DIR}/bazel/BUILD.bazel
+        ${CMAKE_SOURCE_DIR}/bazel/WORKSPACE
+        DESTINATION ${DATASYSTEM_BAZEL_LIBPATH})
+
+install(FILES ${CMAKE_SOURCE_DIR}/bazel/BUILD.bazel
+        ${CMAKE_SOURCE_DIR}/bazel/WORKSPACE
+        DESTINATION ${DATASYSTEM_BAZEL_NEW_LIBPATH})
 
 ############################################################
 # Datasystem python share libraries.
