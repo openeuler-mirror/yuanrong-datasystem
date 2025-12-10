@@ -35,6 +35,7 @@
 #include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/worker/worker_cli.h"
@@ -274,8 +275,16 @@ static Status WorkerMain(int argc, char **argv)
                  FormatString("Failed to normalize the path (%s) with user home directory", FLAGS_monitor_config_file));
     LOG(INFO) << "Worker start success";
     PerfManager *perfManager = PerfManager::Instance();
+    static constexpr int CHECK_EVERY_MS = 1'000;
+    static constexpr int MAX_TOLERATED_ATTEMPTS = 10;
+    static constexpr int REPORTING_THRESHOLD_MS = CHECK_EVERY_MS * MAX_TOLERATED_ATTEMPTS;
+    Timer timer;
     while (!IsTermSignalReceived()) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_EVERY_MS));
+        auto elapsedMs = timer.ElapsedMilliSecondAndReset();
+        if (elapsedMs > REPORTING_THRESHOLD_MS) {
+            LOG(ERROR) << FormatString("Worker was hanged about %.2f ms", elapsedMs);
+        }
         if (perfManager != nullptr) {
             perfManager->Tick();
         }
