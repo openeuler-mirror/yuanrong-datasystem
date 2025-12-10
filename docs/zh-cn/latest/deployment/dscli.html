@@ -366,6 +366,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
@@ -1144,15 +1145,51 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </tr>
 <tr class="row-odd"><td><p>–worker_args &lt;…&gt;</p></td>
 <td><p>-w &lt;…&gt;</p></td>
-<td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379”</p></td>
+<td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379” 需要放在numactl选项后，否则会报错</p></td>
 </tr>
 <tr class="row-even"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
 <td><p>替换配置文件中当前路径的目录。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 datasystem_home_dir 的值</p></td>
 </tr>
+<tr class="row-odd"><td><p>–cpunodebind</p></td>
+<td><p>-N</p></td>
+<td><p>numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点。</p></td>
+</tr>
+<tr class="row-even"><td><p>–physcpubind</p></td>
+<td><p>-C</p></td>
+<td><p>按物理 CPU 编号将进程绑定到指定核心。</p></td>
+</tr>
+<tr class="row-odd"><td><p>–interleave</p></td>
+<td><p>-i</p></td>
+<td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面。</p></td>
+</tr>
+<tr class="row-even"><td><p>–preferred</p></td>
+<td><p>-p</p></td>
+<td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点。</p></td>
+</tr>
+<tr class="row-odd"><td><p>–membind</p></td>
+<td><p>-m</p></td>
+<td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败。</p></td>
+</tr>
+<tr class="row-even"><td><p>–localalloc</p></td>
+<td><p>-l</p></td>
+<td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点。</p></td>
+</tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p><strong>绑核配置项注意事项</strong>：</p>
+<ul class="simple">
+<li><p>使用绑核功能前请确保机器上已安装numactl命令。</p></li>
+<li><p>绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于-w worker参数之前。</p></li>
+</ul>
+<p>例子：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存</span>
+dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+</pre></div>
+</div>
+</div></blockquote>
 </section>
 <section id="dscli-stop">
 <h3>dscli stop<a class="headerlink" href="#dscli-stop" title="Link to this heading">#</a></h3>
@@ -1194,9 +1231,44 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <td><p>-d &lt;DIR&gt;</p></td>
 <td><p>替换配置文件中当前路径的目录为<code class="docutils literal notranslate"><span class="pre">datasystem_home_dir</span></code>的值</p></td>
 </tr>
+<tr class="row-even"><td><p>–cpunodebind</p></td>
+<td><p>-N</p></td>
+<td><p>仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点。</p></td>
+</tr>
+<tr class="row-odd"><td><p>–physcpubind</p></td>
+<td><p>-C</p></td>
+<td><p>按物理 CPU 编号将进程绑定到指定核心。</p></td>
+</tr>
+<tr class="row-even"><td><p>–interleave</p></td>
+<td><p>-i</p></td>
+<td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面。</p></td>
+</tr>
+<tr class="row-odd"><td><p>–preferred</p></td>
+<td><p>-p</p></td>
+<td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点</p></td>
+</tr>
+<tr class="row-even"><td><p>–membind</p></td>
+<td><p>-m</p></td>
+<td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败。</p></td>
+</tr>
+<tr class="row-odd"><td><p>–localalloc</p></td>
+<td><p>-l</p></td>
+<td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点。</p></td>
+</tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p><strong>绑核配置项注意事项</strong>：</p>
+<ul class="simple">
+<li><p>使用绑核功能前请确保机器上已安装numactl命令。</p></li>
+</ul>
+<p>例子：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 启动集群并绑核</span>
+dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>-f<span class="w"> </span>./cluster_config.json<span class="w"> </span>
+</pre></div>
+</div>
+</div></blockquote>
 </section>
 <section id="dscli-down">
 <h3>dscli down<a class="headerlink" href="#dscli-down" title="Link to this heading">#</a></h3>

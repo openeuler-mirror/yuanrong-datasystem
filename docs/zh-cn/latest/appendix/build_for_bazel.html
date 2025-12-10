@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>贡献者指南 &#8212; openYuanrong datasystem  documentation</title>
+    <title>openYuanrong datasystem + Bazel 集成指南 &#8212; openYuanrong datasystem  documentation</title>
   
   
   
@@ -52,11 +52,11 @@
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor_guide/contribution';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'appendix/build_for_bazel';</script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="附录" href="../appendix/index.html" />
-    <link rel="prev" title="StatusCode" href="../development-guide/api/cpp/enum-StatusCode.html" />
+    <link rel="next" title="多集群模式FAQ" href="../FAQ/clusterFAQ.html" />
+    <link rel="prev" title="大页内存配置指南" href="hugepage_guide.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   </head>
@@ -362,11 +362,11 @@
 </details></li>
 </ul>
 </details></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">贡献者指南</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">附录</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
@@ -424,7 +424,7 @@
       
       
       
-      <li><a href="../_sources/contributor_guide/contribution.md" target="_blank"
+      <li><a href="../_sources/appendix/build_for_bazel.md" target="_blank"
    class="btn btn-sm btn-download-source-button dropdown-item"
    title="Download source file"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -508,7 +508,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>贡献者指南</h1>
+    <h1>openYuanrong datasystem + Bazel 集成指南</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -518,8 +518,16 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue">提交或处理 Issue</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">如何工作</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">适用范围</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">发布包目录结构说明</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">集成示例</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">1. 新建工程并拷贝发布包</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">2. 声明外部仓库</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">3. 添加目标依赖</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#demo">4. 示例Demo程序</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">版本升级策略</a></li>
 </ul>
             </nav>
         </div>
@@ -531,25 +539,98 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>贡献者指南<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
-<p>我们欢迎您对 openYuanrong 做各种形式的贡献，包括但不限于：</p>
-<ul class="simple">
-<li><p>代码贡献：提交或检视补丁，补充测试用例等。</p></li>
-<li><p>非代码贡献：补充文档和示例，参与社区论坛，撰写教程、博客文章等。</p></li>
-</ul>
-<p>openYuanrong 是 openEuler 社区中的项目。参与社区贡献前，您需要提前签署 <a class="reference external" href="https://clasign.osinfra.cn/sign/gitee_openeuler-1611298811283968340" target="_blank">openEuler 社区贡献者许可协议（CLA）</a>。</p>
-<section id="issue">
-<h2>提交或处理 Issue<a class="headerlink" href="#issue" title="Link to this heading">#</a></h2>
-<p>我们使用 issue 来记录和追踪开发者的反馈及任务。您可以在项目主页点击工具栏中的“Issues”找到 Issue 列表，上报 Bug 或者提交需求请参考 <a class="reference external" href="https://gitee.com/openeuler/community/blob/master/zh/contributors/issue-submit.md" target="_blank">Issue 提交指南</a>。</p>
-<p>您可以对感兴趣的 Issue 发表自己的意见，参与交流和讨论。如果愿意处理某个 Issue，只需要在评论框内输入 /assign 或 /assign &#64;yourself，机器人就会将问题分配给您，您的名字将显示在负责人列表里。</p>
+  <section class="tex2jax_ignore mathjax_ignore" id="openyuanrong-datasystem-bazel">
+<h1>openYuanrong datasystem + Bazel 集成指南<a class="headerlink" href="#openyuanrong-datasystem-bazel" title="Link to this heading">#</a></h1>
+<section id="id1">
+<h2>适用范围<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<p>本文档面向需要在 Bazel 构建体系中集成 openYuanrong DataSystem C++ SDK 的开发人员、CI 维护人员及第三方系统厂商。</p>
 </section>
 <section id="id2">
-<h2>如何工作<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p>请参考以下内容了解如何贡献代码。</p>
-<ul class="simple">
-<li><p>参考<a class="reference internal" href="../installation/installation_linux.html#id6"><span class="std std-ref">源码编译 openYuanrong datasystem</span></a> 构建您的代码开发环境。</p></li>
-</ul>
+<h2>发布包目录结构说明<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<p>在源码编译安装完 openYuanrong datasystem 后，C++ 相关的发布包如下：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/cpp
+├── BUILD.bazel   # datasystem Bazel 模块定义文件（*.bzl）
+├── include       # 头文件（datasystem.h）
+├── lib           # 动态链接库（libdatasystem.so 及其依赖）
+└── WORKSPACE     # Bazel WORKSPACE 文件
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h2>集成示例<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<section id="id4">
+<h3>1. 新建工程并拷贝发布包<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<p>新建一个 Demo 工程，并将 <code class="docutils literal notranslate"><span class="pre">output/cpp</span></code> 下的文件拷贝到 <code class="docutils literal notranslate"><span class="pre">thirdparty/datasystem</span></code> 下，最终目录示例：：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>demo
+├── BUILD
+├── main.cpp
+├── thirdparty
+│   └── datasystem
+│       ├── BUILD.bazel
+│       ├── include
+│       ├── lib
+|       └── BUILD.WORKSPACE
+└── WORKSAPCE
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h3>2. 声明外部仓库<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
+<p>在 <code class="docutils literal notranslate"><span class="pre">WORKSPACE</span></code> 文件中将datasystem注册本地仓库：</p>
+<div class="highlight-bazel notranslate"><div class="highlight"><pre><span></span><span class="n">local_repository</span><span class="p">(</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;datasystem&quot;</span><span class="p">,</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="s2">&quot;thirdparty/datasystem/bazel&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h3>3. 添加目标依赖<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<p>在需要使用 DataSystem 的 <code class="docutils literal notranslate"><span class="pre">BUILD</span></code> 文件内添加依赖：</p>
+<div class="highlight-bazel notranslate"><div class="highlight"><pre><span></span><span class="n">cc_binary</span><span class="p">(</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;demo&quot;</span><span class="p">,</span>
+    <span class="n">srcs</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;main.cpp&quot;</span><span class="p">],</span>
+    <span class="n">deps</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;@datasystem//:datasystem&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="demo">
+<h3>4. 示例Demo程序<a class="headerlink" href="#demo" title="Link to this heading">#</a></h3>
+<p>以下代码片段 <code class="docutils literal notranslate"><span class="pre">main.cpp</span></code> 演示最小可用调用：</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;datasystem/datasystem.h&gt;</span>
+
+<span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">datasystem</span><span class="p">;</span>
+
+<span class="kt">int</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ConnectOptions</span><span class="w"> </span><span class="n">opts</span><span class="p">{</span><span class="w"> </span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">31501</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">KVClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">opts</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>编译验证</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>demo
+bazel<span class="w"> </span>build<span class="w"> </span>//:demo
+bazel<span class="w"> </span>run<span class="w">   </span>//:demo
+</pre></div>
+</div>
+<p>无报错且进程正常退出，即视为集成成功。</p>
+</section>
+</section>
+<section id="id7">
+<h2>版本升级策略<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<p>当需要升级数据系统 SDK 版本时，升级步骤如下：</p>
+<ol class="arabic simple">
+<li><p>备份旧版本：<code class="docutils literal notranslate"><span class="pre">mv</span> <span class="pre">thirdparty/datasystem</span> <span class="pre">thirdparty/datasystem.bak.$(date</span> <span class="pre">+%F)</span></code></p></li>
+<li><p>使用新版本发布包覆盖 <code class="docutils literal notranslate"><span class="pre">thirdparty/datasystem</span></code>；</p></li>
+<li><p>重新执行 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">build</span> <span class="pre">//...</span></code> 进行全量编译验证；</p></li>
+<li><p>通过回归测试后，删除备份目录。</p></li>
+</ol>
+<blockquote>
+<div><p>升级期间无需修改任何 <code class="docutils literal notranslate"><span class="pre">BUILD</span></code> 或 <code class="docutils literal notranslate"><span class="pre">WORKSPACE</span></code> 文件。</p>
+</div></blockquote>
 </section>
 </section>
 
@@ -565,20 +646,20 @@ document.write(`
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../development-guide/api/cpp/enum-StatusCode.html"
+       href="hugepage_guide.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">StatusCode</p>
+        <p class="prev-next-title">大页内存配置指南</p>
       </div>
     </a>
     <a class="right-next"
-       href="../appendix/index.html"
+       href="../FAQ/clusterFAQ.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">附录</p>
+        <p class="prev-next-title">多集群模式FAQ</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -598,8 +679,16 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue">提交或处理 Issue</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">如何工作</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">适用范围</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">发布包目录结构说明</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">集成示例</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">1. 新建工程并拷贝发布包</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">2. 声明外部仓库</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">3. 添加目标依赖</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#demo">4. 示例Demo程序</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">版本升级策略</a></li>
 </ul>
   </nav></div>
 
