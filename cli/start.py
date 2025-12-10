@@ -18,7 +18,8 @@ import json
 import os
 import subprocess
 import time
-from typing import Dict
+import shutil
+from typing import Dict, Optional, Any
 
 import datasystem.cli.common.util as util
 from datasystem.cli.command import BaseCommand
@@ -76,6 +77,46 @@ class Command(BaseCommand):
             ),
         )
 
+        ng = parser.add_argument_group("numactl options (optional, passed straight to numactl)")
+        ng.add_argument(
+            "-N", "--cpunodebind",
+            metavar="NODES",
+            help="Restricts process execution to only the CPUs belonging to the specified NUMA node(s)."
+        )
+        ng.add_argument(
+            "-C", "--physcpubind",
+            metavar="CPUS",
+            help="Binds the process to specific physical CPU cores by their numeric IDs."
+        )
+        ng.add_argument(
+            "-i", "--interleave",
+            metavar="NODES",
+            help="Sets a memory interleaving policy that round-robins page allocations "
+                "across the specified NUMA node(s) in numeric order."
+        )
+        ng.add_argument(
+            "-p", "--preferred",
+            metavar="NODE",
+            help="Establishes a preferred NUMA node for memory allocation. The kernel will "
+                "first attempt to allocate memory on this node, but will fall back to other "
+                "nodes if insufficient memory is available."
+        )
+        ng.add_argument(
+            "-m", "--membind",
+            metavar="NODES",
+            help="Enforces a strict memory binding policy that permits allocation only from "
+                "the specified NUMA node(s). If memory cannot be allocated on these nodes, "
+                "the allocation fails."
+        )
+        ng.add_argument(
+            "-l", "--localalloc",
+            action="store_true",
+            default=None,
+            help="Sets memory allocation to occur on the NUMA node where the allocating CPU "
+                "resides (the \"local node\"). If the local node has no free memory, the "
+                "kernel will fall back to nearby nodes."
+        )
+
     def run(self, args):
         """
         Execute for start command.
@@ -86,8 +127,30 @@ class Command(BaseCommand):
         Raises:
             Exception: If any error occurs during worker startup, an exception is raised with error details.
         """
-        final_params = {}
+        numactl_opts = {}
+        for k in [
+            "cpunodebind", "physcpubind", "interleave",
+            "preferred", "membind", "localalloc"
+        ]:
+            v = getattr(args, k)
+            if v is not None:
+                numactl_opts[k] = v
+        use_numactl = any(v is not None for v in numactl_opts.values())
 
+        illegal = []
+        for tok in args.worker_args or []:
+            if tok in {"-N", "-C", "-m", "-i", "-p", "-l", "--cpunodebind",
+                       "--physcpubind", "--membind", "--interleave",
+                       "--preferred", "--localalloc"}:
+                illegal.append(tok)
+        if illegal:
+            self.logger.error(
+                "numactl options must be placed *before* -w/--worker_args.  "
+                f"Found illegal token(s) in -w: {', '.join(illegal)}"
+            )
+            raise ValueError(f"numactl options must be placed before worker arguments")
+
+        final_params = {}
         try:
             if args.datasystem_home_dir:
                 home_dir = os.path.abspath(os.path.expanduser(args.datasystem_home_dir))
@@ -97,7 +160,7 @@ class Command(BaseCommand):
             elif args.worker_args:
                 final_params = self.parse_cli_args(args.worker_args)
             final_params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
-            self.start_worker(final_params)
+            self.start_worker(final_params, use_numactl, numactl_opts)
         except Exception as e:
             self.logger.error(f"Start failed: {e}")
             return self.FAILURE
@@ -201,13 +264,16 @@ class Command(BaseCommand):
                 params[key] = os.path.realpath(util.get_timestamped_path(params[key]))
         self.logger.info(f"Log directory configured at: {params['log_dir']}")
 
-    def start_worker(self, params: Dict[str, str]):
+    def start_worker(self, params: Dict[str, str],
+                     use_numactl: bool = False,
+                     numactl_opts: Optional[Dict[str, Any]] = None):
         """
         Start the datasystem worker service with specified parameters.
 
         Args:
             params (Dict[str, str]): Dictionary containing worker configuration parameters.
-
+            use_numactl: bool , true when params contain numactl parameters
+            numactl_opts: numactl options dict
         Raises:
             ValueError: If required parameters are missing.
             RuntimeError: If the worker service fails to start or exits abnormally.
@@ -216,7 +282,7 @@ class Command(BaseCommand):
             if not params.get(param):
                 raise ValueError(f"Missing required parameters: {param}")
 
-        cmd = self.build_command(params)
+        cmd = self.build_command(params, use_numactl, numactl_opts)
         lib_dir = os.path.join(self._base_dir, "lib")
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = f"{lib_dir}:{env.get('LD_LIBRARY_PATH', '')}"
@@ -260,7 +326,9 @@ class Command(BaseCommand):
             self.logger.error("[  FAILED  ] Start worker service @ {} failed: {}".format(params["worker_address"], e))
             raise RuntimeError("The worker service exited abnormally") from e
 
-    def build_command(self, params: Dict[str, str]) -> list:
+    def build_command(self, params: Dict[str, str],
+                        use_numactl: bool = False,
+                        numactl_opts: Optional[Dict[str, Any]] = None) -> list:
         """
         Construct the command line parameters for starting the worker.
 
@@ -270,11 +338,30 @@ class Command(BaseCommand):
         Returns:
             list: List of command line arguments.
         """
-        cmd = [util.validate_no_injection(os.path.abspath(os.path.join(self._base_dir, "datasystem_worker")))]
+        cmd = []
+        if use_numactl:
+            numactl_path = shutil.which("numactl")
+            if not numactl_path:
+                raise RuntimeError(
+                    "numactl is not installed on this host. "
+                    "Please install it first"
+                )
+            cmd.append("numactl")
+            for key in ["cpunodebind", "physcpubind", "interleave",
+                        "preferred", "membind"]:
+                val = (numactl_opts or {}).get(key)
+                if val is not None:
+                    val = util.validate_no_injection(str(val))
+                    cmd.append(f"--{key}={val}")
+            if numactl_opts.get("localalloc"):
+                cmd.append("--localalloc")
+        worker_bin = util.validate_no_injection(
+            os.path.abspath(os.path.join(self._base_dir, "datasystem_worker")))
+        cmd.append(worker_bin)
+
         for k, v in params.items():
-            if not str(v).strip():
-                continue
-            k = util.validate_no_injection(k)
-            v = util.validate_no_injection(v)
-            cmd.extend([f"--{k}={v}"])
+            if str(v).strip():
+                k = util.validate_no_injection(k)
+                v = util.validate_no_injection(v)
+                cmd.append(f"--{k}={v}")
         return cmd

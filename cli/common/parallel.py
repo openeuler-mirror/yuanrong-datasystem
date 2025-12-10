@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 class ParallelMixin:
     """Mixin to run tasks in parallel across nodes."""
 
-    def execute_parallel(self, nodes):
+    def execute_parallel(self, nodes, **kwargs):
         """Execute tasks on all nodes in parallel."""
         if not hasattr(self, "process_node"):
             raise NotImplementedError(
@@ -28,7 +28,7 @@ class ParallelMixin:
         is_error = False
 
         with ThreadPoolExecutor(max_workers=len(nodes)) as executor:
-            futures = {executor.submit(self.process_node, node): node for node in nodes}
+            futures = {executor.submit(self.process_node, node, **kwargs): node for node in nodes}
 
             for future in as_completed(futures):
                 node = futures[future]

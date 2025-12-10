@@ -17,6 +17,8 @@ import json
 import os
 import shlex
 
+from typing import Dict, Any
+
 import datasystem.cli.common.util as util
 from datasystem.cli.command import BaseCommand
 from datasystem.cli.common.constant import ClusterConfig
@@ -64,6 +66,45 @@ class Command(BaseCommand, ParallelMixin):
             ),
         )
 
+        ng = parser.add_argument_group("numactl options (optional, passed straight to numactl)")
+        ng.add_argument(
+            "-N", "--cpunodebind",
+            metavar="NODES",
+            help="Restricts process execution to only the CPUs belonging to the specified NUMA node(s)."
+        )
+        ng.add_argument(
+            "-C", "--physcpubind",
+            metavar="CPUS",
+            help="Binds the process to specific physical CPU cores by their numeric IDs."
+        )
+        ng.add_argument(
+            "-i", "--interleave",
+            metavar="NODES",
+            help="Sets a memory interleaving policy that round-robins page allocations "
+                "across the specified NUMA node(s) in numeric order."
+        )
+        ng.add_argument(
+            "-p", "--preferred",
+            metavar="NODE",
+            help="Establishes a preferred NUMA node for memory allocation. The kernel will "
+                "first attempt to allocate memory on this node, but will fall back to other "
+                "nodes if insufficient memory is available."
+        )
+        ng.add_argument(
+            "-m", "--membind",
+            metavar="NODES",
+            help="Enforces a strict memory binding policy that permits allocation only from "
+                "the specified NUMA node(s). If memory cannot be allocated on these nodes, "
+                "the allocation fails."
+        )
+        ng.add_argument(
+            "-l", "--localalloc",
+            action="store_true",
+            help="Sets memory allocation to occur on the NUMA node where the allocating CPU "
+                "resides (the \"local node\"). If the local node has no free memory, the "
+                "kernel will fall back to nearby nodes."
+        )
+
     def run(self, args):
         """
         Execute for up command.
@@ -85,15 +126,27 @@ class Command(BaseCommand, ParallelMixin):
                     os.path.expanduser(args.datasystem_home_dir)
                 )
                 self._home_dir = util.valid_safe_path(home_dir)
-
+            numactl_opts = {}
+            for k in [
+                "cpunodebind", "physcpubind", "interleave",
+                "preferred", "membind", "localalloc"
+            ]:
+                v = getattr(args, k)
+                if v is not None:
+                    numactl_opts[k] = v
+            use_numactl = any(v is not None for v in numactl_opts.values())
             self.update_worker_config()
-            self.execute_parallel(self._config[ClusterConfig.WORKER_NODES])
+            self.execute_parallel(
+                self._config[ClusterConfig.WORKER_NODES],
+                use_numactl=use_numactl,
+                numactl_opts=numactl_opts
+            )
         except Exception as e:
             self.logger.error(f"Up cluster failed: {e}")
             return self.FAILURE
         return self.SUCCESS
 
-    def process_node(self, node):
+    def process_node(self, node, **kwargs):
         """
         Process startup of worker on a single node.
 
@@ -103,6 +156,10 @@ class Command(BaseCommand, ParallelMixin):
         user_name = self._config[ClusterConfig.SSH_USER_NAME]
         private_key = self._config[ClusterConfig.SSH_PRIVATE_KEY]
         worker_port = self._config[ClusterConfig.WORKER_PORT]
+
+        use_numactl = kwargs.get("use_numactl", False)
+        numactl_opts = kwargs.get("numactl_opts") or {}
+
         self._hidden_config_path = util.validate_no_injection(self._hidden_config_path)
         util.ssh_execute(
             node,
@@ -138,14 +195,36 @@ class Command(BaseCommand, ParallelMixin):
             sed_command,
         )
 
-        # Startup worker
-        util.ssh_execute(
-            node,
-            user_name,
-            private_key,
-            f"bash -l -c 'dscli start -f {shlex.quote(self._hidden_config_path)}'",
+        remote_cmd = self.build_remote_start_cmd(
+            self._hidden_config_path,
+            use_numactl,
+            numactl_opts
         )
+
+        util.ssh_execute(node, user_name, private_key, f"bash -l -c {shlex.quote(remote_cmd)}")
         self.logger.info(f"Start worker service @ {node}:{worker_port} success.")
+
+    def build_remote_start_cmd(self, config_path: str,
+                                use_numactl: bool,
+                                numactl_opts: Dict[str, Any]) -> str:
+        """
+        Update the remote cmd command to execute.
+        """
+        base_cmd = f"dscli start -f {shlex.quote(config_path)}"
+        if not use_numactl:
+            return base_cmd
+
+        cmd_parts = ["numactl"]
+        for key in ["cpunodebind", "physcpubind", "interleave",
+                    "preferred", "membind"]:
+            val = numactl_opts.get(key)
+            if val is not None:
+                val = util.validate_no_injection(str(val))
+                cmd_parts.append(f"--{key}={val}")
+        if numactl_opts.get("localalloc"):
+            cmd_parts.append("--localalloc")
+        cmd_parts.append(base_cmd)
+        return " ".join(cmd_parts)
 
     def update_worker_config(self):
         """
