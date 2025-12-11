@@ -133,6 +133,28 @@ inline void ReadOptFromEnv(ConnectOptions &connectOptions)
     ReadParamFromEnv(connectOptions);
 }
 
+void AccessRecord(const std::shared_ptr<AccessRecorder> &accessPoint, const Status &rc,
+                  const std::vector<DeviceBlobList> &BlobLists,
+                  const std::vector<std::string> &keys)
+{
+    uint64_t totalSize = 0;
+    const uint64_t max_val = std::numeric_limits<uint64_t>::max();
+    for (const auto &deviceBlobList : BlobLists) {
+        for (const auto &blob : deviceBlobList.blobs) {
+            if (blob.size > 0 && max_val - totalSize < blob.size) {
+                // maybe overflow？
+                totalSize = max_val;
+            } else {
+                totalSize += blob.size;
+            }
+        }
+    }
+    RequestParam reqParam = RequestParam{
+            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
+            keys.size()) };
+    accessPoint->Record(rc.GetCode(), std::to_string(totalSize), reqParam, rc.GetMsg());
+};
+
 namespace object_cache {
 ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
 {
@@ -594,9 +616,10 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> 
 
 std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std::string> &objectKeys,
                                                           const std::vector<DeviceBlobList> &devBlobList,
-                                                          uint64_t timeoutMs)
+                                                          uint64_t timeoutMs, AccessRecorderKey accessRecorderKey)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MGET_H2D);
+    std::shared_ptr<AccessRecorder> accessPoint = std::make_shared<AccessRecorder>(accessRecorderKey);
     UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
 
     auto asyncResource = std::make_shared<MGetAsyncRPCSource>();
@@ -607,6 +630,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
                             FormatString("The size of objKeys(%ld) and devBlobList(%ld) does not match",
                                          objectKeys.size(), devBlobList.size()));
         asyncResource->promise.set_value({ err, asyncResource->failList });
+        AccessRecord(accessPoint, err, devBlobList, objectKeys);
         return future;
     }
 
@@ -616,6 +640,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
                 Status(K_INVALID, __LINE__, __FILE__,
                        FormatString("Invalid srcOffset: %d, which must be non-negative.", blockList.srcOffset));
             asyncResource->promise.set_value({ err, asyncResource->failList });
+            AccessRecord(accessPoint, err, devBlobList, objectKeys);
             return future;
         }
     }
@@ -623,36 +648,41 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
     auto traceID = Trace::Instance().GetTraceID();
     // copy objectKeys , devBlobList and asyncResource to avoid user destroy it
     asyncResource->rpcFuture =
-        asyncGetRPCPool_->Submit([this, objectKeys, timeoutMs, asyncResource, traceID, devBlobList]() {
-            PerfPoint point(PerfKey::CLIENT_MGET_FROM_WORKER);
+        asyncGetRPCPool_->Submit([this, objectKeys, timeoutMs, asyncResource, traceID, devBlobList, accessPoint]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            asyncResource->failList.clear();
-            std::vector<Optional<Buffer>> &bufferList = asyncResource->bufferList;
+            auto work = [this, objectKeys, timeoutMs, asyncResource, traceID, devBlobList]() {
+                PerfPoint point(PerfKey::CLIENT_MGET_FROM_WORKER);
+                asyncResource->failList.clear();
+                std::vector<Optional<Buffer>> &bufferList = asyncResource->bufferList;
 
-            // MGetH2D supports RH2D transfer, so if RH2D feature is enabled, it can trigger RH2D.
-            bool isRH2DSupported = true;
-            RETURN_IF_NOT_OK(Get(objectKeys, timeoutMs, bufferList, false, isRH2DSupported));
+                // MGetH2D supports RH2D transfer, so if RH2D feature is enabled, it can trigger RH2D.
+                bool isRH2DSupported = true;
+                RETURN_IF_NOT_OK(Get(objectKeys, timeoutMs, bufferList, false, isRH2DSupported));
 
-            CHECK_FAIL_RETURN_STATUS(objectKeys.size() == bufferList.size(), K_INVALID,
-                                     "The size of objectKeys and bufferList does not match");
+                CHECK_FAIL_RETURN_STATUS(objectKeys.size() == bufferList.size(), K_INVALID,
+                                        "The size of objectKeys and bufferList does not match");
 
-            std::vector<Buffer *> &existBufferList = asyncResource->existBufferList;
-            existBufferList.reserve(bufferList.size());
-            std::vector<uint32_t> devices;
-            devices.reserve(objectKeys.size());
-            for (auto i = 0ul; i < objectKeys.size(); i++) {
-                devices.emplace_back(devBlobList[i].deviceIdx);
-                if (!bufferList[i]) {
-                    asyncResource->failList.emplace_back(objectKeys[i]);
-                    existBufferList.emplace_back(nullptr);
-                    continue;
+                std::vector<Buffer *> &existBufferList = asyncResource->existBufferList;
+                existBufferList.reserve(bufferList.size());
+                std::vector<uint32_t> devices;
+                devices.reserve(objectKeys.size());
+                for (auto i = 0ul; i < objectKeys.size(); i++) {
+                    devices.emplace_back(devBlobList[i].deviceIdx);
+                    if (!bufferList[i]) {
+                        asyncResource->failList.emplace_back(objectKeys[i]);
+                        existBufferList.emplace_back(nullptr);
+                        continue;
+                    }
+                    existBufferList.emplace_back(&bufferList[i].value());
                 }
-                existBufferList.emplace_back(&bufferList[i].value());
-            }
 
-            asyncResource->devBlobList = devBlobList;
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid(devices), "Check device failed.");
-            return Status::OK();
+                asyncResource->devBlobList = devBlobList;
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid(devices), "Check device failed.");
+                return Status::OK();
+            };
+            auto rc = work();
+            AccessRecord(accessPoint, rc, devBlobList, objectKeys);
+            return rc;
         });
 
     asyncGetCopyPool_->Execute([this, traceID, asyncResource]() {
@@ -836,9 +866,10 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
 
 std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::string> &objectKeys,
                                                        const std::vector<DeviceBlobList> &devBlobList,
-                                                       const SetParam &setParam)
+                                                       const SetParam &setParam, AccessRecorderKey accessRecorderKey)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MSET_D2H);
+    std::shared_ptr<AccessRecorder> accessPoint = std::make_shared<AccessRecorder>(accessRecorderKey);
     UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
 
     std::promise<AsyncResult> promise;
@@ -850,6 +881,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
                             FormatString("The size of objKeys(%ld) and devBlobList(%ld) does not match",
                                          objectKeys.size(), devBlobList.size()));
         promise.set_value({ err, objectKeys });
+        AccessRecord(accessPoint, err, devBlobList, objectKeys);
         return future;
     }
 
@@ -859,74 +891,82 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
                             FormatString("not support L2 CACHE write mode,current writeMode is %d",
                                          static_cast<int32_t>(setParam.writeMode)));
         promise.set_value({ err, objectKeys });
+        AccessRecord(accessPoint, err, devBlobList, objectKeys);
         return future;
     }
     auto err = CheckValidObjectKeyVector(objectKeys);
     if (err.IsError()) {
         promise.set_value({ err, objectKeys });
+        AccessRecord(accessPoint, err, devBlobList, objectKeys);
         return future;
     }
     if (!Validator::IsBatchSizeUnderLimit(objectKeys.size())) {
         err = Status(K_INVALID, __LINE__, __FILE__,
                      FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
         promise.set_value({ err, objectKeys });
+        AccessRecord(accessPoint, err, devBlobList, objectKeys);
         return future;
     }
 
     // Submit asynchronous task
     auto traceID = Trace::Instance().GetTraceID();
-    future = asyncSetRPCPool_->Submit([this, traceID, objectKeys, devBlobList, setParam]() mutable {
+    future = asyncSetRPCPool_->Submit([this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        AsyncResult result;
+        auto work = [this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
+            AsyncResult result;
 
-        // Step1: execute Exist check
-        std::vector<std::shared_ptr<Buffer>> bufferList;
-        std::vector<bool> exists;
-        auto rc = DeviceDataCreate(objectKeys, devBlobList, setParam, bufferList, exists);
-        if (rc.IsError()) {
-            result.status = rc;
-            return result;
-        }
-        // Filter non-existing objects
-        std::vector<std::string> nonExistobjectKeys;
-        std::vector<DeviceBlobList> nonExistDevBlobList;
-        std::vector<uint32_t> devices;
-        for (size_t i = 0; i < objectKeys.size(); ++i) {
-            if (!exists[i]) {
-                nonExistobjectKeys.emplace_back(objectKeys[i]);
-                nonExistDevBlobList.emplace_back(devBlobList[i]);
-                devices.emplace_back(devBlobList[i].deviceIdx);
-            }
-        }
-        auto deviceCheckRc = CheckDeviceValid(devices);
-        if (deviceCheckRc.IsError()) {
-            result.status = deviceCheckRc;
-            return result;
-        }
-
-        // If all objects already exist, return success immediately
-        if (nonExistobjectKeys.empty()) {
-            result.status = Status::OK();
-            return result;
-        }
-        // Step3: Execute final MultiPublish operation
-        {
-            PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_OBJECT);
-            std::vector<std::vector<std::uint64_t>> blobSizes;
-            blobSizes.reserve(nonExistDevBlobList.size());
-            for (auto &devblob : nonExistDevBlobList) {
-                std::vector<uint64_t> sizeList;
-                sizeList.reserve(devblob.blobs.size());
-                for (auto &blob : devblob.blobs) {
-                    sizeList.emplace_back(blob.size);
-                }
-                blobSizes.emplace_back(std::move(sizeList));
-            }
-            result.status = MultiPublish(bufferList, setParam, blobSizes);
-            if (result.status.IsError()) {
+            // Step1: execute Exist check
+            std::vector<std::shared_ptr<Buffer>> bufferList;
+            std::vector<bool> exists;
+            auto rc = DeviceDataCreate(objectKeys, devBlobList, setParam, bufferList, exists);
+            if (rc.IsError()) {
+                result.status = rc;
                 return result;
             }
-        }
+            // Filter non-existing objects
+            std::vector<std::string> nonExistobjectKeys;
+            std::vector<DeviceBlobList> nonExistDevBlobList;
+            std::vector<uint32_t> devices;
+            for (size_t i = 0; i < objectKeys.size(); ++i) {
+                if (!exists[i]) {
+                    nonExistobjectKeys.emplace_back(objectKeys[i]);
+                    nonExistDevBlobList.emplace_back(devBlobList[i]);
+                    devices.emplace_back(devBlobList[i].deviceIdx);
+                }
+            }
+            auto deviceCheckRc = CheckDeviceValid(devices);
+            if (deviceCheckRc.IsError()) {
+                result.status = deviceCheckRc;
+                return result;
+            }
+
+            // If all objects already exist, return success immediately
+            if (nonExistobjectKeys.empty()) {
+                result.status = Status::OK();
+                return result;
+            }
+            // Step3: Execute final MultiPublish operation
+            {
+                PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_OBJECT);
+                std::vector<std::vector<std::uint64_t>> blobSizes;
+                blobSizes.reserve(nonExistDevBlobList.size());
+                for (auto &devblob : nonExistDevBlobList) {
+                    std::vector<uint64_t> sizeList;
+                    sizeList.reserve(devblob.blobs.size());
+                    for (auto &blob : devblob.blobs) {
+                        sizeList.emplace_back(blob.size);
+                    }
+                    blobSizes.emplace_back(std::move(sizeList));
+                }
+                result.status = MultiPublish(bufferList, setParam, blobSizes);
+                if (result.status.IsError()) {
+                    return result;
+                }
+            }
+            return result;
+        };
+        AsyncResult result = work();
+        AccessRecord(accessPoint, result.status, devBlobList, objectKeys);
         return result;
     });
     return future;
@@ -2531,13 +2571,15 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
 std::shared_future<AsyncResult> ObjectClientImpl::AsyncDeleteDevObjects(const std::vector<std::string> &objKeys)
 {
     auto traceID = Trace::Instance().GetTraceID();
-    return asyncDevDeletePool_->Submit([this, traceID, objKeys]() {
+    auto accessPoint = std::make_shared<AccessRecorder>(AccessRecorderKey::DS_HETERO_CLIENT_ASYNC_DEVDELETE);
+    return asyncDevDeletePool_->Submit([this, traceID, objKeys, accessPoint]() {
         PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNC_DEV_DELETE_IMPL);
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         AsyncResult result;
         std::vector<std::string> failList;
         result.status = DeleteDevObjects(objKeys, failList);
         result.failedList = std::move(failList);
+        AccessRecord(accessPoint, result.status, {}, objKeys);
         return result;
     });
 }

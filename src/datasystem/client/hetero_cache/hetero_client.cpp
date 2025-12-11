@@ -73,7 +73,7 @@ Status HeteroClient::ShutDown()
         AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_SHUTDOWN);
         auto rc = impl_->ShutDown(needRollbackState);
         impl_->CompleteHandler(rc.IsError(), needRollbackState);
-        accessPoint.Record(rc.GetCode(), "0", {}, "ShutDown call success");
+        accessPoint.Record(rc.GetCode(), "0", {}, rc.GetMsg());
         return rc;
     }
     return Status::OK();
@@ -86,7 +86,7 @@ Status HeteroClient::Init()
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);
-    accessPoint.Record(rc.GetCode(), "0", {}, "Init call success");
+    accessPoint.Record(rc.GetCode(), "0", {}, rc.GetMsg());
     return rc;
 }
 
@@ -96,16 +96,10 @@ Status HeteroClient::MGetH2D(const std::vector<std::string> &keys, const std::ve
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MGET_H2D_ALL);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_MGETH2D);
-    std::shared_future<AsyncResult> future = impl_->MGetH2D(keys, devBlobList, subTimeoutMs);
+    std::shared_future<AsyncResult> future = impl_->MGetH2D(keys, devBlobList, subTimeoutMs,
+                                                            AccessRecorderKey::DS_HETERO_CLIENT_MGETH2D);
     auto result = future.get();
     failedKeys = std::move(result.failedList);
-    accessPoint.Record(
-        result.status.GetCode(), std::to_string(CalculateDataSize(devBlobList)),
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        "MGetH2D call success");
     return result.status;
 }
 
@@ -115,15 +109,9 @@ Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::ve
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MSET_D2H_ALL);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_MSETD2H);
-    std::shared_future<AsyncResult> future = impl_->MSet(keys, devBlobList, setParam);
+    std::shared_future<AsyncResult> future = impl_->MSet(keys, devBlobList, setParam,
+                                                         AccessRecorderKey::DS_HETERO_CLIENT_MSETD2H);
     auto rc = future.get().status;
-    accessPoint.Record(
-        rc.GetCode(), std::to_string(CalculateDataSize(devBlobList)),
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        "MSetD2H call success");
     return rc;
 }
 
@@ -138,7 +126,7 @@ Status HeteroClient::Delete(const std::vector<std::string> &keys, std::vector<st
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "Delete call success");
+        rc.GetMsg());
     return rc;
 }
 
@@ -154,7 +142,7 @@ std::shared_future<AsyncResult> HeteroClient::AsyncMSetD2H(const std::vector<std
         return future;
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->MSet(keys, devBlobList, setParam);
+    return impl_->MSet(keys, devBlobList, setParam, AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMSETD2H);
 }
 
 std::shared_future<AsyncResult> HeteroClient::AsyncMGetH2D(const std::vector<std::string> &keys,
@@ -169,7 +157,7 @@ std::shared_future<AsyncResult> HeteroClient::AsyncMGetH2D(const std::vector<std
         return future;
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->MGetH2D(keys, devBlobList, subTimeoutMs);
+    return impl_->MGetH2D(keys, devBlobList, subTimeoutMs, AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMGETH2D);
 }
 
 Status HeteroClient::GenerateKey(const std::string &prefix, std::string &key)
@@ -178,7 +166,7 @@ Status HeteroClient::GenerateKey(const std::string &prefix, std::string &key)
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_GENERATEKEY);
     auto ret = impl_->GenerateKey(key, prefix);
-    accessPoint.Record(ret.GetCode(), "0", RequestParam{ .objectKey = key }, "GenerateKey call success");
+    accessPoint.Record(ret.GetCode(), "0", RequestParam{ .objectKey = key }, ret.GetMsg());
     return ret;
 }
 
@@ -194,7 +182,7 @@ Status HeteroClient::DevPublish(const std::vector<std::string> &keys, const std:
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "DevPublish call success");
+        ret.GetMsg());
     return ret;
 }
 
@@ -210,7 +198,7 @@ Status HeteroClient::DevSubscribe(const std::vector<std::string> &keys, const st
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "DevSubscribe call success");
+        ret.GetMsg());
     return ret;
 }
 
@@ -226,7 +214,7 @@ Status HeteroClient::DevDelete(const std::vector<std::string> &keys, std::vector
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "DevDelete call success");
+        ret.GetMsg());
     return ret;
 }
 
@@ -241,7 +229,7 @@ Status HeteroClient::DevLocalDelete(const std::vector<std::string> &keys, std::v
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "DevLocalDelete call success");
+        ret.GetMsg());
     return ret;
 }
 
@@ -265,7 +253,7 @@ Status HeteroClient::DevMSet(const std::vector<std::string> &keys, const std::ve
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "DevMSet call success");
+        ret.GetMsg());
     return ret;
 }
 
@@ -281,7 +269,7 @@ Status HeteroClient::DevMGet(const std::vector<std::string> &keys, std::vector<D
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "DevMGet call success");
+        ret.GetMsg());
     return ret;
 }
 
@@ -290,7 +278,7 @@ Status HeteroClient::HealthCheck(ServerState &state)
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_HEALTHCHECK);
     auto rc = impl_->HealthCheck(state);
-    accessPoint.Record(rc.GetCode(), "0", {}, "HealthCheck call success");
+    accessPoint.Record(rc.GetCode(), "0", {}, rc.GetMsg());
     return rc;
 }
 
@@ -305,7 +293,7 @@ Status HeteroClient::Exist(const std::vector<std::string> &keys, std::vector<boo
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "Exist call success");
+        rc.GetMsg());
     return rc;
 }
 
@@ -322,7 +310,7 @@ Status HeteroClient::GetMetaInfo(const std::vector<std::string> &keys, bool isDe
         RequestParam{
             .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
             keys.size()) },
-        "GetMetaInfo call success");
+        rc.GetMsg());
     return rc;
 }
 

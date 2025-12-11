@@ -38,6 +38,7 @@
 #include "datasystem/client/object_cache/client_worker_api.h"
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
@@ -490,7 +491,8 @@ public:
      * @return future of AsyncResult, describe get status and failed list.
      */
     std::shared_future<AsyncResult> MGetH2D(const std::vector<std::string> &objectKeys,
-                                            const std::vector<DeviceBlobList> &devBlobList, uint64_t timeout);
+                                            const std::vector<DeviceBlobList> &devBlobList, uint64_t timeout,
+                                            AccessRecorderKey accessRecorderKey);
 
     /**
      * @brief For device object, to invoke worker client to create and async publish multiple objects
@@ -499,7 +501,8 @@ public:
      * @return future of AsyncResult, describe set status and failed list.
      */
     std::shared_future<AsyncResult> MSet(const std::vector<std::string> &objectKeys,
-                                         const std::vector<DeviceBlobList> &devBlobList, const SetParam &param);
+                                         const std::vector<DeviceBlobList> &devBlobList, const SetParam &param,
+                                         AccessRecorderKey accessRecorderKey);
 
     /**
     @brief Publish device data to device.
