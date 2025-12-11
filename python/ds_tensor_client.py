@@ -168,7 +168,6 @@ class DsTensorClient:
         port,
         device_id,
         connect_timeout_ms=60000,
-        token="",
         client_public_key="",
         client_private_key="",
         server_public_key="",
@@ -180,7 +179,6 @@ class DsTensorClient:
             ["port", port, int],
             ["device_id", device_id, int],
             ["connect_timeout_ms", connect_timeout_ms, int],
-            ["token", token, str],
             ["client_public_key", client_public_key, str],
             ["client_private_key", client_private_key, str],
             ["server_public_key", server_public_key, str],
@@ -188,14 +186,13 @@ class DsTensorClient:
         ]
         validator.check_args_types(args)
         self._hetero_client = HeteroClient(
-            host,
-            port,
-            connect_timeout_ms,
-            token,
-            client_public_key,
-            client_private_key,
-            server_public_key,
-            req_timeout_ms,
+            host=host,
+            port=port,
+            connect_timeout_ms=connect_timeout_ms,
+            client_public_key=client_public_key,
+            client_private_key=client_private_key,
+            server_public_key=server_public_key,
+            req_timeout_ms=req_timeout_ms,
             enable_remote_h2d=enable_remote_h2d
         )
         self._device_id = device_id

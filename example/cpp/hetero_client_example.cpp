@@ -82,7 +82,7 @@ static int Read()
     devGetBlobList.deviceIdx = DEVICE_IDX;
     devGetBlobList.blobs = { blob };
     std::vector<std::string> failedIdList;
-    int subTimeoutMs = 30'000;
+    int subTimeoutMs = 30000;
     std::vector<DeviceBlobList> devGetBlobLists = { devGetBlobList };
     auto getRc = client_->DevMGet({ key }, devGetBlobLists, failedIdList, subTimeoutMs);
     if (getRc.IsError() || !failedIdList.empty()) {
@@ -155,6 +155,10 @@ int main(int argc, char *argv[])
         std::cerr << "The hetero client example run failed." << std::endl;
         return FAILED;
     }
+
+    client_->ShutDown();
+    client_.reset();
+
     (void)aclFinalize();
     return SUCCESS;
 }

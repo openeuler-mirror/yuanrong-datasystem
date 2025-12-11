@@ -106,6 +106,7 @@ int RunExample(const std::string &ip, const int32_t port, const std::string &cli
     ConnectOptions connectOpts{ .host = ip,
                                 .port = port,
                                 .connectTimeoutMs = 60 * 1000,
+                                .requestTimeoutMs = 0,
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };

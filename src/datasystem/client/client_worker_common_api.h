@@ -149,7 +149,7 @@ public:
      * @brief Client Send disconnect notification to worker before exit.
      * @return Status of the call.
      */
-    Status Disconnect();
+    Status Disconnect(bool isDestruct);
 
     /**
      * @brief Obtains the actual heartbeat type..

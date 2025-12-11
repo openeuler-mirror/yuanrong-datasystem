@@ -100,7 +100,7 @@ Status StreamClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 
     // Step3: Send notice to worker before disconnection.
     if (clientWorkerApi_ != nullptr) {
-        RETURN_IF_NOT_OK(clientWorkerApi_->Disconnect());
+        RETURN_IF_NOT_OK(clientWorkerApi_->Disconnect(isDestruct));
     }
     return Status::OK();
 }

@@ -195,7 +195,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
         std::lock_guard<std::shared_timed_mutex> lck(shutdownMux_);
         for (size_t i = 0; i < workerApi_.size(); i++) {
             if (workerApi_[i] != nullptr && CheckConnection(static_cast<WorkerNode>(i)).IsOk()) {
-                auto curRc = workerApi_[i]->Disconnect();
+                auto curRc = workerApi_[i]->Disconnect(isDestruct);
                 if (curRc.IsError()) {
                     rc = std::move(curRc);
                 }
@@ -530,7 +530,7 @@ bool ObjectClientImpl::ReadyToExit(WorkerNode node)
         return false;
     }
     if (status.IsOk()) {
-        (void)workerApi_[node]->Disconnect();
+        (void)workerApi_[node]->Disconnect(false);
     }
     listenWorker_[node]->StopListenWorker(true);
     return true;

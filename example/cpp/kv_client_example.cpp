@@ -153,6 +153,7 @@ int main(int argc, char *argv[])
     ConnectOptions connectOpts{ .host = ip,
                                 .port = port,
                                 .connectTimeoutMs = 3 * 1000,
+                                .requestTimeoutMs = 0,
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };
@@ -169,6 +170,9 @@ int main(int argc, char *argv[])
         std::cerr << "The kv client example run failed." << std::endl;
         return FAILED;
     }
+
+    client_->ShutDown();
+    client_.reset();
 
     return SUCCESS;
 }

@@ -62,7 +62,7 @@ static void Read(int64_t size, bool isSeal)
     std::cout << "Reading data from a buffer" << std::endl;
     std::string objectKey = "123456789";
     std::vector<std::string> objKeys = { objectKey };
-    const int64_t timeoutMs = 60'000;
+    const int64_t timeoutMs = 60000;
     std::vector<Optional<Buffer>> buffers;
     Status status = client_->Get(objKeys, timeoutMs, buffers);
     if (!status.IsOk()) {
@@ -83,7 +83,7 @@ static void Modify(int64_t size)
     std::cout << "Modifying data in the buffer" << std::endl;
     std::string objectKey = "123456789";
     std::vector<std::string> objKeys = { objectKey };
-    const int64_t timeoutMs = 60'000;
+    const int64_t timeoutMs = 60000;
     std::vector<Optional<Buffer>> buffers;
     Status status = client_->Get(objKeys, timeoutMs, buffers);
     if (!status.IsOk()) {
@@ -140,6 +140,14 @@ int InitClient(const ConnectOptions &connectOpts)
     return 0;
 }
 
+void CloseClient()
+{
+    if (client_) {
+        client_->ShutDown();
+        client_.reset();
+    }
+}
+
 int main(int argc, char *argv[])
 {
     const int authParametersNum = 8;
@@ -178,6 +186,7 @@ int main(int argc, char *argv[])
     ConnectOptions connectOpts{ .host = ip,
                                 .port = port,
                                 .connectTimeoutMs = 60 * 1000,
+                                .requestTimeoutMs = 0,
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };
@@ -187,6 +196,6 @@ int main(int argc, char *argv[])
     }
 
     Start(size, isSeal);
-
+    CloseClient();
     return 0;
 }
