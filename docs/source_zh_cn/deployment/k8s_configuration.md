@@ -293,6 +293,7 @@ global:
 |-----|------|---------|-------------|
 | global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`] |
 | global.l2Cache.l2CacheDeleteThreadNum | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
+| global.l2Cache.ocIoFromL2CacheNeedMetadata | bool | `true` | 配置L2缓存守护进程的数据读写是否依赖元数据，设置为false，则表示元数据不存储在etcd中 |
 
 ::::{tab-set}
 
@@ -377,6 +378,7 @@ global:
 | global.reliability.addNodeWaitTimeS | int | `60` | 新节点加入哈希环的等待超时时间 |
 | global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
+| global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
 
 ### 优雅退出相关配置
 
@@ -403,6 +405,7 @@ global:
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | global.performance.ocShmTransferThresholdKB  | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输 |
+| global.performance.urmaMode | string | `UB` | 是否开用Urma通过IB或UB运行，默认情况下，UB将与URMA一起运行 |
 | global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaConnectionSize | int | `16` | jfs和jfr对的数量 |
@@ -410,6 +413,12 @@ global:
 | global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | global.performance.sharedDiskSize | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
 | global.performance.sharedDiskArenaPerTenant  | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
+| global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
+| global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
+| global.performance.ocWorkerAggregateMergeSize | int | `2097152` | worker响应的目标批量大小，默认值为2MB |
+| global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
+| global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
+| global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
 
 ### AK/SK相关配置
 
@@ -417,6 +426,7 @@ global:
 |-----|------|---------|-------------|
 | global.akSk.systemAccessKey | string | `""` | 系统访问密钥 |
 | global.akSk.systemSecretKey | string | `""` | 系统密钥 |
+| global.akSk.systemDataKey | string | `""` | 系统数据秘钥 |
 | global.akSk.tenantAccessKey | string | `""` | 租户访问密钥 |
 | global.akSk.tenantSecretKey | string | `""` | 租户密钥 |
 | global.akSk.requestExpireTimeS | int | `300` | 请求过期时间，单位为秒，最大值为300 |
@@ -509,3 +519,4 @@ global:
 | global.enableNonPreemptive | bool | `false` | 配置priorityClass。如果该值为false，则默认priorityClass为system-cluster-key。如果为true，则会创建一个preemptionPolicy Never的priorityClass |
 | global.fsGid | string | `"1002"` | fsGroup配置。容器的所有进程也是附加组ID的一部分 |
 | global.rollingUpdateTimeoutS | int | `1800` | 滚动升级的最大持续时间，默认值为1800秒 |
+| global.security.scEncryptSecretKey | string | `1800` | 流缓存的加密密钥，密钥长度最多为1024字节，解密后必须为32字节 |

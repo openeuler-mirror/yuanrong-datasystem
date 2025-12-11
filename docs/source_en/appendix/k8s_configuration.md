@@ -291,6 +291,7 @@ global:
 |-----|------|---------|-------------|
 | global.l2Cache.l2CacheType | string | `"none"` | Config the l2 cache type support obs, none by default. Optional value: 'obs', 'sfs', 'none' |
 | global.l2Cache.l2CacheDeleteThreadNum | int | `32` | l2 cache delete threads number, it affects the parallelism of L2 data deletion. Increasing it will also cause CPU usage to increase |
+| global.l2Cache.ocIoFromL2CacheNeedMetadata | bool | `true` | Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd |
 
 ::::{tab-set}
 
@@ -373,6 +374,7 @@ global:
 | global.reliability.addNodeWaitTimeS | int | `60` | Time to wait for the first node that wants to join a working hash ring |
 | global.reliability.autoDelDeadNode | bool | `true` | Indicate dead nodes marked in the hash ring can be removed or not |
 | global.reliability.enableDistributedMaster | bool | `true` | Whether to support distributed master, default is true |
+| global.reliability.enableStreamDataVerification | bool | `false` | Option to verify if data from a producer is out of order |
 
 ### Graceful Shutdown Configurations
 
@@ -399,6 +401,7 @@ global:
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | Enable worker->worker OC batch get, default false |
 | global.performance.ocShmTransferThresholdKB  | int | `500` | The data threshold to transfer obj data between client and worker via shm, unit is KB |
 | global.performance.enableUrma | bool | `false` | Option to turn on urma for OC worker to worker data transfer, default false |
+| global.performance.urmaMode | string | `UB` | Option to enable URMA over IB or UB, default UB to run with URMA over UB |
 | global.performance.urmaPollSize | int | `8` | Number of complete record to poll at a time, 16 is the max this device can poll |
 | global.performance.urmaRegisterWholeArena | bool | `true` | Register the whole arena as segment during init, otherwise, register each object as a segment |
 | global.performance.urmaConnectionSize | int | `16` | Number of jfs and jfr pair |
@@ -406,6 +409,12 @@ global:
 | global.performance.sharedDiskDirectory | string | `""` | Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled |
 | global.performance.sharedDiskSize | int | `0` | Upper limit of the shared disk, the unit is mb |
 | global.performance.sharedDiskArenaPerTenant  | int | `8` | The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared disk allocation for the first time, but each arena will use one more fd. The valid range is 0 to 32 |
+| global.performance.enableRdma | bool | `false` | Option to turn on rdma for OC worker to worker data transfer, default false |
+| global.performance.rdmaRegisterWholeArena | bool | `true` | Register the whole arena as segment during init, otherwise, register each object as a segment |
+| global.performance.ocWorkerAggregateMergeSize | int | `2097152` | Target batch size for worker worker responses, default is 2MB |
+| global.performance.ocWorkerAggregateSingleMax | int | `65536` | Max single item size for batching worker worker batch rsp, default is 64KB |
+| global.performance.ocWorkerWorkerParallelMin | int | `100` | Min data count for parallel worker worker batch rsp, default is 100 |
+| global.performance.ocWorkerWorkerParallelNums | int | `16` | Worker worker batch rsp control nums, 0 means unlimited |
 
 ### AK/SK Configurations
 
@@ -413,6 +422,7 @@ global:
 |-----|------|---------|-------------|
 | global.akSk.systemAccessKey | string | `""` | The access key used by the system |
 | global.akSk.systemSecretKey | string | `""` | The secret key used by the system |
+| global.akSk.systemDataKey | string | `""` | The data key for system encrypte and decrypt secert key |
 | global.akSk.tenantAccessKey | string | `""` | The access key used by the tenant |
 | global.akSk.tenantSecretKey | string | `""` | The secret key used by the tenant |
 | global.akSk.requestExpireTimeS | int | `300` | Request expiration time in seconds, the maximum value is 300s |
@@ -503,3 +513,4 @@ global:
 | global.enableNonPreemptive | bool | `false` | Configure priorityClass. If the value is false, the default priorityClass is system-cluster-critical. If the value is true, a priorityClass with preemptionPolicy Never is created |
 | global.fsGid | string | `"1002"` | fsGroup configuratio. All processes of the container are also part of the supplementary group ID |
 | global.rollingUpdateTimeoutS | int | `1800` | Maximum duration of the rolling upgrade, default value is 1800 seconds |
+| global.security.scEncryptSecretKey | string | `1800` | The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes after decryption |
