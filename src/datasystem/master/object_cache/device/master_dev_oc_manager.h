@@ -147,7 +147,7 @@ public:
      * @return Status::OK() if object is not found or successfully cleared;
      *         Error status if any unexpected error occurs during the operation
      */
-    Status CheckAndClearDeviceMeta(const std::string &objectKey);
+    Status CheckAndClearDeviceMeta(const std::string &clientId, const std::string &objectKey);
 
     /**
      * @brief Release client metadata for scaled-in worker nodes

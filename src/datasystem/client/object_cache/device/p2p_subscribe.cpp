@@ -98,7 +98,6 @@ void P2PSubscribe::RunP2PSendLoop()
                 LOG(INFO) << "Device object life cycle exit: " << npuEvent.object_key();
                 (void)devMemUnitTable_.erase(npuEvent.object_key());
                 (void)objKey2PutReqTable_.erase(npuEvent.object_key());
-                exitEventCv_.notify_all();
             } else if (eventType == SubscribeEventTypePb::GET_NOTIFICATION) {
                 P2PGroupKey groupKey{ .remoteDeviceId = npuEvent.dst_device_id(),
                                       .remoteClientId = npuEvent.dst_client_id(),
@@ -373,8 +372,6 @@ void P2PSubscribe::ProcessP2PRecv(
     const std::unordered_map<std::string, std::shared_ptr<P2PGetRequest>> &objKeyToP2PRequest,
     std::set<std::string> &finishedList)
 {
-    VLOG(1) << FormatString(
-        "Start processing the keys that were successfully queried, keys:[%s]", VectorToString(finishedList));
     for (auto &kv : groupedSubResp) {
         PerfPoint point(PerfKey::CLIENT_P2P_SUB_GET_COMM_AND_SUBMIT);
         auto &srcClientId = kv.first.remoteClientId;
@@ -597,33 +594,6 @@ void P2PSubscribe::RemoveSubscribe(const std::string &devObjectKey)
 {
     (void)devMemUnitTable_.erase(devObjectKey);
     (void)objKey2PutReqTable_.erase(devObjectKey);
-}
-
-Status P2PSubscribe::WaitForKeyDelete(const std::string &key, const int64_t timeoutMs)
-{
-    auto start = std::chrono::system_clock::now();
-    auto acc = TbbP2PPutRequestTable::accessor();
-    if (!objKey2PutReqTable_.find(acc, key)) {
-        return Status::OK();
-    }
-    while (true) {
-        std::unique_lock<std::mutex> lock(exitEventMutex_);
-        if (!objKey2PutReqTable_.find(acc, key)) {
-            return Status::OK();
-        }
-        exitEventCv_.wait_for(lock, std::chrono::milliseconds(RPC_MINIMUM_TIMEOUT));
-        if (!objKey2PutReqTable_.find(acc, key)) {
-            return Status::OK();
-        }
-        auto elapsed = std::chrono::system_clock::now() - start;
-        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-        if ((timeoutMs - elapsedMs) < 0) {
-            LOG(ERROR) << FormatString("Wait for delete timeout, elapsed ms:%s, key:%s, timeout ms:%s", elapsedMs, key,
-                                       timeoutMs);
-            return Status(K_TRY_AGAIN, FormatString("Wait for delete timeout, elapsed ms:%s, key:%s, timeout ms:%s",
-                                                    elapsedMs, key, timeoutMs));
-        }
-    }
 }
 
 void P2PSubscribe::ProcessHcclCommDestroy(const SubscribeReceiveNpuEventPb &npuEvent)

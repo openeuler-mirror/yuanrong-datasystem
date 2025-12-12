@@ -157,13 +157,13 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
 
 ObjectClientImpl::~ObjectClientImpl()
 {
-    ShutdownPerfThread();
     auto shutdownFunc = std::bind(&ObjectClientImpl::ShutDown, this, true, true);
     clientStateManager_->ProcessDestruct(shutdownFunc);
 }
 
 Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 {
+    ShutdownPerfThread();
     INJECT_POINT("ObjClient.ShutDown");
     // Step0: Check client's status to determine whether it meets the conditions for executing shutdown.
     Status rc = clientStateManager_->ProcessShutdown(needRollbackState, isDestruct);
@@ -2532,8 +2532,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncDeleteDevObjects(const st
 {
     auto traceID = Trace::Instance().GetTraceID();
     return asyncDevDeletePool_->Submit([this, traceID, objKeys]() {
+        PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNC_DEV_DELETE_IMPL);
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DEV_DELETE);
         AsyncResult result;
         std::vector<std::string> failList;
         result.status = DeleteDevObjects(objKeys, failList);
@@ -2544,7 +2544,6 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncDeleteDevObjects(const st
 
 Status ObjectClientImpl::DeleteDevObjects(const std::vector<std::string> &objKeys, std::vector<std::string> &failList)
 {
-    PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DEV_DELETE);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objKeys.size()), K_INVALID,
@@ -2556,13 +2555,11 @@ Status ObjectClientImpl::DeleteDevObjects(const std::vector<std::string> &objKey
     if (res.IsError() && failList.empty()) {
         return res;
     }
-    std::vector<std::string> waitKeys;
     for (auto &objKey : objKeys) {
         if (std::find(failList.begin(), failList.end(), objKey) == failList.end()) {
-            waitKeys.emplace_back(objKey);
+            devOcImpl_->RemoveSubscribe(objKey);
         }
     }
-    devOcImpl_->WaitForDeleteKeys(waitKeys, RPC_TIMEOUT, failList);
     CHECK_FAIL_RETURN_STATUS(failList.size() < objKeys.size(), res.GetCode(), res.GetMsg());
     return Status::OK();
 }
@@ -2728,14 +2725,8 @@ Status ObjectClientImpl::DevLocalDelete(const std::vector<std::string> &objectKe
             failedObjectKeys.emplace_back(objectKey);
             continue;
         }
+        devOcImpl_->RemoveSubscribe(objectKey);
     }
-    std::vector<std::string> waitKeys;
-    for (auto &objKey : objectKeys) {
-        if (std::find(failedObjectKeys.begin(), failedObjectKeys.end(), objKey) == failedObjectKeys.end()) {
-            waitKeys.emplace_back(objKey);
-        }
-    }
-    devOcImpl_->WaitForDeleteKeys(waitKeys, RPC_TIMEOUT, failedObjectKeys);
     if (failedObjectKeys.size() < objectKeys.size()) {
         return Status::OK();
     }

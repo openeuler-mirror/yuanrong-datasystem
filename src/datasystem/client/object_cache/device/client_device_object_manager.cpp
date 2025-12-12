@@ -209,22 +209,10 @@ Status ClientDeviceObjectManager::GetOrCreateP2PSubscribe(int32_t deviceId, std:
     return Status::OK();
 }
 
-void ClientDeviceObjectManager::WaitForDeleteKeys(const std::vector<std::string> &keys, int64_t timeoutMs,
-                                                  std::vector<std::string> &failKeys)
+void ClientDeviceObjectManager::RemoveSubscribe(const std::string &key)
 {
-    auto start = std::chrono::system_clock::now();
-    for (const auto &key : keys) {
-        for (auto &it : subscribeTable_) {
-            auto elapse = std::chrono::system_clock::now() - start;
-            auto remainMs = timeoutMs - std::chrono::duration_cast<std::chrono::milliseconds>(elapse).count();
-            std::shared_ptr<P2PPutRequest> putRequest;
-            if (it.second->GetPutRequest(key, putRequest)) {
-                if (it.second->WaitForKeyDelete(key, remainMs).IsError()) {
-                    failKeys.emplace_back(key);
-                    break;
-                };
-            }
-        }
+    for (auto &it : subscribeTable_) {
+        it.second->RemoveSubscribe(key);
     }
 }
 
