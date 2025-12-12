@@ -58,11 +58,16 @@ endif ()
 
 set(datasystem_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
 install_datasystem_target(datasystem EXPORT_NAME DatasystemTargets)
+set(datasystem_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
+install_datasystem_target(datasystem)
 
 if (BUILD_HETERO)
     # Set the permission of acl_plugin to 440
     install(TARGETS acl_plugin
             DESTINATION  ${DATASYSTEM_SDK_USER_LIBPATH}
+            PERMISSIONS OWNER_READ GROUP_READ)
+    install(TARGETS acl_plugin
+            DESTINATION  ${DATASYSTEM_SDK_USER_NEW_LIBPATH}
             PERMISSIONS OWNER_READ GROUP_READ)
 endif()
 

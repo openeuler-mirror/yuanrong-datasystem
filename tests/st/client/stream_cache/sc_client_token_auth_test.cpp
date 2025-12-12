@@ -100,6 +100,7 @@ protected:
         ConnectOptions connectOptions = { .host = workerAddress.Host(),
                                           .port = workerAddress.Port(),
                                           .connectTimeoutMs = 60 * 1000,  // 60s
+                                          .requestTimeoutMs = 0,
                                           .clientPublicKey = "",
                                           .clientPrivateKey = "",
                                           .serverPublicKey = "",
