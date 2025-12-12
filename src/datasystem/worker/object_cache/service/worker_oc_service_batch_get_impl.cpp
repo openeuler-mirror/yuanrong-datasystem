@@ -44,13 +44,11 @@
 
 DS_DEFINE_int64(batch_get_threshold_mb, 100, "The payload threshold to batch get objects");
 DS_DEFINE_validator(batch_get_threshold_mb, &Validator::ValidateBatchGetThreshold);
+DS_DECLARE_bool(enable_data_replication);
 
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
-
-const size_t WORKER_BATCH_THREAD_NUM = 8;
-
 Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDataSize, ReadObjectKV &objectKV,
                                                              std::vector<RpcMessage> &payloads, uint64_t &payloadIndex)
 {
@@ -169,7 +167,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
 
-        auto func = [this, &lastRc, address, &infoList, &request, &lockedEntries, &tempSuccessIds, &tempNeedRetryIds,
+        auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds,
                      &tempFailedIds, &tempFailedMetas, index, traceId] {
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
@@ -335,7 +333,9 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
         entry->stateInfo.SetNeedToDelete(true);
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_SYNC_META);
         ConsistencyType type = ConsistencyType(meta->config().consistency_type());
-        subRc = ProcessObjectEntryAndSyncMetadata(IsUpdateLocation(type), objectKV);
+        if (FLAGS_enable_data_replication) {
+            subRc = ProcessObjectEntryAndSyncMetadata(IsUpdateLocation(type), objectKV);
+        }
         point.Record();
     }
     // Handle error as in GetObjectFromRemoteOnLock code path, move on to the next request.

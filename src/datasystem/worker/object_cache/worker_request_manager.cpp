@@ -39,6 +39,8 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
+DS_DECLARE_bool(enable_data_replication);
+
 namespace datasystem {
 namespace object_cache {
 std::function<Status(const std::string &, uint64_t)> WorkerRequestManager::deleteFunc_ = nullptr;
@@ -352,7 +354,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
             shmRefTable_->AddShmUnit(clientId_, params->shmUnit);
         }
 
-        bool needDeleted = params->objectState.IsNeedToDelete();
+        bool needDeleted = params->objectState.IsNeedToDelete() || !FLAGS_enable_data_replication;
         INJECT_POINT("worker.AddEntryToGetResponse", [&needDeleted] {
             needDeleted = true;
             return Status::OK();
