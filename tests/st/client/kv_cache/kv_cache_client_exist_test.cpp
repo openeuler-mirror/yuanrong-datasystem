@@ -250,6 +250,9 @@ TEST_F(KVCacheClientExistTest, ConnectTimeout)
         .port = 11212,
         .connectTimeoutMs = connectTimeoutMs,
         .requestTimeoutMs = requestTimeoutMs,
+        .clientPublicKey = "",
+        .clientPrivateKey = "",
+        .serverPublicKey = "",
         .accessKey = "QTWAOYTTINDUT2QVKYUC",
         .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
     };
@@ -266,6 +269,9 @@ TEST_F(KVCacheClientExistTest, ConnectTimeout)
         .port = addr.Port(),
         .connectTimeoutMs = connectTimeoutMs,
         .requestTimeoutMs = requestTimeoutMs,
+        .clientPublicKey = "",
+        .clientPrivateKey = "",
+        .serverPublicKey = "",
         .accessKey = "QTWAOYTTINDUT2QVKYUC",
         .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
     };

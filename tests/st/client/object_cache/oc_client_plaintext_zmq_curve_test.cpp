@@ -78,6 +78,7 @@ public:
         ConnectOptions connectOpts{ .host = workerAddress.Host(),
                                     .port = workerAddress.Port(),
                                     .connectTimeoutMs = 1 * 1000,
+                                    .requestTimeoutMs = 0,
                                     .clientPublicKey = authKeys.GetClientPublicKey(),
                                     .clientPrivateKey = authKeys.GetClientPrivateKey(),
                                     .serverPublicKey = serverPublicKey,

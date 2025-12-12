@@ -278,6 +278,7 @@ private:
         ConnectOptions connectOptions = { .host = workerAddress.Host(),
                                           .port = workerAddress.Port(),
                                           .connectTimeoutMs = 60 * 1000,
+                                          .requestTimeoutMs = 0,
                                           .clientPublicKey = "",
                                           .clientPrivateKey = "",
                                           .serverPublicKey = "",

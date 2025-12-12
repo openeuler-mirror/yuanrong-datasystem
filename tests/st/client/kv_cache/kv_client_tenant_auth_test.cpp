@@ -50,6 +50,7 @@ public:
         ConnectOptions connectOptions{ .host = workerAddr_.Host(),
                                        .port = workerAddr_.Port(),
                                        .connectTimeoutMs = 60 * 1000,  // 60s
+                                       .requestTimeoutMs = 0,
                                        .clientPublicKey = "",
                                        .clientPrivateKey = "",
                                        .serverPublicKey = "",
@@ -214,6 +215,7 @@ public:
         ConnectOptions connectOptions{ .host = workerAddr_.Host(),
                                        .port = workerAddr_.Port(),
                                        .connectTimeoutMs = 60 * 1000,  // 60s
+                                       .requestTimeoutMs = 0,
                                        .clientPublicKey = "",
                                        .clientPrivateKey = "",
                                        .serverPublicKey = "",
