@@ -20,7 +20,7 @@ output/cpp
 
 ### 1. 新建工程并拷贝发布包
 
-新建一个 Demo 工程，并将 `output/cpp` 下的文件拷贝到 `thirdparty/datasystem` 下，最终目录示例：：
+新建一个 Demo 工程，并将 `output/cpp` 下的文件拷贝到 `thirdparty/datasystem` 下，最终目录示例：
 
 ```text
 demo
@@ -35,7 +35,7 @@ demo
 └── WORKSAPCE
 ```
 
-### 2. 声明外部仓库
+### 2. 声明 datasystem 为本地仓库
 
 在 `WORKSPACE` 文件中将datasystem注册本地仓库：
 
@@ -46,7 +46,7 @@ local_repository(
 )
 ```
 
-### 3. 添加目标依赖
+### 3. 添加 datasystem 目标依赖
 
 在需要使用 DataSystem 的 `BUILD` 文件内添加依赖：
 
@@ -58,7 +58,7 @@ cc_binary(
 )
 ```
 
-### 4. 示例Demo程序
+### 4. 示例 Demo 程序
 
 以下代码片段 `main.cpp` 演示最小可用调用：
 
