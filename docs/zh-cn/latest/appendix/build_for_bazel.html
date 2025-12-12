@@ -522,12 +522,12 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">发布包目录结构说明</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">集成示例</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">1. 新建工程并拷贝发布包</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">2. 声明外部仓库</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">3. 添加目标依赖</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#demo">4. 示例Demo程序</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datasystem">2. 声明 datasystem 为本地仓库</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">3. 添加 datasystem 目标依赖</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#demo">4. 示例 Demo 程序</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">版本升级策略</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">版本升级策略</a></li>
 </ul>
             </nav>
         </div>
@@ -560,7 +560,7 @@ document.write(`
 <h2>集成示例<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <section id="id4">
 <h3>1. 新建工程并拷贝发布包<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
-<p>新建一个 Demo 工程，并将 <code class="docutils literal notranslate"><span class="pre">output/cpp</span></code> 下的文件拷贝到 <code class="docutils literal notranslate"><span class="pre">thirdparty/datasystem</span></code> 下，最终目录示例：：</p>
+<p>新建一个 Demo 工程，并将 <code class="docutils literal notranslate"><span class="pre">output/cpp</span></code> 下的文件拷贝到 <code class="docutils literal notranslate"><span class="pre">thirdparty/datasystem</span></code> 下，最终目录示例：</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>demo
 ├── BUILD
 ├── main.cpp
@@ -574,8 +574,8 @@ document.write(`
 </pre></div>
 </div>
 </section>
-<section id="id5">
-<h3>2. 声明外部仓库<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
+<section id="datasystem">
+<h3>2. 声明 datasystem 为本地仓库<a class="headerlink" href="#datasystem" title="Link to this heading">#</a></h3>
 <p>在 <code class="docutils literal notranslate"><span class="pre">WORKSPACE</span></code> 文件中将datasystem注册本地仓库：</p>
 <div class="highlight-bazel notranslate"><div class="highlight"><pre><span></span><span class="n">local_repository</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;datasystem&quot;</span><span class="p">,</span>
@@ -584,8 +584,8 @@ document.write(`
 </pre></div>
 </div>
 </section>
-<section id="id6">
-<h3>3. 添加目标依赖<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<section id="id5">
+<h3>3. 添加 datasystem 目标依赖<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
 <p>在需要使用 DataSystem 的 <code class="docutils literal notranslate"><span class="pre">BUILD</span></code> 文件内添加依赖：</p>
 <div class="highlight-bazel notranslate"><div class="highlight"><pre><span></span><span class="n">cc_binary</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;demo&quot;</span><span class="p">,</span>
@@ -596,7 +596,7 @@ document.write(`
 </div>
 </section>
 <section id="demo">
-<h3>4. 示例Demo程序<a class="headerlink" href="#demo" title="Link to this heading">#</a></h3>
+<h3>4. 示例 Demo 程序<a class="headerlink" href="#demo" title="Link to this heading">#</a></h3>
 <p>以下代码片段 <code class="docutils literal notranslate"><span class="pre">main.cpp</span></code> 演示最小可用调用：</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;datasystem/datasystem.h&gt;</span>
 
@@ -619,8 +619,8 @@ bazel<span class="w"> </span>run<span class="w">   </span>//:demo
 <p>无报错且进程正常退出，即视为集成成功。</p>
 </section>
 </section>
-<section id="id7">
-<h2>版本升级策略<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<section id="id6">
+<h2>版本升级策略<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
 <p>当需要升级数据系统 SDK 版本时，升级步骤如下：</p>
 <ol class="arabic simple">
 <li><p>备份旧版本：<code class="docutils literal notranslate"><span class="pre">mv</span> <span class="pre">thirdparty/datasystem</span> <span class="pre">thirdparty/datasystem.bak.$(date</span> <span class="pre">+%F)</span></code></p></li>
@@ -683,12 +683,12 @@ bazel<span class="w"> </span>run<span class="w">   </span>//:demo
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">发布包目录结构说明</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">集成示例</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">1. 新建工程并拷贝发布包</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">2. 声明外部仓库</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">3. 添加目标依赖</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#demo">4. 示例Demo程序</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datasystem">2. 声明 datasystem 为本地仓库</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">3. 添加 datasystem 目标依赖</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#demo">4. 示例 Demo 程序</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">版本升级策略</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">版本升级策略</a></li>
 </ul>
   </nav></div>
 
