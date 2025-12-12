@@ -46,7 +46,7 @@ SubscriptionConfig
        拷贝构造函数。
 
        参数：
-            - **other** - 一个指向 `SubscriptionConfig` 对象的引用。
+            - **other** - 一个指向 ``SubscriptionConfig`` 对象的引用。
  
        返回：
            返回用于创建消费者的配置信息。
@@ -56,7 +56,7 @@ SubscriptionConfig
         移动构造函数。
 
         参数：
-            - **other** - 一个指向 `SubscriptionConfig` 对象的右值（临时对象或被移动对象）引用。
+            - **other** - 一个指向 ``SubscriptionConfig`` 对象的右值（临时对象或被移动对象）引用。
  
         返回：
             返回用于创建消费者的配置信息。
@@ -66,7 +66,7 @@ SubscriptionConfig
        重载赋值运算符，返回配置信息。
 
         参数：
-            - **other** - `SubscriptionConfig` 对象的引用。
+            - **other** - ``SubscriptionConfig`` 对象的引用。
  
         返回：
             返回用于创建消费者的配置信息。
@@ -76,7 +76,7 @@ SubscriptionConfig
         重载 `==` 运算符。
 
         参数：
-            - **other** - `SubscriptionConfig` 对象的引用。
+            - **other** - ``SubscriptionConfig`` 对象的引用。
 
         返回：
             当每一个成员都相等时返回true, 否则返回false。
@@ -86,7 +86,7 @@ SubscriptionConfig
         重载 `！=` 运算符。
 
         参数：
-            - **other** - `SubscriptionConfig` 对象的引用。
+            - **other** - ``SubscriptionConfig`` 对象的引用。
 
         返回：
             当每一个成员函数都相等时返回false, 否则返回true。
@@ -94,11 +94,11 @@ SubscriptionConfig
     **公共成员**
     .. cpp:member:: static constexpr uint32_t SC_CACHE_CAPACITY = 32768
 
-        静态常量 `SC_CACHE_CAPACITY` 的值为 32768
+        静态常量 ``SC_CACHE_CAPACITY`` 的值为 32768
 
     .. cpp:member:: static constexpr uint16_t SC_CACHE_LWM = 0
 
-        静态常量 `SC_CACHE_LWM` 的值为 0
+        静态常量 ``SC_CACHE_LWM`` 的值为 0
 
     .. cpp:member:: std::string subscriptionName
 

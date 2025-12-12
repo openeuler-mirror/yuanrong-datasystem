@@ -12,7 +12,7 @@ Consumer
  
     .. cpp:function:: Consumer()
  
-       构造流缓存消费者实例。注：consumer对象并非线程安全，所以当有多个线程尝试调用同一个consumer做操作时会返回K_SC_STREAM_IN_USE错误码。
+       构造流缓存消费者实例。注：consumer对象并非线程安全，所以当有多个线程尝试调用同一个consumer做操作时会返回 ``K_SC_STREAM_IN_USE`` 错误码。
  
        返回：
            流缓存消费者实例。
@@ -27,7 +27,7 @@ Consumer
 
         参数：
             - **expectNum** - 期望接收elements的个数。
-            - **timeoutMs** - 超时时间， 单位ms, 在超时时间内未收到期望个数的element时, 接口返回K_OK
+            - **timeoutMs** - 超时时间， 单位ms, 在超时时间内未收到期望个数的element时, 接口返回 ``StatusCode::K_OK``
             - **outElements** - 实际接收到的elements，详见 :cpp:class:`Element` 章节。
 
         返回:

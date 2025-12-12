@@ -89,12 +89,12 @@ global:
 > - openYuanrong datasystem默认占用端口号 `31501`，请确保Kubernetes集群中每个节点的31501端口处于空闲状态，或者通过[global.port.datasystemWorker](#ipcrpc相关配置)更换默认端口号。
 > - 请确保Kubernetes集群中每个节点拥有至少3核4G的资源剩余，或者通过[资源相关配置](#资源相关配置)减少默认的资源需求。
 > - openYuanrong datasystem Pod内容器默认会挂载以下宿主机目录，请确保容器运行用户具备以下目录的可读可写可访问权限（rwx）：
->   | 宿主机目录 | 配置项 | 作用 |
+>   | 配置项 | 宿主机目录 | 作用 |
 >   |-----------|--------|------|
->   | /home/sn/datasystem/logs | [global.log.logDir](#日志与可观测相关配置) | 日志持久化目录 |
->   | /home/uds | [global.ipc.udsDir](#ipcrpc相关配置) | Unix Domain Socket目录，用于启用共享内存免拷贝能力 |
->   | /home/sn/datasystem/rocksdb | [global.metadata.rocksdbStoreDir](#元数据相关配置) | 元数据持久化目录 |
->   | /dev/shm | - | 共享内存目录 |
+>   | [global.log.logDir](#日志与可观测相关配置)  | /home/sn/datasystem/logs | 日志持久化目录 |
+>   | [global.ipc.udsDir](#ipcrpc相关配置) | /home/uds | Unix Domain Socket目录，用于启用共享内存免拷贝能力 |
+>   |[global.metadata.rocksdbStoreDir](#元数据相关配置) |  /home/sn/datasystem/rocksdb | 元数据持久化目录 |
+>   | - | /dev/shm | 共享内存目录 |
 
 ## 详细配置项
 
@@ -172,15 +172,15 @@ global:
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.etcd.etcdAddress | string | `""` | ETCD 服务端访问地址 |
+| global.etcd.etcdAddress | string | `""` | ETCD 服务端访问地址，格式为：ip:port, 例如：127.0.0.1:23456 |
 | global.etcd.enableEtcdAuth | bool | `false` | 是否启用 ETCD 认证 |
 | global.etcd.etcdCa | string | `""` | CA明文证书，使用Base64编码 |
 | global.etcd.etcdCert | string | `""` | 客户端明文证书，使用Base64转码 |
-| global.etcd.etcdKey | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语. |
+| global.etcd.etcdKey | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语 |
 | global.etcd.etcdCertDir | string | `"/home/sn/datasystem/etcd_cert_dir"` | 已加密 etcd 证书的挂载路径，`global.etcd.enableEtcdAuth` 为 `true` 必须指定此参数 |
-| global.etcd.passphraseValue | string | `""` | 密码短语的值，需加密并进行Base64转码。 |
+| global.etcd.passphraseValue | string | `""` | 密码短语的值，需加密并进行Base64转码 |
 | global.etcd.etcdMetaPoolSize | int | `8` | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
-| global.etcd.etcdTargetNameOverride | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致。 |
+| global.etcd.etcdTargetNameOverride | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
 
 **样例**：
 ```yaml
@@ -344,10 +344,10 @@ global:
 **样例**：
 ```yaml
 global:
-  azName: "az1"
+  clusterName: "az1"
 
   crossAz:
-    otherAzNames: "az2,az3,az4"
+    otherClusterNames: "az2,az3,az4"
     crossAzGetDataFromWorker: true
     crossAzGetMetaFromWorker: false
 ```

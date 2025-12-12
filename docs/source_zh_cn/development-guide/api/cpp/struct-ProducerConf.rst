@@ -48,4 +48,4 @@ ProducerConf
 
     .. cpp:member:: StreamMode streamMode = StreamMode::MPMC
 
-        配置流的模式，默认值（MPMC）, 详见 :cpp:class`StreamMode` 。
+        配置流的模式，默认值（MPMC）, 详见 :cpp:class:`StreamMode` 。

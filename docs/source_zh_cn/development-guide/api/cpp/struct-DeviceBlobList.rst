@@ -12,7 +12,7 @@ DeviceBlobList
 
     .. cpp:member:: std::vector<Blob> blobs
 
-        描述接收或发送的异构设备内存结构的列表。详见 `:cpp:class:Blob` 章节
+        描述接收或发送的异构设备内存结构的列表。详见 :cpp:class:`Blob` 章节
 
     .. cpp:member:: int32_t deviceIdx = -1
 
