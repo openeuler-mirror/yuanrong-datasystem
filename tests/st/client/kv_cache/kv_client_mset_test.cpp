@@ -1457,7 +1457,7 @@ TEST_F(KVClientMSetDMTest, LEVEL1_MSetRollbackFailed)
         cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMetaPhaseTwo.begin", "1*return(K_RUNTIME_ERROR)"));
     for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
         DS_ASSERT_OK(
-            cluster_->SetInjectAction(WORKER, i, "master.RollbackMultiMeta.begin", "10*return(K_RPC_UNAVAILABLE)"));
+            cluster_->SetInjectAction(WORKER, i, "master.RollbackMultiMeta.begin", "14*return(K_RPC_UNAVAILABLE)"));
     }
     std::shared_ptr<KVClient> client0;
     InitTestKVClient(0, client0, timeoutMs_);
