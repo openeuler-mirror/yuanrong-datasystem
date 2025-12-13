@@ -1,6 +1,6 @@
 set(zlib_VERSION 1.3.1)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
-  set(zlib_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/zlib-v1.3.1.tar.gz")
+  set(zlib_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/v1.3.1.tar.gz")
 else()
   set(zlib_URL "https://gitee.com/mirrors/zlib/repository/archive/v1.3.1.tar.gz")
 endif()
