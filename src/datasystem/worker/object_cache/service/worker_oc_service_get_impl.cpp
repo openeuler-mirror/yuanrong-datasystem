@@ -1350,8 +1350,8 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_BATCH_BY_ADDR);
     for (auto &item : objKeysGrpByMaster) {
         BatchQueryMetaResult &res = batchQueryResults[idx++];
-        auto func = [&res, realTimeoutMs, subTimeout, item, traceID, timer, this]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        auto func = [&res, realTimeoutMs, subTimeout, item, &traceID, &timer, this]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID, true);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
             HostPort masterAddr = item.first.GetAddressAndSaveDbName();

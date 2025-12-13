@@ -387,6 +387,57 @@ TEST_F(UrmaObjectClientTest, TestBatchGetSplitPayload)
     ASSERT_EQ(memcmp(data.data(), buffer[0]->MutableData(), MB_10), 0);
 }
 
+class UrmaObjectClientDisableDataReplicationTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_data_replication=false ";
+    }
+};
+
+TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
+{
+    // Test that the batch get path in urma case is working as expected.
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int numKV = 100;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        values.emplace_back("values_" + std::to_string(i));
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client2->Set(keys[i], values[i]));
+    }
+
+    std::vector<std::string> valuesGet;
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    DS_ASSERT_OK(client1->Get(keys, valuesGet));
+    DS_ASSERT_OK(client1->Get(keys, buffers));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+    ASSERT_EQ(keys.size(), buffers.size());
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
+        ASSERT_EQ(values[i],
+                  std::string(reinterpret_cast<const char *>(buffers[i]->ImmutableData()), buffers[i]->GetSize()));
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client2->Del(keys[i]));
+    }
+
+    DS_ASSERT_NOT_OK(client1->Get(keys, valuesGet));
+}
+
 #ifdef USE_URMA
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetSmallWithError)
 {

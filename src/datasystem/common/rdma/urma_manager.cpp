@@ -729,6 +729,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     auto res = remoteDeviceMap_->Insert(accessor, remoteDeviceId);
     auto &device = accessor.entry->data;
     if (!res) {
+        RETURN_OK_IF_TRUE(device.urmaInfo_.ToString() == urmaInfo.ToString());
         // Existing entry exists, and we will update the imported jfr (assuming the sending worker restarted)
         // First of all, release the existing imported jfr
         device.Clear();
@@ -746,7 +747,6 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     remoteJfr.jfr_id.eid = eid;
     remoteJfr.jfr_id.uasid = urmaInfo.uasid;
     remoteJfr.trans_mode = URMA_TM_RM;
-    LOG(INFO) << "tp_type:" << remoteJfr.tp_type;
     remoteJfr.tp_type = URMA_CTP;
 
     std::vector<urma_target_jetty_t *> tjfrs;
@@ -909,7 +909,8 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
         // Register the incoming jfr.
         UrmaJfrInfo urmaInfo;
         RETURN_IF_NOT_OK(urmaInfo.FromProto(req));
-        LOG(INFO) << "Start import remote jfr, remote urma info: " << urmaInfo.ToString();
+        LOG(INFO) << "Start import remote jfr, remote urma info: " << urmaInfo.ToString()
+                  << ", local address:" << localUrmaInfo_.localAddress;
         // Do not need to import remote jfr or segment for the local node.
         RETURN_OK_IF_TRUE(localUrmaInfo_.localAddress == urmaInfo.localAddress);
         LOG_IF_ERROR(mgr.ImportRemoteJfr(urmaInfo), "Error in import incoming jfr");
@@ -974,7 +975,7 @@ Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &con
 
 Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &importSegmentInfo)
 {
-    (void) urmaContext;
+    (void)urmaContext;
     SegmentMap::Accessor accessor;
     auto segVa = importSegmentInfo.seg().va();
     if (!remoteSegments_.Find(accessor, segVa)) {

@@ -17,6 +17,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include <mutex>
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
@@ -165,6 +166,7 @@ void RpcStubCacheMgr::InitCreators()
 
 Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub)
 {
+    PerfPoint point(PerfKey::WORKER_RPC_STUB_CACHE_LOOKUP);
     std::shared_ptr<RpcStubCacheMgrObj> encapsulatedData = nullptr;
     while (lruCache_->Lookup(HashKeyForRpcStubCacheMgr(hostPort, type), &encapsulatedData).IsOk()) {
         rpcStub = encapsulatedData->GetData();
@@ -173,6 +175,7 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
         }
         encapsulatedData.reset();
     }
+    point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_FIND_CREATOR);
     LOG(INFO) << "Start to create stub, destAddr: " << hostPort.ToString() << ", type: " << static_cast<int>(type);
     auto creator = creators_.find(type);
     if (creator == creators_.end() || creator->second == nullptr) {
@@ -184,6 +187,7 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
     const int retryIntervalMs = 100;
     int attempts = 0;
     {
+        point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_ACCESS);
         newEncapsulatedData->GetWriteLck();
         Raii raii([&newEncapsulatedData]() { newEncapsulatedData->ReleaseWriteLck(); });
         do {
@@ -198,7 +202,9 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
             }
         } while (rc.GetCode() == K_TRY_AGAIN);
         RETURN_IF_NOT_OK(rc);
+        point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_CONNECT);
         rc = creator->second(hostPort, rpcStub);
+        point.Record();
         if (rc.IsError()) {
             LOG(ERROR) << "create rpc stub failed, rc: " << rc.ToString();
             LOG_IF_ERROR(Remove(hostPort, type), "remove rpc stub failed");
