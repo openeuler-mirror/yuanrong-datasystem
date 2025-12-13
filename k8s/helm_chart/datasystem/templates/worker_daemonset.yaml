@@ -134,6 +134,7 @@ spec:
         - -heartbeat_interval_ms={{ $.Values.global.reliability.heartbeatIntervalMs }}
         - -system_access_key={{ $.Values.global.akSk.systemAccessKey }}
         - -system_secret_key={{ $.Values.global.akSk.systemSecretKey }}
+        - -system_data_key={{ $.Values.global.akSk.systemDataKey }}
         - -tenant_access_key={{ $.Values.global.akSk.tenantAccessKey }}
         - -tenant_secret_key={{ $.Values.global.akSk.tenantSecretKey }}
         - -skip_authenticate={{ $.Values.global.akSk.skipAuthenticate }}
@@ -205,6 +206,7 @@ spec:
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
         - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}
+        - -urma_mode={{ $.Values.global.performance.urmaMode }}
         - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
         - -shared_disk_directory={{ $.Values.global.performance.sharedDiskDirectory }}
         - -shared_disk_size_mb={{ $.Values.global.performance.sharedDiskSize }}
@@ -214,6 +216,15 @@ spec:
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
         - -rolling_update_timeout_s={{ $.Values.global.rollingUpdateTimeoutS }}
         - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}
+        - -enable_rdma={{ $.Values.global.performance.enableRdma }}
+        - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}
+        - -enable_stream_data_verification={{ $.Values.global.reliability.enableStreamDataVerification }}
+        - -oc_io_from_l2cache_need_metadata={{ $.Values.global.l2Cache.ocIoFromL2CacheNeedMetadata }}
+        - -oc_worker_aggregate_merge_size={{ $.Values.global.performance.ocWorkerAggregateMergeSize | int64 }}
+        - -oc_worker_aggregate_single_max={{ $.Values.global.performance.ocWorkerAggregateSingleMax | int64 }}
+        - -oc_worker_worker_parallel_min={{ $.Values.global.performance.ocWorkerWorkerParallelMin }}
+        - -oc_worker_worker_parallel_nums={{ $.Values.global.performance.ocWorkerWorkerParallelNums }}
+        - -sc_encrypt_secret_key={{ $.Values.global.security.scEncryptSecretKey }}
         command:
         - /home/yuanrong/worker_entry.sh
         securityContext:

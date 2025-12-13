@@ -19,7 +19,7 @@
         "value": "100",
         "description": "Upper limit of the shared memory in percentage can be used by OC, must be within (0, 100]"
     },
-     "sc_shm_threshold_percentage": {
+    "sc_shm_threshold_percentage": {
         "value": "100",
         "description": "Upper limit of the shared memory in percentage can be used by SC, must be within (0, 100]"
     },
@@ -50,11 +50,11 @@
     "sc_regular_socket_num": {
         "value": "32",
         "description": "The number of regular backend socket for stream cache, must be great equal than 0."
-      },
+    },
     "sc_stream_socket_num": {
         "value": "32",
         "description": "The number of stream backend socket for stream cache, must be great equal than 0."
-      },
+    },
     "oc_worker_worker_direct_port": {
         "value": "0",
         "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Acceptable values:0 or a positive integer. 0 indicates disabled."
@@ -74,15 +74,15 @@
     "sc_gc_interval_ms": {
         "value": "50",
         "description": "Memory resource clean up interval."
-      },
+    },
     "sc_scan_interval_ms": {
         "value": "10",
         "description": "Scan interval for remote send"
-      },
+    },
     "sc_metrics_log_interval_s": {
         "value": "60",
         "description": "Interval between logging stream metrics"
-      },
+    },
     "sc_cache_pages": {
         "value": "16",
         "description": "Default number of cache pages"
@@ -226,7 +226,7 @@
     "rocksdb_write_mode": {
         "value": "async",
         "description": "Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb."
-    }, 
+    },
     "node_timeout_s": {
         "value": "60",
         "description": "Maximum time interval before a node is considered lost."
@@ -518,5 +518,41 @@
     "enable_redirect": {
         "value": "true",
         "description": "Enable query meta redirect when scale up or voluntary scale down, default is true"
+    },
+    "enable_rdma": {
+        "value": "false",
+        "description": "Option to turn on rdma for OC worker to worker data transfer, default false"
+    },
+    "rdma_register_whole_arena": {
+        "value": "true",
+        "description": "Register the whole arena as segment during init, otherwise, register each object as a segment"
+    },
+    "enable_stream_data_verification": {
+        "value": "false",
+        "description": "Option to verify if data from a producer is out of order"
+    },
+    "oc_io_from_l2cache_need_metadata": {
+        "value": "true",
+        "description": "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd"
+    },
+    "oc_worker_aggregate_merge_size": {
+        "value": "2097152",
+        "description": "Target batch size for worker worker responses, default is 2MB"
+    },
+    "oc_worker_aggregate_single_max": {
+        "value": "65536",
+        "description": "Max single item size for batching worker worker batch rsp, default is 64KB"
+    },
+    "oc_worker_worker_parallel_min": {
+        "value": "100",
+        "description": "Min data count for parallel worker worker batch rsp, default is 100"
+    },
+    "oc_worker_worker_parallel_nums": {
+        "value": "16",
+        "description": "worker worker batch rsp control nums, default 0 means unlimited"
+    },
+    "sc_encrypt_secret_key": {
+        "value": "",
+        "description": "The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes after decryption"
     }
 }
