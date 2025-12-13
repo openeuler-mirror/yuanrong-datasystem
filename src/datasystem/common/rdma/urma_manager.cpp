@@ -678,7 +678,7 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
         // Got the event, now get CR for the event
         // Event mode can poll one CR at a time
         cnt = urma_poll_jfc(urmaJfc, numPollCRS, &completeRecords[0]);
-        INJECT_POINT("UrmaManager.CheckCompletionRecordStatus", [&completeRecords](int index) {
+        INJECT_POINT("UrmaManager.CheckCompletionRecordStatus", [&completeRecords]() {
             completeRecords[0].status = URMA_CR_REM_ACCESS_ABORT_ERR;
             return Status::OK();
         });
