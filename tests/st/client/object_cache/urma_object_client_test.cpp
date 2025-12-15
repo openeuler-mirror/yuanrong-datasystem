@@ -438,6 +438,35 @@ TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
     DS_ASSERT_NOT_OK(client1->Get(keys, valuesGet));
 }
 
+
+TEST_F(UrmaObjectClientDisableDataReplicationTest, TestMultiLocalGet)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const int numKV = 100;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        values.emplace_back("values_" + std::to_string(i));
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client->Set(keys[i], values[i]));
+    }
+
+    std::vector<std::string> valuesGet;
+    std::vector<Optional<ReadOnlyBuffer>> buffers;
+    DS_ASSERT_OK(client->Get(keys, valuesGet));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    DS_ASSERT_OK(client->Get(keys, buffers));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+    ASSERT_EQ(keys.size(), buffers.size());
+}
+
 #ifdef USE_URMA
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetSmallWithError)
 {
