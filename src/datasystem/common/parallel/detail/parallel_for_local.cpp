@@ -36,7 +36,7 @@ void ParallelThreadPool::InitThreadPool(int minThreadNum, int maxThreadNum)
     if (isInit_.compare_exchange_strong(expected, true)) {
         threadPool_ = std::make_unique<ThreadPool>(minThreadNum, maxThreadNum, "parallel_for");
         threadPool_->SetWarnLevel(ThreadPool::WarnLevel::NO_WARN);
-        threadNum_ = maxThreadNum == 0 ? minThreadNum : maxThreadNum;
+        threadNum_ = maxThreadNum == 0 ? minThreadNum : std::min(minThreadNum, maxThreadNum);
     }
 }
 
