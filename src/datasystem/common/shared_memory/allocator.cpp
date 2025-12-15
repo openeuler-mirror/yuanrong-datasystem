@@ -98,6 +98,7 @@ Status Allocator::InitSharedDisk(uint64_t size)
 Status Allocator::InitDevMemory(uint64_t devDevSize, uint64_t devHostSize)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(devDevSize > 0, K_INVALID, "Got invalid dev device memory init!");
+    INJECT_POINT_NO_RETURN("Allocator.InitDevMemory");
     devDeviceMemStats_ = std::make_unique<ResourcePool>(devDevSize);
     devHostMemStats_ = std::make_unique<ResourcePool>(devHostSize);
     return Status::OK();
@@ -111,12 +112,11 @@ bool Allocator::IsDiskAvailable()
 Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool scaling, ssize_t decayMs,
                        int objectThreshold, int streamThreshold)
 {
-    RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold, streamThreshold));
-    RETURN_IF_NOT_OK(InitSharedDisk(shdSize));
-
     if (arenaManager_) {
         return Status::OK();
     }
+    RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold, streamThreshold));
+    RETURN_IF_NOT_OK(InitSharedDisk(shdSize));
     arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
     DevMemFuncRegister emptyRegister;
     arenaManager_->Init(emptyRegister);
@@ -126,10 +126,10 @@ Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool s
 Status Allocator::InitWithoutShm(uint64_t devDevSize, uint64_t devHostSize, DevMemFuncRegister memFuncRegister,
                                  bool populate, bool scaling, ssize_t decayMs)
 {
-    RETURN_IF_NOT_OK(InitDevMemory(devDevSize, devHostSize));
     if (arenaManager_) {
         return Status::OK();
     }
+    RETURN_IF_NOT_OK(InitDevMemory(devDevSize, devHostSize));
     arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
     arenaManager_->Init(memFuncRegister);
     return Status::OK();
@@ -290,6 +290,7 @@ Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, Servic
     RETURN_IF_NOT_OK(arenaManager_->GetArenaGroup({ tenantId, cacheType }, arenaGroup));
     auto stats = GetResourcePoolByType(serviceType, cacheType);
     RETURN_IF_NOT_OK(arenaGroup->FreeMemory(pointer, bytesFree, bytesRealFree, stats->Usage()));
+    INJECT_POINT("Allocator.FreeMemory.PostFreeMemoryPreSubUsage");
 
     if (arenaGroup->GetMemoryUsage() == 0) {
         arenaManager_->SetReleaseableTenant({ tenantId, cacheType });
