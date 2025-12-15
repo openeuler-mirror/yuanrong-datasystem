@@ -288,7 +288,7 @@ public:
 
     /**
      * @brief Remove subscribe
-     * @param[in] key  the subscribe key.
+     * @param[in] key The subscribe key.
      */
     void RemoveSubscribe(const std::string &key);
 

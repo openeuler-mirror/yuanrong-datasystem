@@ -129,7 +129,7 @@ public:
      * @param clientId The identifier of the client to be excluded.
      * @return K_OK on success; the error code otherwise.
      */
-    Status ClearAllLocationsExceptClient(const std::string& clientId);
+    Status ClearAllLocationsExceptClient(const std::string &clientId);
 
     /**
      * @brief Remove single location.

@@ -212,7 +212,7 @@ Status ObjectDirectory::ClearAllLocations()
     return Status::OK();
 }
 
-Status ObjectDirectory::ClearAllLocationsExceptClient(const std::string& clientId)
+Status ObjectDirectory::ClearAllLocationsExceptClient(const std::string &clientId)
 {
     for (const auto &iter : locMap_) {
         if (iter.second.location_state() == PENDING_REMOVE) {
