@@ -125,6 +125,13 @@ public:
     Status ClearAllLocations();
 
     /**
+     * @brief Clear all locations and notify clients except the specified one to clear meta.
+     * @param clientId The identifier of the client to be excluded.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status ClearAllLocationsExceptClient(const std::string &clientId);
+
+    /**
      * @brief Remove single location.
      * @param[in] clientId  The client id.
      * @param[in] deviceId The device id.

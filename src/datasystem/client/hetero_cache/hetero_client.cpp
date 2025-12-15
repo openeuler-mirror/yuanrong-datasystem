@@ -217,6 +217,7 @@ Status HeteroClient::DevSubscribe(const std::vector<std::string> &keys, const st
 Status HeteroClient::DevDelete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
+    PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DEV_DELETE);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVDELETE);
     auto ret = impl_->DeleteDevObjects(keys, failedKeys);
@@ -246,6 +247,7 @@ Status HeteroClient::DevLocalDelete(const std::vector<std::string> &keys, std::v
 
 std::shared_future<AsyncResult> HeteroClient::AsyncDevDelete(const std::vector<std::string> &keys)
 {
+    PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNC_DEV_DELETE);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     std::shared_future<AsyncResult> future = impl_->AsyncDeleteDevObjects(keys);
     return future;

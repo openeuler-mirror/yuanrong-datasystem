@@ -60,8 +60,6 @@ using NodeRestartEvent = EventSubscribers<NODE_RESTART, std::function<Status(con
 using CheckNewNodeMetaEvent = EventSubscribers<CHECK_NEW_NODE_META, std::function<Status(const HostPort &)>>;
 using StartClearWorkerMeta = EventSubscribers<START_CLEAR_WORKER_META, std::function<Status(const HostPort &)>>;
 using ClearWorkerMeta = EventSubscribers<CLEAR_WORKER_META, std::function<Status(const HostPort &)>>;
-using CheckAndClearDeviceMeta =
-    EventSubscribers<CHECK_AND_CLEAR_DEVICE_META, std::function<Status(const std::string &)>>;
 using ReplicaEvent = EventSubscribers<REPLICA, std::function<Status(mvccpb::Event &)>>;
 using RecoverMasterAppRefEvent =
     EventSubscribers<RECOVER_MASTER_APP_REF,

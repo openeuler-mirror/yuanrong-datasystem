@@ -291,13 +291,6 @@ public:
     void RemoveSubscribe(const std::string &devObjectKey);
 
     /**
-     * @brief Wait for delete finish
-     * @param[in] key The key for delete.
-     * @param[in] timeoutMs timeout .
-     */
-    Status WaitForKeyDelete(const std::string &key, const int64_t timeoutMs);
-
-    /**
      * @brief The loop of p2p send.
      */
     void RunP2PSendLoop();
@@ -459,8 +452,6 @@ private:
     // User expected timeout notification time transferred by the client during P2P initialization.
     int32_t connectTimeOutMS_;
     bool clientEnableP2Ptransfer_ = false;
-    std::condition_variable exitEventCv_;
-    std::mutex exitEventMutex_;
 };
 }  // namespace datasystem
 

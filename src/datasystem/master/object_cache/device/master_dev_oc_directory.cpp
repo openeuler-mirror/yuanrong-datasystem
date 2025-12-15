@@ -212,6 +212,26 @@ Status ObjectDirectory::ClearAllLocations()
     return Status::OK();
 }
 
+Status ObjectDirectory::ClearAllLocationsExceptClient(const std::string &clientId)
+{
+    for (const auto &iter : locMap_) {
+        if (iter.second.location_state() == PENDING_REMOVE) {
+            RETURN_STATUS(K_TRY_AGAIN, FormatString("Location: %s is pending remove", iter.first));
+        }
+    }
+
+    // Notify all clients except the requester to remove this object's metadata
+    for (const auto &iter : locMap_) {
+        // The client invoking the Delete operation will clean up its local metadata itself,
+        // so the master doesn't need to send LIFECYCLE_EXIT_NOTIFICATION to it.
+        if (iter.second.client_id() != clientId) {
+            removeLocCallBack_(metaPb_.object_key(), iter.second.client_id(), iter.second.device_id());
+        }
+    }
+    removeDirCallBack_(metaPb_.object_key());
+    return Status::OK();
+}
+
 Status ObjectDirectory::ClearClientAllLocations(const std::string &clientId)
 {
     auto guard = GetLockGuard();
@@ -235,6 +255,7 @@ Status ObjectDirectory::ClearClientAllLocations(const std::string &clientId)
     }
     return Status::OK();
 }
+
 void ObjectDirectory::AddLocation(const std::string &clientId, int32_t deviceId)
 {
     DeviceLocationPb loc;

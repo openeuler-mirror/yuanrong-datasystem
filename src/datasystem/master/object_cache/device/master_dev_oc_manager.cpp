@@ -61,9 +61,6 @@ void MasterDevOcManager::Init()
 
     masterDevDeadLockManager_ = std::make_shared<MasterDevDeadLockManager>();
 
-    CheckAndClearDeviceMeta::GetInstance().AddSubscriber(
-        MASTER_DEV_OC_MANAGER, [this](const std::string &objectKey) { return CheckAndClearDeviceMeta(objectKey); });
-
     ObjectDirectory::RegisterCallback(std::bind(&MasterDevOcManager::NotifyClientClearMeta, this, std::placeholders::_1,
                                                 std::placeholders::_2, std::placeholders::_3),
                                       [this](const std::string &objectKey) {
@@ -622,7 +619,7 @@ Status MasterDevOcManager::ProcessGetDataInfoRequest(
         req.sub_timeout());
 }
 
-Status MasterDevOcManager::CheckAndClearDeviceMeta(const std::string &objectKey)
+Status MasterDevOcManager::CheckAndClearDeviceMeta(const std::string &clientId, const std::string &objectKey)
 {
     LOG(INFO) << "check and clear device meta: " << objectKey;
     std::shared_ptr<ObjectDirectory> objDirectory;
@@ -640,12 +637,11 @@ Status MasterDevOcManager::CheckAndClearDeviceMeta(const std::string &objectKey)
         }
         return status;
     }
-    return objDirectory->ClearAllLocations();
+    return objDirectory->ClearAllLocationsExceptClient(clientId);
 }
 
 MasterDevOcManager::~MasterDevOcManager()
 {
-    CheckAndClearDeviceMeta::GetInstance().RemoveSubscriber(MASTER_DEV_OC_MANAGER);
 }
 
 void MasterDevOcManager::GetDeviceMetasMatch(std::function<bool(const std::string &)> &&matchFunc,
@@ -702,7 +698,7 @@ void MasterDevOcManager::DeleteDevObjectsImpl(const DeleteAllCopyMetaReqPb &requ
     auto clientId = request.address();
     auto lastRc = Status::OK();
     for (const auto &objKey : request.object_keys()) {
-        auto rc = CheckAndClearDeviceMeta(objKey);
+        auto rc = CheckAndClearDeviceMeta(clientId, objKey);
         if (rc.IsError()) {
             lastRc = rc;
             resp.add_failed_object_keys(objKey);

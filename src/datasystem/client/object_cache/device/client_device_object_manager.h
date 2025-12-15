@@ -287,12 +287,10 @@ public:
     void SetThreadInterruptFlag2True();
 
     /**
-     * @brief Wait for delete finish
-     * @param[in] keys The key list for delete.
-     * @param[in] timeoutMs timeout .
-     * @param[out] failKeys fail key list for delete.
+     * @brief Remove subscribe
+     * @param[in] key The subscribe key.
      */
-    void WaitForDeleteKeys(const std::vector<std::string> &keys, int64_t timeoutMs, std::vector<std::string> &failKeys);
+    void RemoveSubscribe(const std::string &key);
 
 private:
     acl::AclDeviceManager *devInterImpl_;

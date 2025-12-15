@@ -3231,11 +3231,6 @@ void OCMetadataManager::GDecreaseRefImpl(
             Status rc = Status::OK();
             if (found && nestedRefManager_->CheckIsNoneNestedRefById(objKey)) {
                 needDelete = true;
-            } else {
-                rc = CheckAndClearDeviceMeta::GetInstance().NotifyAll(objKey);
-                if (rc.IsOk()) {
-                    LOG(INFO) << FormatString("[ObjectKey %s] is device object, ignore", objKey);
-                }
             }
 
             if (!found && rc.IsError() && !FLAGS_oc_io_from_l2cache_need_metadata) {
