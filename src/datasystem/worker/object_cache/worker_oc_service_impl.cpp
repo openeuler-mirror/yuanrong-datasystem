@@ -244,7 +244,7 @@ Status WorkerOCServiceImpl::Init()
     RETURN_IF_NOT_OK(ResetHealthProbe());
 
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localMasterAddress_);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Hash master get failed, Init failed");
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "get worker master api failed, Init failed");
     const int minOcGetThreadNum = 8;
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ = std::make_shared<ThreadPool>(minOcGetThreadNum, 0, "OcGetThread"));
     RETURN_IF_EXCEPTION_OCCURS(memCpyThreadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM));
