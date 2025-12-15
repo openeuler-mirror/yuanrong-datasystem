@@ -46,6 +46,7 @@ DS_DECLARE_string(cluster_name);
 namespace datasystem {
 namespace st {
 class STCScaleUpTest : public STCScaleTest {
+public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
@@ -57,7 +58,49 @@ class STCScaleUpTest : public STCScaleTest {
         opts.waitWorkerReady = false;
         opts.disableRocksDB = false;
     }
+
+    void TriggerRedirect(uint32_t workerIdxRouteFrom, uint32_t workerIdxScaleUp, std::function<void()> funcNeedRedirect)
+    {
+        // Redirection occurs when the hash ring's version of the worker is lower than that of the master.
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIdxRouteFrom, "HashRing.UpdateRing.sleep", "sleep(2000)"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(
+            WORKER, workerIdxRouteFrom,
+            "EtcdClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere", "sleep(100)"));
+        std::thread trd(funcNeedRedirect);
+        StartWorkerAndWaitReady({ workerIdxScaleUp });
+        trd.join();
+    }
 };
+
+TEST_F(STCScaleUpTest, TestRedirectExpire)
+{
+    DS_ASSERT_OK(cluster_->StartOBS());
+    StartWorkerAndWaitReady({ 0, 1 });
+    InitTestKVClient(0, client_);
+    InitTestKVClient(1, client1_);
+
+    std::vector<std::string> keys;
+    std::string keyPrefix = "test_expire_redirect";
+    std::string value = "any_val";
+    size_t keyNum = 50;
+    for (size_t i = 0; i < keyNum; ++i) {
+        keys.emplace_back(keyPrefix + std::to_string(i));
+        DS_ASSERT_OK(client_->Set(keys.back(), value));
+    }
+
+    auto expireFunc = [this, &keys]() {
+        uint64_t ttlSecond = 1;
+        std::vector<std::string> failedKeys;
+        DS_ASSERT_OK(client1_->Expire(keys, ttlSecond, failedKeys));
+    };
+    TriggerRedirect(1, 2, std::move(expireFunc));  // 2 is worker index.
+
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(2500));  // Sleep for 2500 milliseconds, waiting for expiration.
+    std::vector<std::string> getValue;
+    auto rc = client_->Get(keys, getValue);
+    ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
+}
 
 TEST_F(STCScaleUpTest, TestRedirectSubscribe)
 {
@@ -95,7 +138,7 @@ TEST_F(STCScaleUpTest, TestRedirectSubscribe)
 
     // Redirection occurs only when the hash ring's version of the worker is lower than that of the master.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "HashRing.UpdateRing.sleep", "sleep(2000)"));
-    StartWorkerAndWaitReady({ 2 });  // 2 is worker index。
+    StartWorkerAndWaitReady({ 2 });  // 2 is worker index.
 
     for (auto &trd : trds) {
         trd.join();

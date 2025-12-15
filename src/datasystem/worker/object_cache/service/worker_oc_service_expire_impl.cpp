@@ -177,7 +177,32 @@ Status WorkerOcServiceExpireImpl::ExpireFromMaster(std::vector<std::string> obje
     absentObj.insert(absentObj.end(), resp.absent_object_keys().begin(), resp.absent_object_keys().end());
     objExpireFailed.insert(resp.failed_object_keys().begin(), resp.failed_object_keys().end());
     *rsp.mutable_last_rc() = resp.last_rc();
-
+    RETURN_OK_IF_TRUE(resp.info().empty());
+    for (const auto &redirectInfo : resp.info()) {
+        master::ExpireReqPb redirectReq;
+        master::ExpireRspPb redirectRsp;
+        *redirectReq.mutable_object_keys() = { redirectInfo.change_meta_ids().begin(),
+                                                redirectInfo.change_meta_ids().end() };
+        redirectReq.set_ttl_second(ttlSeconds);
+        HostPort redirectMasterAddr;
+        RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
+        auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
+        CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
+                                    "hash master get failed, ExpireFromMaster failed");
+        rc = redirectWorkerMasterApi->Expire(redirectReq, redirectRsp);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Expire meta from master[" << masterAddr.ToString()
+                            << "] failed, msg: " << rc.ToString();
+            rsp.mutable_last_rc()->set_error_code(rc.GetCode());
+            rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+            objExpireFailed.insert(redirectReq.object_keys().begin(), redirectReq.object_keys().end());
+            continue;
+        }
+        absentObj.insert(absentObj.end(), redirectRsp.absent_object_keys().begin(),
+                            redirectRsp.absent_object_keys().end());
+        objExpireFailed.insert(redirectRsp.failed_object_keys().begin(), redirectRsp.failed_object_keys().end());
+        *rsp.mutable_last_rc() = redirectRsp.last_rc();
+    }
     return Status::OK();
 }
 

@@ -4490,12 +4490,11 @@ Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
     std::vector<std::string> notRedirectObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
     FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
-    std::set<std::string> sortedObjectKeys = { notRedirectObjectKeys.begin(), notRedirectObjectKeys.end() };
-    auto &objectKeys = req.object_keys();
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     Status lastRc;
     std::vector<std::string> notExistObjectKeys;
-    for (auto it = objectKeys.begin(); it != objectKeys.end(); ++it) {
-        std::string objectKey = *it;
+    for (auto it = notRedirectObjectKeys.begin(); it != notRedirectObjectKeys.end(); ++it) {
+        const std::string &objectKey = *it;
         {
             std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
             TbbMetaTable::accessor accessor;
@@ -4514,7 +4513,6 @@ Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
             lastRc = rc;
         }
     }
-    FillRedirectResponseInfos(rsp, notExistObjectKeys, req.redirect());
     if (!notExistObjectKeys.empty()) {
         lastRc = Status(K_NOT_FOUND,
                         FormatString("[Expire] Some object can not be found in metaTable_, size: %d, object: %s",

@@ -205,9 +205,8 @@ protected:
                     isMoving = true;
                     rsp.set_meta_is_moving(isMoving);
                     return;
-                } else {
-                    info->add_change_meta_ids(id);
                 }
+                info->add_change_meta_ids(id);
             }
         }
     }

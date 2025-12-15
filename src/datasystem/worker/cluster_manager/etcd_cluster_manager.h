@@ -39,6 +39,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -382,6 +383,8 @@ public:
             MetaAddrInfo metaAddrInfo;
             std::optional<Status> rc;
             rc.emplace();
+            INJECT_POINT_NO_RETURN(
+                "EtcdClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere");
             FetchDestAddrFromAnywhere(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo, disableCache);
             auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
             con.emplace_back(objectKey);
