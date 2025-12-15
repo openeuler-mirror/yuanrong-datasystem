@@ -90,7 +90,7 @@ ZmqService::~ZmqService()
         try {
             agent->Stop();
             agent->CloseSocket();
-        } catch  (const std::exception &e) {
+        } catch (const std::exception &e) {
             VLOG(ERROR) << "A work agent got an exception during Stop(): " << e.what();
         }
     }
@@ -1034,9 +1034,13 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
     VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeout) << ", dbName:" << dbName;
     Timer timer;
     auto func = [=]() {
+        const int64_t US_TO_NS = 1000;
+        const int64_t MS_TO_US = 1000;
+        int64_t elapsedUs = timer.ElapsedMicroSecond();
+        PerfPoint::RecordElapsed(PerfKey::ZMQ_SERVER_TASK_DELAY, elapsedUs * US_TO_NS);
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         if (timeout > 0) {
-            int64_t elapsed = timer.ElapsedMilliSecond();
+            int64_t elapsed = elapsedUs / MS_TO_US;
             INJECT_POINT_NO_RETURN("ZmqService::RouteToRegBackend",
                                    [&elapsed](int64_t inElapsed) { elapsed = inElapsed; });
             reqTimeoutDuration.Init(timeout - elapsed);
@@ -1147,7 +1151,7 @@ Status ZmqService::FrontendToBackend(int fd, const EventType type, ZmqMetaMsgFra
         MetaPb meta;
         ZmqCurveUserId userId;
         // A direct connection from stub needs to be parsed.
-        Status rc = ParseMsgFrames(p.second, meta, fd, type, userId);
+        Status rc = ParseMsgFrames(p.second, meta, fd, type, userId, PerfKey::ZMQ_NETWORK_TRANSFER_SERVER_UDS);
         if (rc.IsError()) {
             // Log the message for anything else, and move on.
             RETURN_STATUS_LOG_ERROR(StatusCode::K_OK, "Incompatible rpc request. Ignore");
@@ -1216,12 +1220,11 @@ Status ZmqService::ProcessAccept(int listenFd)
             int maxWorkAgents = MAX_EXCLUSIVE_CONNECTIONS_LIMIT;
 
             INJECT_POINT_NO_RETURN("ZmqService.ProcessAccept.FakeFullPool", [&maxWorkAgents](int32_t fakeMax) {
-                 maxWorkAgents = fakeMax;
-                 LOG(INFO) << "Testcase injection has faked the max work agents to: " << maxWorkAgents;
+                maxWorkAgents = fakeMax;
+                LOG(INFO) << "Testcase injection has faked the max work agents to: " << maxWorkAgents;
             });
 
-            RETURN_IF_EXCEPTION_OCCURS(workAgentThreadPool_ =
-                                       std::make_unique<ThreadPool>(1, maxWorkAgents));
+            RETURN_IF_EXCEPTION_OCCURS(workAgentThreadPool_ = std::make_unique<ThreadPool>(1, maxWorkAgents));
         }
 
         // grab the pool usage stats for debug purposes

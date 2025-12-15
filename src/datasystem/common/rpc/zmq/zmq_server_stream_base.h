@@ -362,9 +362,11 @@ public:
             VLOG(RPC_LOG_LEVEL) << "Server uses unary socket sending rc " << Status::OK() << " message "
                                 << LogHelper::IgnoreSensitive(pb) << " back to client " << meta_.client_id()
                                 << std::endl;
+            PerfPoint point(PerfKey::ZMQ_RESPONSE_PROTO_TO_MSG);
             ZmqMessage rcMsg = StatusToZmqMessage(Status::OK());
             outMsg_.push_back(std::move(rcMsg));
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
+            point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_RESPONSE_SIZE_AFTER_SERIALIZE, outMsg_.back().Size());
             RETURN_OK_IF_TRUE(HasRecvPayloadOp());
             if (enableMsgQ_) {
@@ -473,7 +475,9 @@ public:
             VLOG(RPC_LOG_LEVEL) << "Server uses unary socket reading";
             ZmqMessage protoMsg = std::move(inMsg_.front());
             inMsg_.pop_front();
+            PerfPoint point(PerfKey::ZMQ_REQUEST_MSG_TO_PROTO);
             RETURN_IF_NOT_OK(ParseFromZmqMessage(protoMsg, pb));
+            point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_REQUEST_SIZE_BEFORE_DESERIALIZE, protoMsg.Size());
             g_SerializedMessage = std::move(protoMsg);
             g_ReqAk = meta_.access_key();

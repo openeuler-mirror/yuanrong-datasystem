@@ -18,6 +18,8 @@
 #include <string>
 #include <iostream>
 
+#include "datasystem/common/perf/perf_manager.h"
+
 // This macro is for use in the void Run() function. Since Run() cannot return an error, it logs
 // the error, closes the socket, and then breaks out of any code by returning.
 // Since Run() is the main thread loop, this results in thread exit after it returns.
@@ -55,7 +57,8 @@ Status WorkAgent::ClientToService(ZmqMetaMsgFrames &p)
     // Parse the message, populate the meta from the frames into p.first
     ZmqCurveUserId userId;
     EventType type = uds_ ? EventType::V1MTP : (decoder_->V2Client() ? EventType::V2MTP : EventType::V1MTP);
-    RETURN_IF_NOT_OK(ParseMsgFrames(frames, p.first, sockFd_.GetFd(), type, userId));
+    RETURN_IF_NOT_OK(
+        ParseMsgFrames(frames, p.first, sockFd_.GetFd(), type, userId, PerfKey::ZMQ_NETWORK_TRANSFER_SERVER_UDS));
 
     // The meta has been extracted into p.first. Remaining frames will be moved into p.second
     p.second = std::move(frames);

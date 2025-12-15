@@ -262,8 +262,10 @@ inline bool IsRpcError(const Status &status)
  * @param[out] meta Parsed metaPb structure.
  * @param[in] fd File descriptor.
  * @param[in] type Event type.
+ * @param[in] transferPerfKey The perf key.
  */
-Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, EventType type, ZmqCurveUserId &userId);
+Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, EventType type, ZmqCurveUserId &userId,
+                      PerfKey transferPerfKey);
 
 /**
  * @brief Acknowledge a protobuf request sent earlier and get is reply.
