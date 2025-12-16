@@ -64,6 +64,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/object/object_enum.h"
@@ -243,7 +244,14 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         return rc;
     }
 
-    LOG(INFO) << "Start to init worker client at address: " << ipAddress_.ToString();
+    // Validate the port number individually first, then validate entire host port.
+    CHECK_FAIL_RETURN_STATUS(Validator::ValidatePort("Port", ipAddress_.Port()), K_INVALID,
+        FormatString("Invalid port number: %d", ipAddress_.Port()));
+    std::string hostPortStr = ipAddress_.ToString();
+    CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
+        FormatString("Invalid IP address/port. Host %s, port: %d", ipAddress_.Host(), ipAddress_.Port()));
+
+    LOG(INFO) << "Start to init worker client at address: " << hostPortStr;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
     CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
@@ -347,7 +355,7 @@ void ObjectClientImpl::ProcessWorkerLost()
         memoryRefCount_.clear();
     }
 
-    LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_;
+    LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_.ToString();
     std::vector<std::string> ids;
     {
         std::lock_guard<std::shared_timed_mutex> l(globalRefMutex_);
