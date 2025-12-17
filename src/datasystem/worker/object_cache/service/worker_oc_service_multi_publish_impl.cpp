@@ -89,7 +89,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_info_size()),
-                                         StatusCode::K_INVALID, "invalid object info size");
+                                         StatusCode::K_INVALID, "The objectKeys size exceed " +
+                                         std::to_string(OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::vector<ShmKey> shmUnits;
     shmUnits.reserve(req.object_info_size());
     for (const auto &info : req.object_info()) {

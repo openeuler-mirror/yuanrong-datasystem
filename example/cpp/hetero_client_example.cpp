@@ -139,6 +139,7 @@ int main(int argc, char *argv[])
     ConnectOptions connectOpts{ .host = ip,
                                 .port = port,
                                 .connectTimeoutMs = 3 * 1000,
+                                .requestTimeoutMs = 0,
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };

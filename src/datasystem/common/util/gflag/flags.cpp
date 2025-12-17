@@ -161,7 +161,7 @@ void Flags::StartConfigFileHandle(const std::string &configFilePath,
     // Check whether the configfile has been modified.
     int64_t modifiedTime;
     rc = GetFileModifiedTime(configFilePath, modifiedTime);
-    LOG_IF_ERROR(rc, rc.ToString());
+    LOG_IF_ERROR(rc, "GetFileModifiedTime failed");
     if (rc.IsError()) {
         return;
     }
@@ -189,7 +189,7 @@ std::unordered_map<std::string, std::string> Flags::ProcessFlagFile(const std::s
     size_t fileSize = fileContext.size();
     if (fileSize > FILE_SIZE_MAX_LIMIT) {
         LOG(ERROR) << FormatString(
-            "The size of the configuration file is %s Byte, which exceeds the max limit of %s Byte.", fileSize,
+            "The size of the configuration file is %zu Byte, which exceeds the max limit of %zu Byte.", fileSize,
             FILE_SIZE_MAX_LIMIT);
         return flagMap;
     }

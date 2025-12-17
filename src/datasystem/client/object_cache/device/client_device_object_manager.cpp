@@ -75,7 +75,9 @@ Status ClientDeviceObjectManager::CreateDevBufferImpl(std::shared_ptr<DeviceBuff
     // check input parameter
     RETURN_IF_NOT_OK(objClientImpl_->IsClientReady());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo->devObjKey.empty(), K_INVALID, "The devObjKey is empty");
-    CHECK_FAIL_RETURN_STATUS(!devBlobList.blobs.empty(), K_INVALID, "The devBlobList is empty");
+    CHECK_FAIL_RETURN_STATUS(
+        !devBlobList.blobs.empty(), K_INVALID,
+        "DeviceBlobList.blobs array cannot be empty. Please ensure at least one blob is provided for processing.");
     RETURN_IF_NOT_OK(ObjectClientImpl::CheckValidObjectKey(bufferInfo->devObjKey));
 
     int32_t deviceIdxNow = -1;
