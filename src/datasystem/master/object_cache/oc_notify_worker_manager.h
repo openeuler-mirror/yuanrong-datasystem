@@ -107,7 +107,7 @@ public:
      * @return Status of the call.
      */
     Status NotifySubscribeMeta(const std::string &objectKey, const ObjectMeta &objectMeta,
-                               const std::string &subAddress, bool isFromOtherAz);
+                               const std::string &subAddress, bool isFromOtherAz, uint64_t &subTimeoutMs);
 
     /**
      * @brief clear data without meta.

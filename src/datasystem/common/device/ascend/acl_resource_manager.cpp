@@ -22,6 +22,7 @@
 #include <string>
 
 #include "datasystem/common/device/ascend/ffts_dispatcher.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
@@ -117,7 +118,7 @@ Status AclMemMgrBase::Allocate(const std::vector<BufferMetaInfo> &bMeta, std::ve
     uint64_t batchSize = bMeta.size();
     uint64_t maxAllocateSize = 0;
     if (type_ == AllocateType::DEV_DEVICE) {
-        for (auto meta : bMeta) {
+        for (const auto &meta : bMeta) {
             maxAllocateSize = std::max(maxAllocateSize, meta.size);
         }
         batchSize = memoryPool.size();
@@ -197,6 +198,7 @@ Status AclResourceManager::Init()
             return Status::OK();
         }
     }
+    INJECT_POINT_NO_RETURN("AclResourceManager.Init");
 
     auto devInterImpl = acl::AclDeviceManager::Instance();
     struct DevMemFuncRegister regFunc;
@@ -204,7 +206,7 @@ Status AclResourceManager::Init()
     auto hostAllocFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
         return devInterImpl->aclrtMallocHost(&(*ptr), maxSize);
     };
-    auto hostdestroyFunc = [devInterImpl](void *ptr, size_t destroySize) -> Status {
+    auto hostdestroyFunc = [](void *ptr, size_t destroySize) -> Status {
         (void)destroySize;
         if (ptr) {
             // do not free in instance yet (destroy func : devInterImpl->aclrtFreeHost(ptr))
@@ -216,7 +218,7 @@ Status AclResourceManager::Init()
     auto devAllocFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
         return devInterImpl->aclrtMalloc(&(*ptr), maxSize, ACL_MEM_MALLOC_HUGE_FIRST);
     };
-    auto devdestroyFunc = [devInterImpl](void *ptr, size_t destroySize) -> Status {
+    auto devdestroyFunc = [](void *ptr, size_t destroySize) -> Status {
         (void)destroySize;
         if (ptr) {
             // do not free in instance yet (destroy func : devInterImpl->aclrtFree(ptr)

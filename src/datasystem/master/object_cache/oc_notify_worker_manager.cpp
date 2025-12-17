@@ -658,7 +658,8 @@ Status OCNotifyWorkerManager::AsyncSendUpdateObject(const std::string &objectKey
 }
 
 Status OCNotifyWorkerManager::NotifySubscribeMeta(const std::string &objectKey, const ObjectMeta &objectMeta,
-                                                  const std::string &subAddress, bool isFromOtherAz)
+                                                  const std::string &subAddress, bool isFromOtherAz,
+                                                  uint64_t &subTimeoutMs)
 {
     LOG(INFO) << FormatString("Notify object meta to subscriber: %s, objectKey: %s", subAddress, objectKey);
     RETURN_IF_NOT_OK(CheckWorkerIsHealthy(subAddress));
@@ -671,6 +672,7 @@ Status OCNotifyWorkerManager::NotifySubscribeMeta(const std::string &objectKey, 
     request.mutable_meta()->set_object_key(objectKey);
     request.set_address(objectMeta.meta.primary_address());
     request.set_is_from_other_az(isFromOtherAz);
+    request.set_timeout(subTimeoutMs);
     RETURN_IF_NOT_OK(masterWorkerApi->PublishMeta(request, response));
     LOG(INFO) << FormatString("Notify object meta %s done.", objectKey);
     return Status::OK();

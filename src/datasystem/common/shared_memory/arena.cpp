@@ -61,9 +61,9 @@ DS_DECLARE_string(shared_disk_directory);
 
 namespace datasystem {
 namespace memory {
-thread_local bool needFallocate = false;
-thread_local uint64_t requestSize = 0;
-thread_local bool fakeAllocate = false;  // fake allocate only need allochook, no need to commit.
+thread_local bool g_NeedFallocate = false;
+thread_local uint64_t g_RequestSize = 0;
+thread_local bool g_FakeAllocate = false;  // fake allocate only need allochook, no need to commit.
 
 inline uintptr_t AlignCeiling(uintptr_t addr, uintptr_t alignment)
 {
@@ -138,8 +138,8 @@ Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size,
     CHECK_FAIL_RETURN_STATUS(!arenas_.empty(), StatusCode::K_RUNTIME_ERROR, "arenas_ is empty");
     CHECK_FAIL_RETURN_STATUS(arenas_.size() > index, StatusCode::K_RUNTIME_ERROR, "index is bigger than arenas_ size");
     using clock = std::chrono::steady_clock;
-    needFallocate = populate;
-    requestSize = size;
+    g_NeedFallocate = populate;
+    g_RequestSize = size;
     auto arenaCount = arenas_.size();
     auto arena = arenas_[index];
     auto arenaId = arena->GetArenaId();
@@ -401,7 +401,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
 
 void ArenaManager::FakeAllocate(CacheType type, const std::vector<uint64_t> &arenaInds, const uint64_t maxSize)
 {
-    fakeAllocate = true;
+    g_FakeAllocate = true;
     for (const auto &arenaInd : arenaInds) {
         uint64_t hookSize = maxSize;
         void *pointer;
@@ -420,7 +420,7 @@ void ArenaManager::FakeAllocate(CacheType type, const std::vector<uint64_t> &are
             Jemalloc::Free(arenaInd, pointer);
         }
     }
-    fakeAllocate = false;
+    g_FakeAllocate = false;
 }
 
 Status ArenaManager::CreateArenaGroup(const std::string &tenantId, CacheType type, uint64_t maxSize,
@@ -714,11 +714,11 @@ Arena::~Arena() noexcept
 
 void *Arena::AllocHook(size_t size, size_t alignment, bool *zero, bool *commit)
 {
-    if (fakeAllocate) {
+    if (g_FakeAllocate) {
         *commit = false;
     }
     bool needCommit = *commit && !*zero;
-    if (fakeAllocate && !firstFakeHook_.load()) {
+    if (g_FakeAllocate && !firstFakeHook_.load()) {
         LOG(INFO) << "fake hook before, no need to hook again";
         return nullptr;
     }
@@ -733,7 +733,7 @@ void *Arena::AllocHook(size_t size, size_t alignment, bool *zero, bool *commit)
         }
         return addr;
     }
-    if (fakeAllocate) {
+    if (g_FakeAllocate) {
         firstFakeHook_ = false;
     }
     if (needCommit) {
@@ -762,7 +762,7 @@ bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size
     VLOG(1) << "CommitHook arena " << arenaId_;
     (void)size;
     if (commit) {
-        if (fakeAllocate) {
+        if (g_FakeAllocate) {
             LOG(INFO) << "fake allocate no need to commit";
             return true;
         }
@@ -781,14 +781,14 @@ bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size
 bool Arena::CommitImpl(void *addr, size_t offset, size_t length)
 {
     PerfPoint point(PerfKey::JEMALLOC_COMMIT);
-    if (!needFallocate && length > Arena::pageSize_) {
-        if (length == requestSize) {
+    if (!g_NeedFallocate && length > Arena::pageSize_) {
+        if (length == g_RequestSize) {
             return false;
-        } else if (length > requestSize) {
-            offset += requestSize;
-            length -= requestSize;
+        } else if (length > g_RequestSize) {
+            offset += g_RequestSize;
+            length -= g_RequestSize;
         } else {
-            LOG(WARNING) << "Request size is: " << requestSize << " but length is " << length
+            LOG(WARNING) << "Request size is: " << g_RequestSize << " but length is " << length
                          << ", it should not happen";
         }
     }

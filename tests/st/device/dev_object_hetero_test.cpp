@@ -27,11 +27,13 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -46,6 +48,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/hetero_client.h"
 #include "datasystem/client/hetero_cache/device_util.h"
+#include "datasystem/utils/status.h"
 #include "device/dev_test_helper.h"
 
 using datasystem::memory::DevMemFuncRegister;
@@ -708,6 +711,55 @@ TEST_F(DevObjectHeteroTest, DISABLED_TestAsyncMSetD2H)
     std::vector<std::string> failedIds;
     DS_ASSERT_OK(heteroClient->Delete(inObjectKeys, failedIds));
     ASSERT_TRUE(failedIds.empty());
+}
+
+TEST_F(DevObjectHeteroTest, DISABLED_TestMultiAsyncMSetD2H)
+{
+    size_t deviceId = 0;
+    size_t blkSz = 1024;
+    size_t numOfObjs = 1;
+    size_t totalSz = 10 * 1024;
+    size_t blksPerObj = totalSz / blkSz / numOfObjs;
+    std::uniform_int_distribution<> distrib(0, numOfObjs - 1);
+
+    InitAcl(deviceId);
+
+    std::shared_ptr<DsClient> client;
+    InitTestDsClient(0, client);
+    std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+
+    std::vector<std::vector<std::pair<std::vector<std::string>, std::vector<DeviceBlobList>>>> data;
+    int threadNum = 8;
+    int loopNum = 2;
+    data.resize(loopNum);
+    for (int i = 0; i < threadNum; ++i) {
+        for (int j = 0; j < loopNum; ++j) {
+            std::vector<std::string> inObjectKeys;
+            for (auto i = 0ul; i < numOfObjs; i++) {
+                inObjectKeys.emplace_back(GetStringUuid());
+            }
+            std::vector<DeviceBlobList> swapOutBlobList;
+            std::vector<DeviceBlobList> swapInBlobList;
+            PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+            data[j].emplace_back(std::make_pair(std::move(inObjectKeys), std::move(swapOutBlobList)));
+        }
+    }
+    DS_ASSERT_OK(datasystem::inject::Set("Allocator.InitDevMemory", "5*sleep(100)"));
+    DS_ASSERT_OK(datasystem::inject::Set("AclResourceManager.Init", "5*sleep(500)"));
+    DS_ASSERT_OK(datasystem::inject::Set("Allocator.FreeMemory.PostFreeMemoryPreSubUsage", "5*sleep(1000)"));
+    auto func = [&](int i) {
+        for (int j = 0; j < loopNum; ++j) {
+            std::shared_future<AsyncResult> future = heteroClient->AsyncMSetD2H(data[j][i].first, data[j][i].second);
+            DS_ASSERT_OK((future.get().status));
+        }
+    };
+    std::vector<std::thread> trds;
+    for (int i = 0; i < threadNum; ++i) {
+        trds.emplace_back(func, i);
+    }
+    for (auto &trd : trds) {
+        trd.join();
+    }
 }
 
 TEST_F(DevObjectHeteroTest, DISABLED_TestSwapInAndOutWithAcl)

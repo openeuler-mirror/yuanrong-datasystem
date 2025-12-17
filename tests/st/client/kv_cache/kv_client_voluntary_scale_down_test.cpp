@@ -2001,6 +2001,44 @@ TEST_F(KVCacheClientClusterState, LEVEL1_TestWorkerRecovery)
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(fun1, waitTime, K_OK));
 }
 
+TEST_F(KVCacheClientClusterState, TestWorkerRecoveryWhenRestart)
+{
+    client0_.reset();
+    client1_.reset();
+    client2_.reset();
+    client3_.reset();
+    std::string value;
+    DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
+    db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
+    auto pos = value.find(";");
+    auto state = value.substr(pos + 1);
+    ASSERT_EQ(state, "ready");
+    DS_ASSERT_OK(externalCluster_->KillWorker(2)); // index is 2
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "heartbeat.sleep", "1*sleep(4000)"));
+    std::function<Status()> fun = [&] {
+        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
+        pos = value.find(";");
+        state = value.substr(pos + 1);
+        if (state == "recover") {
+            return Status::OK();
+        }
+        return Status(K_RUNTIME_ERROR, "not equal");
+    };
+    std::function<Status()> fun1 = [&] {
+        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
+        pos = value.find(";");
+        state = value.substr(pos + 1);
+        if (state == "ready") {
+            return Status::OK();
+        }
+        return Status(K_RUNTIME_ERROR, "not equal");
+    };
+    int waitTime = 20;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(fun, waitTime, K_OK));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, " -client_reconnect_wait_s=1")); // index is 2
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(fun1, waitTime, K_OK));
+}
+
 TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeavingTimeout)
 {
     std::string value;

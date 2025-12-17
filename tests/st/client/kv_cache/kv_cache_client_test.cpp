@@ -224,6 +224,21 @@ TEST_F(KVCacheClientTest, TestRemoteGetStatus)
     ASSERT_TRUE(status.GetMsg().find("Cannot get object from worker and l2 cache") != std::string::npos);
 }
 
+TEST_F(KVCacheClientTest, SubscribeTimeoutTest)
+{
+    std::shared_ptr<KVClient> client1, client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+    auto key = client1->GenerateKey();
+    std::thread t1([&] () {
+        std::string val;
+        DS_ASSERT_OK(client1->Get(key, val, 20000));  // timeout is 20000 ms
+    });
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.remote_get_failed", "1*sleep(15000)"));
+    DS_ASSERT_OK(client2->Set(key, "aaaaaa"));
+    t1.join();
+}
+
 TEST_F(KVCacheClientTest, TestSingleKey)
 {
     std::shared_ptr<KVClient> client;

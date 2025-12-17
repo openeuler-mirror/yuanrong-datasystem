@@ -2471,8 +2471,11 @@ void OCMetadataManager::UpdateSubscribeCache(const std::string &objectKey, const
         auto subMeta = subConstAccessor->second;
         // Notify subscribe meta info.
         if (subMeta->address_ != objectMeta.meta.primary_address()) {
+            uint64_t timeoutMs = subMeta->timer_->GetTimestamp() > TimerQueue::GetInstance()->CurrentTimeMs()
+                                     ? subMeta->timer_->GetTimestamp() - TimerQueue::GetInstance()->CurrentTimeMs()
+                                     : 0;
             Status status = notifyWorkerManager_->NotifySubscribeMeta(objectKey, objectMeta, subMeta->address_,
-                                                                      subMeta->isFromOtherAz_);
+                                                                      subMeta->isFromOtherAz_, timeoutMs);
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("Notify subscribe of worker: %s for object: %s failed, status: %s.",
                                            subMeta->address_, objectKey, status.ToString());
