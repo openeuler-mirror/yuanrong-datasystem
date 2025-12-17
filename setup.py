@@ -154,10 +154,30 @@ def delete_unuse_so(directory: Path):
     """delete unuse so"""
     for item in directory.iterdir():
         if item.is_file():
+            # skip ucx so
+            if item.name.startswith("libuc"):
+                continue
             if item.name not in all_dependencies_for_datasystem:
                 item.unlink()
         elif item.is_dir():
             delete_unuse_so(item)
+
+
+def check_and_refactor_ucx_lib(lib_path):
+    """
+    check and refactor ucx lib
+    """
+    ucp_file_path = os.path.join(lib_path, "libucp.so")
+    if not os.path.exists(ucp_file_path):
+        return
+
+    ucx_lib_path = os.path.join(lib_path, "ucx")
+    os.makedirs(ucx_lib_path, exist_ok=True)
+
+    src_path = Path(lib_path)
+    ucp_so_files = list(src_path.glob("libuct_*")) + list(src_path.glob("libucx_*"))
+    for file_path in ucp_so_files:
+        shutil.move(str(file_path), os.path.join(ucx_lib_path, file_path.name))
 
 
 def update_permissions(path):
@@ -207,6 +227,7 @@ class BuildPy(build_py):
         lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem', 'lib')
         lib_path = Path(lib_dir)
         delete_unuse_so(lib_path)
+        check_and_refactor_ucx_lib(lib_dir)
 
 
 class CustomBdistWheel(_bdist_wheel):

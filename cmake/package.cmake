@@ -21,10 +21,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
 # Datasystem rpc libraries.
 ############################################################
 set(RPC_LIB_PATH "${ZeroMQ_LIB_PATH}/libzmq.so*")
-if (BUILD_WITH_RDMA)
-        list(APPEND RPC_LIB_PATH "${UCX_LIB_PATH}/libuc*.so*")
-        list(APPEND UCX_LIB_PATH "${UCX_LIB_PATH}/libuc*.so*")
-endif()
+
 ############################################################
 # Datasystem header files and share libraries.
 ############################################################
@@ -195,11 +192,29 @@ install_file_pattern(
 )
 
 if (BUILD_WITH_RDMA)
-    install_file_pattern(
-        PATH_PATTERN ${UCX_LIB_PATH}
-        DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}
-        PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
-    )
+        list(APPEND UCX_BASE_LIB_PATH
+                "${UCX_LIB_PATH}/libucp.so*"
+                "${UCX_LIB_PATH}/libucs*.so*"
+                "${UCX_LIB_PATH}/libuct.so*"
+                "${UCX_LIB_PATH}/libucm.so*"
+        )
+
+        list(APPEND UCX_IB_LIB_PATH
+                "${UCX_LIB_PATH}/libuct_*.so*"
+                "${UCX_LIB_PATH}/libucx*.so*"
+        )
+
+        install_file_pattern(
+                PATH_PATTERN ${UCX_BASE_LIB_PATH}
+                DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}
+                PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
+        )
+
+        install_file_pattern(
+                PATH_PATTERN ${UCX_IB_LIB_PATH}
+                DEST_DIR "${DATASYSTEM_SERVICE_LIBPATH}/ucx"
+                PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
+        )
 endif()
 ############################################################
 # Datasystem deploy scripts generate zone.
