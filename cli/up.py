@@ -100,6 +100,7 @@ class Command(BaseCommand, ParallelMixin):
         ng.add_argument(
             "-l", "--localalloc",
             action="store_true",
+            default=None,
             help="Sets memory allocation to occur on the NUMA node where the allocating CPU "
                 "resides (the \"local node\"). If the local node has no free memory, the "
                 "kernel will fall back to nearby nodes."

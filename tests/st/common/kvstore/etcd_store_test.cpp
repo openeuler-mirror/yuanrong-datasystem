@@ -919,7 +919,7 @@ TEST_F(EtcdSslTest, TestCreateSessionWithTls)
     std::string pass = "example";
     SensitiveValue passphrase(pass);
 
-    std::string CA;
+    SensitiveValue CA;
     SensitiveValue crt;
     SensitiveValue key;
     Status res = ParsePKCS12(stsP12Path, passphrase, CA, crt, key);
@@ -972,9 +972,7 @@ TEST_F(EtcdSslWithPassphraseTest, TestCreateSessionWithTls)
     InitTestEtcdInstance();
 
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession;
-    DS_ASSERT_OK(GrpcSession<etcdserverpb::KV>::ReadEtcdCertAndCreateSession(
-        FLAGS_etcd_address, FLAGS_etcd_ca, FLAGS_etcd_cert, FLAGS_etcd_key, "etcd", FLAGS_etcd_passphrase_path, true,
-        rpcSession));
+    DS_ASSERT_OK(GrpcSession<etcdserverpb::KV>::CreateSession(FLAGS_etcd_address, rpcSession, "", "", "", "etcd"));
 
     // put success
     etcdserverpb::PutRequest req;

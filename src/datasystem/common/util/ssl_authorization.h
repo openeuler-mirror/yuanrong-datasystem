@@ -78,8 +78,8 @@ void LoadSslStrings();
  * @param[out] key the private key
  * @return Status of the call.
  */
-Status ParsePKCS12(const std::string &p12Path, const SensitiveValue &passphrase, std::string &ca, SensitiveValue &cert,
-                   SensitiveValue &key);
+Status ParsePKCS12(const std::string &p12Path, const SensitiveValue &passphrase, SensitiveValue &ca,
+                   SensitiveValue &cert, SensitiveValue &key);
 
 /**
  * @brief Decrypt the RSA private key to memory in pem format.

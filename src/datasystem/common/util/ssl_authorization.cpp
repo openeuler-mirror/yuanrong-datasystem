@@ -131,8 +131,8 @@ std::string GetSslErrorMessage()
     return "ssl is ok";
 }
 
-Status ParsePKCS12(const std::string &p12Path, const SensitiveValue &passphrase, std::string &ca, SensitiveValue &cert,
-                   SensitiveValue &key)
+Status ParsePKCS12(const std::string &p12Path, const SensitiveValue &passphrase, SensitiveValue &ca,
+                   SensitiveValue &cert, SensitiveValue &key)
 {
     EVP_PKEY *pkey = nullptr;
     X509 *crt = nullptr;
@@ -177,14 +177,16 @@ Status ParsePKCS12(const std::string &p12Path, const SensitiveValue &passphrase,
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(result != 0, K_RUNTIME_ERROR, "failed to BIO_get_mem_ptr");
     cert = SensitiveValue(bptr->data, bptr->length);
     // get ca
+    std::string tempCa;
     for (int32_t i = 0; caCert && i < sk_X509_num(caCert); i++) {
         BIO_reset(bio);
         result = PEM_write_bio_X509(bio, sk_X509_value(caCert, i));
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(result != 0, K_RUNTIME_ERROR, "failed to write ca to bio");
         result = BIO_get_mem_ptr(bio, &bptr);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(result != 0, K_RUNTIME_ERROR, "failed to BIO_get_mem_ptr");
-        ca += std::string(bptr->data, bptr->length);
+        tempCa += std::string(bptr->data, bptr->length);
     }
+    ca = SensitiveValue(tempCa);
     return Status::OK();
 }
 

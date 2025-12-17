@@ -1,6 +1,7 @@
 set(ENCRYPT_SRCS
         encrypt_kit.cpp
         secret_manager.cpp
+        phrase_pem_tls.cpp
         )
 
 set(ENCRYPT_DEPEND_LIBS
