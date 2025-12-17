@@ -51,7 +51,7 @@ StringView
 
     .. cpp:function:: constexpr const char *data() const noexcept
 
-        获取 StringView 的数据指针。
+        获取 ``StringView`` 的数据指针。
 
         返回：
             ``StringView`` 的数据指针。

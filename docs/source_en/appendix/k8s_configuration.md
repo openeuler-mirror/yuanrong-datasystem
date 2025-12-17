@@ -333,18 +333,18 @@ global:
 
 | Configuration | Type | Default | Description |
 |-----|------|---------|-------------|
-| global.azName | string | `"AZ1"` | Available Zone name |
-| global.crossAz.otherAzNames | string | `""` | Specify other az names using the same etcd. Only split by ',' |
+| global.clusterName | string | `"AZ1"` | Available Zone name |
+| global.crossAz.otherClusterNames | string | `""` | Specify other az names using the same etcd. Only split by ',' |
 | global.crossAz.crossAzGetDataFromWorker | bool | `true` | Control whether to try to get data from other AZ's worker first. If false, data will be retrieved directly from the L2 cache |
 | global.crossAz.crossAzGetMetaFromWorker | bool | `false` | Control whether to get meta data from other AZ's worker, if false then get meta data from local AZ |
 
 **Example**:
 ```yaml
 global:
-  azName: "az1"
+  clusterName: "az1"
 
   crossAz:
-    otherAzNames: "az2,az3,az4"
+    otherClusterNames: "az2,az3,az4"
     crossAzGetDataFromWorker: true
     crossAzGetMetaFromWorker: false
 ```
