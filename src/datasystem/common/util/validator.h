@@ -27,6 +27,7 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <arpa/inet.h>
 
 #include <linux/limits.h>
 #include <re2/re2.h>
@@ -122,6 +123,40 @@ public:
             return false;
         }
         return true;
+    }
+
+    /**
+     * @brief Validate a string is a valid ipv4 address.
+     * @param[in] flagName IP address flag.
+     * @param[in] value The string to be checked.
+     * @return True if valid.
+     */
+    static bool ValidateHostIPv4(const char *flagName, const std::string &value)
+    {
+        in_addr  addr{};
+        if (inet_pton(AF_INET, value.c_str(), &addr) == 1) {
+            return true;
+        }
+        LOG(ERROR) << FormatString("The value of %s flag is %s, which is a illegal IPv4 address format.", flagName,
+                                   value);
+        return false;
+    }
+
+    /**
+     * @brief Validate a string is a valid ipv6 address.
+     * @param[in] flagName IP address flag.
+     * @param[in] value The string to be checked.
+     * @return True if valid.
+     */
+    static bool ValidateHostIPv6(const char *flagName, const std::string &value)
+    {
+        in6_addr addr{};
+        if (inet_pton(AF_INET6, value.c_str(), &addr) == 1) {
+            return true;
+        }
+        LOG(ERROR) << FormatString("The value of %s flag is %s, which is a illegal IPv6 address format.", flagName,
+                                   value);
+        return false;
     }
 
     /**

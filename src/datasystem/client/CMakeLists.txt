@@ -80,6 +80,24 @@ list(APPEND common_etcd_client
         common_util
         hash_ring_protos_client)
 
+list(APPEND ROUTER_CLIENT_SRCS
+        router_client.cpp)
+
+list(APPEND ROUTER_CLIENT_DEPEND_LIBS
+        common_etcd_client
+        etcdapi_proto
+        common_util
+        hash_ring_protos_client)
+
+# static library for ut.
+add_library(ds_router_client_static STATIC ${ROUTER_CLIENT_SRCS})
+target_link_libraries(ds_router_client_static PRIVATE "${ROUTER_CLIENT_DEPEND_LIBS}")
+ 
+# shared library for user.
+add_library(ds_router_client SHARED ${ROUTER_CLIENT_SRCS})
+target_compile_options(ds_router_client PRIVATE "-fvisibility=hidden")
+target_link_libraries(ds_router_client PRIVATE "${ROUTER_CLIENT_DEPEND_LIBS}")
+
 add_dependencies(datasystem_static
         share_memory_protos_client
         posix_protos_client

@@ -68,6 +68,9 @@ if (BUILD_HETERO)
             PERMISSIONS OWNER_READ GROUP_READ)
 endif()
 
+set(ds_router_client_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+install_datasystem_target(ds_router_client EXPORT_NAME DatasystemTargets)
+
 set(SDK_SPDLOG_LIB
     "${SPDLOG_LIB_PATH}/libds-spdlog.so*"
 )
