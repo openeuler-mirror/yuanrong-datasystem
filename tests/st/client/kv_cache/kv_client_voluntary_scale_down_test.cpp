@@ -21,6 +21,7 @@
 #include "cluster/external_cluster.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/kv_client.h"
@@ -1750,8 +1751,8 @@ public:
     {
         KVClientVoluntaryScaleDownWorkerDfxTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams =
-            "-shared_memory_size_mb=100 -v=2 -node_timeout_s=3 "
-            "-auto_del_dead_node=true -node_dead_timeout_s=6 ";
+            "-shared_memory_size_mb=100 -v=2 -node_timeout_s=2 "
+            "-auto_del_dead_node=true -node_dead_timeout_s=3 ";
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
             opts.workerConfigs.emplace_back(HOST_IP_PREFIX + std::to_string(i), GetFreePort());
             workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
@@ -1759,7 +1760,7 @@ public:
     }
 };
 
-TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, LEVEL1_TestRedirctDuringScaleDownFailedAndRestart)
+TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, TestRedirctDuringScaleDownFailedAndRestart)
 {
     StartWorkerAndWaitReady({ 0, 1 });
     InitTestKVClient(0, client0_);
@@ -1767,15 +1768,18 @@ TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, LEVEL1_TestRedirctDuringScaleDo
     client0_.reset();
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashring.after_finish_add_node_info", "call()"));
     VoluntaryScaleDownInject(0);
-    sleep(10);  // sleep 10s to wait for scale down.
-    DS_ASSERT_OK(cluster_->SetInjectAction(
-        WORKER, 1, "HashRingTaskExecutor.SubmitOneScaleUpTask.PreMarkAddNodeInfoFinished", "sleep(5000)"));
-    DS_ASSERT_OK(externalCluster_->StartWorker(0, HostPort(), ""));
-    sleep(3);  // sleep 3s to wait for worker1 to trigger the migration task of sacling up.
+    WaitAllNodesJoinIntoHashRing(1);
     InitTestKVClient(1, client1_);
+    DS_ASSERT_OK(cluster_->SetInjectAction(
+        WORKER, 1, "HashRingTaskExecutor.SubmitOneScaleUpTask.PreMarkAddNodeInfoFinished", "sleep(3000)"));
+    DS_ASSERT_OK(externalCluster_->StartWorker(0, HostPort(), ""));
+    // Wait for worker0 to write add_node_info so that worker1 can trigger the sacling up migration task.
+    WaitAddNodeInfoInHashRing();
+    // The metadata has now been migrated, but hash ring hasn't been updated yet.
+    // It's expected that SET requests will be routed to the node where the metadata has been migrated, so that GET can
+    // query meta successfully.
     DS_ASSERT_OK(client1_->Set(keyWithW0Id, "val"));
-    sleep(6);  // sleep 6s to wait for worker1 to update hash ring to mark the sacling up task finish.
-
+    WaitAllNodesJoinIntoHashRing(2);  // wait for 2 workers to join into hash ring.
     ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, 0, 20).IsOk());  // wait 20s to restart.
     InitTestKVClient(0, client0_);
     std::string valToGet;
@@ -1783,8 +1787,8 @@ TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, LEVEL1_TestRedirctDuringScaleDo
     ASSERT_EQ(valToGet, "val");
 }
 
-// Test the scenario where records in updateWorkerMap are deleted by scheduled tasks during metadata migration
-TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, DISABLED_TestRedirctDuringScaleDownFailedAndRestart2)
+// Test the scenario where records in update_worker_map are deleted by scheduled tasks during metadata migration.
+TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, TestRedirctDuringScaleDownFailedAndRestart2)
 {
     StartWorkerAndWaitReady({ 0, 1 });
     InitTestKVClient(0, client0_);
@@ -1792,18 +1796,21 @@ TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, DISABLED_TestRedirctDuringScale
     client0_.reset();
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashring.after_finish_add_node_info", "call()"));
     VoluntaryScaleDownInject(0);
-    sleep(10);  // sleep 10s to wait for scale down.
+    WaitAllNodesJoinIntoHashRing(1);
     InitTestKVClient(1, client1_);
     DS_ASSERT_OK(client1_->Set(keyWithW0Id, "val"));
-
-    DS_ASSERT_OK(externalCluster_->StartWorker(0, HostPort(), ""));
+    // To prevent worker0 from receiving the hash ring indicating that the scale up is complete, otherwise the
+    // redirection cannot be triggered.
     DS_ASSERT_OK(cluster_->SetInjectAction(
         WORKER, 1, "HashRingTaskExecutor.SubmitOneScaleUpTask.PreMarkAddNodeInfoFinished", "sleep(5000)"));
-    sleep(3);  // Wait 3s for worker0 to finish writing add_node_info for itself.
+    DS_ASSERT_OK(externalCluster_->StartWorker(0, HostPort(), ""));
+    // Wait for worker0 to write add_node_info so that worker1 can trigger the sacling up migration task.
+    WaitAddNodeInfoInHashRing();
+    // The background task in worker1 will delete the workerId of worker0 in update_worker_map in advance.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "HashRingTools.WorkerUuidRemovable", "return()"));
-    // Redirection is triggered only when the client updates the hash ring slowly.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "HashRing.UpdateRing.sleep", "sleep(10000)"));
-    sleep(6);  // sleep 6s to wait for worker1 to update hash ring to mark the sacling up task finish.
+    // After receiving the migration from worker1, refuse to update the hash ring to ensure that a redirection will be
+    // triggered.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "HashRing.UpdateRing.sleep", "return()"));
     ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, 0, 20).IsOk());  // wait 20s to restart.
     InitTestKVClient(0, client0_);
     std::string valToGet;
