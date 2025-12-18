@@ -50,6 +50,74 @@ class HeteroD2HTest : public DevTestHelper {
     }
 };
 
+class HeteroD2HThroughTcpTest : public DevTestHelper {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        auto workerNum = 2;
+        opts.numWorkers = workerNum;
+        opts.workerGflagParams =
+            " -ipc_through_shared_memory=false -log_monitor=true -v=1 -authorization_enable=true "
+            "-shared_memory_size_mb=4096 "
+            "-enable_fallocate=false -arena_per_tenant=2 ";
+        opts.enableDistributedMaster = "false";
+        opts.numEtcd = 1;
+        FLAGS_v = 1;
+    }
+
+    void SetUp() override
+    {
+        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
+        if (ascend_root == nullptr) {
+            DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
+            DS_ASSERT_OK(datasystem::inject::Set("client.GetOrCreateHcclComm.setIsSameNode", "call(0)"));
+            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly(Return(&managerMock_));
+        }
+        ExternalClusterTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        ExternalClusterTest::TearDown();
+    }
+};
+
+TEST_F(HeteroD2HThroughTcpTest, SetGet)
+{
+    std::shared_ptr<HeteroClient> c0, c1;
+    size_t numOfObjs = 10, blksPerObj = 1024, blkSz = 1024;
+    std::vector<std::string> inObjectKeys, failedKeys;
+    std::vector<DeviceBlobList> devGetBlobList, devSetBlobList;
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        inObjectKeys.emplace_back(FormatString("key_%s", j));
+    }
+    auto retcode = -1;
+    auto hook = [&retcode]() { exit(retcode); };
+    auto setPid = fork();
+    if (setPid == 0) {
+        Raii raii(hook);
+        InitAcl(0);
+        InitTestHeteroClient(0, c0);
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, 0);
+        DS_ASSERT_OK(c0->MSetD2H(inObjectKeys, devSetBlobList));
+        c0.reset();
+        retcode = 0;
+    }
+    ASSERT_FALSE(WaitForChildFork(setPid));
+    auto getPid = fork();
+    if (getPid == 0) {
+        Raii raii(hook);
+        InitTestHeteroClient(1, c1);
+        InitAcl(1);
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, 1);
+        DS_ASSERT_OK(c1->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, 0));
+        ASSERT_TRUE(failedKeys.empty());
+        DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
+        c1.reset();
+        retcode = 0;
+    }
+    ASSERT_FALSE(WaitForChildFork(getPid));
+}
+
 TEST_F(HeteroD2HTest, Perf)
 {
     std::vector<uint64_t> keyNums{ 1, 10, 450, 500, 1000 };
