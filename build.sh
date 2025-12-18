@@ -39,6 +39,7 @@ Options:
     -P Build Python sdk, choose from: on/off/<python_root_dir>, default: on. Accepts on (default) to auto-detect a Python
        version from the system environment, off to disable the build, or a <python_root_dir> path to prioritize the Python
        at that specified location for search.
+    -G Build Go sdk, choose from: on/off, default: off.
     -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'on'.
 
     For communication layer
@@ -147,6 +148,7 @@ function init_default_opts() {
   # For packaging mutil language
   export PACKAGE_PYTHON="on"
   export PYTHON_ROOT_DIR=""
+  export PACKAGE_GO="off"
 
   # Whether to build device object.
   export BUILD_HETERO="on"
@@ -299,7 +301,8 @@ function run_example() {
     export LD_LIBRARY_PATH=$new_ld_path
     echo -e "---- Sanitize LD_LIBRARY_PATH from ${old_ld_path} to ${new_ld_path}"
 
-    bash "${DATASYSTEM_DIR}/example/run-example.sh" || (remove_running_pids && go_die "---- Smoke Testing failed!")
+    bash "${DATASYSTEM_DIR}/example/run-example.sh" "${PACKAGE_GO}" ||
+      (remove_running_pids && go_die "---- Smoke Testing failed!")
     echo -e "---- Smoke Testing success!"
     echo -e "---- [TIMER] Run example: $(($(date +%s)-$baseTime_s)) seconds"
 
@@ -341,6 +344,13 @@ function run_ut_python() {
   cd ${python_test_dir}
   python3 -m unittest || (remove_running_pids && go_die "---- run datasystem testcases failed!")
   echo -e "---- run datasystem python testcases success!"
+}
+
+# Build Golang client
+function build_golang_client() {
+  echo -e "---- Start building Golang client..."
+  bash "${DATASYSTEM_DIR}/scripts/package_go_sdk.sh" "${BUILD_DIR}" "$INSTALL_DIR" || go_die "Build Golang client failed!"
+  echo -e "---- Build Golang client success!"
 }
 
 function clean_dirs() {
@@ -476,6 +486,7 @@ function build_datasystem()
     "-DBUILD_THREAD_NUM:STRING=${BUILD_THREAD_NUM}"
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
+    "-DBUILD_GO_API:BOOL=${PACKAGE_GO}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
     "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
     "-DBUILD_WITH_RDMA:BOOL=${BUILD_WITH_RDMA}"
@@ -546,6 +557,14 @@ function build_datasystem()
     echo -e "---- [TIMER] Build example: $(($(date +%s)-$baseTime_s)) seconds"
   fi
 
+  #package golang client
+  if is_on "${PACKAGE_GO}"; then
+    baseTime_s=$(date +%s)
+    echo -e "---- start to package golang client!"
+    build_golang_client
+    echo -e "---- [TIMER] Build go client: $(($(date +%s)-$baseTime_s)) seconds"
+  fi
+  
   # package 
   cd "${INSTALL_DIR}"
   tar --remove-files -zcf yr-datasystem-v$(cat "${BASE_DIR}/VERSION").tar.gz datasystem
@@ -566,7 +585,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:P:X:R:D:C:M:x:m:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:G:P:X:R:D:C:M:x:m:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -643,6 +662,10 @@ function main() {
         echo -e "${USAGE}"
         exit 1
       fi
+      ;;
+    G)
+      check_on_off "${OPTARG}" G
+      PACKAGE_GO=${OPTARG}
       ;;
     p)
       check_on_off "${OPTARG}" p
