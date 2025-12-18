@@ -13,6 +13,7 @@ yr.datasystem.DsTensorClient
         - **client_public_key** (str) - 用于 curve 认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于 curve 认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于 curve 认证的服务端公钥。默认值： ``""`` 。
+        - **enable_remote_h2d** (bool) - 如果为 ``True`` ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： ``False`` 。
 
     输出：
         DsTensorClient
