@@ -44,7 +44,7 @@ Status
 
     .. cpp:function:: Status(StatusCode code, int lineOfCode, const std::string &fileName, const std::string &extra = "")
 
-        构造函数，根据 StatusCode、``lineOfCode``、``filenName`` 以及 ``extra`` 构造 ``Status`` 实例。
+        构造函数，根据 ``StatusCode``、``lineOfCode``、``filenName`` 以及 ``extra`` 构造 ``Status`` 实例。
 
         参数：
             - **code** - 错误码。

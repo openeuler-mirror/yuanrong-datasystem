@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/StreamClient';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="HeteroClient" href="HeteroClient.html" />
@@ -582,7 +583,7 @@ document.write(`
 <dd><p>建立与数据系统 Worker 之间的连接并完成初始化。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>reportWorkerLost</strong> - 当client与worker断连时是否向用户返回 <cite>K_SC_WORKER_WAS_LOST</cite> 错误码。默认为false。</p></li>
+<li><p><strong>reportWorkerLost</strong> - 当client与worker断连时是否向用户返回 <code class="docutils literal notranslate"><span class="pre">K_SC_WORKER_WAS_LOST</span></code> 错误码。默认为false。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示初始化成功，否则返回其他错误码。</p>
@@ -606,7 +607,7 @@ document.write(`
 <dd><p>创建生产者, 创建生产者时会创建流。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>streamName</strong> - 指定流的名称， 用于创建生产者。 <cite>streamName</cite> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>streamName</strong> - 指定流的名称， 用于创建生产者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
 <li><p><strong>outProducer</strong> - 传出参数，返回 std::shared_ptr&lt; <a class="reference internal" href="Producer.html#_CPPv48Producer" title="Producer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Producer</span></code></a> &gt; 用于生产数据。</p></li>
 <li><p><strong>producerConf</strong> - 设置参数，详见 <a class="reference internal" href="struct-ProducerConf.html#_CPPv412ProducerConf" title="ProducerConf"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ProducerConf</span></code></a> 章节。</p></li>
 </ul>
@@ -622,7 +623,7 @@ document.write(`
 <dd><p>创建消费者，创建消费者时会创建流。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>streamName</strong> - 指定流的名称， 用于创建消费者。 <cite>streamName</cite> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>streamName</strong> - 指定流的名称， 用于创建消费者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
 <li><p><strong>config</strong> - 设置参数，详见 <a class="reference internal" href="struct-SubscriptionConfig.html#_CPPv418SubscriptionConfig" title="SubscriptionConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code></a> 。</p></li>
 <li><p><strong>outConsumer</strong> - 传出参数，返回 std::shared_ptr&lt; <a class="reference internal" href="Consumer.html#_CPPv48Consumer" title="Consumer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Consumer</span></code></a> &gt; 用于消费数据。</p></li>
 <li><p><strong>autoAck</strong> - 设置参数，是否支持自动 <a class="reference internal" href="Consumer.html#_CPPv4N8Consumer3AckE8uint64_t" title="Consumer::Ack"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">Consumer::Ack()</span></code></a> 功能。</p></li>
@@ -653,8 +654,8 @@ document.write(`
 <dd><p>指定流的名称，查询流的生产者数量。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>streamName</strong> - 指定流的名称，查询该条流有多少个生产者。 <cite>streamName</cite> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
-<li><p><strong>gProducerNum</strong> - 传出参数， 指定 <cite>streamName</cite> 对应的生产者的数量。</p></li>
+<li><p><strong>streamName</strong> - 指定流的名称，查询该条流有多少个生产者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>gProducerNum</strong> - 传出参数， 指定 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 对应的生产者的数量。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示查询成功，否则返回其他错误码。</p>
@@ -668,8 +669,8 @@ document.write(`
 <dd><p>指定流的名称，查询流的消费者数量。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>streamName</strong> - 指定流的名称，查询该条流有多少消费者。 <cite>streamName</cite> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
-<li><p><strong>gConsumerNum</strong> - 传出参数， 指定 <cite>streamName</cite> 对应的消费者的数量。</p></li>
+<li><p><strong>streamName</strong> - 指定流的名称，查询该条流有多少消费者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>gConsumerNum</strong> - 传出参数， 指定 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 对应的消费者的数量。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示查询成功，否则返回其他错误码。</p>

@@ -555,14 +555,14 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
 |--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成 |
-|--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379" 需要放在numactl选项后，否则会报错|
+|--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 " --\<Args>  \<Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379" 需要放在numactl选项后，否则会报错|
 |--datasystem_home_dir &lt;DIR&gt; |-d &lt;DIR&gt; | 替换配置文件中当前路径的目录。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 datasystem_home_dir 的值 |
-|--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点。|
-|--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心。|
-|--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面。|
-|--preferred|-p | 设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点。|
-|--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败。 |
-|--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点。 |
+|--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
+|--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
+|--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面 |
+|--preferred|-p | 设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点 |
+|--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败  |
+|--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 
 > **绑核配置项注意事项**：
 > 
@@ -588,12 +588,12 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |-----------------------------|-----------|--------|
 |--cluster_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 指定集群配置文件的路径，配置文件（JSON格式）可通过generate_config生成 |
 |--datasystem_home_dir &lt;DIR&gt;  |-d &lt;DIR&gt; | 替换配置文件中当前路径的目录为`datasystem_home_dir`的值 |
-|--cpunodebind|-N | 仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点。|
-|--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心。 |
-|--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面。 |
+|--cpunodebind|-N | 仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
+|--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
+|--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面 |
 |--preferred|-p | 设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点 |
-|--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败。 |
-|--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点。 |
+|--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败 |
+|--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 
 
 > **绑核配置项注意事项**：
@@ -679,7 +679,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |-----|------|---------|-------------|
 | ipc_through_shared_memory | bool | `true` | datasystem-worker共享内存启用开关 |
 | unix_domain_socket_dir | string | `"./yr_datasystem/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
-| worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址 |
+| worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | enable_curve_zmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | curve_key_dir | string | `""` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
@@ -698,14 +698,14 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| etcd_address | string | `""` | ETCD 服务端访问地址 |
+| etcd_address | string | `""` | ETCD 服务端访问地址，格式为：ip:port, 例如：127.0.0.1:23456 |
 | enable_etcd_auth | bool | `false` | 是否启用 ETCD 认证 |
 | etcd_ca | string | `""` | CA明文证书，使用Base64编码 |
 | etcd_cert | string | `""` | 客户端明文证书，使用Base64转码 |
-| etcd_key | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语. |
-| etcd_passphrase_path | string | `""` | 密码短语的值，需加密并进行Base64转码。 |
+| etcd_key | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语 |
+| etcd_passphrase_path | string | `""` | 密码短语的值，需加密并进行Base64转码 |
 | etcd_meta_pool_size | int | `8` | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
-| etcd_target_name_override | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致。 |
+| etcd_target_name_override | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
 
 #### Spill相关配置
 

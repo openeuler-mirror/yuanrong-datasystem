@@ -53,14 +53,14 @@ Buffer
             - **timeoutSec** - 添加写锁的超时时间，默认为 60 秒。
 
         返回：
-            返回值状态码为 `K_OK` 时表示加写锁成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示加写锁成功，否则返回其他错误码。
 
     .. cpp:function:: Status UnWLatch()
 
         对 ``Buffer`` 解除写锁。
 
         返回：
-            返回值状态码为 `K_OK` 时表示加写锁成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示加写锁成功，否则返回其他错误码。
 
     .. cpp:function:: Status RLatch(uint64_t timeoutSec = 60)
 
@@ -73,25 +73,25 @@ Buffer
             - **timeoutSec** - 添加写锁的超时时间，默认为 60 秒。
 
         返回：
-            返回值状态码为 `K_OK` 时表示加写锁成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示加写锁成功，否则返回其他错误码。
 
     .. cpp:function:: Status UnRLatch()
 
         对 ``Buffer`` 解除读锁。
 
         返回：
-            返回值状态码为 `K_OK` 时表示加写锁成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示加写锁成功，否则返回其他错误码。
 
     .. cpp:function:: Status MemoryCopy(const void *data, uint64_t length)
 
-        将数据拷贝到 `Buffer` 的缓存。该函数具备多线程并行拷贝的能力，同时能拷贝超过 2GB 的连续内存地址。
+        将数据拷贝到 ``Buffer`` 的缓存。该函数具备多线程并行拷贝的能力，同时能拷贝超过 2GB 的连续内存地址。
 
         参数：
             - **data** - 需要拷贝的数据内存地址。
             - **length** - 需要拷贝的数据长度。
 
         返回：
-            返回值状态码为 `K_OK` 时表示数据拷贝成功，否则返回其他错误码。
+            返回值状态码为 ``StatusCode::K_OK`` 时表示数据拷贝成功，否则返回其他错误码。
 
         
  

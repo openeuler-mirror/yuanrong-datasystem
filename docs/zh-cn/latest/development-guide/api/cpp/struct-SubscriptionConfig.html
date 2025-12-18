@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/struct-SubscriptionConfig';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="Blob" href="struct-Blob.html" />
@@ -608,7 +609,7 @@ document.write(`
 <dd><p>拷贝构造函数。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>other</strong> - 一个指向 <cite>SubscriptionConfig</cite> 对象的引用。</p></li>
+<li><p><strong>other</strong> - 一个指向 <code class="docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code> 对象的引用。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回用于创建消费者的配置信息。</p>
@@ -622,7 +623,7 @@ document.write(`
 <dd><p>移动构造函数。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>other</strong> - 一个指向 <cite>SubscriptionConfig</cite> 对象的右值（临时对象或被移动对象）引用。</p></li>
+<li><p><strong>other</strong> - 一个指向 <code class="docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code> 对象的右值（临时对象或被移动对象）引用。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回用于创建消费者的配置信息。</p>
@@ -637,7 +638,7 @@ document.write(`
 <blockquote>
 <div><dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>other</strong> - <cite>SubscriptionConfig</cite> 对象的引用。</p></li>
+<li><p><strong>other</strong> - <code class="docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code> 对象的引用。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回用于创建消费者的配置信息。</p>
@@ -652,7 +653,7 @@ document.write(`
 <dd><p>重载 <cite>==</cite> 运算符。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>other</strong> - <cite>SubscriptionConfig</cite> 对象的引用。</p></li>
+<li><p><strong>other</strong> - <code class="docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code> 对象的引用。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>当每一个成员都相等时返回true, 否则返回false。</p>
@@ -666,7 +667,7 @@ document.write(`
 <dd><p>重载 <cite>！=</cite> 运算符。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>other</strong> - <cite>SubscriptionConfig</cite> 对象的引用。</p></li>
+<li><p><strong>other</strong> - <code class="docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code> 对象的引用。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>当每一个成员函数都相等时返回false, 否则返回true。</p>
@@ -677,12 +678,12 @@ document.write(`
 <p><strong>公共成员</strong>
 .. cpp:member:: static constexpr uint32_t SC_CACHE_CAPACITY = 32768</p>
 <blockquote>
-<div><p>静态常量 <cite>SC_CACHE_CAPACITY</cite> 的值为 32768</p>
+<div><p>静态常量 <code class="docutils literal notranslate"><span class="pre">SC_CACHE_CAPACITY</span></code> 的值为 32768</p>
 </div></blockquote>
 <dl class="cpp member">
 <dt class="sig sig-object cpp" id="_CPPv4N18SubscriptionConfig12SC_CACHE_LWME">
 <span id="_CPPv3N18SubscriptionConfig12SC_CACHE_LWME"></span><span id="_CPPv2N18SubscriptionConfig12SC_CACHE_LWME"></span><span id="SubscriptionConfig::SC_CACHE_LWM__uint16_t"></span><span class="k"><span class="pre">static</span></span><span class="w"> </span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><span class="n"><span class="pre">uint16_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">SC_CACHE_LWM</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><a class="headerlink" href="#_CPPv4N18SubscriptionConfig12SC_CACHE_LWME" title="Link to this definition">#</a><br /></dt>
-<dd><p>静态常量 <cite>SC_CACHE_LWM</cite> 的值为 0</p>
+<dd><p>静态常量 <code class="docutils literal notranslate"><span class="pre">SC_CACHE_LWM</span></code> 的值为 0</p>
 </dd></dl>
 
 <dl class="cpp member">

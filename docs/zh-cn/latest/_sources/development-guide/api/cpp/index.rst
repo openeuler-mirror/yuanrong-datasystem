@@ -91,11 +91,11 @@ Hetero接口
     * - :cpp:func:`HeteroClient::MSetD2H`
       - 批量将数据从异构设备(Device)缓存到数据系统主机(Host)侧。
     * - :cpp:func:`HeteroClient::MGetH2D`
-      - 批量从数据系统主机(Host)侧获取数据并直接写入到异构设备(Device)内存中。该接口与 :cpp:func:`MSetD2H` 配合使用。
+      - 批量从数据系统主机(Host)侧获取数据并直接写入到异构设备(Device)内存中。该接口与 :cpp:func:`HeteroClient::MSetD2H` 配合使用。
     * - :cpp:func:`HeteroClient::AsyncMSetD2H`
       - 批量将数据从异构设备(Device)异步缓存到数据系统主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。
     * - :cpp:func:`HeteroClient::AsyncMGetH2D`
-      - 批量将数据从系统主机(Host)异步获取到异构设备主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。与 :cpp:func:`AsyncMSetD2H` 配合使用。
+      - 批量将数据从系统主机(Host)异步获取到异构设备主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。与 :cpp:func:`HeteroClient::AsyncMSetD2H` 配合使用。
     * - :cpp:func:`HeteroClient::DevPublish`
       - 将异构设备上的内存作为数据系统的异构对象发布。异构对象可通过 DevSubscribe 获取。DevPublish 和 DevSubscribe 必须同时使用。
     * - :cpp:func:`HeteroClient::DevSubscribe`
@@ -107,7 +107,7 @@ Hetero接口
     * - :cpp:func:`HeteroClient::Delete`
       - 批量删除指定key(通过MSetD2H/AsyncMSetD2H缓存进来的key)。key不存在时视为删除成功。
     * - :cpp:func:`HeteroClient::AsyncDevDelete`
-      - 异步删除数据在异构设备的key(通过 :cpp:func:`DevMSet` 缓存的key)。执行此命令后，数据系统将不再管理与该key对应的设备内存。
+      - 异步删除数据在异构设备的key(通过 :cpp:func:`HeteroClient::DevMSet` 缓存的key)。执行此命令后，数据系统将不再管理与该key对应的设备内存。
     * - :cpp:func:`HeteroClient::DevDelete`
       - 批量删除数据在异构设备的key（由DevMset缓存的key）。执行此命令后，数据系统将不再管理与该key对应的设备内存。
     * - :cpp:func:`HeteroClient::DevLocalDelete`
@@ -187,18 +187,14 @@ Stream接口
       - 析构流缓存生产者实例，析构过程中会自动断开与 Worker 的连接，释放流缓存生产者持有的资源。
     * - :cpp:func:`Producer::Send`
       - Producer发送数据。
-    * - :cpp:func:`Producer::Send`
-      - Producer发送数据， 可以配置超时时间。
     * - :cpp:func:`Producer::Close`
       - 关闭生产者会触发刷新数据缓冲区。一旦关闭后，生产者不可再用。
     * - :cpp:func:`Consumer::Consumer`
       - 构造流缓存消费者实例。注：consumer对象并非线程安全，所以当有多个线程尝试调用同一个consumer做操作时会返回K_SC_STREAM_IN_USE错误码。
     * - :cpp:func:`Consumer::~Consumer`
       - 析构流缓存消费者实例，析构过程中会自动断开与 Worker 的连接，释放消费者持有的资源。
-    * - :cpp:func: Status `Consumer::Receive`
-      - 消费者接收数据带有订阅功能，接收数据会等待接收expectNum个elements的时候返回成功，或者当超时时间timeoutMs到达返回成功。
-    * - :cpp:func: Status `Consumer::Receive`
-      - 消费者获取到element后立刻返回。如果没有element，将等待直到超时时间到达。。
+    * - :cpp:func:`Consumer::Receive`
+      - 消费者接收数据。
     * - :cpp:func:`Consumer::Ack`
       - 消费者接收完某elementId标识的element后，需要确认已消费完，使得各个worker上可以获取到是否所有消费者都已经消费完的信息，若所有消费者都消费完某个Page， 可以触发内部的内存回收机制。若不Ack，则在消费者退出时候才会自动Ack。
     * - :cpp:func:`Consumer::Close`

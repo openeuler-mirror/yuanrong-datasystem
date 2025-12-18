@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/datasystem.kv_client.KVClient.mset';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="datasystem.kv_client.KVClient.msettx" href="datasystem.kv_client.KVClient.msettx.html" />
@@ -534,7 +535,7 @@ document.write(`
 <h1>datasystem.kv_client.KVClient.mset<a class="headerlink" href="#datasystem-kv-client-kvclient-mset" title="Link to this heading">#</a></h1>
 <dl class="py method">
 <dt class="sig sig-object py" id="datasystem.kv_client.KVClient.mset">
-<span class="sig-prename descclassname"><span class="pre">datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">mset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ttl_second</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.kv_client.KVClient.mset" title="Link to this definition">#</a></dt>
+<span class="sig-prename descclassname"><span class="pre">datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">mset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ttl_second</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">existence_opt</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">ExistenceOpt.NONE</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.kv_client.KVClient.mset" title="Link to this definition">#</a></dt>
 <dd><p>批量设置键值对。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
@@ -542,6 +543,7 @@ document.write(`
 <li><p><strong>vals</strong> (list) - 值列表。</p></li>
 <li><p><strong>write_mode</strong> (<a class="reference internal" href="datasystem.object_client.WriteMode.html#datasystem.object_client.WriteMode" title="datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.WriteMode</span></code></a>) - 控制数据是否写入二级缓存以增强数据可靠性。默认值：<code class="docutils literal notranslate"><span class="pre">WriteMode.NONE_L2_CACHE</span></code>。</p></li>
 <li><p><strong>ttl_second</strong> (int) - 控制数据的过期时间，超时会自动删除，单位为秒。0表示不会自动过期，需要通过调用 <a class="reference internal" href="datasystem.kv_client.KVClient.delete.html#datasystem.kv_client.KVClient.delete" title="datasystem.kv_client.KVClient.delete"><code class="xref py py-func docutils literal notranslate"><span class="pre">datasystem.kv_client.KVClient.delete()</span></code></a> 接口删除 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 才能退出生命周期。默认值：<code class="docutils literal notranslate"><span class="pre">0</span></code>。</p></li>
+<li><p><strong>existence_opt</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.ExistenceOpt</span></code>) - 控制key存在时能否设置。</p></li>
 </ul>
 </dd>
 <dt>异常：</dt><dd><ul class="simple">

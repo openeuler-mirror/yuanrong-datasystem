@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/dscli';</script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="openYuanrong datasystem Kubernetes配置项" href="k8s_configuration.html" />
@@ -1145,7 +1146,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </tr>
 <tr class="row-odd"><td><p>–worker_args &lt;…&gt;</p></td>
 <td><p>-w &lt;…&gt;</p></td>
-<td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379” 需要放在numactl选项后，否则会报错</p></td>
+<td><p>使用参数启动数据系统worker, 以 “ –&lt;Args&gt;  &lt;Value&gt;”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379” 需要放在numactl选项后，否则会报错</p></td>
 </tr>
 <tr class="row-even"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
@@ -1153,27 +1154,27 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </tr>
 <tr class="row-odd"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
-<td><p>numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点。</p></td>
+<td><p>numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点</p></td>
 </tr>
 <tr class="row-even"><td><p>–physcpubind</p></td>
 <td><p>-C</p></td>
-<td><p>按物理 CPU 编号将进程绑定到指定核心。</p></td>
+<td><p>按物理 CPU 编号将进程绑定到指定核心</p></td>
 </tr>
 <tr class="row-odd"><td><p>–interleave</p></td>
 <td><p>-i</p></td>
-<td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面。</p></td>
+<td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面</p></td>
 </tr>
 <tr class="row-even"><td><p>–preferred</p></td>
 <td><p>-p</p></td>
-<td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点。</p></td>
+<td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点</p></td>
 </tr>
 <tr class="row-odd"><td><p>–membind</p></td>
 <td><p>-m</p></td>
-<td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败。</p></td>
+<td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败</p></td>
 </tr>
 <tr class="row-even"><td><p>–localalloc</p></td>
 <td><p>-l</p></td>
-<td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点。</p></td>
+<td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
 </tbody>
 </table>
@@ -1233,15 +1234,15 @@ dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span cla
 </tr>
 <tr class="row-even"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
-<td><p>仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点。</p></td>
+<td><p>仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点</p></td>
 </tr>
 <tr class="row-odd"><td><p>–physcpubind</p></td>
 <td><p>-C</p></td>
-<td><p>按物理 CPU 编号将进程绑定到指定核心。</p></td>
+<td><p>按物理 CPU 编号将进程绑定到指定核心</p></td>
 </tr>
 <tr class="row-even"><td><p>–interleave</p></td>
 <td><p>-i</p></td>
-<td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面。</p></td>
+<td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面</p></td>
 </tr>
 <tr class="row-odd"><td><p>–preferred</p></td>
 <td><p>-p</p></td>
@@ -1249,11 +1250,11 @@ dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span cla
 </tr>
 <tr class="row-even"><td><p>–membind</p></td>
 <td><p>-m</p></td>
-<td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败。</p></td>
+<td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败</p></td>
 </tr>
 <tr class="row-odd"><td><p>–localalloc</p></td>
 <td><p>-l</p></td>
-<td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点。</p></td>
+<td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
 </tbody>
 </table>
@@ -1486,7 +1487,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>worker_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;127.0.0.1:31501&quot;</span></code></p></td>
-<td><p>datasystem_worker IP地址</p></td>
+<td><p>datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_curve_zmq</p></td>
 <td><p>bool</p></td>
@@ -1571,7 +1572,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>etcd_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>ETCD 服务端访问地址</p></td>
+<td><p>ETCD 服务端访问地址，格式为：ip:port, 例如：127.0.0.1:23456</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_etcd_auth</p></td>
 <td><p>bool</p></td>
@@ -1591,12 +1592,12 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>etcd_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语.</p></td>
+<td><p>客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语</p></td>
 </tr>
 <tr class="row-odd"><td><p>etcd_passphrase_path</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>密码短语的值，需加密并进行Base64转码。</p></td>
+<td><p>密码短语的值，需加密并进行Base64转码</p></td>
 </tr>
 <tr class="row-even"><td><p>etcd_meta_pool_size</p></td>
 <td><p>int</p></td>
@@ -1606,7 +1607,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><td><p>etcd_target_name_override</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致。</p></td>
+<td><p>设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致</p></td>
 </tr>
 </tbody>
 </table>

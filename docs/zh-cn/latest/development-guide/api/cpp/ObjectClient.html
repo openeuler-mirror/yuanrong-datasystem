@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/ObjectClient';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="Buffer" href="Buffer.html" />
@@ -672,12 +673,7 @@ document.write(`
 <li><p><strong>data</strong> - 传入参数 缓存到数据系统的数据的指针。</p></li>
 <li><p><strong>size</strong> - 传入参数 缓存到数据系统的数据大小，以字节为单位。</p></li>
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-CreateParam.html#_CPPv411CreateParam" title="CreateParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">CreateParam</span></code></a> 章节。</p></li>
-<li><dl class="simple">
-<dt><strong>nestedObjectKeys</strong> - 传入参数，嵌套对象id。用于表示nestedIds中的对象会被objectId所关联的对象所使用，</dt><dd><p>如果objectId所关联的对象未被删除时，nestedIds中所有已创建的对象也会一直被系统持有，
-直到objectId所关联的对象被删除，才会开始对nestedIds的对象的生命周期状态进行改变。</p>
-</dd>
-</dl>
-</li>
+<li><p><strong>nestedObjectKeys</strong> - 传入参数，嵌套对象id。用于表示nestedIds中的对象会被objectId所关联的对象所使用，如果objectId所关联的对象未被删除时，nestedIds中所有已创建的对象也会一直被系统持有，直到objectId所关联的对象被删除，才会开始对nestedIds的对象的生命周期状态进行改变。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>

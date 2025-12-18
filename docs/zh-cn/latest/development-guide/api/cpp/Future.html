@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/Future';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="StatusCode" href="enum-StatusCode.html" />
@@ -553,9 +554,9 @@ document.write(`
 <span id="_CPPv3N6Future3GetE8uint64_t"></span><span id="_CPPv2N6Future3GetE8uint64_t"></span><span id="Future::Get__uint64_t"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Get</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">subTimeoutMs</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">60000</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Future3GetE8uint64_t" title="Link to this definition">#</a><br /></dt>
 <dd><p>等待异步请求执行完成并且获取异步请求的执行结果</p>
 <dl class="simple">
-<dt>参数：</dt><dd><p><strong>subTimeoutMs</strong> - 传入参数，如果 <strong>subTimeoutMs</strong> &gt; 0, 阻塞直到异步请求结果返回， 或者阻塞时间达到 <strong>subTimeoutMs</strong>， 单位ms。if subTimeoutMs = 0, 立即返回。默认值60000ms</p>
+<dt>参数：</dt><dd><p><strong>subTimeoutMs</strong> - 传入参数，如果 <strong>subTimeoutMs</strong> &gt; 0, 阻塞直到异步请求结果返回， 或者阻塞时间达到 <strong>subTimeoutMs</strong>， 单位ms。如果subTimeoutMs = 0, 立即返回。默认值60000ms</p>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示获取异步请求结果成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示获取异步请求结果成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
