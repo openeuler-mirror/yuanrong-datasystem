@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/datasystem.object_client.ObjectClient.create';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="datasystem.object_client.ObjectClient.put" href="datasystem.object_client.ObjectClient.put.html" />
@@ -534,14 +535,14 @@ document.write(`
 <h1>datasystem.object_client.ObjectClient.create<a class="headerlink" href="#datasystem-object-client-objectclient-create" title="Link to this heading">#</a></h1>
 <dl class="py method">
 <dt class="sig sig-object py" id="datasystem.object_client.ObjectClient.create">
-<span class="sig-prename descclassname"><span class="pre">datasystem.object_client.ObjectClient.</span></span><span class="sig-name descname"><span class="pre">create</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">object_key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">consistency_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">ConsistencyType.PRAM</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.object_client.ObjectClient.create" title="Link to this definition">#</a></dt>
+<span class="sig-prename descclassname"><span class="pre">datasystem.object_client.ObjectClient.</span></span><span class="sig-name descname"><span class="pre">create</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">object_key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">param</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.object_client.ObjectClient.create" title="Link to this definition">#</a></dt>
 <dd><p>创建对象buffer。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>object_key</strong> (int) - 对象 key。</p></li>
 <li><p><strong>size</strong> (int) - 对象大小，单位为byte。</p></li>
 <li><p><strong>write_mode</strong> (<a class="reference internal" href="datasystem.object_client.WriteMode.html#datasystem.object_client.WriteMode" title="datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.WriteMode</span></code></a>), 对象可靠性配置，详细说明可参考： <a class="reference internal" href="datasystem.object_client.WriteMode.html#datasystem.object_client.WriteMode" title="datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.WriteMode</span></code></a> 。默认值： <code class="docutils literal notranslate"><span class="pre">WriteMode.NONE_L2_CACHE</span></code> 。</p></li>
-<li><p><strong>consistency_type</strong> (<a class="reference internal" href="datasystem.object_client.ConsistencyType.html#datasystem.object_client.ConsistencyType" title="datasystem.object_client.ConsistencyType"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.ConsistencyType</span></code></a>)，对象一致性配置，详细说明可参考： <a class="reference internal" href="datasystem.object_client.ConsistencyType.html#datasystem.object_client.ConsistencyType" title="datasystem.object_client.ConsistencyType"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.ConsistencyType</span></code></a> 。默认值： <code class="docutils literal notranslate"><span class="pre">ConsistencyType.PRAM</span></code> 。</p></li>
+<li><p><strong>param</strong> (dict)，- 默认值 为None时，param = {consistency_type: ConsistencyType.PRAM}, 对象一致性配置，详细说明可参考： <a class="reference internal" href="datasystem.object_client.ConsistencyType.html#datasystem.object_client.ConsistencyType" title="datasystem.object_client.ConsistencyType"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.ConsistencyType</span></code></a> 。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>buffer，对象(<a class="reference internal" href="datasystem.object_client.Buffer.html#datasystem.object_client.Buffer" title="datasystem.object_client.Buffer"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.Buffer</span></code></a>)。</p>

@@ -128,12 +128,12 @@ KVClient
 
     .. cpp:function:: Status Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs)
 
-        获取键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:func:`Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)` 可减少一次从共享内存到临时内存的拷贝，直接读取缓存在共享内存上的数据，性能更优。
+        获取键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)` 可减少一次从共享内存到临时内存的拷贝，直接读取缓存在共享内存上的数据，性能更优。
 
         参数：
             - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
-            - **buffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` ，当 Get 返回失败时，``buffer`` 的值为` ``nullptr``。
+            - **buffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` ，当 Get 返回失败时，``buffer`` 的值为 ``nullptr``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
@@ -162,7 +162,7 @@ KVClient
 
     .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs)
     
-        批量获取多个键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:func:`Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)` 少一次从共享内存到临时内存的拷贝，性能更优。
+        批量获取多个键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)` 少一次从共享内存到临时内存的拷贝，性能更优。
         
         参数：
             - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。

@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/datasystem.object_client.ObjectClient.get';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="datasystem.object_client.ObjectClient.g_increase_ref" href="datasystem.object_client.ObjectClient.g_increase_ref.html" />
@@ -534,12 +535,12 @@ document.write(`
 <h1>datasystem.object_client.ObjectClient.get<a class="headerlink" href="#datasystem-object-client-objectclient-get" title="Link to this heading">#</a></h1>
 <dl class="py method">
 <dt class="sig sig-object py" id="datasystem.object_client.ObjectClient.get">
-<span class="sig-prename descclassname"><span class="pre">datasystem.object_client.ObjectClient.</span></span><span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">object_keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_timeout_ms</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.object_client.ObjectClient.get" title="Link to this definition">#</a></dt>
+<span class="sig-prename descclassname"><span class="pre">datasystem.object_client.ObjectClient.</span></span><span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">object_keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_ms</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#datasystem.object_client.ObjectClient.get" title="Link to this definition">#</a></dt>
 <dd><p>获取给定列表对象 key 的Buffer。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>object_keys</strong> (list) - 对象 key 列表。约束：传入的object key的数量不能超过1万。</p></li>
-<li><p><strong>sub_timeout_ms</strong> (int) - 订阅超时时间，当该值大于 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时，如果列表中有未存在的对象 key，则会在超时时间内等待对象创建并返回，如果超时时间到达之后对象仍未被创建，则返回空。默认值： <code class="docutils literal notranslate"><span class="pre">0</span></code> 。</p></li>
+<li><p><strong>sub_timeout_ms</strong> (int) - 订阅超时时间，timeout_ms的取值范围是[0, int(“0x7FFFFFFF”, 16)=2147483647]。当该值大于 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时，如果列表中有未存在的对象 key，则会在超时时间内等待对象创建并返回，如果超时时间到达之后对象仍未被创建，则返回空。默认值： <code class="docutils literal notranslate"><span class="pre">0</span></code> 。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>buffers(list): 携带对象 key 列表对应值的 <a class="reference internal" href="datasystem.object_client.Buffer.html#datasystem.object_client.Buffer" title="datasystem.object_client.Buffer"><code class="xref py py-class docutils literal notranslate"><span class="pre">datasystem.object_client.Buffer</span></code></a> 列表。</p>

@@ -92,9 +92,7 @@ ObjectClient
             - **data** - 传入参数 缓存到数据系统的数据的指针。
             - **size** - 传入参数 缓存到数据系统的数据大小，以字节为单位。
             - **param** - 设置参数，详见 :cpp:class:`CreateParam` 章节。
-            - **nestedObjectKeys** - 传入参数，嵌套对象id。用于表示nestedIds中的对象会被objectId所关联的对象所使用，
-                                     如果objectId所关联的对象未被删除时，nestedIds中所有已创建的对象也会一直被系统持有，
-                                     直到objectId所关联的对象被删除，才会开始对nestedIds的对象的生命周期状态进行改变。
+            - **nestedObjectKeys** - 传入参数，嵌套对象id。用于表示nestedIds中的对象会被objectId所关联的对象所使用，如果objectId所关联的对象未被删除时，nestedIds中所有已创建的对象也会一直被系统持有，直到objectId所关联的对象被删除，才会开始对nestedIds的对象的生命周期状态进行改变。
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。

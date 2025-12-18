@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/enum-WriteMode';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="ConsistencyType" href="enum-ConsistencyType.html" />
@@ -551,16 +552,16 @@ document.write(`
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><cite>WriteMode::NONE_L2_CACHE</cite></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WriteMode::NONE_L2_CACHE</span></code></p></td>
 <td><p>对象仅写入到缓存中。默认配置</p></td>
 </tr>
-<tr class="row-odd"><td><p><cite>WriteMode::WRITE_THROUGH_L2_CACHE</cite></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WriteMode::WRITE_THROUGH_L2_CACHE</span></code></p></td>
 <td><p>对象同步写入缓存和二级缓存中。</p></td>
 </tr>
-<tr class="row-even"><td><p><cite>WriteMode::WRITE_BACK_L2_CACHE</cite></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">WriteMode::WRITE_BACK_L2_CACHE</span></code></p></td>
 <td><p>对象同步写入缓存，异步写入二级缓存中。</p></td>
 </tr>
-<tr class="row-odd"><td><p><cite>WriteMode::NONE_L2_CACHE_EVICT</cite></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">WriteMode::NONE_L2_CACHE_EVICT</span></code></p></td>
 <td><p>对象是易失性的，如果缓存资源缺乏，对象可能会提前退出生命周期。</p></td>
 </tr>
 </tbody>

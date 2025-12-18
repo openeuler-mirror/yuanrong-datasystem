@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/Consumer';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="ConnectOptions" href="struct-ConnectOptions.html" />
@@ -557,7 +558,7 @@ document.write(`
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8Consumer8ConsumerEv">
 <span id="_CPPv3N8Consumer8ConsumerEv"></span><span id="_CPPv2N8Consumer8ConsumerEv"></span><span id="Consumer::Consumer"></span><span class="sig-name descname"><span class="n"><span class="pre">Consumer</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8Consumer8ConsumerEv" title="Link to this definition">#</a><br /></dt>
-<dd><p>构造流缓存消费者实例。注：consumer对象并非线程安全，所以当有多个线程尝试调用同一个consumer做操作时会返回K_SC_STREAM_IN_USE错误码。</p>
+<dd><p>构造流缓存消费者实例。注：consumer对象并非线程安全，所以当有多个线程尝试调用同一个consumer做操作时会返回 <code class="docutils literal notranslate"><span class="pre">K_SC_STREAM_IN_USE</span></code> 错误码。</p>
 <dl class="simple">
 <dt>返回：</dt><dd><p>流缓存消费者实例。</p>
 </dd>
@@ -577,7 +578,7 @@ document.write(`
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>expectNum</strong> - 期望接收elements的个数。</p></li>
-<li><p><strong>timeoutMs</strong> - 超时时间， 单位ms, 在超时时间内未收到期望个数的element时, 接口返回K_OK</p></li>
+<li><p><strong>timeoutMs</strong> - 超时时间， 单位ms, 在超时时间内未收到期望个数的element时, 接口返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code></p></li>
 <li><p><strong>outElements</strong> - 实际接收到的elements，详见 <a class="reference internal" href="struct-Element.html#_CPPv47Element" title="Element"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Element</span></code></a> 章节。</p></li>
 </ul>
 </dd>

@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=7308451e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
   <!-- Pre-loaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
@@ -53,6 +53,7 @@
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/Producer';</script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="Consumer" href="Consumer.html" />
@@ -577,7 +578,7 @@ document.write(`
 <li><p><strong>element</strong> - 需要发送的Element数据。详见 cpp:class:<cite>Element</cite>。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 StatusCode::K_OK 时表示发送数据成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示发送数据成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -592,7 +593,7 @@ document.write(`
 <li><p><strong>timeoutMs</strong> - 接口超时时间， 单位ms。值为0时如果发送失败，将立刻返回错误原因。大于0时将会阻塞，等待完成。如果等待时间超过该值，则停止等待，并返回错误原因。</p></li>
 </ul>
 </dd>
-<dt>返回:</dt><dd><p>返回值状态码为 StatusCode::K_OK 时表示发送成功，否则返回其他错误码。</p>
+<dt>返回:</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示发送成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -602,7 +603,7 @@ document.write(`
 <span id="_CPPv3N8Producer5CloseEv"></span><span id="_CPPv2N8Producer5CloseEv"></span><span id="Producer::Close"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Close</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8Producer5CloseEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>关闭生产者。一旦关闭后，生产者不可再用。</p>
 <dl class="simple">
-<dt>返回：</dt><dd><p>返回值状态码为 <cite>K_OK</cite> 时表示关闭成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示关闭成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
