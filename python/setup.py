@@ -145,7 +145,7 @@ class CustomBdistWheel(_bdist_wheel):
         return tag.interpreter, tag.abi, tag.platform
 
 setup(
-    python_requires='>=3.6',
+    python_requires='>=3.9',
     name=package_name,
     version=version,
     packages=find_packages(include=['yr*', 'yr.*']),

@@ -715,7 +715,8 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
 
   # Copy python sdk
   install(DIRECTORY ${PYTHON_SDK}/
-          DESTINATION ${DATASYSTEM_SETUP_PATH}/)
+          DESTINATION ${DATASYSTEM_SETUP_PATH}/
+          PATTERN "setup.py" EXCLUDE)
 
   # Copy ds cli source files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli
