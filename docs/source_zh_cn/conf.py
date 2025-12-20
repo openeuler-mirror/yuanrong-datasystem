@@ -108,6 +108,7 @@ html_theme_options = {
     "show_navbar_depth": 1,
     "max_navbar_depth": 7,
     "collapse_navigation": True,
+    "use_download_button": False,
     "extra_footer": """
         Built with
         <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
