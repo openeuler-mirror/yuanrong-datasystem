@@ -199,6 +199,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
+    asyncReleasePool_.reset();
 
     if (devOcImpl_ != nullptr) {
         devOcImpl_->SetThreadInterruptFlag2True();
@@ -224,7 +225,6 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
                 }
             }
         }
-        asyncReleasePool_.reset();
     }
 
     // The destructor of devOcImpl_ should occur after the client disconnect request so that the device asynchronous
@@ -2391,15 +2391,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
-    asyncReleasePool_->Execute([this, buffers = std::move(bufferList)]() mutable {
-        std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
-        if (!IsClientReady()) {
-            return;
-        }
-        for (const auto &buf : buffers) {
-            buf->Release();
-        }
-    });
+    asyncReleasePool_->Execute([buffers = std::move(bufferList)]() mutable { buffers.clear(); });
     for (const auto &objKey : rsp.failed_object_keys()) {
         outFailedKeys.emplace_back(objKey);
     }
