@@ -15,6 +15,7 @@ C++
    Consumer
    struct-ConnectOptions
    struct-SetParam
+   struct-MSetParam
    struct-Element
    struct-ProducerConf
    struct-SubscriptionConfig
