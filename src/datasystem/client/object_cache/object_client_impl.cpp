@@ -1101,7 +1101,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     // If failed with create, need to rollback.
     auto version = 0u;
     auto useShmTransfer = false;
-    if (dataSizeSum >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
+    if (workerApi_[LOCAL_WORKER]->GetShmEnabled() && dataSizeSum >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
         RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
                                                                exists, useShmTransfer));
     } else {

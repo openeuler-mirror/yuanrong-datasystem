@@ -201,9 +201,9 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
             exists[i] = rsp.exists(i);
         }
     }
-    auto checkUseShm = [&rsp, &skipCheckExistence]() {
+    auto checkUseShm = [this, &rsp, &skipCheckExistence]() {
         if (skipCheckExistence) {
-            return true;
+            return GetShmEnabled();
         }
         for (const auto &res : rsp.results()) {
             if (!res.shm_id().empty()) {
