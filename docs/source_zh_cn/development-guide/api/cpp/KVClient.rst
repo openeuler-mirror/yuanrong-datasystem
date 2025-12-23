@@ -97,7 +97,7 @@ KVClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
-    .. cpp:function:: Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals, std::vector<std::string> &outFailedKeys, const SetParam &param)
+    .. cpp:function:: Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals, std::vector<std::string> &outFailedKeys, const MSetParam &param)
 
         键值对批量设置接口。可批量设置键值对并返回失败的键。
 
@@ -105,7 +105,7 @@ KVClient
             - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节. key的最大个数为10,000，推荐单次设置的key个数小于等于64个。
             - **vals** - 需要设置的一组key对应的value. 该数组长度需要与 ``keys`` 的长度相等。
             - **outFailedKeys** - 传出参数，代表设置失败的key。
-            - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
+            - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
