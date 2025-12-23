@@ -21,7 +21,7 @@ from __future__ import absolute_import
 import argparse
 import logging
 
-from datasystem import DsTensorClient
+from yr.datasystem import DsTensorClient
 
 is_torch_exist = True
 is_mindspore_exist = True

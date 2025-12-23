@@ -28,7 +28,7 @@ from typing import Dict, List
 import acl
 import numpy as np
 
-from datasystem.hetero_client import (
+from yr.datasystem.hetero_client import (
     HeteroClient,
     Blob,
     DeviceBlobList,

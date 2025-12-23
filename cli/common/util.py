@@ -21,7 +21,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from datasystem.cli.common.constant import ClusterConfig
+from yr.datasystem.cli.common.constant import ClusterConfig
 
 DANGER = re.compile(r'''[;&|`$()<>{}!*?\n\t\r\x0b\x0c'"\\]''')
 UNSAFE = ["/bin", "/sbin", "/lib", "/lib64", "/",

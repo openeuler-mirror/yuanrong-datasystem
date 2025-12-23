@@ -22,8 +22,8 @@ import random
 import time
 import unittest
 
-from datasystem.object_client import ObjectClient
-from datasystem.stream_client import StreamClient, SubconfigType
+from yr.datasystem.object_client import ObjectClient
+from yr.datasystem.stream_client import StreamClient, SubconfigType
 
 
 def wait_proc(proc):

@@ -145,7 +145,7 @@ if (BUILD_PYTHON_API)
             ${RPC_LIB_PATH}
     )
 
-    package_python(datasystem
+    package_python(yr/datasystem
             PYTHON_SRC_DIR ${CMAKE_SOURCE_DIR}/python
             CMAKE_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}/datasystem/sdk
             DEPEND_TARGETS ${DEPEND_TARGETS}

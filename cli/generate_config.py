@@ -16,8 +16,8 @@
 import os
 import shutil
 
-from datasystem.cli.command import BaseCommand
-import datasystem.cli.common.util as util
+from yr.datasystem.cli.command import BaseCommand
+import yr.datasystem.cli.common.util as util
 
 
 class Command(BaseCommand):

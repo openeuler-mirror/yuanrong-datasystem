@@ -40,7 +40,7 @@ except ImportError:
     is_mindspore_exist = False
 
 try:
-    from datasystem import DsTensorClient, CopyRange
+    from yr.datasystem import DsTensorClient, CopyRange
 except ImportError:
     is_tensor_client_exist = False
 

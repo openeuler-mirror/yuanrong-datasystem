@@ -21,7 +21,7 @@ from __future__ import absolute_import
 import argparse
 
 import acl
-from datasystem.hetero_client import (
+from yr.datasystem.hetero_client import (
     HeteroClient,
     Blob,
     DeviceBlobList,

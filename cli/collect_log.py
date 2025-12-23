@@ -17,10 +17,10 @@
 import os
 from datetime import datetime, timezone
 
-import datasystem.cli.common.util as util
-from datasystem.cli.command import BaseCommand
-from datasystem.cli.common.constant import ClusterConfig
-from datasystem.cli.common.parallel import ParallelMixin
+import yr.datasystem.cli.common.util as util
+from yr.datasystem.cli.command import BaseCommand
+from yr.datasystem.cli.common.constant import ClusterConfig
+from yr.datasystem.cli.common.parallel import ParallelMixin
 
 
 class Command(BaseCommand, ParallelMixin):

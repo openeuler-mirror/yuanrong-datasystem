@@ -21,7 +21,7 @@ import json
 import time
 import unittest
 
-from datasystem.hetero_client import (
+from yr.datasystem.hetero_client import (
     HeteroClient,
     Blob,
     DeviceBlobList,

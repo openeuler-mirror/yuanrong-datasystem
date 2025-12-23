@@ -23,7 +23,7 @@ import threading
 import time
 import unittest
 
-from datasystem.object_client import Buffer, ConsistencyType, ObjectClient
+from yr.datasystem.object_client import Buffer, ConsistencyType, ObjectClient
 
 
 class TestOcClientMethods(unittest.TestCase):

@@ -29,11 +29,11 @@ from wheel.vendored.packaging import tags
 
 root_dir = os.path.dirname(os.path.realpath(__file__))
 
-version_path = os.path.join(root_dir, 'datasystem', 'VERSION')
+version_path = os.path.join(root_dir, 'yr', 'datasystem', 'VERSION')
 with open(version_path, 'r') as f:
     version = f.read()
 
-readme_path = os.path.join(root_dir, 'datasystem', 'README.md')
+readme_path = os.path.join(root_dir, 'yr', 'datasystem', 'README.md')
 with open(readme_path, 'r') as f:
     readme = f.read()
 readme = '\n'.join(readme.split('\n')[1:])
@@ -45,7 +45,7 @@ def recursive_package_files(directory):
     """recursive package files"""
     paths = []
     lib_root_dir = os.path.dirname(os.path.abspath(__file__))
-    lib_root_dir = os.path.join(lib_root_dir, 'datasystem')
+    lib_root_dir = os.path.join(lib_root_dir, 'yr', 'datasystem')
     full_dir = os.path.join(lib_root_dir, directory)
     for root, _, files in os.walk(full_dir):
         for file_name in files:
@@ -70,13 +70,12 @@ requires = []
 
 
 def build_depends():
-    """generate python file"""
-    commit_file = os.path.join('datasystem', '.commit_id')
+    """Generate python file"""
+    commit_file = os.path.join('yr', 'datasystem', '.commit_id')
+    os.makedirs(os.path.dirname(commit_file), exist_ok=True)
     with os.fdopen(os.open(commit_file, os.O_CREAT | os.O_WRONLY, 0o600), 'w') as file:
         file.write("__commit_id__ = '{}'\n".format(commit_id))
     os.chmod(commit_file, mode=stat.S_IREAD)
-
-
 build_depends()
 
 
@@ -110,10 +109,8 @@ def get_dependencies(file_path):
     if ldd_path is None:
         raise FileNotFoundError("cant find ldd, get dependencies failed")
     path = Path(file_path)
-
     if not path.exists():
         raise FileNotFoundError(f"File or directory does not exist: {file_path}")
-
     if path.is_dir():
         for so_file in path.rglob('*.so'):
             try:
@@ -123,13 +120,10 @@ def get_dependencies(file_path):
                 continue
             except Exception as e:
                 raise RuntimeError(f"Error processing {file_path}: {e}") from e
-
     elif path.is_file():
         dependencies.update(_process_single_file(ldd_path, path))
-
     else:
         raise FileNotFoundError(f"Path is not a regular file or directory: {file_path}")
-
     return dependencies
 
 
@@ -138,15 +132,14 @@ def get_all_dependencies():
     get all dependencies for datasystem
     """
     all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so"}
-    src = os.path.join(os.path.dirname(__file__), 'datasystem', 'lib')
-    worker = os.path.join(os.path.dirname(__file__), 'datasystem', 'datasystem_worker')
+    src = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'lib')
+    worker = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'datasystem_worker')
     src_path = Path(src)
     bin_path = Path(worker)
     all_dependencies.update(get_dependencies(bin_path))
     for item in src_path.rglob('*'):
         all_dependencies.update(get_dependencies(item))
     return all_dependencies
-
 all_dependencies_for_datasystem = get_all_dependencies()
 
 
@@ -221,10 +214,10 @@ class BuildPy(build_py):
         super().run()
         update_permissions(datasystem_lib_dir)
         worker_bin = os.path.join(
-            datasystem_lib_dir, 'lib', 'datasystem', 'datasystem_worker')
+            datasystem_lib_dir, 'lib', 'yr', 'datasystem', 'datasystem_worker')
         os.chmod(worker_bin, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
         os.system(f"strip --strip-all {worker_bin}")
-        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem', 'lib')
+        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'yr', 'datasystem', 'lib')
         lib_path = Path(lib_dir)
         delete_unuse_so(lib_path)
         check_and_refactor_ucx_lib(lib_dir)
@@ -247,8 +240,8 @@ setup(
     long_description=readme,
     long_description_content_type="text/markdown",
     url="https://gitee.com/openeuler/yuanrong-datasystem",
-    python_requires='>=3.8',
-    packages=find_packages(),
+    python_requires='>=3.9',
+    packages=find_packages(include=['yr*', 'yr.*']),
     package_data=package_datas,
     include_package_data=True,
     cmdclass={
@@ -258,7 +251,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'dscli=datasystem.cli.command:main'
+            'dscli=yr.datasystem.cli.command:main'
         ]
     },
     install_requires=requires,
@@ -268,7 +261,6 @@ setup(
         'Intended Audience :: Developers',
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python :: 3 :: Only',
-        'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',

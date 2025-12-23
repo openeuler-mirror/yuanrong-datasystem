@@ -30,7 +30,7 @@ from wheel.vendored.packaging import tags
 
 pwd = os.path.dirname(os.path.realpath(__file__))
 
-version_path = os.path.join(pwd, 'datasystem', 'VERSION')
+version_path = os.path.join(pwd, 'yr', 'datasystem', 'VERSION')
 with open(version_path, 'r') as v:
     version = v.read()
 
@@ -50,12 +50,10 @@ requires = []
 
 def build_depends():
     """generate python file"""
-    commit_file = os.path.join('datasystem', '.commit_id')
+    commit_file = os.path.join('yr', 'datasystem', '.commit_id')
     with os.fdopen(os.open(commit_file, os.O_CREAT | os.O_WRONLY, 0o600), 'w') as file:
         file.write("__commit_id__ = '{}'\n".format(commit_id))
     os.chmod(commit_file, mode=stat.S_IREAD)
-
-
 build_depends()
 
 
@@ -88,7 +86,7 @@ def get_all_dependencies():
     get all dependencies for datasystem
     """
     all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so"}
-    src = os.path.join(os.path.dirname(__file__), 'datasystem', 'lib')
+    src = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'lib')
     src_path = Path(src)
     for item in src_path.rglob('*'):
         all_dependencies.update(get_dependencies(item))
@@ -131,10 +129,10 @@ class BuildPy(build_py):
     """Build py files."""
 
     def run(self):
-        datasystem_lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem')
+        datasystem_lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'yr', 'datasystem')
         super().run()
         update_permissions(datasystem_lib_dir)
-        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'datasystem', 'lib')
+        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'yr', 'datasystem', 'lib')
         lib_path = Path(lib_dir)
         for item in lib_path.rglob('*'):
             if item.name not in all_dependencies_for_datasystem:
@@ -147,10 +145,10 @@ class CustomBdistWheel(_bdist_wheel):
         return tag.interpreter, tag.abi, tag.platform
 
 setup(
-    python_requires='>=3.6',
+    python_requires='>=3.9',
     name=package_name,
     version=version,
-    packages=find_packages(),
+    packages=find_packages(include=['yr*', 'yr.*']),
     package_data=package_datas,
     include_package_data=True,
     cmdclass={

@@ -20,7 +20,7 @@ from __future__ import absolute_import
 
 import argparse
 
-from datasystem.object_client import ObjectClient
+from yr.datasystem import ObjectClient
 
 
 class ObjectClientExample:
