@@ -920,7 +920,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
     auto traceID = Trace::Instance().GetTraceID();
     future = asyncSetRPCPool_->Submit([this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        auto work = [this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
+        auto work = [this, objectKeys, devBlobList, setParam]() mutable {
             AsyncResult result;
 
             // Step1: execute Exist check

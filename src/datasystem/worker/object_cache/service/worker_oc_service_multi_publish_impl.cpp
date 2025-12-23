@@ -582,15 +582,13 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
         return;
     }
     int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
-    auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMeta2PCRes>> futures;
     Timer timer;
     CreateMeta2PCRes lastRc;
     for (size_t i = 0; i < masterAddrs.size(); i++) {
         auto &masterAddrInfo = masterAddrs[i];
         auto &req = reqs[i];
-        auto func = [this, &masterAddrInfo, &req, timeout, &traceId, &timer] {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        auto func = [this, &masterAddrInfo, &req, timeout, &timer] {
             const auto &masterAddr = masterAddrInfo.GetAddressAndSaveDbName();
             std::shared_ptr<WorkerMasterOCApi> api;
             auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
