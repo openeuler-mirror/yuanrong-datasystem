@@ -270,5 +270,30 @@ TEST_F(HeteroD2HTestEvcit, SpillTest)
     sleep(MINI_WAIT_TIME);
 }
 
+TEST_F(HeteroD2HTest, TestMSetD2HMsgWithInvalidDeviceId)
+{
+    const int32_t deviceId = 0;
+    InitAcl(deviceId);
+    std::shared_ptr<HeteroClient> client;
+    InitTestHeteroClient(deviceId, client);
+
+    const size_t numOfObjs = 1;
+    const size_t blksPerObj = 1;
+    const size_t blkSz = 1024;
+    std::vector<DeviceBlobList> swapOutBlobList;
+    std::vector<DeviceBlobList> swapInBlobList;
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+
+    std::vector<std::string> keys{ GetStringUuid() };
+    const int32_t invalidDeviceId = -1;
+    for (auto &it : swapInBlobList) {
+        it.deviceIdx = invalidDeviceId;
+    }
+
+    std::vector<std::string> failedKeys;
+    Status s1 = client->MSetD2H(keys, swapInBlobList);
+    LOG(INFO) << "MSetD2H Status: " << s1.ToString();
+    ASSERT_TRUE(s1.IsError());
+}
 }  // namespace st
 }  // namespace datasystem

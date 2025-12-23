@@ -834,6 +834,10 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     param.cacheType = setParam.cacheType;
     std::vector<size_t> dataSizeList;
     dataSizeList.reserve(objectKeys.size());
+    for (size_t i = 0; i < devBlobList.size(); i++) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ static_cast<uint32_t>(devBlobList[i].deviceIdx) }),
+                                        "Check device failed.");
+    }
     BlobListInfo blobInfo;
     RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo));
     LOG(INFO) << blobInfo.ToString(true);
