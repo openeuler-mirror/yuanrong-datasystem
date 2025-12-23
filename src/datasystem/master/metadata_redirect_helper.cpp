@@ -65,7 +65,7 @@ void MetadataRedirectHelper::GroupRedirctObjectByNewMetaAddr(
             newMetaAddr = addr;
             tempRedirect = true;
         });
-        if (tempRedirect == true) {
+        if (tempRedirect) {
             auto iter = redirectMap.find(newMetaAddr);
             if (iter == std::end(redirectMap)) {
                 std::vector<std::string> idList({ *id });

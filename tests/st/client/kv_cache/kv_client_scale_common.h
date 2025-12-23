@@ -33,6 +33,7 @@
 #include "common.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_tools.h"
@@ -95,6 +96,17 @@ public:
             },
             timeoutSec * S2Ms, azName);
         sleep(WORKER_RECEIVE_DELAY);
+    }
+
+    void WaitAddNodeInfoInHashRing(uint64_t timeoutSec = 60, std::string azName = "", bool needDelay = true)
+    {
+        int S2Ms = 1000;
+        WaitHashRingChange([&](const HashRingPb &hashRing) { return !hashRing.add_node_info().empty(); },
+                           timeoutSec * S2Ms, azName);
+        // We only checked the status of etcd, and there will be a delay in workers subscribing to this information.
+        if (needDelay) {
+            sleep(WORKER_RECEIVE_DELAY);
+        }
     }
 
     void WaitNodeVoluntaryScaleDownDone(const std::string &workerAddr, uint64_t timeoutSec = 60,

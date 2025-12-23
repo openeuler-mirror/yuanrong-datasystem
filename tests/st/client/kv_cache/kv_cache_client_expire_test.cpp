@@ -214,12 +214,12 @@ TEST_F(KVCacheClientExpireTest, ExpireObjWhenScaleDown)
 }
 
 class KVClientExpireCrossAZ : public KVCacheClientExpireTest {
-void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = workerNum_;
-        opts.addNodeTime = 3; // add node time is 3 sec
+        opts.addNodeTime = 3;  // add node time is 3 sec
         opts.workerGflagParams = FormatString(
             " -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d -other_cluster_names=AZ1,AZ2 "
             "-cross_az_get_meta_from_worker=true -cross_az_get_data_from_worker=true",
@@ -269,6 +269,5 @@ TEST_F(KVClientExpireCrossAZ, ExpireObjCrossAZ)
     auto rc = client0->Get(key2, getValue);
     EXPECT_EQ(rc.GetCode(), K_NOT_FOUND);
 }
-
 }
 }
