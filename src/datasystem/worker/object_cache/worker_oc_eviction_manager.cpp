@@ -82,11 +82,25 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
                                    std::make_unique<ThreadPool>(MASTER_TASK_THREAD_NUM, 0, "MasterTaskThread"));
     RETURN_IF_EXCEPTION_OCCURS(spillTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(FLAGS_spill_thread_num, 0, "SpillThread"));
+    RETURN_IF_EXCEPTION_OCCURS(scheduleEvictThreadPool_ = std::make_unique<ThreadPool>(1, 0, "scheduleEvictThread"));
     // reduce warn log output when thread pool is almost full
     spillTaskThreadPool_->SetWarnLevel(ThreadPool::WarnLevel::LOW);
     RETURN_IF_NOT_OK(WorkerOcSpill::Instance()->Init());
     gRefTable_ = gRefTable;
     akSkManager_ = std::move(akSkManager);
+    scheduleEvictThreadPool_->Submit([this]() {
+        Timer timer;
+        while (!IsTermSignalReceived()) {
+            auto evictInterval = 10;
+            if (timer.ElapsedSecond() > evictInterval) {
+                EvictWhenMemoryExceedThrehold("", 0, shared_from_this(), ServiceType::OBJECT);
+                EvictWhenMemoryExceedThrehold("", 0, shared_from_this(), ServiceType::STREAM);
+                timer.Reset();
+            }
+            auto checkIntervalMs = 10;
+            std::this_thread::sleep_for(std::chrono::milliseconds(checkIntervalMs));
+        }
+    });
     return Status::OK();
 }
 
@@ -442,15 +456,6 @@ Status WorkerOcEvictionManager::SpillImpl(const std::string &objectKey, uint64_t
 std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::SubmitSpillTask(const std::string &objectKey,
                                                                                            uint64_t version)
 {
-    const size_t maxWaitingTask = 32;
-    if (spillTaskThreadPool_->GetWaitingTasksNum() > maxWaitingTask) {
-        Status rc(StatusCode::K_TRY_AGAIN, __LINE__, __FILE__, "Spill thread is busy, try again.");
-        std::promise<SpillResult> p;
-        p.set_value(SpillResult{ .rc = rc, .elapsed = 0 });
-        VLOG(1) << FormatString("Spill thread is busy, %s skip to spill, wait to next try.", objectKey);
-        return p.get_future();
-    }
-
     auto traceId = Trace::Instance().GetTraceID();
     return spillTaskThreadPool_->Submit([this, objectKey, version, traceId] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
