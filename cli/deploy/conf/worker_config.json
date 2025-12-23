@@ -554,5 +554,29 @@
     "sc_encrypt_secret_key": {
         "value": "",
         "description": "The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes after decryption"
+    },
+    "iam_kit": {
+        "value": "none",
+        "description": "The type of iam kit, none is default, value range: [none, yuanrong_iam]"
+    },
+    "yuanrong_iam_url": {
+        "value": "",
+        "description": "yuanrong_iam auth server url"
+    },
+    "yuanrong_iam_ca": {
+        "value": "",
+        "description": "File path of trusted CA/ca bundle file for yuanrong iam, optional. Use standard characters only. if ca , cert, key is all empty, connect with yuanrong iam without tls."
+    },
+    "yuanrong_iam_cert": {
+        "default": "",
+        "description": "File path of client certificate file for yuanrong iam, optional. Use standard characters only. if ca , cert, key is all empty, connect with yuanrong iam without tls."
+    },
+    "yuanrong_iam_key": {
+        "value": "",
+        "description": "File path of client private key, optional for yuanrong iam. Use standard characters only. if ca , cert, key is all empty, connect with yuanrong iam without tls."
+    },
+    "yuanrong_iam_passphrase": {
+        "value": "",
+        "description": "File path of tls pwd, optional for yuanrong iam. Use standard characters only. if ca , cert, key is all empty, connect with yuanrong iam without tls."
     }
 }

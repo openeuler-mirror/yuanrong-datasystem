@@ -79,6 +79,7 @@ public:
                                     .port = workerAddress.Port(),
                                     .connectTimeoutMs = 1 * 1000,
                                     .requestTimeoutMs = 0,
+                                    .token = "",
                                     .clientPublicKey = authKeys.GetClientPublicKey(),
                                     .clientPrivateKey = authKeys.GetClientPrivateKey(),
                                     .serverPublicKey = serverPublicKey,

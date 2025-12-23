@@ -1,5 +1,6 @@
 set(IAM_SRCS
         tenant_auth_manager.cpp
+        yuanrong_iam.cpp
         )
 
 set(IAM_DEPEND_LIBS

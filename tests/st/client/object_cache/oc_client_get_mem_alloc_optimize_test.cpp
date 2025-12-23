@@ -89,7 +89,7 @@ TEST_F(OCClientGetMemAllocOptimizeTest, DISABLED_RegisterClient)
 {
     using datasystem::client::ClientWorkerCommonApi;
     auto workerApi = std::make_shared<ClientWorkerCommonApi>(
-        workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, signature_.get(), "", true);
+        workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "", true, false);
     ASSERT_TRUE(workerApi->IsEnableHugeTlb());
 }
 }  // namespace st

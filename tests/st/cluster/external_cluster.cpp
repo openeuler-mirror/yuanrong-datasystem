@@ -1016,7 +1016,8 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
            + " -l2_cache_delete_thread_num=4" + " -inject_actions=" + injectActions + " " + opts_.workerGflagParams
            + " " + gFlag + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads) + " -spill_directory=" + spillDir
            + " -enable_distributed_master=" + opts_.enableDistributedMaster
-           + " -add_node_wait_time_s=" + std::to_string(opts_.addNodeTime)
+           + " -add_node_wait_time_s=" + std::to_string(opts_.addNodeTime) + " -iam_kit=" + opts_.iamKit
+           + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
            + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads) + " -zmq_server_io_context="
            + std::to_string(opts_.numZmqServerCtx) + " -oc_thread_num=" + std::to_string(opts_.numOcThreadNum)
            + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum) + " -check_async_queue_empty_time_s=1";

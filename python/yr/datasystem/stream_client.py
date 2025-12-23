@@ -38,6 +38,7 @@ class StreamClient:
                  server_public_key: str = "",
                  access_key="",
                  secret_key="",
+                 token: str = '',
                  tenant_id="",
                  enable_exclusive_connection=False):
         """ Constructor of the StreamClient class
@@ -50,17 +51,20 @@ class StreamClient:
             server_public_key(str): The worker server's public key, for curve authentication.
             access_key(str): The access key used by AK/SK authorize.
             secret_key(str): The secret key for AK/SK authorize.
+            token(str): A string used for authentication.
             tenant_id(str): The tenant ID.
             enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
             datasystem_worker.
         """
 
+        if isinstance(token, str):
+            token = str.encode(token)
         if isinstance(client_private_key, str):
             client_private_key = str.encode(client_private_key)
         if isinstance(secret_key, str):
             secret_key = str.encode(secret_key)
         self._client = ds.StreamClient(host, port, client_public_key, client_private_key, server_public_key, access_key,
-                                       secret_key, tenant_id, enable_exclusive_connection)
+                                       secret_key, token, tenant_id, enable_exclusive_connection)
 
     def init(self):
         """ Init a stream client to connect to a worker.

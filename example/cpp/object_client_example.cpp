@@ -187,6 +187,7 @@ int main(int argc, char *argv[])
                                 .port = port,
                                 .connectTimeoutMs = 60 * 1000,
                                 .requestTimeoutMs = 0,
+                                .token = "",
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };

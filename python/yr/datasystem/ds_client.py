@@ -32,6 +32,7 @@ class DsClient:
         host,
         port,
         connect_timeout_ms=60000,
+        token="",
         client_public_key="",
         client_private_key="",
         server_public_key="",
@@ -48,6 +49,7 @@ class DsClient:
             host(str): The host of the worker address.
             port(int): The port of the worker address.
             connect_timeout_ms(int): The timeout_ms interval for the connection between the client and worker.
+            token(str): A string used for authentication.
             client_public_key(str): The client's public key, for curve authentication.
             client_private_key(str): The client's private key, for curve authentication.
             server_public_key(str): The worker server's public key, for curve authentication.
@@ -67,6 +69,7 @@ class DsClient:
             ["host", host, str],
             ["port", port, int],
             ["connect_timeout_ms", connect_timeout_ms, int],
+            ["token", token, str],
             ["client_public_key", client_public_key, str],
             ["client_private_key", client_private_key, str],
             ["server_public_key", server_public_key, str],
@@ -81,6 +84,7 @@ class DsClient:
             host,
             port,
             connect_timeout_ms,
+            token,
             client_public_key,
             client_private_key,
             server_public_key,
@@ -95,6 +99,7 @@ class DsClient:
             host,
             port,
             connect_timeout_ms,
+            token,
             client_public_key,
             client_private_key,
             server_public_key,
@@ -109,6 +114,7 @@ class DsClient:
             host,
             port,
             connect_timeout_ms,
+            token,
             client_public_key,
             client_private_key,
             server_public_key,

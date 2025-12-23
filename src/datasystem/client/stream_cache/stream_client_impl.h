@@ -123,6 +123,21 @@ public:
     uint32_t GetLockId() const;
 
     /**
+     * @brief Update token for yr iam
+     * @param[in] Token message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateToken(SensitiveValue &token);
+
+    /**
+     * @brief Update aksk for yr iam
+     * @param[in] acessKey message for auth certification
+     * @param[in] secretKey message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey);
+
+    /**
      * @brief Set producer and consumer inactive and clear.
      */
     void ClearProducerAndConsumer();
@@ -226,6 +241,7 @@ private:
     std::shared_ptr<ListenWorker> listenWorker_{ nullptr };
 
     RpcAuthKeys authKeys_;
+    SensitiveValue token_;
     std::string tenantId_;
     int32_t requestTimeoutMs_ = RPC_TIMEOUT;
     int32_t connectTimeoutMs_ = RPC_TIMEOUT;

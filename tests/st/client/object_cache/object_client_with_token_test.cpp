@@ -50,23 +50,23 @@ public:
     }
 
     void InitTestTokenClient(uint32_t workerIndex, std::shared_ptr<ObjectClient> &client,
-                             const std::string &tenantId = "token1")
+                             const std::string &token = "token1")
     {
         ConnectOptions connectOptions;
-        InitConnectTokenOpt(workerIndex, connectOptions, tenantId);
+        InitConnectTokenOpt(workerIndex, connectOptions, token);
         client = std::make_shared<ObjectClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
 
-    void InitConnectTokenOpt(uint32_t workerIndex, ConnectOptions &connectOptions,
-                             const std::string &tenantId = "token1", int32_t timeoutMs = 60000)
+    void InitConnectTokenOpt(uint32_t workerIndex, ConnectOptions &connectOptions, const std::string &token = "token1",
+                             int32_t timeoutMs = 60000)
     {
         HostPort workerAddress;
         ASSERT_TRUE(workerIndex < cluster_->GetWorkerNum());
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
         connectOptions = { .host = workerAddress.Host(), .port = workerAddress.Port(), .connectTimeoutMs = timeoutMs };
         connectOptions.enableExclusiveConnection = true;
-        connectOptions.SetAkSkAuth(accessKey_, secretKey_, tenantId);
+        connectOptions.token = token;
     }
 
     void EndToEndSuccess(int64_t size, bool isSeal);
@@ -90,10 +90,6 @@ public:
     {
         ExternalClusterTest::TearDown();
     }
-
-protected:
-    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
-    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
 // Test create->GIncreaseRef->WLatch->Write->Publish->UnWLatch->Get->RLatch->MutableData->UnRLatch->GDecreaseRef

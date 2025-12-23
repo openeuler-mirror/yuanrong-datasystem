@@ -134,6 +134,21 @@ public:
      */
     Status QueryGlobalConsumersNum(const std::string &streamName, uint64_t &gConsumerNum);
 
+    /**
+     * @brief Update token for yr iam
+     * @param[in] Token message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateToken(SensitiveValue token);
+
+    /**
+     * @brief Update aksk for yr iam
+     * @param[in] acessKey message for auth certification
+     * @param[in] secretKey message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateAkSk(const std::string accessKey, SensitiveValue secretKey);
+
 private:
     //  for make_unique to access private/protected constructor.
     friend std::unique_ptr<client::stream_cache::StreamClientImpl>

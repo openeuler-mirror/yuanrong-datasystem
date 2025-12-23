@@ -37,22 +37,38 @@
 #include "kv_client_c_wrapper.h"
 #include "status_definition.h"
 
-KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *clientPublicKey,
-                          size_t cClientPublicKeyLen, const char *clientPrivateKey, size_t clientPrivateKeyLen,
-                          const char *serverPublicKey, size_t cServerPublicKeyLen, const char *accessKey,
-                          size_t cAccessKeyLen, const char *secretKey, size_t secretKeyLen, const char *tenantId,
-                          size_t cTenantIdLen, const char *enableCrossNodeConnection)
+KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
+                          size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
+                          const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
+                          size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen,
+                          const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
+                          const char *enableCrossNodeConnection)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
-    return CreateObjectClient(cWorkerHost, workerPort, timeOut, clientPublicKey, cClientPublicKeyLen, clientPrivateKey,
-                              clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen,
-                              secretKey, secretKeyLen, tenantId, cTenantIdLen, enableCrossNodeConnection);
+    return CreateObjectClient(cWorkerHost, workerPort, timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen,
+                              clientPrivateKey, clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey,
+                              cAccessKeyLen, secretKey, secretKeyLen, tenantId, cTenantIdLen,
+                              enableCrossNodeConnection);
 }
 
 struct StatusC SCConnectWorker(KVClient_p clientPtr)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
     return ConnectWorker(clientPtr);
+}
+
+struct StatusC SCUpdateAkSk(KVClient_p clientPtr, const char *cAccessKey, size_t cAccessKeyLen, const char *cSecretKey,
+                            size_t cSecretKeyLen)
+{
+    auto client = reinterpret_cast<std::shared_ptr<datasystem::object_cache::ObjectClientImpl> *>(clientPtr);
+    std::string accessKey(cAccessKey, cAccessKeyLen);
+    accessKey.assign(cAccessKey, cAccessKeyLen);
+    datasystem::SensitiveValue secretKey(cSecretKey, cSecretKeyLen);
+    datasystem::Status rc = (*client)->UpdateAkSk(accessKey, secretKey);
+    if (rc.IsError()) {
+        return ToStatusC(rc);
+    }
+    return StatusC{ datasystem::K_OK, {} };
 }
 
 void SCFreeClient(KVClient_p clientPtr)

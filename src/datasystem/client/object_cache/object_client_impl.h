@@ -314,6 +314,21 @@ public:
     Status Set(const std::string &key, const StringView &val, const SetParam &setParam);
 
     /**
+     * @brief Update token for yr iam
+     * @param[in] Token message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateToken(SensitiveValue &token);
+
+    /**
+     * @brief Update aksk for yr iam
+     * @param[in] acessKey message for auth certification
+     * @param[in] secretKey message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey);
+
+    /**
      * @brief Invoke worker client to set the value of a key.
      * @param[in] val The value for the key.
      * @param[in] setParam The param for set operation.
@@ -1162,6 +1177,7 @@ private:
     RpcCredential cred_;
     int32_t requestTimeoutMs_;
     int32_t connectTimeoutMs_;
+    SensitiveValue token_;
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
     bool enableExclusiveConnection_ = false;

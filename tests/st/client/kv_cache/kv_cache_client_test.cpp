@@ -132,7 +132,7 @@ TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
     (void)setenv("DATASYSTEM_HOST", connectOptions.host.c_str(), replace);
     (void)setenv("DATASYSTEM_PORT", std::to_string(connectOptions.port).c_str(), replace);
     (void)setenv("DATASYSTEM_CONNECT_TIME_MS", std::to_string(connectOptions.connectTimeoutMs).c_str(), replace);
-
+    (void)setenv("DATASYSTEM_TOKEN", connectOptions.token.GetData(), replace);
     (void)setenv("DATASYSTEM_CLIENT_PUBLIC_KEY", connectOptions.clientPublicKey.c_str(), replace);
     (void)setenv("DATASYSTEM_CLIENT_PRIVATE_KEY", connectOptions.clientPrivateKey.GetData(), replace);
     (void)setenv("DATASYSTEM_SERVER_PUBLIC_KEY", connectOptions.serverPublicKey.c_str(), replace);

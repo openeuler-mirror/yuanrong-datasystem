@@ -22,7 +22,6 @@
 
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
-#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/utils/status.h"

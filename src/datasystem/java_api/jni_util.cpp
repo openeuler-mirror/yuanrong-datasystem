@@ -160,6 +160,7 @@ ConnectOptions ToCppConnectOptions(JNIEnv *env, jobject connectOptionsJO)
     auto port = GetIntField(env, connectOptsJC, connectOptionsJO, "port");
     auto connectTimeoutMs = GetIntField(env, connectOptsJC, connectOptionsJO, "connectTimeoutMs");
     auto requestTimeoutMs = GetIntField(env, connectOptsJC, connectOptionsJO, "requestTimeoutMs");
+    auto token = GetSecretField(env, connectOptsJC, connectOptionsJO, "token");
     auto clientPublicKey = GetStringField(env, connectOptsJC, connectOptionsJO, "clientPublicKey");
     auto clientPrivateKey = GetSecretField(env, connectOptsJC, connectOptionsJO, "clientPrivateKey");
     auto serverPublicKey = GetStringField(env, connectOptsJC, connectOptionsJO, "serverPublicKey");
@@ -171,6 +172,7 @@ ConnectOptions ToCppConnectOptions(JNIEnv *env, jobject connectOptionsJO)
                                       .port = port,
                                       .connectTimeoutMs = connectTimeoutMs,
                                       .requestTimeoutMs = std::move(requestTimeoutMs),
+                                      .token = token,
                                       .clientPublicKey = std::move(clientPublicKey),
                                       .clientPrivateKey = std::move(clientPrivateKey),
                                       .serverPublicKey = std::move(serverPublicKey),
@@ -191,7 +193,7 @@ CreateParam ToCppCreateParam(JNIEnv *env, jobject createParamJO)
         "consistencyType", "Lorg/yuanrong/datasystem/ConsistencyType;");
     if (consistencyTypeId == nullptr) {
         std::stringstream ss;
-        ss << "Failed to get the field ID of the consistencyType member variable of the CreateParam class.";
+    ss << "Failed to get the field ID of the consistencyType member variable of the CreateParam class.";
         LOG(ERROR) << ss.str();
         ThrowException(env, -1, ss.str());
         return createParam;

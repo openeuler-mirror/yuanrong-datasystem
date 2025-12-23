@@ -173,6 +173,26 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_freeKVClientPtr(
     delete client;
 }
 
+JNIEXPORT void JNICALL Java_com_datasystem_kv_KVClient_updateTokenNative(JNIEnv *env, jclass,
+    jlong handle, jbyteArray tokenBytes)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    VLOG(LOG_LEVEL) << "JNICALL ObjectClient.updateToken";
+    auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
+    SensitiveValue token = ToSensitiveValue(env, tokenBytes);
+    JNI_CHECK_RESULT(env, (*client)->UpdateToken(token), (void)0);
+}
+
+JNIEXPORT void JNICALL Java_com_datasystem_kv_KVClient_updateAkSkNative(JNIEnv *env, jclass,
+    jlong handle, jstring accessKeyJO, jbyteArray secretKeyBytes)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    VLOG(LOG_LEVEL) << "JNICALL ObjectClient.updateAkSk";
+    auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
+    std::string accessKey = ToString(env, accessKeyJO);
+    SensitiveValue secretKey = ToSensitiveValue(env, secretKeyBytes);
+    JNI_CHECK_RESULT(env, (*client)->UpdateAkSk(accessKey, secretKey), (void)0);
+}
 }  // namespace java_api
 }  // namespace datasystem
 }

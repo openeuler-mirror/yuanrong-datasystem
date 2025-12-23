@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/agc/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -58,13 +59,14 @@ public:
      * @param[in] hostPort The address of worker node.
      * @param[in] cred The authentication credentials.
      * @param[in] heartbeatType The type of heartbeat.
+     * @param[in] token Token to be authenticated.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId TenantId of client user.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
      */
     explicit ClientWorkerCommonApi(HostPort hostPort, RpcCredential cred = {},
                                    HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                   Signature *signature = nullptr, std::string tenantId = "",
+                                   SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
                                    bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
 
     virtual ~ClientWorkerCommonApi();
@@ -162,6 +164,21 @@ public:
      * @return Status of the call.
      */
     virtual Status Reconnect();
+
+    /**
+     * @brief Update token for yr iam
+     * @param[in] Token message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateToken(SensitiveValue &token);
+
+    /**
+     * @brief Update aksk for yr iam
+     * @param[in] acessKey message for auth certification
+     * @param[in] secretKey message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey);
 
     /**
      * @brief Get worker version.
@@ -340,6 +357,22 @@ public:
     }
 
 protected:
+    /**
+     * @brief Set valid client access token for request.
+     * @param[in] req any type of request.
+     * @return Status of the call.
+     */
+    template <class ReqType>
+    Status SetToken(ReqType &req)
+    {
+        SensitiveValue token;
+        RETURN_IF_NOT_OK(clientAccessToken_->UpdateAccessToken(token));
+        if (!token.Empty()) {
+            req.set_token(token.GetData(), token.GetSize());
+        }
+        return Status::OK();
+    }
+
     template <class ReqType>
     void SetTenantId(ReqType &req)
     {
@@ -350,7 +383,7 @@ protected:
     Status SetTokenAndTenantId(ReqType &req)
     {
         SetTenantId(req);
-        return Status::OK();
+        return SetToken(req);
     }
 
     /**
@@ -455,6 +488,7 @@ protected:
     uint64_t shmThreshold_{ 0 };
     Signature *signature_;
     std::string tenantId_;
+    std::unique_ptr<ClientAccessToken> clientAccessToken_;
     int32_t requestTimeoutMs_{ 0 };
     int32_t connectTimeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };

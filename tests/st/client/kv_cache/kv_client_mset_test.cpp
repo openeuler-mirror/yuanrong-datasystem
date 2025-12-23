@@ -1176,13 +1176,16 @@ public:
         opts.numEtcd = 1;
     }
 
-    void InitTestKVClient(std::shared_ptr<KVClient> &client, std::string tenant,
+    void InitTestKVClient(std::shared_ptr<KVClient> &client, std::string tenant, std::string token,
                              std::string &ak, std::string &sk)
     {
+        std::string returnVal = "return(" + token + ", " + tenant + ")";
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", returnVal));
         ConnectOptions connectOptions{ .host = workerAddr_.Host(),
                                        .port = workerAddr_.Port(),
                                        .connectTimeoutMs = 60 * 1000,  // 60s
                                        .requestTimeoutMs = 0,
+                                       .token = token,
                                        .clientPublicKey = "",
                                        .clientPrivateKey = "",
                                        .serverPublicKey = "",
@@ -1208,8 +1211,9 @@ protected:
 TEST_F(KVClientMSetTenantAuthTest, TenantAuthTokenTest)
 {
     std::shared_ptr<KVClient> client, client1;
-    InitTestKVClient(client, "tenant1", accessKey, secretKey);
-    InitTestKVClient(client1, "tenant2", accessKey, secretKey);
+    std::string ak, sk;
+    InitTestKVClient(client, "tenant1", "token", ak, sk);
+    InitTestKVClient(client1, "tenant2", "token1", ak, sk);
 
     MSetParam param;
     std::vector<std::string> keys, vals, vals1;
@@ -1243,8 +1247,9 @@ TEST_F(KVClientMSetTenantAuthTest, TenantAuthTokenTest)
 TEST_F(KVClientMSetTenantAuthTest, TenantAuthAkSkTest)
 {
     std::shared_ptr<KVClient> client, client1;
-    InitTestKVClient(client, "tenant1", accessKey, secretKey);
-    InitTestKVClient(client1, "tenant2", accessKey, secretKey);
+    std::string ak, sk;
+    InitTestKVClient(client, "tenant1", "token", ak, sk);
+    InitTestKVClient(client1, "tenant2", "token1", accessKey, secretKey);
 
     MSetParam param;
     std::vector<std::string> keys, vals, vals1;

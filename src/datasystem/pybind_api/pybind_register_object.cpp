@@ -123,15 +123,17 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
         .export_values();
 
     py::class_<ObjectClient, std::shared_ptr<ObjectClient>>(*m, "ObjectClient")
-        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
+        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId, int32_t reqTimeoutMs, bool enableExclusiveConnection) {
+                         const std::string &tenantId,
+                         int32_t reqTimeoutMs, bool enableExclusiveConnection) {
             ConnectOptions connectOpts{
                 .host = host,
                 .port = port,
                 .connectTimeoutMs = connectTimeoutMs,
                 .requestTimeoutMs = reqTimeoutMs,
+                .token = token,
                 .clientPublicKey = clientPublicKey,
                 .clientPrivateKey = clientPrivateKey,
                 .serverPublicKey = serverPublicKey,
@@ -139,7 +141,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
                 .secretKey = secretKey,
                 .tenantId = tenantId,
                 .enableCrossNodeConnection = false,
-                .enableExclusiveConnection = enableExclusiveConnection
+                .enableExclusiveConnection = enableExclusiveConnection,
             };
             return std::make_unique<ObjectClient>(connectOpts);
         }))
@@ -152,22 +154,22 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
 
         .def("create",
              [](ObjectClient &client, const std::string &objectKey, uint64_t size, ConsistencyType consistency) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-                 std::shared_ptr<Buffer> buffer;
-                 CreateParam param{ .consistencyType = consistency };
-                 datasystem::Status status = client.Create(objectKey, size, param, buffer);
-                 return std::make_pair(status, std::move(buffer));
+                    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                    std::shared_ptr<Buffer> buffer;
+                    CreateParam param{ .consistencyType = consistency };
+                    datasystem::Status status = client.Create(objectKey, size, param, buffer);
+                    return std::make_pair(status, std::move(buffer));
              })
 
         .def("put",
              [](ObjectClient &client, const std::string &objectKey, py::buffer value, ConsistencyType consistency,
                 const std::vector<std::string> &refIds) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-                 CreateParam param{ .consistencyType = consistency };
-                 py::buffer_info info(value.request());
-                 std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
-                 return client.Put(objectKey, reinterpret_cast<const uint8_t *>(info.ptr), info.size, param,
-                                   nestedObjectKeys);
+                    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                    CreateParam param{ .consistencyType = consistency };
+                    py::buffer_info info(value.request());
+                    std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
+                    return client.Put(objectKey, reinterpret_cast<const uint8_t *>(info.ptr), info.size, param,
+                                      nestedObjectKeys);
              })
 
         .def("get",

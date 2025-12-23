@@ -111,6 +111,10 @@ func CreateClient(param common.ConnectArguments) StateClient {
 	defer C.free(unsafe.Pointer(cWorkerHost))
 	cWorkerPort := C.int(param.Port)
 	cWorkerTimeout := C.int(param.TimeoutMs)
+	// Token
+	cWorkerTokenLen := C.ulong(len(param.Token))
+	cWorkerToken := (*C.char)(C.CBytes(param.Token))
+	defer clearAndFree(cWorkerToken, cWorkerTokenLen)
 	// ClientPublicKey
 	cClientPublicKey := C.CString(param.ClientPublicKey)
 	cClientPublicKeyLen := C.ulong(len(param.ClientPublicKey))
@@ -140,7 +144,7 @@ func CreateClient(param common.ConnectArguments) StateClient {
 	defer C.free(unsafe.Pointer(cEnableCrossNodeConnection))
 
 	var ret StateClient
-	ret.client = C.KVCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, 
+	ret.client = C.KVCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, cWorkerToken, cWorkerTokenLen,
 		cClientPublicKey, cClientPublicKeyLen, cClientPrivateKey, cClientPrivateKeyLen, cServerPublicKey, cServerPublicKeyLen,
 		cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen, cEnableCrossNodeConnection)
 	ret.mutex = new(sync.RWMutex)
@@ -159,6 +163,24 @@ func (t *StateClient) Init() common.Status {
 	if int(statusC.code) != common.Ok {
 		return common.CreateStatus(int(statusC.code),
 			fmt.Sprintf("State cache client failed to connect. msg: %s", C.GoString(&statusC.errMsg[0])))
+	}
+	return common.CreateStatus(common.Ok, "")
+}
+
+// UpdateAkSk function update aksk for the object client with given accessKey and secretKey, return error if failed.
+func (t *StateClient) UpdateAkSk(accessKey string, secretKey []byte) common.Status {
+	cAccessKey := C.CString(accessKey)
+	cAccessKeyLen := C.ulong(len(accessKey))
+	defer C.free(unsafe.Pointer(cAccessKey))
+
+	cSecretKey := (*C.char)(C.CBytes(secretKey))
+	cSecretKeyLen := C.ulong(len(secretKey))
+	defer clearAndFree(cSecretKey, cSecretKeyLen)
+
+	statusC := C.SCUpdateAkSk(t.client, cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen)
+	if int(statusC.code) != common.Ok {
+		return common.CreateStatus(int(statusC.code),
+			fmt.Sprintf("Object cache client failed to update aksk. msg: %s", C.GoString(&statusC.errMsg[0])))
 	}
 	return common.CreateStatus(common.Ok, "")
 }

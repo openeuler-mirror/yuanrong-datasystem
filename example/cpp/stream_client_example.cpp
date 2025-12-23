@@ -107,6 +107,7 @@ int RunExample(const std::string &ip, const int32_t port, const std::string &cli
                                 .port = port,
                                 .connectTimeoutMs = 60 * 1000,
                                 .requestTimeoutMs = 0,
+                                .token = "",
                                 .clientPublicKey = clientPublicKey,
                                 .clientPrivateKey = clientPrivateKey,
                                 .serverPublicKey = serverPublicKey };

@@ -150,6 +150,21 @@ public:
     Status Get(const std::vector<std::string> &objectKeys, int32_t subTimeoutMs,
                std::vector<Optional<Buffer>> &buffers);
 
+    /// \brief Update token for yr iam
+    ///
+    /// \param[in] token message for auth certification
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    Status UpdateToken(SensitiveValue token);
+
+    /// \brief Update aksk for yr iam
+    ///
+    /// \param[in] accessKey message for auth certification
+    /// \param[in] secretKey message for auth certification
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    Status UpdateAkSk(const std::string accessKey, SensitiveValue secretKey);
+
     /// \brief Get meta info of the given objects.
     ///
     /// \param[in] tenantId The tenant that the objs belong to.

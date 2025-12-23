@@ -48,11 +48,11 @@ public:
      * @brief Construct ClientWorkerApi.
      * @param[in] hostPort The address of the worker node.
      * @param[in] cred The authentication credentials.
+     * @param[in] token Token to be authenticated.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId TenantId of client user.
-     *
      */
-    ClientWorkerApi(const HostPort &hostPort, RpcCredential cred,
+    ClientWorkerApi(const HostPort &hostPort, RpcCredential cred, SensitiveValue token = "",
                     Signature *signature = nullptr, std::string tenantId = "");
 
     /**

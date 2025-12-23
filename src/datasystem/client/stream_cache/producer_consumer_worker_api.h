@@ -114,7 +114,7 @@ public:
     Status SetTokenAndTenantId(ReqType &req)
     {
         req.set_tenant_id(tenantId_);
-        return Status::OK();
+        return workerApi_->SetToken(req);
     }
 
 private:

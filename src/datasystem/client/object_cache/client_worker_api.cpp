@@ -56,10 +56,10 @@ static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
 
 ClientWorkerApi::ClientWorkerApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
-                                 Signature *signature, std::string tenantId, bool enableCrossNodeConnection,
-                                 bool enableExclusiveConnection)
-    : ClientWorkerCommonApi(hostPort, cred, heartbeatType, signature, std::move(tenantId), enableCrossNodeConnection,
-                            enableExclusiveConnection)
+                                 SensitiveValue token, Signature *signature, std::string tenantId,
+                                 bool enableCrossNodeConnection, bool enableExclusiveConnection)
+    : ClientWorkerCommonApi(hostPort, cred, heartbeatType, std::move(token), signature, std::move(tenantId),
+                            enableCrossNodeConnection, enableExclusiveConnection)
 {
     if (enableExclusiveConnection) {
         // Assign a value and then bump the counter. This id is a client-side-only identifier, a bit like a
