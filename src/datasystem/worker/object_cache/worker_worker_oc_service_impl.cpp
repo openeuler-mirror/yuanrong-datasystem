@@ -551,8 +551,9 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     BatchGetObjectRemoteReqPb req;
     BatchGetObjectRemoteRspPb rsp;
     std::vector<RpcMessage> payload;
+    PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
-    PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
     std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -612,10 +613,9 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
             GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, emptyRes);
         }
     }
-    pointImpl.Record();
     // Wait for fast transport events if the events are created and not already waited.
 
-    PerfPoint pointWait(PerfKey::URMA_TOTAL_WAIT_TO_FINISH);
+    pointImpl.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);
     for (auto &pair : keys) {
         int index = pair.first;
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
@@ -628,15 +628,13 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         // Early release of ShmGuard.
         pair.second.second.clear();
     }
-    pointWait.Record();
 
-    PerfPoint pointWrite(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
-    pointWrite.Record();
-    PerfPoint pointSendPayload(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
-    pointSendPayload.Record();
+    pointImpl.Record();
     LOG(INFO) << FormatString("pull success");
     point.Record();
     return Status::OK();

@@ -172,7 +172,6 @@ Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t
 
 #ifdef USE_RDMA
     if (UcpManager::IsUcpEnabled()) {
-        PerfPoint point(PerfKey::RDMA_TOTAL_WAIT_TO_FINISH);
         for (auto key : keys) {
             // Wait for the event until timeout
             Status rc = UcpManager::Instance().WaitToFinish(key, remainingTime());

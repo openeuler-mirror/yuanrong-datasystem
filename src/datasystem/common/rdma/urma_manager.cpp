@@ -186,6 +186,8 @@ Status UrmaManager::RegisterUrmaLog()
         } else if (level <= (int)URMA_VLOG_LEVEL_NOTICE) {
             LOG(WARNING) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_INFO) {
+            VLOG(INFO) << message;
+        } else if (level <= (int)URMA_VLOG_LEVEL_DEBUG) {
             VLOG(RPC_LOG_LEVEL) << message;
         } else {
             VLOG(RPC_DEBUG_LOG_LEVEL) << message;
