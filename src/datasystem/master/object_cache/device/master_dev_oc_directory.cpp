@@ -284,36 +284,48 @@ google::protobuf::RepeatedPtrField<DataInfoPb> ObjectDirectory::GetDataInfos()
     return metaPb_.data_infos();
 }
 
-Status ObjectDirectory::VerifyGetRequest(const DeviceObjectMetaPb &getMetaPb)
+Status ObjectDirectory::VerifyDataRangeLegality(const DeviceObjectMetaPb &getMetaPb)
 {
-    auto &dataInfosFromPut = metaPb_.data_infos();
-    auto &dataInfosFromGet = getMetaPb.data_infos();
-    // Verify number
-    if (dataInfosFromPut.size() != dataInfosFromGet.size()) {
+    auto &blobsFromPut = metaPb_.data_infos();
+    auto &blobsFromGet = getMetaPb.data_infos();
+
+    // 1. Validate that the number of data blobs matches
+    if (blobsFromPut.size() != blobsFromGet.size()) {
         RETURN_STATUS_LOG_ERROR(K_INVALID,
                                 FormatString("The number of data blobs corresponding to the same key is inconsistent "
                                              "between sender and receiver, src size is: %zu, dst size is: %zu",
-                                             dataInfosFromPut.size(), dataInfosFromGet.size()));
+                                             blobsFromPut.size(), blobsFromGet.size()));
     }
-    for (auto i = 0; i < dataInfosFromPut.size(); i++) {
-        // Verify dataType
-        if (dataInfosFromPut[i].data_type() != dataInfosFromGet[i].data_type()) {
-            RETURN_STATUS_LOG_ERROR(K_INVALID, FormatString("The dataInfo.dataType does not match, Put: %d, Get: %d",
-                                                            static_cast<int>(dataInfosFromPut[i].data_type()),
-                                                            static_cast<int>(dataInfosFromGet[i].data_type())));
+
+    // 2. Validate each data blob individually
+    for (auto i = 0; i < blobsFromPut.size(); i++) {
+        const auto &putBlob = blobsFromPut[i];
+        const auto &getBlob = blobsFromGet[i];
+
+        // 2.1 Validate data types match
+        if (putBlob.data_type() != getBlob.data_type()) {
+            RETURN_STATUS_LOG_ERROR(
+                K_INVALID, FormatString("The dataInfo.dataType does not match, Put: %d, Get: %d",
+                                        static_cast<int>(putBlob.data_type()), static_cast<int>(getBlob.data_type())));
         }
-        // Verify that the requested data range does not exceed the available data
+
+        // 2.2 Validate offset is non-negative
         if (getMetaPb.src_offset() < 0) {
             RETURN_STATUS_LOG_ERROR(K_INVALID, FormatString("getMetaPb: %d < 0", getMetaPb.src_offset()));
         }
+
+        // 2.3 Validate data range boundaries
+        // Check for integer overflow in range calculation
         size_t requestedOffset = static_cast<size_t>(getMetaPb.src_offset());
-        size_t requestedSize = dataInfosFromGet[i].count();
+        size_t requestedSize = getBlob.count();
         if (SIZE_MAX - requestedOffset < requestedSize) {
             RETURN_STATUS_LOG_ERROR(K_INVALID, FormatString("request offset: %zu + request size: %zu > SIZE_MAX",
                                                             requestedOffset, requestedSize));
         }
+
+        // Verify requested range does not exceed available data
         size_t requestedEnd = requestedOffset + requestedSize;
-        size_t availableSize = dataInfosFromPut[i].count();
+        size_t availableSize = putBlob.count();
         if (requestedEnd > availableSize) {
             RETURN_STATUS_LOG_ERROR(
                 K_INVALID, FormatString("The requested data range of receiver exceeds the available data of sender. "
@@ -321,12 +333,16 @@ Status ObjectDirectory::VerifyGetRequest(const DeviceObjectMetaPb &getMetaPb)
                                         availableSize, requestedOffset, requestedSize, requestedEnd));
         }
     }
+
+    // 3. ensure requested locations are unique
     for (const auto &loc : getMetaPb.locations()) {
         auto npuId = ConcatClientAndDeviceId(loc.client_id(), loc.device_id());
         if (locMap_.find(npuId) != locMap_.end()) {
-            RETURN_STATUS_LOG_ERROR(K_INVALID, FormatString("The location %s already in directory", npuId));
+            RETURN_STATUS_LOG_ERROR(
+                K_INVALID, FormatString("Duplicate location request: %s already exists in the directory", npuId));
         }
     }
+
     return Status::OK();
 }
 
@@ -405,13 +421,13 @@ void ObjectGetP2PMetaReqSubscriptionTable::RemoveGetP2PMetaRequest(std::shared_p
     return getP2PMetaRequestTable_.RemoveRequest(request);
 }
 
-Status ObjectGetP2PMetaReqSubscriptionTable::UpdateGetP2PMetaRequest(const std::string &objectKey,
-                                                                     std::string srcClientId, int32_t srcDeviceId,
-                                                                     std::string srcWorkerIP)
+Status ObjectGetP2PMetaReqSubscriptionTable::UpdateGetP2PMetaRequest(
+    const std::string &objectKey, std::string srcClientId, int32_t srcDeviceId, std::string srcWorkerIP,
+    const std::unordered_map<std::shared_ptr<GetP2PMetaRequest>, Status> &requestVerificationResults)
 {
     auto entryParam = GetP2PMetaEntryParams::ConstructGetP2PMetaEntryParams(srcClientId, srcDeviceId, srcWorkerIP);
-    return getP2PMetaRequestTable_.UpdateRequest(
-        objectKey, entryParam, Status::OK(), [this](std::shared_ptr<GetP2PMetaRequest> req) {
+    return getP2PMetaRequestTable_.UpdateRequestsWithVerificationResults(
+        objectKey, entryParam, requestVerificationResults, [this](std::shared_ptr<GetP2PMetaRequest> req) {
             LOG_IF_ERROR(ReturnGetP2PMetaRequest(req), "ReturnGetP2PMetaRequest failed");
         });
 }
@@ -459,7 +475,13 @@ Status ObjectGetP2PMetaReqSubscriptionTable::ReturnGetP2PMetaRequest(std::shared
         GetP2PMetaRequest::TbbGetObjsTable::const_accessor accessor;
         if (request->objects_.find(accessor, objectKey) && accessor->second != nullptr) {
             auto childResp = resp.add_dev_obj_resp_meta();
+            auto rc = request->GetObjectStatus(objectKey);
             childResp->set_object_key(objectKey);
+            if (rc.IsError()) {
+                childResp->mutable_error()->set_error_code(rc.GetCode());
+                childResp->mutable_error()->set_error_msg(rc.GetMsg());
+                continue;
+            }
             childResp->set_src_client_id(accessor->second->srcClientId_);
             childResp->set_src_device_id(accessor->second->srcDeviceId_);
             auto &srcWorkerIP = accessor->second->srcWorkerIP_;
