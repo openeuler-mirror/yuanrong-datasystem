@@ -659,17 +659,18 @@ obs</label><div class="sd-tab-content docutils">
 <input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-3">
 sfs</label><div class="sd-tab-content docutils">
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># Endpoint of sfs-turbo, which is used to concatenate the shared path in sfs-turbo. such as &#39;172.21.7.239&#39;.</span>
-<span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
-<span class="c1"># Sfs-turbo sub-path mounted to ds-worker. If this parameter is not specified, the root directory &#39;/&#39; of sfs-turbo</span>
-<span class="c1"># is mounted by default.</span>
-<span class="nt">subPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
-<span class="c1"># Specifies the sfs-turbo ID, which can be viewed on the sfs-turbo page.</span>
-<span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
-<span class="c1"># Specifies the sfs-turbo enterprise project ID, which can be viewed on the sfs-turbo page.</span>
-<span class="nt">projectId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
-<span class="c1"># Specifies the capacity of using sfs-turbo. Note that the size must be smaller than the size of sfsTurbo.</span>
-<span class="nt">capacity</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;500Gi&quot;</span>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sfsTurbo</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># Endpoint of sfs-turbo, which is used to concatenate the shared path in sfs-turbo. such as &#39;172.21.7.239&#39;.</span>
+<span class="w">  </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="c1"># Sfs-turbo sub-path mounted to ds-worker. If this parameter is not specified, the root directory &#39;/&#39; of sfs-turbo</span>
+<span class="w">  </span><span class="c1"># is mounted by default.</span>
+<span class="w">  </span><span class="nt">subPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="c1"># Specifies the sfs-turbo ID, which can be viewed on the sfs-turbo page.</span>
+<span class="w">  </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
+<span class="w">  </span><span class="c1"># Specifies the sfs-turbo enterprise project ID, which can be viewed on the sfs-turbo page.</span>
+<span class="w">  </span><span class="nt">projectId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
+<span class="w">  </span><span class="c1"># Specifies the capacity of using sfs-turbo. Note that the size must be smaller than the size of sfsTurbo.</span>
+<span class="w">  </span><span class="nt">capacity</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;500Gi&quot;</span>
 </pre></div>
 </div>
 </div>
