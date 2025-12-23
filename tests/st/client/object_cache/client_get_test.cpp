@@ -1807,8 +1807,8 @@ TEST_F(OCClientRemoteGetTest5, TestRemoteGetAndRemoveLocationFailedThenPut)
     InitTestClient(1, client1, 5000);
     InitTestClient(2, client2, 5000);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remote_get_failed", "5*return(K_RPC_UNAVAILABLE)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remove_location", "5*return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remote_get_failed", "7*return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remove_location", "7*return(K_RPC_UNAVAILABLE)"));
 
     std::string objKey = "Ugly_iPhone15";
     std::string val = RandomData().GetRandomString(1024ul * 1024ul);

@@ -133,8 +133,8 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
     }
     // The retries last for four times, and the interval is continuously extended,
-    // which are 50, 200, 1000, 5000 according to the rpc timeout setting
-    static std::vector<int32_t> retryIntervalsMs = { 50, 200, 1000, 5000 };
+    // which are 1, 5, 50, 200, 1000, 5000 according to the rpc timeout setting
+    static std::vector<int32_t> retryIntervalsMs = { 1, 5, 50, 200, 1000, 5000 };
     auto startTime = std::chrono::steady_clock::now();
     uint64_t retryCount = 0;
     Status status;
@@ -149,7 +149,7 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
             return rc;
         };
         int32_t rpcTimeoutMs = std::min<int32_t>(remainTimeMs, maxRpcTimeoutMs);
-        rpcTimeoutMs = std::max<int32_t>(rpcTimeoutMs, minOnceRpcTimeoutMs);
+        rpcTimeoutMs = std::max<int32_t>(rpcTimeoutMs, 1);
         status = f(rpcTimeoutMs);
         if (exceptionCode.find(status.GetCode()) != exceptionCode.end()) {
             // If an exception code is received during retry, the retry is considered successful.
@@ -173,7 +173,7 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
         VLOG(1) << "retryCount: " << retryCount << ", retryIntervalMs: " << retryIntervalMs
                 << ", remainTimeMs: " << remainTimeMs;
 
-        if (remainTimeMs <= retryIntervalsMs.front()) {
+        if (remainTimeMs < minOnceRpcTimeoutMs) {
             // If the remaining time is not enough to execute the function once, here need to exit.
             break;
         }

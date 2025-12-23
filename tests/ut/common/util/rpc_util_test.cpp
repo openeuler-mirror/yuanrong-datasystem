@@ -81,7 +81,7 @@ TEST_F(RpcUtilTest, TestMinOnceRpcTimeout)
     inject::Set("rpc_util.retry_on_error_before_func", "2*sleep(300)");
     int32_t timeoutMs = 882;
     // exec time: 50 and 200 is interval time, 50 is the last remaining time
-    int32_t expectTime = 300 + 50 + 300 + 200 + 50;
+    int32_t expectTime = 300 + 50 + 300 + 200 + 32;
     ExecRpcRetryOneError(timeoutMs, expectTime);
 }
 
