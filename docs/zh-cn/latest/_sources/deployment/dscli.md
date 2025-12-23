@@ -678,14 +678,14 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | ipc_through_shared_memory | bool | `true` | datasystem-worker共享内存启用开关 |
-| unix_domain_socket_dir | string | `"./yr_datasystem/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
+| unix_domain_socket_dir | string | `"./datasystem/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
 | worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | enable_curve_zmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | curve_key_dir | string | `""` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
 | oc_worker_worker_pool_size | int | `3` | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
 | payload_nocopy_threshold | string | `"104857600"` | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
-| rpc_thread_num | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
+| rpc_thread_num | int | `16` | 配置服务端的RPC线程数，必须为大于0的数 |
 | oc_thread_num | int | `32` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | zmq_server_io_context | int | `5` | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | zmq_client_io_context | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
@@ -723,7 +723,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| log_dir | string | `"/datasystem/logs"` | 日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下 |
+| log_dir | string | `"./datasystem/logs"` | 日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下 |
 | v | int | `0` | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
 | log_async | bool | `true` | 是否开启异步刷新日志功能 |
 | log_async_queue_size | int | `65536` | 异步日志的消息队列大小 |
@@ -734,7 +734,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | max_log_file_num | int | `5` | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 单个日志文件最大大小（以MB为单位） |
 | log_monitor | bool | `true` | 是否开启接口性能与资源观测日志 |
-| monitor_config_file | string | `./yr_datasystem/config/yr_datasystem.config` | 配置worker监控配置文件的路径 |
+| monitor_config_file | string | `./datasystem/config/datasystem.config` | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | `"harddisk"` | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
 | log_monitor_interval_ms | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
@@ -767,7 +767,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| rocksdb_store_dir | string | `"./yr_datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
+| rocksdb_store_dir | string | `"./datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | rocksdb_background_threads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | rocksdb_max_open_file | int | `128` | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
