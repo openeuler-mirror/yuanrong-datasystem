@@ -25,6 +25,8 @@
 #include <memory>
 #include <vector>
 
+#include <tbb/concurrent_hash_map.h>
+
 #include "datasystem/client/mmap_table_entry.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
@@ -39,6 +41,7 @@
 
 namespace datasystem {
 
+using RemoteH2DHostInfoMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<RemoteH2DHostInfo>>;
 struct ObjectInterface {
     // The state and config of the object.
     datasystem::StateInfo stateInfo;
@@ -317,12 +320,14 @@ struct ObjectInterface {
         return GetShmUnit() != nullptr && !stateInfo.IsIncomplete();
     }
 
-    virtual void SetRemoteHostInfo(const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
+    virtual void SetRemoteHostInfo(const std::string &clientCommId,
+                                   const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
     {
+        (void)clientCommId;
         (void)remoteH2DHostInfo;
     }
 
-    virtual std::shared_ptr<RemoteH2DHostInfo> GetRemoteHostInfo() const
+    virtual std::shared_ptr<RemoteH2DHostInfoMap> GetRemoteHostInfo() const
     {
         return nullptr;
     }

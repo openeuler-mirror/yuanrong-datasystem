@@ -97,7 +97,9 @@ Status AclDeviceManager::LoadPlugin()
     std::string aclPluginPath = std::string(dirname(curSoPath.data())) + "/" + AclPluginLibrary;
     // If the plugin library cannot be found with the symbols,
     // try traverse all the lib paths and see if it can be found.
-    if (FileSize(aclPluginPath) < 0) {
+    // Also avoid error logging.
+    bool logError = false;
+    if (FileSize(aclPluginPath, logError) < 0) {
         std::unordered_set<std::string> soPaths{ dirname(curSoPath.data()) };
         auto pathCollector = [](struct dl_phdr_info *info, size_t size, void *data) {
             (void)size;
@@ -109,7 +111,7 @@ Status AclDeviceManager::LoadPlugin()
         CHECK_FAIL_RETURN_STATUS(dl_iterate_phdr(pathCollector, reinterpret_cast<void *>(&soPaths)) == 0,
                                  K_RUNTIME_ERROR, "Walk through list of shared objects failed");
         for (auto &path : soPaths) {
-            if (FileSize(path + "/" + AclPluginLibrary) >= 0) {
+            if (FileSize(path + "/" + AclPluginLibrary, logError) >= 0) {
                 aclPluginPath = path + "/" + AclPluginLibrary;
                 break;
             }

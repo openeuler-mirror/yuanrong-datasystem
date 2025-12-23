@@ -153,6 +153,16 @@ Status GetRequest::MarkSuccessImpl(const ObjectKey &objectKey, std::unique_ptr<G
     auto iter = objects_.find(objectKey);
     CHECK_FAIL_RETURN_STATUS(iter != objects_.cend(), K_RUNTIME_ERROR,
                              FormatString("Not found object key %s in GetRequest", objectKey));
+    // In RH2D scenario, check that the client communicator id corresponds before returning the get response.
+    // When data is found local, either shm unit will exist, or the comm id mapping is empty.
+    if (IsRemoteH2DEnabled() && params->shmUnit == nullptr && params->remoteH2DHostInfo
+        && !params->remoteH2DHostInfo->empty() && !GetClientCommUuid().empty()) {
+        RemoteH2DHostInfoMap::const_accessor constAccessor;
+        bool found = params->remoteH2DHostInfo->find(constAccessor, GetClientCommUuid());
+        CHECK_FAIL_RETURN_STATUS(
+            found, K_TRY_AGAIN,
+            FormatString("Response is not ready yet for object %s, comm id %s", objectKey, GetClientCommUuid()));
+    }
     {
         std::lock_guard<std::mutex> locker(mutex_);
         RETURN_OK_IF_TRUE(iter->second.params != nullptr);
@@ -346,7 +356,9 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         const auto &params = iter->second.params;
         totalSize += params->dataSize;
         rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, resp, payloads);
-        if (shmEnabled && !(IsRemoteH2DEnabled() && iter->second.params->remoteH2DHostInfo)) {
+        if (shmEnabled
+            && !(IsRemoteH2DEnabled() && params->shmUnit == nullptr && params->remoteH2DHostInfo
+                 && !params->remoteH2DHostInfo->empty())) {
             // If object is shm, we increase the refCnt for client.
             // The client will be using this object and be responsible for releasing this object.
             shmRefTable_->AddShmUnit(clientId_, params->shmUnit);
@@ -375,7 +387,9 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
                                        bool shmEnabled, GetRspPb &resp, std::vector<RpcMessage> &outPayloads)
 {
     const auto &params = objectInfo.params;
-    if (shmEnabled || (IsRemoteH2DEnabled() && objectInfo.params->remoteH2DHostInfo)) {
+    if (shmEnabled
+        || (IsRemoteH2DEnabled() && objectInfo.params->remoteH2DHostInfo
+            && !objectInfo.params->remoteH2DHostInfo->empty())) {
         GetRspPb::ObjectInfoPb *object = resp.add_objects();
         SetShmObjectInfoPb(objectKeyUri, objectIndex, *params, *object);
         return Status::OK();
@@ -416,10 +430,13 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t object
         TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
         info.set_object_key(objectKey);
     }
-    if (IsRemoteH2DEnabled() && safeEntry.remoteH2DHostInfo) {
-        *(info.mutable_remote_host_segment()) = std::move(safeEntry.remoteH2DHostInfo->segmentInfo);
-        *(info.mutable_root_info()) = std::move(safeEntry.remoteH2DHostInfo->rootInfo);
-        *(info.mutable_data_info()) = std::move(safeEntry.remoteH2DHostInfo->dataInfo);
+    // The existence should have been checked at MarkSuccessImpl.
+    RemoteH2DHostInfoMap::const_accessor constAccessor;
+    if (IsRemoteH2DEnabled() && safeEntry.remoteH2DHostInfo
+        && safeEntry.remoteH2DHostInfo->find(constAccessor, clientCommId_)) {
+        *(info.mutable_remote_host_segment()) = constAccessor->second->segmentInfo;
+        *(info.mutable_root_info()) = constAccessor->second->rootInfo;
+        *(info.mutable_data_info()) = constAccessor->second->dataInfo;
         // Leave the shm unit stuff empty to be clearer.
         info.set_store_fd(0);
         info.set_offset(0);

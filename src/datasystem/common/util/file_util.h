@@ -36,9 +36,10 @@ namespace datasystem {
 /**
  * @brief Get file size in bytes.
  * @param[in] filename Filename.
+ * @param[in] logError Whether to log error when failed.
  * @return File size in bytes.
  */
-off_t FileSize(const std::string &filename);
+off_t FileSize(const std::string &filename, bool logError = true);
 
 /**
  * @brief Get the file size via the file descriptor.

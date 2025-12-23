@@ -1079,7 +1079,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         hostInfo->segmentInfo = std::move(rspPb.remote_host_segment());
         hostInfo->rootInfo = std::move(rspPb.root_info());
         hostInfo->dataInfo = std::move(rspPb.data_info());
-        objectKV.GetObjEntry()->SetRemoteHostInfo(hostInfo);
+        objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
     }
 
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,

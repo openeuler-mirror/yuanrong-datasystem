@@ -225,13 +225,18 @@ Status RemoteH2DManager::Init()
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
     // It could have been initialized already on client side.
-    LOG_IF_ERROR(acl::AclDeviceManager::Instance()->aclInit(nullptr), "");
+    Status rc = acl::AclDeviceManager::Instance()->aclInit(nullptr);
+    if (rc.IsError()) {
+        LOG(INFO) << "RemoteH2DManager acl init failed. Repeated init with error code 100002 is acceptable. "
+                  << rc.ToString();
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetDeviceIdx(), "RemoteH2DManager set device index failed.");
     return Status::OK();
 }
 
 Status RemoteH2DManager::Uninit()
 {
+    LOG_IF_ERROR(SetDeviceIdx(), "Set device index failed at RemoteH2DManager uninitialization");
     {
         std::lock_guard<std::shared_timed_mutex> l(communicatorMutex_);
         communicatorMap_.reset();
