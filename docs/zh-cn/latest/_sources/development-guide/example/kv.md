@@ -174,17 +174,18 @@ obs:
 :::{tab-item} sfs
 
 ```yaml
-# Endpoint of sfs-turbo, which is used to concatenate the shared path in sfs-turbo. such as '172.21.7.239'.
-endpoint: ""
-# Sfs-turbo sub-path mounted to ds-worker. If this parameter is not specified, the root directory '/' of sfs-turbo
-# is mounted by default.
-subPath: ""
-# Specifies the sfs-turbo ID, which can be viewed on the sfs-turbo page.
-id: "0"
-# Specifies the sfs-turbo enterprise project ID, which can be viewed on the sfs-turbo page.
-projectId: "0"
-# Specifies the capacity of using sfs-turbo. Note that the size must be smaller than the size of sfsTurbo.
-capacity: "500Gi"
+sfsTurbo:
+  # Endpoint of sfs-turbo, which is used to concatenate the shared path in sfs-turbo. such as '172.21.7.239'.
+  endpoint: ""
+  # Sfs-turbo sub-path mounted to ds-worker. If this parameter is not specified, the root directory '/' of sfs-turbo
+  # is mounted by default.
+  subPath: ""
+  # Specifies the sfs-turbo ID, which can be viewed on the sfs-turbo page.
+  id: "0"
+  # Specifies the sfs-turbo enterprise project ID, which can be viewed on the sfs-turbo page.
+  projectId: "0"
+  # Specifies the capacity of using sfs-turbo. Note that the size must be smaller than the size of sfsTurbo.
+  capacity: "500Gi"
 ```
 
 :::
