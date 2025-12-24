@@ -594,7 +594,7 @@ function(ADD_DATASYSTEM_TEST TARGET)
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${_CTEST_INCLUDE_FILE}")
 endfunction()
 
-# Clean target build rpath. Some targets like python shared library
+# Clean target build rpath. Some targets like java/python shared library
 # would package as jar/wheel format file first then install. But there
 # build rpath need to erase first.
 #

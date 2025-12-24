@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.yuanrong.datasystem.example</groupId>
+  <artifactId>kv_client_example</artifactId>
+  <version>1.0</version>
+
+  <name>kv_client_example</name>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.source>1.8</maven.compiler.source>
+    <maven.compiler.target>1.8</maven.compiler.target>
+    <api_name>datasystem</api_name>
+    <api_version>1.0</api_version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.huawei.datasystem</groupId>
+      <artifactId>${api_name}</artifactId>
+      <version>${api_version}</version>
+    </dependency>
+  </dependencies>
+</project>

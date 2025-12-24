@@ -29,6 +29,7 @@ function get_var_from_cmake() {
 ds_output_dir=$(get_var_from_cmake "INSTALL_DIR" "$config_file")
 run_hetero=$(get_var_from_cmake "BUILD_HETERO" "$config_file")
 run_python=$(get_var_from_cmake "PACKAGE_PYTHON" "$config_file")
+run_java=$(get_var_from_cmake "PACKAGE_JAVA" "$config_file")
 
 [[ ! -d "${ds_output_dir}"/service ]] && tar -zxf "${ds_output_dir}"/yr-datasystem-v$(cat "${curr_dir}/../VERSION").tar.gz -C ${ds_output_dir}
 python3 -m pip install ${ds_output_dir}/openyuanrong_datasystem-*.whl --force-reinstall
@@ -55,7 +56,7 @@ function run_go_example()
     echo "Running golang tests. Using worker ${WORKER_ADDR} on port ${WORKER_PORT}, etcd address: ${WORKER_ETCD_ADDRESS}"
     cd ${BUILD_GO_DIR}/common
     go test
-  
+
     cd ${BUILD_GO_DIR}/object
     go test
 
@@ -108,6 +109,42 @@ if [ "x$run_python" == "xon" ]; then
         python ${example_python_dir}/hetero_client_example.py --host "127.0.0.1" --port "${worker_port}"
         python ${example_python_dir}/ds_tensor_client_example.py --host "127.0.0.1" --port "${worker_port}"
     fi
+fi
+
+if [ "x$run_java" == "xon" ] ; then
+    echo -e "---- Running java example..."
+    java_sdk_path=$(ls -1 ${ds_output_dir}/sdk/datasystem-*.jar)
+    java_sdk_count=$(echo "${java_sdk_path}" | wc -l)
+    [[ ${java_sdk_count} -ne 1 ]] && echo "jar file count is ${java_sdk_count}" && exit 1
+    java_sdk_filename=${java_sdk_path##*/}
+    java_sdk_filename=${java_sdk_filename%.*}
+    java_sdk_name=${java_sdk_filename%-*}
+    java_sdk_version=${java_sdk_filename##*-}
+
+    echo -e "install package ${java_sdk_path}, name: ${java_sdk_name}, version: ${java_sdk_version}"
+
+    mvn install:install-file \
+    -Dfile=${java_sdk_path} \
+    -DgroupId=com.huawei.datasystem \
+    -DartifactId=${java_sdk_name} \
+    -Dversion=${java_sdk_version} \
+    -Dpackaging=jar
+
+    java_demo_pom="${curr_dir}/../example"/java/stream.xml
+    mvn compile -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -f ${java_demo_pom}
+    mvn exec:java -e -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -Dexec.mainClass="org.yuanrong.datasystem.example.StreamClientExample" \
+        -Dexec.args="127.0.0.1 ${worker_port}" -f ${java_demo_pom}
+
+    java_demo_pom="${curr_dir}/../example"/java/object.xml
+    mvn compile -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -f ${java_demo_pom}
+    mvn exec:java -e -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -Dexec.mainClass="org.yuanrong.datasystem.example.ObjectClientExample" \
+        -Dexec.args="127.0.0.1 ${worker_port}" -f ${java_demo_pom}
+
+    java_demo_pom="${curr_dir}/../example"/java/kv.xml
+    mvn compile -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -f ${java_demo_pom}
+    mvn exec:java -e -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -Dexec.mainClass="org.yuanrong.datasystem.example.KVClientExample" \
+        -Dexec.args="127.0.0.1 ${worker_port}" -f ${java_demo_pom}
+    echo -e "---- End java example..."
 fi
 
 if [[ "x$run_go" = "xon" ]] ; then

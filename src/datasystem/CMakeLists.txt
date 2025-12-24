@@ -13,3 +13,7 @@ endif ()
 if (BUILD_GO_API)
     add_subdirectory(c_api)
 endif ()
+
+if (BUILD_JAVA_API)
+    add_subdirectory(java_api)
+endif ()
