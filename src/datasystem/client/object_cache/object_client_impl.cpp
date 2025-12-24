@@ -2102,6 +2102,8 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "The buffer list must not be empty.");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(buffers.size()), K_INVALID,
+                                         FormatString("The buffer size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     RETURN_IF_NOT_OK(IsClientReady());
     std::shared_ptr<ClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
@@ -2302,6 +2304,8 @@ Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std
 {
     RETURN_IF_NOT_OK(IsClientReady());
     CHECK_FAIL_RETURN_STATUS(keys.size() > 0, K_INVALID, "The keys should not be empty.");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(keys.size()), K_INVALID,
+                                         FormatString("The key size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     CHECK_FAIL_RETURN_STATUS(keys.size() == sizes.size(), K_INVALID, "The number of key and value is not the same.");
     for (size_t i = 0; i < keys.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
