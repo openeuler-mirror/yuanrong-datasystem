@@ -14,6 +14,7 @@
 """YuanRong datasystem CLI util module."""
 
 import ipaddress
+import importlib.resources
 import json
 import os
 import re
@@ -370,3 +371,36 @@ def compare_and_process_config(
                 user_item["value"] = os.path.realpath(get_timestamped_path(user_value))
 
     return modified
+
+
+def get_commit_id():
+    """Reads and returns the git commit ID from a file."""
+    try:
+        with importlib.resources.path("yr.datasystem", ".commit_id") as commit_file_path:
+            with open(commit_file_path, "r") as f:
+                content = f.read().strip()
+                return _extract_commit_id(content)
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _extract_commit_id(content):
+    """Extract commit ID from content string."""
+    if not content:
+        return "unknown"
+    parts = content.split("=", 1)
+    if len(parts) != 2:
+        return "unknown"
+    commit_info_str = parts[1].strip()
+    if not commit_info_str or commit_info_str == "unknown":
+        return "unknown"
+    is_single_quoted = commit_info_str.startswith("'") and commit_info_str.endswith("'")
+    is_double_quoted = commit_info_str.startswith('"') and commit_info_str.endswith('"')
+    if is_single_quoted or is_double_quoted:
+        commit_info_str = commit_info_str[1:-1]
+    start_idx = commit_info_str.find("[")
+    end_idx = commit_info_str.find("]", start_idx)
+    if start_idx != -1 and end_idx != -1:
+        return commit_info_str[start_idx + 1 : end_idx]
+    return "unknown"

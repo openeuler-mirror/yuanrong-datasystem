@@ -15,6 +15,7 @@
 # limitations under the License.
 
 """setup_package."""
+
 import os
 import shutil
 import stat
@@ -36,9 +37,9 @@ with open(version_path, 'r') as f:
 readme_path = os.path.join(root_dir, 'yr', 'datasystem', 'README.md')
 with open(readme_path, 'r') as f:
     readme = f.read()
-readme = '\n'.join(readme.split('\n')[1:])
+readme = "\n".join(readme.split("\n")[1:])
 
-commit_id = os.getenv('COMMIT_ID', 'None').replace("\n", "")
+commit_id = os.getenv("COMMIT_ID", "None").replace("\n", "")
 
 
 def recursive_package_files(directory):
@@ -56,8 +57,8 @@ def recursive_package_files(directory):
 
 package_datas = {
     '': (
-        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py',
-        'worker_config.json', 'cluster_config.json'] +
+        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py', 'VERSION', 'README.md', '.commit_id',
+        'worker_config.json', 'cluster_config.json', 'kv.json'] +
         recursive_package_files('include') +
         recursive_package_files('helm_chart') +
         recursive_package_files('lib') +
@@ -187,8 +188,7 @@ def update_permissions(path):
         for dirname in dirnames:
             dir_fullpath = os.path.join(dirpath, dirname)
             if not os.path.islink(dir_fullpath):
-                os.chmod(dir_fullpath, stat.S_IREAD |
-                         stat.S_IWRITE | stat.S_IEXEC)
+                os.chmod(dir_fullpath, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
         for filename in filenames:
             file_fullpath = os.path.join(dirpath, filename)
             if os.path.islink(file_fullpath):
@@ -210,7 +210,7 @@ class BuildPy(build_py):
     """Build py files."""
 
     def run(self):
-        datasystem_lib_dir = os.path.join(os.path.dirname(__file__), 'build')
+        datasystem_lib_dir = os.path.join(os.path.dirname(__file__), "build")
         super().run()
         update_permissions(datasystem_lib_dir)
         worker_bin = os.path.join(
@@ -245,13 +245,14 @@ setup(
     package_data=package_datas,
     include_package_data=True,
     cmdclass={
-        'egg_info': EggInfo,
-        'build_py': BuildPy,
-        'bdist_wheel': CustomBdistWheel
+        "egg_info": EggInfo,
+        "build_py": BuildPy,
+        "bdist_wheel": CustomBdistWheel,
     },
     entry_points={
-        'console_scripts': [
-            'dscli=yr.datasystem.cli.command:main'
+        "console_scripts": [
+            "dscli=yr.datasystem.cli.command:main",
+            "dsbench=yr.datasystem.cli.benchmark.main:main",
         ]
     },
     install_requires=requires,

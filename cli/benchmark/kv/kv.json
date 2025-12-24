@@ -1,0 +1,23 @@
+[
+  { "num": 40960, "size": "128KB", "thread_num": 8, "batch_num": 64},
+  { "num": 40960, "size": "128KB", "thread_num": 8, "batch_num": 256},
+  { "num": 40960, "size": "128KB", "thread_num": 16, "batch_num": 64},
+  { "num": 40960, "size": "128KB", "thread_num": 16, "batch_num": 256},
+  { "num": 40960, "size": "128KB", "thread_num": 32, "batch_num": 64},
+  { "num": 40960, "size": "128KB", "thread_num": 32, "batch_num": 256},
+  { "num": 20480, "size": "1MB", "thread_num": 8, "batch_num": 32},
+  { "num": 20480, "size": "1MB", "thread_num": 8, "batch_num": 64},
+  { "num": 20480, "size": "1MB", "thread_num": 8, "batch_num": 128},
+  { "num": 20480, "size": "1MB", "thread_num": 16, "batch_num": 32},
+  { "num": 20480, "size": "1MB", "thread_num": 16, "batch_num": 64},
+  { "num": 20480, "size": "1MB", "thread_num": 16, "batch_num": 128},
+  { "num": 20480, "size": "1MB", "thread_num": 32, "batch_num": 32},
+  { "num": 20480, "size": "1MB", "thread_num": 32, "batch_num": 64},
+  { "num": 20480, "size": "1MB", "thread_num": 32, "batch_num": 128},
+  { "num": 2048, "size": "8MB", "thread_num": 8, "batch_num": 1},
+  { "num": 2048, "size": "8MB", "thread_num": 8, "batch_num": 4},
+  { "num": 2048, "size": "8MB", "thread_num": 8, "batch_num": 16},
+  { "num": 2048, "size": "8MB", "thread_num": 16, "batch_num": 1},
+  { "num": 2048, "size": "8MB", "thread_num": 16, "batch_num": 4},
+  { "num": 2048, "size": "8MB", "thread_num": 16, "batch_num": 16}
+]

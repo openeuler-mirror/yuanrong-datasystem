@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """YuanRong datasystem CLI init module."""
-
 import importlib.metadata
 
 
