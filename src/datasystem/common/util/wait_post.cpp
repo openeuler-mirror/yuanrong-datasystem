@@ -35,6 +35,13 @@ void WaitPost::Wait()
     cv_.wait(lock, [this]() { return val_ != 0; });
 }
 
+void WaitPost::WaitAndClear()
+{
+    std::unique_lock<std::mutex> lock(mux_);
+    cv_.wait(lock, [this]() { return val_ != 0; });
+    val_ = 0;
+}
+
 bool WaitPost::WaitFor(uint64_t timeoutMs)
 {
     std::unique_lock<std::mutex> lock(mux_);
@@ -42,14 +49,12 @@ bool WaitPost::WaitFor(uint64_t timeoutMs)
     return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]() { return val_ != 0; });
 }
 
-bool WaitPost::WaitForNext(uint64_t timeoutMs)
+bool WaitPost::WaitForAndClear(uint64_t timeoutMs)
 {
     std::unique_lock<std::mutex> lock(mux_);
-    if (val_ != 0) {
-        val_ = 0;
-    }
     timeoutMs = std::min<uint64_t>(timeoutMs, INT64_MAX);
     return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]() { return val_ != 0; });
+    val_ = 0;
 }
 
 void WaitPost::Set()
