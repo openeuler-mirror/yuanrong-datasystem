@@ -554,8 +554,9 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
+|--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待 worker 服务就绪的最大时间（默认：90秒） |
 |--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成 |
-|--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 " --\<Args>  \<Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379" 需要放在numactl选项后，否则会报错|
+|--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"<br>**注意**：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数|
 |--datasystem_home_dir &lt;DIR&gt; |-d &lt;DIR&gt; | 替换配置文件中当前路径的目录。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 datasystem_home_dir 的值 |
 |--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
 |--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
@@ -586,6 +587,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
+|--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待 worker 服务就绪的最大时间（默认：90秒） |
 |--cluster_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 指定集群配置文件的路径，配置文件（JSON格式）可通过generate_config生成 |
 |--datasystem_home_dir &lt;DIR&gt;  |-d &lt;DIR&gt; | 替换配置文件中当前路径的目录为`datasystem_home_dir`的值 |
 |--cpunodebind|-N | 仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |

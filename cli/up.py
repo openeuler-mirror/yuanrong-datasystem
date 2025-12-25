@@ -33,9 +33,15 @@ class Command(BaseCommand, ParallelMixin):
     name = "up"
     description = "startup yuanrong datasystem worker on cluster nodes"
 
-    _config = {}
-    _home_dir = ""
-    _hidden_config_path = ""
+    _DEFAULT_TIMEOUT = 90
+
+    def __init__(self):
+        """Initialize command instance."""
+        super().__init__()
+        self._config = {}
+        self._home_dir = ""
+        self._hidden_config_path = ""
+        self._timeout = self._DEFAULT_TIMEOUT
 
     def add_arguments(self, parser):
         """
@@ -44,6 +50,17 @@ class Command(BaseCommand, ParallelMixin):
         Args:
             parser (ArgumentParser): Specify parser to which arguments are added.
         """
+        parser.add_argument(
+            "-t",
+            "--timeout",
+            type=int,
+            default=self._DEFAULT_TIMEOUT,
+            metavar="SECONDS",
+            help=(
+                f"Maximum time to wait for worker service to be ready (default: {self._DEFAULT_TIMEOUT} seconds)"
+            ),
+        )
+
         parser.add_argument(
             "-f",
             "--cluster_config_path",
@@ -137,6 +154,7 @@ class Command(BaseCommand, ParallelMixin):
                     numactl_opts[k] = v
             use_numactl = any(v is not None for v in numactl_opts.values())
             self.update_worker_config()
+            self._timeout = args.timeout
             self.execute_parallel(
                 self._config[ClusterConfig.WORKER_NODES],
                 use_numactl=use_numactl,
@@ -211,7 +229,7 @@ class Command(BaseCommand, ParallelMixin):
         """
         Update the remote cmd command to execute.
         """
-        base_cmd = f"dscli start -f {shlex.quote(config_path)}"
+        base_cmd = f"dscli start -t {self._timeout} -f {shlex.quote(config_path)}"
         if not use_numactl:
             return base_cmd
 

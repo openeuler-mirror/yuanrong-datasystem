@@ -16,6 +16,7 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import time
 import shutil
@@ -33,10 +34,15 @@ class Command(BaseCommand):
     name = "start"
     description = "startup yuanrong datasystem worker service"
 
-    _required_params = ["etcd_address"]
+    _REQUIRED_PARAMS = ["etcd_address"]
     _DEFAULT_WORKER_ADDRESS = "127.0.0.1:31501"
-    _wait_worker_ready_time = 90
-    _home_dir = ""
+    _DEFAULT_TIMEOUT = 90
+
+    def __init__(self):
+        """Initialize command instance."""
+        super().__init__()
+        self._home_dir = ""
+        self._timeout = self._DEFAULT_TIMEOUT
 
     def add_arguments(self, parser):
         """
@@ -46,6 +52,17 @@ class Command(BaseCommand):
             parser (ArgumentParser): Specify parser to which arguments are added.
         """
         group = parser.add_mutually_exclusive_group(required=True)
+        parser.add_argument(
+            "-t",
+            "--timeout",
+            type=int,
+            default=self._DEFAULT_TIMEOUT,
+            metavar="SECONDS",
+            help=(
+                f"Maximum time to wait for worker service to be ready (default: {self._DEFAULT_TIMEOUT} seconds)"
+            ),
+        )
+
         group.add_argument(
             "-f",
             "--worker_config_path",
@@ -160,6 +177,7 @@ class Command(BaseCommand):
             elif args.worker_args:
                 final_params = self.parse_cli_args(args.worker_args)
             final_params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
+            self._timeout = args.timeout
             self.start_worker(final_params, use_numactl, numactl_opts)
         except Exception as e:
             self.logger.error(f"Start failed: {e}")
@@ -278,7 +296,7 @@ class Command(BaseCommand):
             ValueError: If required parameters are missing.
             RuntimeError: If the worker service fails to start or exits abnormally.
         """
-        for param in self._required_params:
+        for param in self._REQUIRED_PARAMS:
             if not params.get(param):
                 raise ValueError(f"Missing required parameters: {param}")
 
@@ -302,7 +320,8 @@ class Command(BaseCommand):
                 text=True,
                 start_new_session=True,
             )
-            for _ in range(self._wait_worker_ready_time):
+            self.logger.info(f"Starting worker service with PID: {process.pid}")
+            for _ in range(self._timeout):
                 return_code = process.poll()
                 if return_code is not None:
                     stdout, stderr = process.communicate(timeout=10)
@@ -318,8 +337,12 @@ class Command(BaseCommand):
                 time.sleep(1)
             else:
                 self.logger.error(
-                    f"[  FAILED  ] Worker service is not ready within {self._wait_worker_ready_time} seconds"
+                    f"[  FAILED  ] Worker service is not ready within {self._timeout} seconds"
                 )
+                try:
+                    os.kill(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 raise RuntimeError(f"Worker service startup timeout")
 
         except Exception as e:
