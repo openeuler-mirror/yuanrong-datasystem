@@ -36,6 +36,42 @@ python3 -m pip install ${ds_output_dir}/openyuanrong_datasystem-*.whl --force-re
 export PATH=$PATH:${curr_dir}/../scripts/modules
 export PATH=$PATH:/usr/sbin
 . llt_util.sh
+run_go="$1"
+
+function run_go_example()
+{
+    echo "Start to run go example"
+    BUILD_GO_DIR="$(realpath "${curr_dir}/../build/package-go")"
+    export WORKER_ADDR=$1
+    export WORKER_PORT=$2
+    export WORKER_ETCD_ADDRESS=$3
+
+    # Run the golang tests
+    # We do this here during the example run because we lack an infrastructure for starting
+    # and stopping the cluster.  The example has this built in already.
+    # In the future we should move this "go test" logic into the unit test paths
+    export LD_LIBRARY_PATH=${BUILD_GO_DIR}/lib:${LD_LIBRARY_PATH}
+    echo "Set LD_LIBRARY_PATH=${LD_LIBRARY_PATH} before go example test."
+    echo "Running golang tests. Using worker ${WORKER_ADDR} on port ${WORKER_PORT}, etcd address: ${WORKER_ETCD_ADDRESS}"
+    cd ${BUILD_GO_DIR}/common
+    go test
+  
+    cd ${BUILD_GO_DIR}/object
+    go test
+
+    cd ${BUILD_GO_DIR}/kv
+    go test
+
+    cd ${BUILD_GO_DIR}/stream
+    go test
+
+    echo "Running golang state/object cache demo. Using worker ${WORKER_ADDR} on port ${WORKER_PORT}"
+    ${BUILD_GO_DIR}/kv_client_example
+    ${BUILD_GO_DIR}/object_client_example
+
+    export LD_LIBRARY_PATH=${old_ld_path}
+    echo "Restore LD_LIBRARY_PATH=${LD_LIBRARY_PATH} after go example test."
+}
 
 start_all "${example_cpp_dir}" "${ds_output_dir}"
 cleanup_once=false
@@ -72,4 +108,8 @@ if [ "x$run_python" == "xon" ]; then
         python ${example_python_dir}/hetero_client_example.py --host "127.0.0.1" --port "${worker_port}"
         python ${example_python_dir}/ds_tensor_client_example.py --host "127.0.0.1" --port "${worker_port}"
     fi
+fi
+
+if [[ "x$run_go" = "xon" ]] ; then
+  run_go_example "127.0.0.1" ${worker_port} ${WORKER_ETCD_ADDRESS}
 fi

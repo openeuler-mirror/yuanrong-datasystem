@@ -147,6 +147,7 @@ if (WITH_TESTS)
 endif ()
 
 add_subdirectory(src/datasystem)
+add_subdirectory(dsbench)
 
 if (WITH_TESTS)
     enable_testing()

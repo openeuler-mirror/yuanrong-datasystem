@@ -246,9 +246,10 @@ Status WorkerOCServiceImpl::Init()
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localMasterAddress_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "get worker master api failed, Init failed");
     const int minOcGetThreadNum = 8;
-    RETURN_IF_EXCEPTION_OCCURS(threadPool_ = std::make_shared<ThreadPool>(minOcGetThreadNum, 0, "OcGetThread"));
+    RETURN_IF_EXCEPTION_OCCURS(threadPool_ =
+                                   std::make_shared<ThreadPool>(minOcGetThreadNum, FLAGS_oc_thread_num, "OcGetThread"));
     RETURN_IF_EXCEPTION_OCCURS(memCpyThreadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM));
-    datasystem::Parallel::InitParallelThreadPool(PARALLEL_THREAD_NUM);
+    datasystem::Parallel::InitParallelThreadPool(PARALLEL_THREAD_NUM, FLAGS_oc_thread_num);
     constexpr uint32_t gcThrdNum = 4;
     RETURN_IF_EXCEPTION_OCCURS(gcThreadPool_ = std::make_unique<ThreadPool>(gcThrdNum, 0, "OcCleanClient"));
 

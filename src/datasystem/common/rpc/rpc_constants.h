@@ -43,7 +43,7 @@ static constexpr int ONE_THOUSAND = 1000;              // One thousand.
 #ifdef WITH_TESTS
 static constexpr int STUB_FRONTEND_TIMEOUT = 3000;     // Timeout for UnixSockFd and ZmqStub::InitFrontend in test.
 #else
-static constexpr int STUB_FRONTEND_TIMEOUT = 30000;     // Timeout for UnixSockFd and ZmqStub::InitFrontend.
+static constexpr int STUB_FRONTEND_TIMEOUT = 3000;     // Timeout for UnixSockFd and ZmqStub::InitFrontend.
 #endif
 static constexpr int CACHE_UDS_SOCK_FD_TIMEOUT_MS = RPC_TIMEOUT + 10'000;  // Timeout for caching UnixSockFd
 static constexpr int RPC_EIGHT = 8;                    // constant 8

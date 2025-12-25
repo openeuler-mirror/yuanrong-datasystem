@@ -55,7 +55,7 @@ class EtcdClusterManager;
 namespace object_cache {
 using datasystem::EtcdClusterManager;
 
-class WorkerOcEvictionManager {
+class WorkerOcEvictionManager : public std::enable_shared_from_this<WorkerOcEvictionManager> {
 public:
     /**
      * @brief Construct WorkerOcEvictionManager.
@@ -368,6 +368,7 @@ private:
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
 
     friend class ::datasystem::ut::SpillEvictionTest;
 };

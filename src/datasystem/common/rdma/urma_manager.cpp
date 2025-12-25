@@ -752,6 +752,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     remoteJfr.tp_type = URMA_CTP;
 
     std::vector<urma_target_jetty_t *> tjfrs;
+    Timer timer;
     for (uint i = 0; i < FLAGS_urma_connection_size; ++i) {
         remoteJfr.jfr_id.id = urmaInfo.jfrIds[i];
         PerfPoint point1a(PerfKey::URMA_IMPORT_JFR);
@@ -769,6 +770,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
         point1b.Record();
         tjfrs.emplace_back(tjfr);
     }
+    LOG_IF(WARNING, timer.ElapsedSecond() > 1) << "ImportRemoteJfr exceed 1s!";
     device.SetJfrs(tjfrs);
     accessor.Release();
     point1.Record();

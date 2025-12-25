@@ -21,7 +21,7 @@ import stat
 import subprocess
 
 from pathlib import Path
-from setuptools import find_packages
+from setuptools import find_namespace_packages
 from setuptools import setup
 from setuptools.command.egg_info import egg_info
 from setuptools.command.build_py import build_py
@@ -148,7 +148,7 @@ setup(
     python_requires='>=3.9',
     name=package_name,
     version=version,
-    packages=find_packages(include=['yr*', 'yr.*']),
+    packages=find_namespace_packages(),
     package_data=package_datas,
     include_package_data=True,
     cmdclass={

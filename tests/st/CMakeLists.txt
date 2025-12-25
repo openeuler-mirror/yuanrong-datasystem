@@ -27,6 +27,7 @@ set(DS_ST_DEPEND_LIBS
         worker_object_cache
         master_stream_cache
         worker_stream_cache
+        ds_router_client_static
         master_stream_cache_store
         master_stream_protos
         httpclient

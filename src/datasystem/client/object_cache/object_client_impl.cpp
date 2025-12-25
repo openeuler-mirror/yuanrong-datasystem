@@ -199,6 +199,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
+    asyncReleasePool_.reset();
 
     if (devOcImpl_ != nullptr) {
         devOcImpl_->SetThreadInterruptFlag2True();
@@ -224,7 +225,6 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
                 }
             }
         }
-        asyncReleasePool_.reset();
     }
 
     // The destructor of devOcImpl_ should occur after the client disconnect request so that the device asynchronous
@@ -834,6 +834,10 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     param.cacheType = setParam.cacheType;
     std::vector<size_t> dataSizeList;
     dataSizeList.reserve(objectKeys.size());
+    for (size_t i = 0; i < devBlobList.size(); i++) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ static_cast<uint32_t>(devBlobList[i].deviceIdx) }),
+                                        "Check device failed.");
+    }
     BlobListInfo blobInfo;
     RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo));
     LOG(INFO) << blobInfo.ToString(true);
@@ -920,7 +924,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
     auto traceID = Trace::Instance().GetTraceID();
     future = asyncSetRPCPool_->Submit([this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        auto work = [this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
+        auto work = [this, objectKeys, devBlobList, setParam]() mutable {
             AsyncResult result;
 
             // Step1: execute Exist check
@@ -2387,15 +2391,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
-    asyncReleasePool_->Execute([this, buffers = std::move(bufferList)]() mutable {
-        std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
-        if (!IsClientReady()) {
-            return;
-        }
-        for (const auto &buf : buffers) {
-            buf->Release();
-        }
-    });
+    asyncReleasePool_->Execute([buffers = std::move(bufferList)]() mutable { buffers.clear(); });
     for (const auto &objKey : rsp.failed_object_keys()) {
         outFailedKeys.emplace_back(objKey);
     }

@@ -134,7 +134,8 @@ void RecalculateMetaTimeout(MetaPb &meta, uint64_t lapTime)
     }
 }
 
-Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventType type, ZmqCurveUserId &userId)
+Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventType type, ZmqCurveUserId &userId,
+                      PerfKey transferPerfKey)
 {
     // Next is the metadata.
     CHECK_FAIL_RETURN_STATUS(!frames.empty(), StatusCode::K_INVALID, "Expect a gateway id");
@@ -160,7 +161,7 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventTyp
     }
     uint64_t lapTime = GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SERVER)");
     // This is the time spent in ZMQ and the underlying network (tcp/ip or unix socket) overhead.
-    PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER, lapTime);
+    PerfPoint::RecordElapsed(transferPerfKey, lapTime);
     // Set up the return address.
     meta.set_gateway_id(ZmqMessageToString(gatewayId));
     meta.set_route_fd(fd);
@@ -190,7 +191,7 @@ Status ZmqServerImpl::ClientToService(ZmqMsgFrames &&frames)
 {
     MetaPb meta;
     ZmqCurveUserId userId = { .checkUserId_ = FLAGS_enable_curve_zmq };
-    Status rc = ParseMsgFrames(frames, meta, ffd_, EventType::ZMQ, userId);
+    Status rc = ParseMsgFrames(frames, meta, ffd_, EventType::ZMQ, userId, PerfKey::ZMQ_NETWORK_TRANSFER_SERVER_TCP);
     if (rc.IsError()) {
         // Silently (no logging) ignore K_TRY_AGAIN because stub will probe us with an empty message
         // on first connection.

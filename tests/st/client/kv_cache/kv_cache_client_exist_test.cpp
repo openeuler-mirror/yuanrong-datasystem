@@ -299,8 +299,11 @@ TEST_F(KVCacheClientExistTest, ReqTimeoutMs)
             .port = addr.Port(),
             .connectTimeoutMs = connectTimeoutMs,
             .requestTimeoutMs = requestTimeoutMs,
+            .clientPublicKey = "",
+            .clientPrivateKey = "",
+            .serverPublicKey = "",
             .accessKey = "QTWAOYTTINDUT2QVKYUC",
-            .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
+            .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"
         };
         KVClient client(op);
         DS_ASSERT_OK(client.Init());

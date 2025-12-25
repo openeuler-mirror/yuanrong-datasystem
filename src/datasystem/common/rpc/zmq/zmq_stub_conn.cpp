@@ -279,7 +279,8 @@ Status ZmqFrontend::ZmqSocketToBackend()
         });
         CHECK_FAIL_RETURN_STATUS(meta.ticks_size() > 0, K_RUNTIME_ERROR,
                                  FormatString("Incomplete MetaPb for receiver %s:\n%s", receiver, meta.DebugString()));
-        PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (ZMQ)"));
+        PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_TCP,
+                                 GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (ZMQ)"));
         auto p = std::make_pair(meta, std::move(frames));
         VLOG(RPC_LOG_LEVEL) << FormatString("Receiving reply for sender %s gateway %s client %s service '%s' method %d",
                                             receiver, meta.gateway_id(), meta.client_id(), meta.svc_name(),
@@ -1315,6 +1316,7 @@ Status ZmqStubConnMgrImpl::Outbound(const std::string &sender, ZmqMetaMsgFrames 
     int64_t stubId = 0;
     std::shared_ptr<ZmqFrontend> frontend;
     MetaPb meta = p.first;
+    PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_ROUTE_MSG, GetLapTime(meta, "ZMQ_STUB_ROUTE_MSG"));
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(DecodeQueName(sender, fePtr, connInfo, stubId),
                                      FormatString("Bad queue format %s", sender));
@@ -1492,7 +1494,7 @@ Status SockConnEntry::FrontendToBackend(int fd, std::shared_ptr<SockConnEntry::F
     MetaPb meta;
     RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
-    PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
+    PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
     auto p = std::make_pair(meta, std::move(frames));
     VLOG(RPC_LOG_LEVEL) << FormatString("Receiving reply for sender %s gateway %s client %s service '%s' method %d",
                                         receiver, meta.gateway_id(), meta.client_id(), meta.svc_name(),

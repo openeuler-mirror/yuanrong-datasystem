@@ -37,7 +37,7 @@ yr.datasystem.object_client.ObjectClient
          - 减少给定列表对象 key 的全局引用计数。
        * - :doc:`query_global_ref_num <yr.datasystem.object_client.ObjectClient.query_global_ref_num>`
          - 查询对象全局引用计数。
-       * - :doc:`generate_object_key <yr.datasystem.object_client.ObjectClient.generate_object_key>`
+       * - :doc:`generate_object_id <yr.datasystem.object_client.ObjectClient.generate_object_id>`
          - 生成一个带数据系统Worker UUID的对象 key。
        
 .. toctree::
@@ -51,4 +51,4 @@ yr.datasystem.object_client.ObjectClient
     yr.datasystem.object_client.ObjectClient.g_increase_ref
     yr.datasystem.object_client.ObjectClient.g_decrease_ref
     yr.datasystem.object_client.ObjectClient.query_global_ref_num
-    yr.datasystem.object_client.ObjectClient.generate_object_key
+    yr.datasystem.object_client.ObjectClient.generate_object_id

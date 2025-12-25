@@ -1146,21 +1146,33 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
     auto func = [this, &address, &payloadSize, &payloads](const std::string &objectKey,
                                                           std::vector<QueryMetaInfoPb> &infos,
                                                           std::vector<std::string> &notExistObjectKeys) {
-        TbbMetaTable::accessor accessor;
-        if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
-            QueryMetaInfoPb info;
+        auto getMetaInfo = [&](auto &accessor, QueryMetaInfoPb &info) {
             info.mutable_meta()->CopyFrom(accessor->second.meta);
             info.mutable_meta()->set_object_key(objectKey);
             info.set_address(SelectObjectLocation(objectKey, address, accessor->second.locations));
             info.set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
-            TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
-            bool updateLocation =
-                (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM
-                && FLAGS_enable_data_replication;
-            if (updateLocation && accessor->second.locations.insert(address).second) {
-                RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
+        };
+        bool isReadLock = IsUrmaEnabled() && FLAGS_enable_data_replication;
+        QueryMetaInfoPb info;
+        if (isReadLock) {
+            TbbMetaTable::const_accessor accessor;
+            if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
+                getMetaInfo(accessor, info);
             }
-            accessor.release();
+        } else {
+            TbbMetaTable::accessor accessor;
+            if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
+                getMetaInfo(accessor, info);
+                TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
+                bool updateLocation =
+                    (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM
+                    && FLAGS_enable_data_replication;
+                if (updateLocation && accessor->second.locations.insert(address).second) {
+                    RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
+                }
+            }
+        }
+        if (!info.meta().object_key().empty()) {
             infos.emplace_back(std::move(info));
             return Status::OK();
         }

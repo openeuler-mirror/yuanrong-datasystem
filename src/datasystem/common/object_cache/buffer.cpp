@@ -37,14 +37,17 @@
 static constexpr int DEBUG_LOG_LEVEL = 2;
 
 namespace datasystem {
-Buffer::Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl)
-    : bufferInfo_(std::move(bufferInfo)), clientImpl_(std::move(clientImpl)), isShm_(false)
+Buffer::Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
+               const std::shared_ptr<object_cache::ObjectClientImpl> &clientImpl)
+    : bufferInfo_(std::move(bufferInfo)), clientImpl_(clientImpl->weak_from_this()), isShm_(false)
 {
-    clientId_ = clientImpl_->GetClientId();
+    clientId_ = clientImpl->GetClientId();
 }
 
 Status Buffer::Init()
 {
+    auto clientImpl = clientImpl_.lock();
+    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
     RETURN_IF_NOT_OK(CheckDeprecated());
 
     // Special check for Remote H2D. If the remote host info exists,
@@ -70,8 +73,7 @@ Status Buffer::Init()
     } else {
         isShm_ = true;
         auto *lockFrame = reinterpret_cast<uint32_t *>(bufferInfo_->pointer);
-        latch_ =
-            std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize, clientImpl_->GetLockId());
+        latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize, clientImpl->GetLockId());
     }
     INJECT_POINT("buffer.init");
     return latch_->Init();
@@ -82,10 +84,10 @@ Status Buffer::CreateBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
 {
     struct ConcreteBuffer : public Buffer {
         ConcreteBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
-                       std::shared_ptr<object_cache::ObjectClientImpl> clientImpl)
-            : Buffer(std::move(bufferInfo), std::move(clientImpl))
+                       const std::shared_ptr<object_cache::ObjectClientImpl> &clientImpl)
+            : Buffer(std::move(bufferInfo), clientImpl)
         {
-            clientId_ = clientImpl_->GetClientId();
+            clientId_ = clientImpl->GetClientId();
         }
     };
     buffer = std::make_shared<ConcreteBuffer>(std::move(bufferInfo), std::move(clientImpl));
@@ -120,7 +122,7 @@ Buffer &Buffer::operator=(Buffer &&other) noexcept
 void Buffer::Reset()
 {
     bufferInfo_ = nullptr;
-    clientImpl_ = nullptr;
+    clientImpl_.reset();
     latch_ = nullptr;
     isShm_ = false;
     clientId_ = "";
@@ -138,9 +140,9 @@ void Buffer::Release()
 
     // for ut test
     INJECT_POINT("buffer.release", [this]() { isShm_ = false; });
-
-    if (clientImpl_ != nullptr && isShm_ && !isReleased_) {
-        clientImpl_->DecreaseReferenceCnt(bufferInfo_->shmId, isShm_, bufferInfo_->version);
+    auto clientImpl = clientImpl_.lock();
+    if (clientImpl != nullptr && isShm_ && !isReleased_) {
+        clientImpl->DecreaseReferenceCnt(bufferInfo_->shmId, isShm_, bufferInfo_->version);
     }
     bufferInfo_.reset();
     clientImpl_.reset();
@@ -155,6 +157,8 @@ Buffer::~Buffer()
 
 Status Buffer::MemoryCopy(const void *data, uint64_t length)
 {
+    auto clientImpl = clientImpl_.lock();
+    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
@@ -165,7 +169,7 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
     Status status = ::datasystem::MemoryCopy(dstData, dataSize, static_cast<const uint8_t *>(data), length,
-                                             clientImpl_->memoryCopyThreadPool_, clientImpl_->memcpyParallelThreshold_);
+                                             clientImpl->memoryCopyThreadPool_, clientImpl->memcpyParallelThreshold_);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
                                          FormatString("Copy data to buffer failed, err: %s", status.ToString()));
     return Status::OK();
@@ -178,11 +182,13 @@ int64_t Buffer::GetSize() const
 
 Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
 {
+    auto clientImplSharedPtr = clientImpl_.lock();
+    RETURN_RUNTIME_ERROR_IF_NULL(clientImplSharedPtr);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
 
-    Status status = clientImpl_->Publish(bufferInfo_, nestedKeys, isShm_);
+    Status status = clientImplSharedPtr->Publish(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {
         SetVisibility(status.IsOk());
     }
@@ -191,10 +197,12 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
 
 Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
 {
+    auto clientImpl = clientImpl_.lock();
+    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
-    Status status = clientImpl_->Seal(bufferInfo_, nestedKeys, isShm_);
+    Status status = clientImpl->Seal(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {
         SetVisibility(status.IsOk());
     }
@@ -255,9 +263,11 @@ const void *Buffer::ImmutableData()
 
 Status Buffer::InvalidateBuffer()
 {
+    auto clientImpl = clientImpl_.lock();
+    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
-    RETURN_IF_NOT_OK(clientImpl_->InvalidateBuffer(bufferInfo_->objectKey));
+    RETURN_IF_NOT_OK(clientImpl->InvalidateBuffer(bufferInfo_->objectKey));
     return Status::OK();
 }
 
@@ -268,18 +278,17 @@ RemoteH2DHostInfo *Buffer::GetRemoteHostInfo()
 
 Status Buffer::CheckDeprecated()
 {
-    if (clientImpl_ == nullptr) {
-        RETURN_STATUS(K_RUNTIME_ERROR, "The buffer has been moved!");
-    }
+    auto clientImpl = clientImpl_.lock();
+    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
     RETURN_OK_IF_TRUE(!isShm_);
 
     // In the shared memory scenario, the worker may have released the memory when the network is unavailable.
-    Status status = clientImpl_->CheckConnection();
+    Status status = clientImpl->CheckConnection();
     if (status.IsError()) {
         return status;
     }
-    if (bufferInfo_->version != clientImpl_->GetWorkerVersion()
-        || clientImpl_->GetState() != (uint16_t)ClientState::INITIALIZED) {
+    if (bufferInfo_->version != clientImpl->GetWorkerVersion()
+        || clientImpl->GetState() != (uint16_t)ClientState::INITIALIZED) {
         RETURN_STATUS(K_RUNTIME_ERROR, "The buffer is useless, please destruct it!");
     }
     return Status::OK();

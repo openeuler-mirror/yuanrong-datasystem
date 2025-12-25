@@ -244,7 +244,7 @@ bash build.sh
 ```text
 output/
 |-- openyuanrong_datasystem-0.5.0-cp311-cp311-manylinux_2_34_x86_64.whl
-`-- yr-datasystem-v0.5.0.tar.gz
+|-- yr-datasystem-v0.5.0.tar.gz
 ```
 
 ### 安装

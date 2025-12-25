@@ -48,6 +48,7 @@ std::string UrmaJfrInfo::ToString() const
         }
         oss << jfr_id;
     }
+    oss << "]";
     return oss.str();
 }
 

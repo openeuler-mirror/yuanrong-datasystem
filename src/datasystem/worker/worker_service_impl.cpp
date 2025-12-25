@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <shared_mutex>
+#include "datasystem/c_api/status_definition.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 #ifdef __linux__
 #include <linux/memfd.h>

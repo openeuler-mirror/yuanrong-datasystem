@@ -135,7 +135,8 @@ private:
     friend class KVClient;
     friend class WorkerOCServiceImpl;
 
-    Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo, std::shared_ptr<object_cache::ObjectClientImpl> clientImpl);
+    Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
+           const std::shared_ptr<object_cache::ObjectClientImpl> &clientImpl);
 
     /// \brief The only purpose of having this function is to encapsulate the above private Buffer constructor,
     ///         to make it work with std::make_shared<Buffer>. Directly use std::make_shared with a private
@@ -179,7 +180,7 @@ private:
     Status CheckVisible();
 
     std::shared_ptr<ObjectBufferInfo> bufferInfo_;
-    std::shared_ptr<object_cache::ObjectClientImpl> clientImpl_;
+    std::weak_ptr<object_cache::ObjectClientImpl> clientImpl_;
     std::shared_ptr<object_cache::Lock> latch_;
 
     bool isShm_ = false;  // indicate whether the buffer will be created via a shm way

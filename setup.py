@@ -21,7 +21,7 @@ import stat
 import subprocess
 
 from pathlib import Path
-from setuptools import find_packages, setup
+from setuptools import find_namespace_packages, setup
 from setuptools.command.build_py import build_py
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
@@ -56,7 +56,7 @@ def recursive_package_files(directory):
 
 package_datas = {
     '': (
-        ['sdk_lib_list', 'datasystem_worker', '*.py',
+        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py',
         'worker_config.json', 'cluster_config.json'] +
         recursive_package_files('include') +
         recursive_package_files('helm_chart') +
@@ -241,7 +241,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://gitee.com/openeuler/yuanrong-datasystem",
     python_requires='>=3.9',
-    packages=find_packages(include=['yr*', 'yr.*']),
+    packages=find_namespace_packages(),
     package_data=package_datas,
     include_package_data=True,
     cmdclass={

@@ -279,7 +279,9 @@ private:
             VLOG(RPC_LOG_LEVEL) << FormatString("Client %s use unary socket writing to Service %s Method %d",
                                                 meta_.client_id(), meta_.svc_name(), meta_.method_index());
             SetMetaAuthInfo();
+            PerfPoint point(PerfKey::ZMQ_REQUEST_PROTO_TO_MSG);
             RETURN_IF_NOT_OK(PushBackProtobufToFrames(pb, outMsg_));
+            point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_REQUEST_SIZE_AFTER_SERIALIZE, outMsg_.back().Size());
             RETURN_OK_IF_TRUE(HasSendPayloadOp());
             return SendAll(ZmqSendFlags::NONE);
@@ -321,7 +323,9 @@ private:
             RETURN_IF_NOT_OK(ReadAll(ZmqRecvFlags::NONE));
             ZmqMessage msg;
             RETURN_IF_NOT_OK(AckRequest(inMsg_, msg));
+            PerfPoint point(PerfKey::ZMQ_RESPONSE_MSG_TO_PROTO);
             RETURN_IF_NOT_OK(ParseFromZmqMessage(msg, pb));
+            point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_RESPONSE_SIZE_BEFORE_DESERIALIZE, msg.Size());
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " got message\n"
                                 << LogHelper::IgnoreSensitive(pb) << std::endl;
@@ -439,10 +443,11 @@ private:
             RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
             // In exclusive mode, there is no front/backend. There is only a receive. Do not record any stub perf
             // points, and just record the network transfer here.
-            // Note that in non-exclusive mode, the ZMQ_NETWORK_TRANSFER was recorded in the frontend codepath, but that
-            // code did not run here so this is the appropriate time to capture this stat.
+            // Note that in non-exclusive mode, the ZMQ_NETWORK_TRANSFER_STUB_UDS was recorded in the frontend codepath,
+            // but that code did not run here so this is the appropriate time to capture this stat.
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
-            PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS,
+                                     GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
             reply = std::make_pair(meta, std::move(replyFrames));
         }
         return Status::OK();

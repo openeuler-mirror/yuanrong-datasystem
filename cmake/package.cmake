@@ -68,6 +68,9 @@ if (BUILD_HETERO)
             PERMISSIONS OWNER_READ GROUP_READ)
 endif()
 
+set(ds_router_client_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+install_datasystem_target(ds_router_client EXPORT_NAME DatasystemTargets)
+
 set(SDK_SPDLOG_LIB
     "${SPDLOG_LIB_PATH}/libds-spdlog.so*"
 )
@@ -150,6 +153,56 @@ if (BUILD_PYTHON_API)
             CMAKE_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}/datasystem/sdk
             DEPEND_TARGETS ${DEPEND_TARGETS}
             THIRDPATRY_LIBS_PATTERN ${PYTHON_LIB_PATTERNS})
+endif ()
+
+############################################################
+# Datasystem go header files and share libraries.
+############################################################
+if (BUILD_GO_API)
+    set(DATASYSTEM_GO_INCLUDEDIR datasystem/sdk/go/include)
+    set(DATASYSTEM_GO_LIBPATH datasystem/sdk/go/lib)
+    set(DATASYSTEM_GO_PATH datasystem/sdk)
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/go
+            DESTINATION ${DATASYSTEM_GO_PATH}
+            FILES_MATCHING PATTERN "*")
+
+    install(FILES ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/status_definition.h
+            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/kv_client_c_wrapper.h
+            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/stream_client_c_wrapper.h
+            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/object_client_c_wrapper.h
+            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/utilC.h
+            DESTINATION ${DATASYSTEM_GO_INCLUDEDIR}/datasystem/c_api)
+
+    set(datasystem_c_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
+    install_datasystem_target(datasystem_c)
+
+    set(datasystem_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
+    install_datasystem_target(datasystem)
+
+    set(GO_LIB_PATTERNS
+            ${SDK_SPDLOG_LIB}
+            ${SDK_PROTOBUF_LIB}
+            ${SDK_PROTOC_LIB}
+           "${SecureC_LIB_PATH}/libsecurec.so"
+           "${TBB_LIB_PATH}/libtbb.so*"
+           "${OpenSSL_LIB_PATH}/libssl.so*"
+           "${OpenSSL_LIB_PATH}/libcrypto.so*"
+           "${CURL_LIB_PATH}/libcurl.so*"
+           "${gRPC_LIB_PATH}/libgrpc.so*"
+           "${gRPC_LIB_PATH}/libgrpc++.so*"
+           "${gRPC_LIB_PATH}/libgpr.so*"
+           "${gRPC_LIB_PATH}/libupb*"
+           "${gRPC_LIB_PATH}/libutf8*"
+           "${gRPC_LIB_PATH}/libaddress_sorting.so*"
+           "${SPDLOG_LIB_PATH}/libds-spdlog.so*"
+           ${RPC_LIB_PATH}
+    )
+
+    install_file_pattern(
+            PATH_PATTERN ${GO_LIB_PATTERNS}
+            DEST_DIR ${DATASYSTEM_GO_LIBPATH}
+    )
 endif ()
 
 ############################################################

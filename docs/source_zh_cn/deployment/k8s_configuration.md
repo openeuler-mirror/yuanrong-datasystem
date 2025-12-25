@@ -205,7 +205,7 @@ global:
 | global.spill.spillDirectory | string | `""` | 配置缓存溢出功能的本地磁盘路径，为空表示禁用缓存溢出功能。当配置该路径后，溢出的缓存数据将保存在该路径下的 `datasystem_spill_data` 目录下 |
 | global.spill.spillSizeLimit | string | `"0"` | 配置缓存溢出的最大容量（以字节为单位） |
 | global.spill.spillThreadNum | int | `8` | 表示溢出数据写文件的最大并行度，线程数越多会消耗越多的CPU和I/O资源 |
-| global.spill.spillFileMaxSizeMb | int | `200` | 单个溢出文件的最大大小（以MB为单位）；对于小于此值的对象，会聚合存储于同一个文件中；对于超过此值的对象，将以单个对象单独存为一个文件 |
+| global.spill.spillFileMaxSizeMb | int | `200` | 单个溢出文件的最大大小（以MB为单位），对于小于此值的对象，会聚合存储于同一个文件中，对于超过此值的对象，将以单个对象单独存为一个文件 |
 | global.spill.spillFileOpenLimit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | global.spill.spillEnableReadahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
 | global.spill.evictionThreadNum | int | `1` | 后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘 |

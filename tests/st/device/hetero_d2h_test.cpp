@@ -50,6 +50,20 @@ class HeteroD2HTest : public DevTestHelper {
     }
 };
 
+class HeteroD2HTestEvcit : public HeteroD2HTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 1;
+        opts.workerGflagParams =
+            "-log_monitor_interval_ms=1000 -v=2 -authorization_enable=true -shared_memory_size_mb=2096 "
+            "-enable_fallocate=false -arena_per_tenant=2 ";
+        opts.enableDistributedMaster = "false";
+        opts.numEtcd = 1;
+        opts.enableSpill = true;
+        FLAGS_v = 0;
+    }
+};
+
 class HeteroD2HThroughTcpTest : public DevTestHelper {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -230,5 +244,56 @@ TEST_F(HeteroD2HTest, TestPartExist)
     }
 }
 
+TEST_F(HeteroD2HTestEvcit, SpillTest)
+{
+    inject::Set("worker.SubmitSpillTask", "sleep(10000)");
+    std::shared_ptr<HeteroClient> c0, c1;
+    size_t numOfObjs = 2200, blksPerObj = 1, blkSz = 1024000;
+    std::vector<std::string> inObjectKeys, failedKeys;
+    std::vector<DeviceBlobList> devGetBlobList, devSetBlobList;
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        inObjectKeys.emplace_back(FormatString("key_%s", j));
+    }
+    auto retcode = -1;
+    auto hook = [&retcode]() { exit(retcode); };
+    Raii raii(hook);
+    auto npu = 1;
+    InitAcl(npu);
+    InitTestHeteroClient(0, c0);
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, npu);
+    for (auto i = 0uL; i < numOfObjs; i++) {
+        DS_ASSERT_OK(c0->MSetD2H({ inObjectKeys[i] }, { devSetBlobList[i] },
+                                 SetParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT }));
+    }
+    c0.reset();
+    retcode = 0;
+    sleep(MINI_WAIT_TIME);
+}
+
+TEST_F(HeteroD2HTest, TestMSetD2HMsgWithInvalidDeviceId)
+{
+    const int32_t deviceId = 0;
+    InitAcl(deviceId);
+    std::shared_ptr<HeteroClient> client;
+    InitTestHeteroClient(deviceId, client);
+
+    const size_t numOfObjs = 1;
+    const size_t blksPerObj = 1;
+    const size_t blkSz = 1024;
+    std::vector<DeviceBlobList> swapOutBlobList;
+    std::vector<DeviceBlobList> swapInBlobList;
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceId);
+
+    std::vector<std::string> keys{ GetStringUuid() };
+    const int32_t invalidDeviceId = -1;
+    for (auto &it : swapInBlobList) {
+        it.deviceIdx = invalidDeviceId;
+    }
+
+    std::vector<std::string> failedKeys;
+    Status s1 = client->MSetD2H(keys, swapInBlobList);
+    LOG(INFO) << "MSetD2H Status: " << s1.ToString();
+    ASSERT_TRUE(s1.IsError());
+}
 }  // namespace st
 }  // namespace datasystem
