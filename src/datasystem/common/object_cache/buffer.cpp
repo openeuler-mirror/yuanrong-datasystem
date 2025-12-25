@@ -128,7 +128,7 @@ void Buffer::Reset()
     clientId_ = "";
 }
 
-void Buffer::Release()
+void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 {
     // At the condition of "non-shared memory Create or Put", free memory after destructor.
     if (bufferInfo_ != nullptr) {
@@ -140,10 +140,19 @@ void Buffer::Release()
 
     // for ut test
     INJECT_POINT("buffer.release", [this]() { isShm_ = false; });
-    auto clientImpl = clientImpl_.lock();
-    if (clientImpl != nullptr && isShm_ && !isReleased_) {
-        clientImpl->DecreaseReferenceCnt(bufferInfo_->shmId, isShm_, bufferInfo_->version);
-    }
+    do {
+        if (!isShm_ || isReleased_) {
+            break;
+        }
+        if (clientPtr) {
+            clientPtr->DecreaseReferenceCnt(bufferInfo_->shmId, isShm_, bufferInfo_->version);
+            break;
+        }
+        auto clientImpl = clientImpl_.lock();
+        if (clientImpl != nullptr) {
+            clientImpl->DecreaseReferenceCnt(bufferInfo_->shmId, isShm_, bufferInfo_->version);
+        }
+    } while (false);
     bufferInfo_.reset();
     clientImpl_.reset();
     latch_.reset();

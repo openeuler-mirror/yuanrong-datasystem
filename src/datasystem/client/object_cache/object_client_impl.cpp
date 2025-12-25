@@ -2395,7 +2395,15 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
-    asyncReleasePool_->Execute([buffers = std::move(bufferList)]() mutable { buffers.clear(); });
+    asyncReleasePool_->Execute([this, buffers = std::move(bufferList)]() {
+        for (auto &buffer : buffers) {
+            // If buffer holds the client's shared_ptr during destruction, it might cause this thread to join itself.
+            // Therefore, passing the `this` here is to allow the buffer to complete the release operation
+            // without holding the client's shared_ptr.
+            buffer->Release(this);
+            buffer->isReleased_ = true;
+        }
+    });
     for (const auto &objKey : rsp.failed_object_keys()) {
         outFailedKeys.emplace_back(objKey);
     }

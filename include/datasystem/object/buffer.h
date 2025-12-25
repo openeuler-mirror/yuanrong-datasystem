@@ -165,7 +165,8 @@ private:
     void Reset();
 
     /// \brief Release the buffer owned resources.
-    void Release();
+    /// \param[in] clientPtr The raw pointer of client. The caller needs to guarantee its lifecycle.
+    void Release(object_cache::ObjectClientImpl *clientPtr = nullptr);
 
     uint8_t *GetVisiblePointer();
 
