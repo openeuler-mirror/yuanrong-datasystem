@@ -46,6 +46,9 @@ def object_test():
         client.object().get([object_key], 0)
     except RuntimeError as e:
         print("get error:", e)
+
+if __name__ == "__main__":
+    object_test()
 ```
 
 :::
