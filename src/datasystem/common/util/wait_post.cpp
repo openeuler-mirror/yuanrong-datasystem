@@ -53,8 +53,11 @@ bool WaitPost::WaitForAndClear(uint64_t timeoutMs)
 {
     std::unique_lock<std::mutex> lock(mux_);
     timeoutMs = std::min<uint64_t>(timeoutMs, INT64_MAX);
-    return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]() { return val_ != 0; });
-    val_ = 0;
+    bool ret = cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]() { return val_ != 0; });
+    if (val_ != 0) {
+        val_ = 0;
+    }
+    return ret;
 }
 
 void WaitPost::Set()
