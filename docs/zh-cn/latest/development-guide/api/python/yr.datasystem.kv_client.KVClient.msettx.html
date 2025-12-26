@@ -283,7 +283,7 @@
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
-<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.generate_object_key.html">yr.datasystem.object_client.ObjectClient.generate_object_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -488,7 +488,7 @@ document.write(`
 <h1>yr.datasystem.kv_client.KVClient.msettx<a class="headerlink" href="#yr-datasystem-kv-client-kvclient-msettx" title="Link to this heading">#</a></h1>
 <dl class="py method">
 <dt class="sig sig-object py" id="yr.datasystem.kv_client.KVClient.msettx">
-<span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">msettx</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ttl_second</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient.msettx" title="Link to this definition">#</a></dt>
+<span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">msettx</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ttl_second</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">existence_opt</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">ExistenceOpt.NONE</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient.msettx" title="Link to this definition">#</a></dt>
 <dd><p>批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
@@ -496,6 +496,7 @@ document.write(`
 <li><p><strong>vals</strong> (list) - 值列表。</p></li>
 <li><p><strong>write_mode</strong> (<a class="reference internal" href="yr.datasystem.object_client.WriteMode.html#yr.datasystem.object_client.WriteMode" title="yr.datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.WriteMode</span></code></a>) - 控制数据是否写入二级缓存以增强数据可靠性。默认值：<code class="docutils literal notranslate"><span class="pre">WriteMode.NONE_L2_CACHE</span></code>。</p></li>
 <li><p><strong>ttl_second</strong> (int) - 控制数据的过期时间，超时会自动删除，单位为秒。0表示不会自动过期，需要通过调用 <a class="reference internal" href="yr.datasystem.kv_client.KVClient.delete.html#yr.datasystem.kv_client.KVClient.delete" title="yr.datasystem.kv_client.KVClient.delete"><code class="xref py py-func docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.KVClient.delete()</span></code></a> 接口删除 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 才能退出生命周期。默认值：<code class="docutils literal notranslate"><span class="pre">0</span></code>。</p></li>
+<li><p><strong>existence_opt</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.ExistenceOpt</span></code>) - 控制key存在时能否设置。</p></li>
 </ul>
 </dd>
 <dt>异常：</dt><dd><ul class="simple">
