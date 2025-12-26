@@ -166,7 +166,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     ReadOptFromEnv(connectOptions);
     ipAddress_ = HostPort(connectOptions.host, connectOptions.port);
     connectTimeoutMs_ = connectOptions.connectTimeoutMs;
-    requestTimeoutMs_ = connectOptions.requestTimeoutMs > 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
+    requestTimeoutMs_ = connectOptions.requestTimeoutMs != 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableExclusiveConnection_ = connectOptions.enableExclusiveConnection;
