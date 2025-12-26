@@ -16,6 +16,7 @@ yr.datasystem.hetero_client.HeteroClient
         - **secret_key** (str) - AK/SK 授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户 ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统 Worker 连接异常时自动切换到备用节点。默认值： ``False`` 。
+        - **enable_remote_h2d** (bool) - 如果为 ``True`` ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： ``False`` 。
 
     输出：
         HeteroClient
