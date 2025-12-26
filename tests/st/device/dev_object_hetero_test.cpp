@@ -1701,6 +1701,88 @@ TEST_F(DevObjectHeteroTest, DISABLED_DevMGetWithAckTimeout)
     DS_ASSERT_TRUE(WaitForChildFork(devMgetChild), 0);
 }
 
+TEST_F(DevObjectHeteroTest, DISABLED_TestClientDisconnect)
+{
+    size_t numOfObjs = 1;
+    int srcDevice = 0;
+    int dtsDevice1 = 1;
+    int dtsDevice2 = 2;
+    int timeout = 10 * 1000;
+    std::vector<std::string> keys;
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        keys.emplace_back(GetStringUuid());
+    }
+    // location1
+    int devMsetChild = ForkForTest([&]() {
+        std::vector<DeviceBlobList> setBlobList;
+        std::vector<DeviceBlobList> getBlobList;
+        InitAcl(srcDevice);
+        PrePareDevData(keys.size(), 1, 1, setBlobList, getBlobList, srcDevice);
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(0, client, 2000);
+        std::vector<std::string> failedList;
+        DS_ASSERT_OK(client->DevMSet(keys, setBlobList, failedList));
+        DS_ASSERT_TRUE(failedList.empty(), true);
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        DS_ASSERT_OK(objectClient->Get({ keys[0] + "_DevMGet2_finish" }, timeout, buffers));
+    });
+    // location2
+    int devMgetChild1 = ForkForTest([&]() {
+        std::vector<DeviceBlobList> setBlobList;
+        std::vector<DeviceBlobList> getBlobList;
+        std::vector<std::string> failedList;
+        InitAcl(dtsDevice1);
+        PrePareDevData(keys.size(), 1, 1, setBlobList, getBlobList, dtsDevice1);
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(1, client, 2000);
+        DS_ASSERT_OK(client->DevMGet(keys, getBlobList, failedList, 5000));
+        DS_ASSERT_TRUE(failedList.empty(), true);
+
+        // clear location1
+        client.reset();
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ keys[0] + "_DevMGet1_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+    });
+    // location3
+    int devMgetChild2 = ForkForTest([&]() {
+        std::vector<DeviceBlobList> setBlobList;
+        std::vector<DeviceBlobList> getBlobList;
+        std::vector<std::string> failedList;
+        InitAcl(dtsDevice2);
+        PrePareDevData(keys.size(), 1, 1, setBlobList, getBlobList, dtsDevice2);
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(1, client, 2000);
+
+        // Use ObjectClient to synchronize
+        std::shared_ptr<ObjectClient> objectClient;
+        InitTestClient(0, objectClient);
+        std::vector<Optional<Buffer>> buffers;
+        DS_ASSERT_OK(objectClient->Get({ keys[0] + "_DevMGet1_finish" }, timeout, buffers));
+
+        // The expected matched location is location1.
+        DS_ASSERT_OK(client->DevMGet(keys, getBlobList, failedList, 1000));
+        DS_ASSERT_TRUE(failedList.empty(), true);
+
+        CreateParam param = CreateParam{};
+        std::string value = "notice";
+        DS_ASSERT_OK(objectClient->Put({ keys[0] + "_DevMGet2_finish" },
+                                       reinterpret_cast<const uint8_t *>(value.data()), value.size(), param));
+    });
+    DS_ASSERT_TRUE(WaitForChildFork(devMsetChild), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(devMgetChild1), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(devMgetChild2), 0);
+}
+
 TEST_F(DevObjectHeteroTest, DISABLED_DevDelWhenPreRemove)
 {
     size_t numOfObjs = 2;
