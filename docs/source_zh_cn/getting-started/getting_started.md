@@ -105,6 +105,10 @@ openYuanrong datasystem 还提供了基于 Kubernetes 容器化部署方式，�
 
 通过异构对象接口，将任意二进制数据以键值对形式写入 HBM：
 
+::::{tab-set}
+
+:::{tab-item} Python
+
 ```python
 import acl
 import os
@@ -166,6 +170,110 @@ else:
     hetero_dev_mget()
     os.wait()
 ```
+
+:::
+
+:::{tab-item} C++
+
+```cpp
+#include <iostream>
+#include <vector>
+#include <string>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <acl/acl.h>
+#include "datasystem/datasystem.h"
+
+using namespace datasystem;
+
+void HeteroDevMSet()
+{
+    ConnectOptions connectOpts;
+    connectOpts.host = "127.0.0.1";
+    connectOpts.port = 31501; 
+    auto client = std::make_shared<HeteroClient>(connectOpts);
+    client->Init();
+
+    int deviceIdx = 1;
+    aclInit(nullptr);
+    aclrtSetDevice(deviceIdx);
+
+    std::vector<std::string> keyList = { "key1", "key2", "key3" };
+    size_t dataSize = 1024 * 1024;
+    std::string testValue = "value";
+
+    std::vector<DeviceBlobList> inDataBlobList;
+    for (size_t k = 0; k < keyList.size(); ++k) {
+        std::vector<Blob> tmpBatchList;
+        for (int i = 0; i < 4; ++i) {
+            void* devPtr = nullptr;
+            aclrtMalloc(&devPtr, dataSize, aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
+            aclrtMemcpy(devPtr, dataSize, testValue.c_str(), testValue.length(), ACL_MEMCPY_HOST_TO_DEVICE);
+            Blob blob;
+            blob.pointer = devPtr;
+            blob.size = dataSize;
+            tmpBatchList.push_back(blob);
+        }
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceIdx;
+        blobList.blobs = tmpBatchList;
+        inDataBlobList.push_back(blobList);
+    }
+    
+    std::vector<std::string> failedIdList;
+    client->DevMSet(keyList, inDataBlobList, failedIdList);
+    client->ShutDown();
+}
+
+void HeteroDevMGet()
+{
+    ConnectOptions connectOpts;
+    connectOpts.host = "127.0.0.1";
+    connectOpts.port = 31501;
+    auto client = std::make_shared<HeteroClient>(connectOpts);
+    client->Init();
+
+    int deviceIdx = 2;
+    aclInit(nullptr);
+    aclrtSetDevice(deviceIdx);
+
+    std::vector<std::string> keyList = { "key1", "key2", "key3" };
+    size_t dataSize = 1024 * 1024;
+
+    std::vector<DeviceBlobList> outDataBlobList;
+    for (size_t k = 0; k < keyList.size(); ++k) {
+        std::vector<Blob> tmpBatchList;
+        for (int i = 0; i < 4; ++i) {
+            void* devPtr = nullptr;
+            aclrtMalloc(&devPtr, dataSize, aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
+            Blob blob;
+            blob.pointer = devPtr;
+            blob.size = dataSize;
+            tmpBatchList.push_back(blob);
+        }
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceIdx;
+        blobList.blobs = tmpBatchList;
+        outDataBlobList.push_back(blobList);
+    }
+
+    std::vector<std::string> failedIdList;
+    client->DevMGet(keyList, outDataBlobList, failedIdList, 60000);
+    client->DevDelete(keyList, failedIdList);
+    client->ShutDown();
+}
+
+int main()
+{
+    HeteroDevMSet();
+    HeteroDevMGet();
+    return 0;
+}
+```
+
+:::
+
+::::
 
 更多异构对象使用方式请参考：[异构对象开发指南](../development-guide/example/hetero.md)
 
