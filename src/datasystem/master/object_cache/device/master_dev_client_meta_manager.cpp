@@ -27,17 +27,17 @@
 
 namespace datasystem {
 namespace master {
-std::shared_ptr<TbbDeviceMetaOpRecord> MasterDevClientMetaManager::GetTableByType(RecordType type)
+TbbDeviceMetaOpRecord *MasterDevClientMetaManager::GetTableByType(RecordType type)
 {
     switch (type) {
         case RecordType::NPUID:
-            return std::make_shared<TbbDeviceMetaOpRecord>(DeviceMetaOpRecordNpuId_);
+            return &DeviceMetaOpRecordNpuId_;
         case RecordType::OBJECTKEY:
-            return std::make_shared<TbbDeviceMetaOpRecord>(DeviceMetaOpRecordObjectKey_);
+            return &DeviceMetaOpRecordObjectKey_;
         case RecordType::HCCLPEERID:
-            return std::make_shared<TbbDeviceMetaOpRecord>(DeviceMetaOpRecordHcclPeerId_);
+            return &DeviceMetaOpRecordHcclPeerId_;
         case RecordType::WORKER2CLIENT:
-            return std::make_shared<TbbDeviceMetaOpRecord>(worker2ClientsTable_);
+            return &worker2ClientsTable_;
         default:
             LOG(ERROR) << FormatString("TbbDeviceMetaOpRecord type no find");
             return nullptr;

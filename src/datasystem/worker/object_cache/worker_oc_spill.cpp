@@ -953,7 +953,7 @@ void WorkerOcSpill::Compact()
         auto diskSpaceThreshold = GetSpillLimitSize() / 100u * 90u;
         freeSpaceInRealTime_ = GetFreeSpaceBytes(realSpillDirectory);
         LOG(INFO) << "[Spill] freeSpaceInRealTime: " << freeSpaceInRealTime_;
-        waitPost_.WaitForNext(compactIntervalMs);
+        waitPost_.WaitForAndClear(compactIntervalMs);
         for (uint32_t mgrIndex = 0; mgrIndex < FLAGS_spill_thread_num && !stopCompaction_; mgrIndex++) {
             Status rc = fileMgr_[mgrIndex]->CompactFiles(SpillFileManager::HOLE_SIZE_RATIO_THRESHOLD_50);
             LOG_IF_ERROR(rc, "failed to CompactFiles");

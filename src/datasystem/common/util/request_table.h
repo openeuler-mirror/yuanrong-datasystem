@@ -168,6 +168,46 @@ public:
     }
 
     /**
+     * @brief Update requests with verification results.
+     * @param[in] objectKey The object key.
+     * @param[in] entryParam The object entry parameter.
+     * @param[in] requestVerificationResults Map from request to verification result.
+     * @param[in] doneRequestCallBack Callback function for replying to a done request.
+     * @return Status of the call.
+     */
+    template <typename EntryParam>
+    Status UpdateRequestsWithVerificationResults(
+        const std::string &objectKey, std::shared_ptr<EntryParam> entryParam,
+        const std::unordered_map<std::shared_ptr<Request>, Status> &requestVerificationResults,
+        std::function<void(std::shared_ptr<Request>)> doneRequestCallBack)
+    {
+        std::vector<std::shared_ptr<Request>> completedRequests;
+        completedRequests.reserve(requestVerificationResults.size());
+
+        for (const auto &[req, verifyStatus] : requestVerificationResults) {
+            std::lock_guard<std::mutex> locker(req->mutex_);
+
+            req->SetObjectStatus(objectKey, verifyStatus);
+            if (req->objects_.emplace(objectKey, entryParam)) {
+                (void)req->numSatisfiedObjects_.fetch_add(1);
+            } else {
+                continue;
+            }
+
+            if (req->numSatisfiedObjects_ == req->numWaitingObjects_) {
+                VLOG(1) << "All object data ready for clientId: " << req->clientId_;
+                completedRequests.emplace_back(req);
+            }
+        }
+
+        for (auto &req : completedRequests) {
+            doneRequestCallBack(req);
+        }
+
+        return Status::OK();
+    }
+
+    /**
      * @brief Get the Requests By Object object
      * @param[in] objKey object key
      * @return std::vector<std::shared_ptr<Request>>
@@ -279,6 +319,21 @@ public:
         }
     }
 
+    void SetObjectStatus(const std::string &objectKey, const Status &status)
+    {
+        object2StatuseMap_[objectKey] = status;
+        SetStatus(status);
+    }
+
+    Status GetObjectStatus(const std::string &objectKey)
+    {
+        auto it = object2StatuseMap_.find(objectKey);
+        if (it != object2StatuseMap_.end()) {
+            return it->second;
+        }
+        return Status::OK();
+    }
+
     void SetOffset(const std::unordered_map<std::string, OffsetInfo> offsetInfos)
     {
         std::lock_guard<std::mutex> locker(mutex_);
@@ -344,6 +399,9 @@ public:
 
     // save the last error.
     Status lastRc_;
+
+    // Status map for each object (key: object key, value: status).
+    std::unordered_map<std::string, Status> object2StatuseMap_;
 
     std::mutex mutex_;
 

@@ -146,7 +146,7 @@ protected:
     std::shared_ptr<KVClient> client0_, client1_, client2_;
 };
 
-TEST_F(KVClientMSetPerfTest, DISABLED_MsetNtxSmallObj)
+TEST_F(KVClientMSetPerfTest, MsetNtxSmallObj)
 {
     MSetParam param;
     param.existence = ExistenceOpt::NX;

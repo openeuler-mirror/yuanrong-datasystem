@@ -53,7 +53,6 @@ uint64_t TimerQueue::NextTick(const std::map<uint64_t, std::list<TimerImpl>> &ti
 void TimerQueue::ExecTimers(const std::list<TimerImpl> &timers)
 {
     for (const auto &timer : timers) {
-        DLOG(INFO) << FormatString("ExecTimers with id %llu, timestamp %llu", timer.GetId(), timer.GetTimestamp());
         timer.ExecTimeOutCallBack();
     }
 }

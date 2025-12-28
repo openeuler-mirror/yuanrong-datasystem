@@ -486,6 +486,9 @@ Status P2PSubscribe::ProcessP2PResponse(
         respKeys << objectKey;
         first = false;
     }
+    if (groupedSubResp.empty()) {
+        return Status::OK();
+    }
     VLOG(1) << FormatString("Start processing the keys that were successfully queried, keys:[%s]", respKeys.str());
     ProcessP2PRecv(groupedSubResp, objKeyToP2PRequest, finishedList);
     std::stringstream retryKeys;

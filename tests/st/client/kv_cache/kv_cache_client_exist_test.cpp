@@ -307,6 +307,10 @@ TEST_F(KVCacheClientExistTest, ReqTimeoutMs)
         };
         KVClient client(op);
         DS_ASSERT_OK(client.Init());
+        op.requestTimeoutMs = -1;
+        KVClient client2(op);
+        ASSERT_TRUE(client2.Init().GetMsg().find("The req timeout should be greater than or equal to 0 milliseconds.")
+                    != std::string::npos);
         std::vector<bool> ex;
         Timer timer2;
         DS_ASSERT_NOT_OK(client.Exist({ "failedKeys" }, ex));

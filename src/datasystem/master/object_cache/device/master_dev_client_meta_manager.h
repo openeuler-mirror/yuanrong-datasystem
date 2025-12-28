@@ -85,8 +85,7 @@ private:
      * @param[in] type The type of use table {npuid, objectkey, hcclpeerid}.
      * @return The TbbDeviceMetaOpRecord point
      */
-    std::shared_ptr<TbbDeviceMetaOpRecord> GetTableByType(RecordType type);
-
+    TbbDeviceMetaOpRecord *GetTableByType(RecordType type);
     /**
      * @brief Internal implementation: Looks up value by key with optional erase after retrieval
      * @param type Record type used to determine which table to query

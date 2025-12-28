@@ -1016,7 +1016,7 @@ Status EtcdClusterManager::StartOrphanNodeMonitorThread()
         Timer timer;
         while (!exitFlag_) {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            orphanWaitPost_.Wait();
+            orphanWaitPost_.WaitAndClear();
             std::unordered_map<std::string, std::string> orphanNodes;
             {
                 std::lock_guard<std::shared_timed_mutex> lock(orphanNodeMutex_);

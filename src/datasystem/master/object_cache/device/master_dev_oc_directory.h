@@ -72,11 +72,20 @@ public:
     std::tuple<bool, DeviceLocationPb *> FindLocation(const std::string &clientId, int32_t deviceId);
 
     /**
-     * @brief Veriry the get request is legal.
+     * @brief Verifies data is legal between sender and receiver.
+     *
+     * This function performs the following validations:
+     * 1. Checks if the number of data blobs matches between put and get operations.
+     * 2. Validates data types for each corresponding blob.
+     * 3. Ensures the requested offset and size do not overflow.
+     * 4. Confirms the requested data range does not exceed available data boundaries.
+     * 5. Confirms the requested locations are not already present in the directory (ensures uniqueness).
+     *
      * @param[in] getMetaPb The device meta pb from GetP2PMeta request.
-     * @return K_OK on success; the error code otherwise.
+     * @return Status Returns Status::OK() if validation passes,
+     *                otherwise returns an appropriate error status.
      */
-    Status VerifyGetRequest(const DeviceObjectMetaPb &getMetaPb);
+    Status VerifyDataRangeLegality(const DeviceObjectMetaPb &getMetaPb);
 
     /**
      * @brief Add location to directory.
@@ -351,8 +360,9 @@ public:
      * @param[in] srcDeviceId The src device ID.
      * @return Status of the call.
      */
-    Status UpdateGetP2PMetaRequest(const std::string &objectKey, std::string srcClientId, int32_t srcDeviceId,
-                                   std::string srcWorkerIP);
+    Status UpdateGetP2PMetaRequest(
+        const std::string &objectKey, std::string srcClientId, int32_t srcDeviceId, std::string srcWorkerIP,
+        const std::unordered_map<std::shared_ptr<GetP2PMetaRequest>, Status> &requestVerificationResults);
 
     /**
      * @brief Find the GetP2PMeta request according to object key.

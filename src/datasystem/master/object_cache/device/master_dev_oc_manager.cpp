@@ -104,16 +104,34 @@ Status MasterDevOcManager::PutP2PMetaImpl(const PutP2PMetaReqPb &req, PutP2PMeta
             LOG(INFO) << "MasterDevOcManager.PutP2PMetaImpl.TestPutGetMultThreadSync";
             return Status::OK();
         });
+
         auto p2pReqVec = objectGetP2PMetaReqSubscriptionTable_->GetAllP2PMetaRequest(objectKey);
+        std::unordered_map<std::shared_ptr<GetP2PMetaRequest>, Status> reqVerifyResults;
+        for (auto &req : p2pReqVec) {
+            auto getMetaPbs = req->requestInfo_.dev_obj_meta();
+            if (getMetaPbs.size() != 1) {
+                LOG(WARNING) << "Expected 1 device object metadata for per-key subscription";
+                reqVerifyResults[req] = Status(K_RUNTIME_ERROR, "Invalid metadata size");
+                continue;
+            }
+
+            auto rc = objDirectory->VerifyDataRangeLegality(getMetaPbs[0]);
+            reqVerifyResults[req] = rc;
+        }
+
         // For subscriptions of unary key buffers only
         auto locs = req.dev_obj_meta().begin()->locations();
         std::string srcClientId = locs.begin()->client_id();
         int32_t srcDeviceId = locs.begin()->device_id();
         std::string srcWorkerIP = locs.begin()->worker_ip();
         LOG_IF_ERROR(objectGetP2PMetaReqSubscriptionTable_->UpdateGetP2PMetaRequest(objectKey, srcClientId, srcDeviceId,
-                                                                                    srcWorkerIP),
+                                                                                    srcWorkerIP, reqVerifyResults),
                      FormatString("Failed to update GetP2PMeta requests for objectKey %s.", objectKey));
-        for (auto &getP2PReq : p2pReqVec) {
+
+        for (const auto &[getP2PReq, verifyStatus] : reqVerifyResults) {
+            if (verifyStatus.IsError()) {
+                continue;
+            }
             if (getP2PReq != nullptr && getP2PReq->isReturn_) {
                 auto &dstClientId = getP2PReq->clientId_;
                 auto &dstDeviceId = getP2PReq->deviceId_;
@@ -213,7 +231,7 @@ Status MasterDevOcManager::ProcessSingleGetP2PMetaReq(const DeviceObjectMetaPb &
     RETURN_IF_NOT_OK(objectDirectoryTable_->GetObjectDirectory(objectKey, objDirectory));
     DeviceLocationPb *returnLoc = nullptr;
     auto guard = objDirectory->GetLockGuard();
-    RETURN_IF_NOT_OK(objDirectory->VerifyGetRequest(subReq));
+    RETURN_IF_NOT_OK(objDirectory->VerifyDataRangeLegality(subReq));
     auto dataReceiver = ConcatClientAndDeviceId(dstClientId, dstDeviceId);
     auto selectFunc = [this, dataReceiver](std::vector<DeviceLocationPb *> locPtrVec, DeviceLocationPb *&returnLoc) {
         CHECK_FAIL_RETURN_STATUS(locPtrVec.size() != 0, K_RUNTIME_ERROR, "No available location.");

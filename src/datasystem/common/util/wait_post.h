@@ -49,6 +49,11 @@ public:
     void Wait();
 
     /**
+     * @brief Wait for the event to happen, then reset for next wait.
+     */
+    void WaitAndClear();
+
+    /**
      * @brief Wait for the event to happen.
      * @param[in] timeoutMs In milliseconds.
      * @return true if the event happen before timeout. False otherwise.
@@ -56,11 +61,11 @@ public:
     bool WaitFor(uint64_t timeoutMs);
 
     /**
-     * @brief Wait for the event to happen, if event has happened, reset and wait for next.
+     * @brief Wait for the event to happen, if event has happened, reset for next wait.
      * @param[in] timeoutMs In milliseconds.
      * @return true if the event happen before timeout. False otherwise.
      */
-    bool WaitForNext(uint64_t timeoutMs);
+    bool WaitForAndClear(uint64_t timeoutMs);
 
     /**
      * @brief Notify all blocking threads the event has happened.
