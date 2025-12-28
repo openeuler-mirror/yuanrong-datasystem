@@ -36,6 +36,7 @@ Options:
     -n Use Ninja to speed up compilation, the default is to compile using Unix Makefiles, choose from: on/off, default: off.
 
     For multiple programming languages:
+    -J Build Java api client, choose from: on/off, default: off.
     -P Build Python sdk, choose from: on/off/<python_root_dir>, default: on. Accepts on (default) to auto-detect a Python
        version from the system environment, off to disable the build, or a <python_root_dir> path to prioritize the Python
        at that specified location for search.
@@ -75,16 +76,17 @@ Options:
     For testcase:
     -c Build coverage, choose from: off/on/html, default: off.
     -u CTest run the testcases in parallel using the given number of jobs, default is 8.
-    -t Compiling or running testcases, default off. Choose from: off/build/run/run_except_cpp/run_cases/run_cpp/run_python/run_example.
+    -t Compiling or running testcases, default off. Choose from: off/build/run/run_except_cpp/run_cases/run_cpp/run_java/run_python/run_example.
        Field 'off' indicates that testcases are not compiled and executed.
        Field not 'off', The 'tools' directory will be generated under the compilation result path
-             curve_keygen (generate zmq public and private keys) and 
+             curve_keygen (generate zmq public and private keys) and
              hashring_parser (parse hashringPb) will be generated under the 'tools' directory.
        Field 'build' indicates that testcases are compiled but not run.
        Field 'run' indicates that testcases are compiled and run.
        Field 'run_except_cpp' indicates that testcases are run, except cpp ut.
        Field 'run_cases' indicates that only testcases are run.
        Field 'run_cpp' indicates that only cpp testcases are run.
+       Field 'run_java' indicates that only java testcases are run.
        Field 'run_python' indicates that only python testcases are run.
        Field 'run_example' indicates that only example testcases are run.
     -l The label of testcases, effective when '-t run/run_cases/run_cpp', default: level*.
@@ -93,8 +95,8 @@ Options:
 
 Environment:
 1) DS_JEMALLOC_LG_PAGE: Explicitly sets the page size used by the jemalloc. page size=2^\${DS_JEMALLOC_LG_PAGE} bytes.
-    When this variable is omitted, jemalloc infers the system's page size at build time from the build environment 
-    (e.g., via sysconf(_SC_PAGESIZE) or equivalent). Only set DS_JEMALLOC_LG_PAGE if the runtime system's page size 
+    When this variable is omitted, jemalloc infers the system's page size at build time from the build environment
+    (e.g., via sysconf(_SC_PAGESIZE) or equivalent). Only set DS_JEMALLOC_LG_PAGE if the runtime system's page size
     differs from the one detected at build time and you must override the value.
 2) DS_OPENSOURCE_DIR: Specifies a directory to cache the opensource compilation result.
     Cache the compilation result to speed up the compilation. Default: /tmp/{sha256(pwd)}/
@@ -147,6 +149,7 @@ function init_default_opts() {
 
   # For packaging mutil language
   export PACKAGE_PYTHON="on"
+  export PACKAGE_JAVA="off"
   export PYTHON_ROOT_DIR=""
   export PACKAGE_GO="off"
 
@@ -316,6 +319,12 @@ function run_ut() {
   # run testcases if RUN_TESTS is run.
   echo -e "---- running datasystem testcases..."
 
+  if [[ "${RUN_TESTS}" = "run_java" ]]; then
+    LLT_LABELS="java"
+  elif [[ "${RUN_TESTS}" = "run_cpp" ]]; then
+    LLT_LABELS_EXCLUDE="java"
+  fi
+
   local baseTime_s
   baseTime_s=$(date +%s)
   # Run all testcases in parallel and don't print the log out.
@@ -428,7 +437,7 @@ function run_manual_ut()
 
 function run_automated_ut()
 {
-  if [[ "${RUN_TESTS}" = "run" || "${RUN_TESTS}" = "run_cases" || "${RUN_TESTS}" = "run_cpp" ]]; then
+  if [[ "${RUN_TESTS}" = "run" || "${RUN_TESTS}" = "run_cases" || "${RUN_TESTS}" = "run_cpp" || "${RUN_TESTS}" = "run_java" ]]; then
       run_ut
   fi
 }
@@ -443,12 +452,12 @@ function run_testcases()
   run_automated_ut
 }
 
-function version_lt() 
+function version_lt()
 {
     [ "$1" = "$(echo -e "$1\n$2" | sort -V | head -n1)" ] && [ "$1" != "$2" ]
 }
 
-function generate_config() 
+function generate_config()
 {
   local config_file=${BASE_DIR}/config.cmake
   [[ -f "${config_file}" ]] && rm -f "${config_file}"
@@ -487,6 +496,7 @@ function build_datasystem()
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
     "-DBUILD_GO_API:BOOL=${PACKAGE_GO}"
+    "-DBUILD_JAVA_API:BOOL=${PACKAGE_JAVA}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
     "-DBUILD_WITH_URMA:BOOL=${BUILD_WITH_URMA}"
     "-DBUILD_WITH_RDMA:BOOL=${BUILD_WITH_RDMA}"
@@ -499,7 +509,7 @@ function build_datasystem()
       "-DUB_SHA256:STRING=${UB_SHA256}"
     )
   fi
- 
+
   if is_on "${PACKAGE_PYTHON}" && [ -n "${PYTHON_ROOT_DIR}" ]; then
     echo -e "-- Specify python root path: ${PYTHON_ROOT_DIR}"
     cmake_options=("${cmake_options[@]}" "-DPython3_ROOT_DIR:PATH=${PYTHON_ROOT_DIR}")
@@ -543,6 +553,9 @@ function build_datasystem()
     if is_on "${BUILD_HETERO}"; then
       cp ${BUILD_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     fi
+    if is_on "${PACKAGE_JAVA}"; then
+      cp ${BUILD_DIR}/java/jni_lib/*.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
+    fi
     if is_on "${PACKAGE_PYTHON}"; then
       cp ${BUILD_DIR}/python_lib/*.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     fi
@@ -564,8 +577,8 @@ function build_datasystem()
     build_golang_client
     echo -e "---- [TIMER] Build go client: $(($(date +%s)-$baseTime_s)) seconds"
   fi
-  
-  # package 
+
+  # package
   cd "${INSTALL_DIR}"
   tar --remove-files -zcf yr-datasystem-v$(cat "${BASE_DIR}/VERSION").tar.gz datasystem
   cd -
@@ -585,7 +598,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:G:P:X:R:D:C:M:x:m:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:X:R:D:C:M:x:m:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -601,7 +614,7 @@ function main() {
       ;;
     t)
       if [[ "X${OPTARG}" != "Xoff" && "X${OPTARG}" != "Xbuild" && "X${OPTARG}" != "Xrun" && "X${OPTARG}" != "Xrun_except_cpp" &&
-        "X${OPTARG}" != "Xrun_cases" && "X${OPTARG}" != "Xrun_cpp" && "X${OPTARG}" != "Xrun_python" &&
+        "X${OPTARG}" != "Xrun_cases" && "X${OPTARG}" != "Xrun_cpp" && "X${OPTARG}" != "Xrun_java" && "X${OPTARG}" != "Xrun_python" &&
         "X${OPTARG}" != "Xrun_example" ]]; then
         echo -e "Invalid value ${OPTARG} for option -t"
         echo -e "${USAGE}"
@@ -670,6 +683,10 @@ function main() {
     p)
       check_on_off "${OPTARG}" p
       ENABLE_PERF="${OPTARG}"
+      ;;
+    J)
+      check_on_off "${OPTARG}" J
+      PACKAGE_JAVA="${OPTARG}"
       ;;
     M)
       check_on_off "${OPTARG}" M

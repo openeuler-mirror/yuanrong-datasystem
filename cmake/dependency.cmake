@@ -31,6 +31,10 @@ if (BUILD_WITH_RDMA)
     include(${CMAKE_SOURCE_DIR}/cmake/external_libs/ucx.cmake)
 endif()
 
+if (BUILD_JAVA_API)
+    include(${CMAKE_SOURCE_DIR}/cmake/external_libs/jni.cmake)
+endif()
+
 if (WITH_TESTS)
     include(${CMAKE_SOURCE_DIR}/cmake/external_libs/gtest.cmake)
 endif()

@@ -206,6 +206,14 @@ if (BUILD_GO_API)
 endif ()
 
 ############################################################
+# Datasystem java jar package.
+############################################################
+if (BUILD_JAVA_API)
+    set(DATASYSTEM_JAR_PATH sdk)
+    install(FILES ${JAR_PACKAGE} DESTINATION ${DATASYSTEM_JAR_PATH})
+endif ()
+
+############################################################
 # Datasystem bin and depends libs.
 ############################################################
 set(DATASYSTEM_SERVICE_BINPATH datasystem/service)

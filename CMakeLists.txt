@@ -56,7 +56,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wextra")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wfloat-equal")
 # -fno-common: Specifies that the compiler places uninitialized global variables in the BSS section of the object file.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-common")
-# -rdynamic: Pass the flag -export-dynamic to the ELF linker, on targets that support it. 
+# -rdynamic: Pass the flag -export-dynamic to the ELF linker, on targets that support it.
 # This option is needed to allow obtaining backtraces from within a program.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -rdynamic")
 
@@ -152,6 +152,10 @@ add_subdirectory(dsbench)
 if (WITH_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif ()
+
+if (BUILD_JAVA_API)
+    add_subdirectory(java)
 endif ()
 
 include(cmake/package.cmake)
