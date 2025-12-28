@@ -21,8 +21,9 @@ import sys
 from importlib import import_module
 
 import importlib.resources as resources
+import yr.datasystem.cli.common.util as util
 
-from . import __version__
+from yr.datasystem.cli import __version__
 
 
 class BaseCommand:
@@ -113,16 +114,21 @@ def main():
     # set umask to 0o077
     os.umask(stat.S_IRWXG | stat.S_IRWXO)
 
+    version_str = f"{__version__}"
+    commit_id = util.get_commit_id()
+    if commit_id != "unknown":
+        version_str += f" (commit: {commit_id})"
+
     parser = argparse.ArgumentParser(
         prog="dscli",
         description="YuanRong datasystem CLI entry point (version: {})".format(
-            __version__
+            version_str
         ),
         allow_abbrev=False,
     )
 
     parser.add_argument(
-        "--version", action="version", version="%(prog)s {}".format(__version__)
+        "--version", action="version", version="%(prog)s {}".format(version_str)
     )
 
     subparsers = parser.add_subparsers(
