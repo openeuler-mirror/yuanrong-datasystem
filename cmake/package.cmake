@@ -209,7 +209,7 @@ endif ()
 # Datasystem java jar package.
 ############################################################
 if (BUILD_JAVA_API)
-    set(DATASYSTEM_JAR_PATH sdk)
+    set(DATASYSTEM_JAR_PATH datasystem/sdk)
     install(FILES ${JAR_PACKAGE} DESTINATION ${DATASYSTEM_JAR_PATH})
 endif ()
 

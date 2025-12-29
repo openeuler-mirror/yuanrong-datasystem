@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.huawei.datasystem</groupId>
+    <groupId>org.yuanrong.datasystem</groupId>
     <artifactId>datasystem</artifactId>
     <version>${api_version}</version>
     <packaging>jar</packaging>
@@ -105,47 +105,6 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.1.1</version>
-            </plugin>
-            <plugin>
-                <groupId>com.huawei.bepcloud</groupId>
-                <artifactId>rebuild-maven-plugin</artifactId>
-                <version>2.2.0</version>
-                <executions>
-                    <execution>
-                        <id>rebuild_1</id>
-                        <goals>
-                            <goal>rebuild</goal>
-                        </goals>
-                        <configuration>
-                            <overwrite>true</overwrite>
-                            <rules>
-                                <rule>(pom.properties,#)->del</rule>
-                                <rule>(MANIFEST.MF,Import-Service)->sort</rule>
-                            </rules>
-                        </configuration>
-                    </execution>
-                    <execution>
-                        <id>rebuild_2</id>
-                            <goals>
-                                <goal>fixFileTimeAttr</goal>
-                            </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.directory}</outputDirectory>
-                        </configuration>
-                    </execution>
-                    <execution>
-                        <id>rebuild_3</id>
-                        <goals>
-                            <goal>sortClassFile</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.directory}</outputDirectory>
-                            <sortMethods>true</sortMethods>
-                            <dedupConstantPool>true</dedupConstantPool>
-                            <sortLocalVariables>true</sortLocalVariables>
-                        </configuration>
-                    </execution>
-                </executions>
             </plugin>
         </plugins>
     </build>
