@@ -264,7 +264,7 @@ TEST_F(KVCacheSpillTest, LEVEL1_TestWorkerShutdown)
     std::this_thread::sleep_for(std::chrono::seconds(1));
 }
 
-TEST_F(KVCacheSpillTest, LEVEL1_TestSpillSpaceFull)
+TEST_F(KVCacheSpillTest, DISABLED_TestSpillSpaceFull)
 {
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client);

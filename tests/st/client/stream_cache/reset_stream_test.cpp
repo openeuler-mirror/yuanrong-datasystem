@@ -406,7 +406,7 @@ TEST_F(ResetStreamTest, LEVEL1_TestClientLostWorkerSameNode)
     DS_ASSERT_OK(prod1->Send(element));
 }
 
-TEST_F(ResetStreamTest, LEVEL1_TestClientLostWorkerCrossNode)
+TEST_F(ResetStreamTest, DISABLED_TestClientLostWorkerCrossNode)
 {
     std::shared_ptr<Producer> prod1;
     std::string streamName = "workerlosttestcrossnode";

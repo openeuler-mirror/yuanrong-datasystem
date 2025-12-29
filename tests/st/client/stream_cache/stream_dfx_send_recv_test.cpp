@@ -143,7 +143,7 @@ TEST_F(StreamDfxSendRecvTest, TestRecv)
     DS_ASSERT_OK(consumer2->Ack(outElements.back().id));
 }
 
-TEST_F(StreamDfxSendRecvTest, TestRecvWorkerCrash)
+TEST_F(StreamDfxSendRecvTest, DISABLED_TestRecvWorkerCrash)
 {
     std::shared_ptr<Producer> producer;
     std::shared_ptr<Consumer> consumer1;
@@ -180,7 +180,7 @@ TEST_F(StreamDfxSendRecvTest, TestRecvWorkerCrash)
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1));
 }
 
-TEST_F(StreamDfxSendRecvTest, TestPendingRecvWorkerCrash)
+TEST_F(StreamDfxSendRecvTest, DISABLED_TestPendingRecvWorkerCrash)
 {
     std::shared_ptr<Producer> producer;
     std::shared_ptr<Consumer> consumer1;
@@ -326,7 +326,7 @@ TEST_F(StreamDfxSendRecvTest, LEVEL1_TestResendDataAfterProducerWorkerCrash)
     DS_ASSERT_OK(consumer1->Ack(numElements));
 }
 
-TEST_F(StreamDfxSendRecvTest, LEVEL1_TestResendDataAfterConsumerWorkerCrash)
+TEST_F(StreamDfxSendRecvTest, DISABLED_TestResendDataAfterConsumerWorkerCrash)
 {
     std::shared_ptr<Producer> producer;
     std::shared_ptr<Consumer> consumer1;

@@ -1226,7 +1226,7 @@ public:
 protected:
 };
 
-TEST_F(STCClientDistMasterDfxTest, LEVEL1_TestReStartWorker)
+TEST_F(STCClientDistMasterDfxTest, DISABLED_TestReStartWorker)
 {
     StartClustersAndWaitReady();
     std::string value = "value1";

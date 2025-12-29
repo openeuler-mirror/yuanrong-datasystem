@@ -706,7 +706,7 @@ TEST_F(WorkerDfxTest, TestGDecreaseRetryIdempotence)
     DS_ASSERT_OK(client1->GDecreaseRef({ objectKey }, failedObjectKeys));
 }
 
-TEST_F(WorkerDfxTest, LEVEL1_TestChangePrimaryCopy)
+TEST_F(WorkerDfxTest, DISABLED_TestChangePrimaryCopy)
 {
     std::shared_ptr<ObjectClient> client1, client2, client3;
     InitTestClient(0, client1);

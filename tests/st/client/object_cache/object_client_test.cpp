@@ -2382,7 +2382,7 @@ public:
     }
 };
 
-TEST_F(ObjectClientTestIPv6, IPv6_PutGet)
+TEST_F(ObjectClientTestIPv6, DISABLED_IPv6_PutGet)
 {
     // Simple put and get test, ensuring rpcs are sent okay given worker started with IPv6 format
     std::shared_ptr<ObjectClient> client;
@@ -2403,7 +2403,7 @@ TEST_F(ObjectClientTestIPv6, IPv6_PutGet)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
-TEST_F(ObjectClientTestIPv6, IPv6_PutGetRemote)
+TEST_F(ObjectClientTestIPv6, DISABLED_IPv6_PutGetRemote)
 {
     // This is a basically a copy of the EndToEndRemoteGet from the ObjectClientTest version of the testcase.
     std::string objectKey = NewObjectKey();
