@@ -20,7 +20,7 @@
 
   <dependencies>
     <dependency>
-      <groupId>com.huawei.datasystem</groupId>
+      <groupId>org.yuanrong.datasystem</groupId>
       <artifactId>${api_name}</artifactId>
       <version>${api_version}</version>
     </dependency>

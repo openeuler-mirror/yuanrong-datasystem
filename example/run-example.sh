@@ -125,7 +125,7 @@ if [ "x$run_java" == "xon" ] ; then
 
     mvn install:install-file \
     -Dfile=${java_sdk_path} \
-    -DgroupId=com.huawei.datasystem \
+    -DgroupId=org.yuanrong.datasystem \
     -DartifactId=${java_sdk_name} \
     -Dversion=${java_sdk_version} \
     -Dpackaging=jar
