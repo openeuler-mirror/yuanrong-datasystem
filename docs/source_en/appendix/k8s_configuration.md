@@ -335,8 +335,8 @@ global:
 |-----|------|---------|-------------|
 | global.clusterName | string | `"AZ1"` | Available Zone name |
 | global.crossAz.otherClusterNames | string | `""` | Specify other az names using the same etcd. Only split by ',' |
-| global.crossAz.crossAzGetDataFromWorker | bool | `true` | Control whether to try to get data from other AZ's worker first. If false, data will be retrieved directly from the L2 cache |
-| global.crossAz.crossAzGetMetaFromWorker | bool | `false` | Control whether to get meta data from other AZ's worker, if false then get meta data from local AZ |
+| global.crossAz.crossAzGetDataFromWorker | bool | `true` | Control whether to try to get data from other cluster's worker first. If false, data will be retrieved directly from the L2 cache |
+| global.crossAz.crossAzGetMetaFromWorker | bool | `false` | Control whether to get meta data from other cluster's worker, if false then get meta data from local cluster |
 
 **Example**:
 ```yaml

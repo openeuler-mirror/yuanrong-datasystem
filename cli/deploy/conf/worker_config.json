@@ -275,13 +275,13 @@
         "value": "false",
         "description": "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) can enhance performance and reduce page table overhead, but it may also lead to increased memory usage"
     },
-    "cross_az_get_data_from_worker": {
+    "cross_cluster_get_data_from_worker": {
         "value": "true",
-        "description": "Control whether try to get data from other AZ's worker firstly, if false then get data from L2 cache directly."
+        "description": "Control whether try to get data from other cluster's worker firstly, if false then get data from L2 cache directly."
     },
-    "cross_az_get_meta_from_worker": {
+    "cross_cluster_get_meta_from_worker": {
         "value": "false",
-        "description": "Control whether get meta data from other AZ's worker, if false then get meta data from local AZ."
+        "description": "Control whether get meta data from other cluster's worker, if false then get meta data from local cluster."
     },
     "enable_worker_worker_batch_get": {
         "value": "false",

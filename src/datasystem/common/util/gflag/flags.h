@@ -187,7 +187,7 @@ private:
                                                               "add_node_wait_time_s",
                                                               "async_delete",
                                                               "auto_del_dead_node",
-                                                              "cross_az_get_data_from_worker",
+                                                              "cross_cluster_get_data_from_worker",
                                                               "enable_hash_ring_self_healing",
                                                               "shared_disk_arena_per_tenant",
                                                               "enable_lossless_data_exit_mode",

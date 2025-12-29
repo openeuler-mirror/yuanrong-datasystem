@@ -806,7 +806,7 @@ public:
         opts.enableDistributedMaster = "true";
         std::string gflag =
             " -v=1 -shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=8 -auto_del_dead_node=true "
-            "-other_cluster_names=AZ1,AZ2,AZ3 -cross_az_get_meta_from_worker=true -enable_meta_replica=true "
+            "-other_cluster_names=AZ1,AZ2,AZ3 -cross_cluster_get_meta_from_worker=true -enable_meta_replica=true "
             "-oc_io_from_l2cache_need_metadata=true";
 
         opts.workerGflagParams = gflag;

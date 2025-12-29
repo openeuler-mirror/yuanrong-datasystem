@@ -60,7 +60,7 @@ DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(auto_del_dead_node);
-DS_DEFINE_bool(cross_az_get_meta_from_worker, false, "cross az to get metadata from worker");
+DS_DEFINE_bool(cross_cluster_get_meta_from_worker, false, "cross az to get metadata from worker");
 
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
@@ -1325,7 +1325,7 @@ Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &o
     bool hasWorkerId = TrySplitWorkerIdFromObjecId(objKey, workerIdInObjKey).IsOk();
     if (!hasWorkerId) {
         RETURN_IF_NOT_OK(ProcessGetMetaAddressByHash(objKey, dbName, masterAddr, routeInfo));
-    } else if (FLAGS_cross_az_get_meta_from_worker) {
+    } else if (FLAGS_cross_cluster_get_meta_from_worker) {
         RETURN_IF_NOT_OK(ProcessGetMetaAddressIfAllowMetaAccessAcrossAZWithWorkerId(
             objKey, workerIdInObjKey, dbName, masterAddr, isFromOtherAz, routeInfo));
     } else {

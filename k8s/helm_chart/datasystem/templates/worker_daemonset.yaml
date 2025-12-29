@@ -209,8 +209,8 @@ spec:
         - -monitor_config_file=/home/yuanrong/config/datasystem.config
         - -client_dead_timeout_s={{ $.Values.global.reliability.clientDeadTimeoutS }}
         - -enable_thp={{ $.Values.global.performance.enableThp }}
-        - -cross_az_get_data_from_worker={{ $.Values.global.crossAz.crossAzGetDataFromWorker }}
-        - -cross_az_get_meta_from_worker={{ $.Values.global.crossAz.crossAzGetMetaFromWorker }}
+        - -cross_cluster_get_data_from_worker={{ $.Values.global.crossAz.crossAzGetDataFromWorker }}
+        - -cross_cluster_get_meta_from_worker={{ $.Values.global.crossAz.crossAzGetMetaFromWorker }}
         - -enable_reconciliation={{ $.Values.global.reliability.enableReconciliation }}
         - -enable_hash_ring_self_healing={{ $.Values.global.reliability.enableHashRingSelfHealing }}
         - -liveness_probe_timeout_s={{ $.Values.global.reliability.livenessProbeTimeoutS }}
