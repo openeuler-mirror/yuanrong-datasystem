@@ -31,6 +31,26 @@ Status
         返回：
             移动构造后的 ``Status`` 实例。
 
+    .. cpp:function:: Status &operator=(const Status &other) noexcept
+
+        拷贝赋值运算符。
+
+        参数：
+            - **other** - 其他 ``Status`` 实例。
+
+        返回：
+            ``Status`` 实例引用。
+
+    .. cpp:function:: Status &operator=(Status &&other) noexcept
+
+        移动赋值运算符。
+
+        参数：
+            - **other** - 其他 ``Status`` 实例。
+
+        返回：
+            ``Status`` 实例引用。
+
     .. cpp:function:: Status(StatusCode code, std::string msg)
 
         构造函数，根据 StatusCode 和 ``msg`` 构造 ``Status`` 实例。
@@ -93,6 +113,44 @@ Status
 
         参数： 
             - **appendMsg** - 需要拼接的报错信息。
+
+    .. cpp:function:: friend std::ostream &operator<<(std::ostream &os, const Status &s)
+
+        重载输出流运算符。
+
+        参数：
+            - **os** - 输出流。
+            - **s** - ``Status`` 实例。
+
+        返回：
+            输出流引用。
+
+    .. cpp:function:: explicit operator bool() const
+
+        显式布尔转换运算符，判断 Status 的状态码是否为 ``K_OK``。
+
+        返回：
+            ``true`` 表示 Status 的状态码为 ``K_OK``。
+
+    .. cpp:function:: bool operator==(const Status &other) const
+
+        比较两个 Status 实例的状态码是否相等。
+
+        参数：
+            - **other** - 其他 ``Status`` 实例。
+
+        返回：
+            ``true`` 表示状态码相等。
+
+    .. cpp:function:: bool operator!=(const Status &other) const
+
+        比较两个 Status 实例的状态码是否不相等。
+
+        参数：
+            - **other** - 其他 ``Status`` 实例。
+
+        返回：
+            ``true`` 表示状态码不相等。
 
     .. cpp:function:: bool IsOk() const
 

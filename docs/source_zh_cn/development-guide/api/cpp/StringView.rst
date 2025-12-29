@@ -17,6 +17,16 @@ StringView
         返回：
             ``StringView`` 实例。
 
+    .. cpp:function:: constexpr StringView(const StringView &) noexcept
+
+        拷贝构造函数，使用默认实现。
+
+        参数：
+            - **StringView** - 要拷贝的 ``StringView`` 实例。
+
+        返回：
+            ``StringView`` 实例。
+
     .. cpp:function:: constexpr StringView(const char *str)
 
         保存字符串指针上的并构造实例，这个过程不会发生拷贝。
@@ -45,6 +55,19 @@ StringView
         参数：
             - **str** - 字符串。
 
+        返回：
+            ``StringView`` 实例。
+
+    .. cpp:function:: constexpr StringView &operator=(const StringView &) noexcept
+
+        拷贝赋值运算符，使用默认实现。
+
+        参数：
+            - **StringView** - 要拷贝的 ``StringView`` 实例。
+
+        返回：
+            ``StringView &`` 引用。
+
     .. cpp:function:: ~StringView()
 
         默认析构函数。
@@ -63,7 +86,7 @@ StringView
         返回：
             ``StringView`` 的数据大小。
 
-    .. cpp:function:: constexpr size_t empty() const noexcept
+    .. cpp:function:: constexpr bool empty() const noexcept
 
         判断 StringView 是否为空。
 
