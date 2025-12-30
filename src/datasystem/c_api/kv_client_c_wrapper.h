@@ -54,11 +54,12 @@ typedef void *KVClient_p;  // The main type/handle for interacting with the kv c
  * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
  * @return Return the pointer of StateClient.
  */
-KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *clientPublicKey,
-                          size_t cClientPublicKeyLen, const char *clientPrivateKey, size_t clientPrivateKeyLen,
-                          const char *serverPublicKey, size_t cServerPublicKeyLen, const char *accessKey,
-                          size_t cAccessKeyLen, const char *secretKey, size_t secretKeyLen, const char *tenantId,
-                          size_t cTenantIdLen, const char *enableCrossNodeConnection);
+KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
+                          size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
+                          const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
+                          size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen,
+                          const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
+                          const char *enableCrossNodeConnection);
 
 /**
  * @brief Executes the initialization of the connection to the worker
@@ -66,6 +67,18 @@ KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const i
  * @return status of the call
  */
 struct StatusC SCConnectWorker(KVClient_p clientPtr);
+
+/**
+ * @brief Update the access key and secret key for client.
+ * @param[in] clientPtr The pointer of ObjectClient.
+ * @param[in] accessKey The access key for AK/SK authorize.
+ * @param[in] cAccessKeyLen The length of cAccessKey
+ * @param[in] secretKey The secret key for AK/SK authorize.
+ * @param[in] cSecretKeyLen The secret key length.
+ * @return status of the call
+ */
+struct StatusC SCUpdateAkSk(KVClient_p clientPtr, const char *cAccessKey, size_t cAccessKeyLen,
+                            const char *cSecretKey, size_t cSecretKeyLen);
 
 /**
  * @brief Frees the kv client and releases all associated resources with this handle

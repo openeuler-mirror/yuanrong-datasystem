@@ -216,17 +216,10 @@ private:
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(index, workerAddress));
         LOG(INFO) << "worker index " << index << ": " << workerAddress.ToString();
         ConnectOptions connectOptions = { .host = workerAddress.Host(), .port = workerAddress.Port() };
-        if (index <= 1) {
-            connectOptions.SetAkSkAuth(accessKey_, secretKey_, "TenantId1");
-        } else {
-            connectOptions.SetAkSkAuth(accessKey_, secretKey_, "TenantId2");
-        }
+        connectOptions.token = "Token";
         client = std::make_shared<StreamClient>(connectOptions);
         return client->Init();
     }
-
-    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
-    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
 TEST_F(StreamMultiTenantTokenAuth, IdenticalStreamNameDataIsolation)

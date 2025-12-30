@@ -360,6 +360,37 @@ public class StreamClient {
         }
     }
 
+    /**
+     * To update token for the stream client.
+     *
+     * @param tokenBytes The token bytes of the stream client.
+     */
+    public void updateToken(byte[] tokenBytes) {
+        rLock.lock();
+        try {
+            ensureOpen();
+            updateTokenNative(clientPtr, tokenBytes);
+        } finally {
+            rLock.unlock();
+        }
+    }
+
+    /**
+     * To update aksk for the stream client.
+     *
+     * @param accessKey The accessKey of the stream client.
+     * @param secretKeyBytes The secretKey bytes of the stream client.
+     */
+    public void updateAkSk(String accessKey, byte[] secretKeyBytes) {
+        rLock.lock();
+        try {
+            ensureOpen();
+            updateAkSkNative(clientPtr, accessKey, secretKeyBytes);
+        } finally {
+            rLock.unlock();
+        }
+    }
+
     @Override
     public String toString() {
         return super.toString();
@@ -455,4 +486,21 @@ public class StreamClient {
      * @param clientPtr The StreamClient pointer.
      */
     private static native void freeJNIPtrNative(long clientPtr);
+
+    /**
+     * Use JNI to invoke the UpdateToken interface of C++.
+     *
+     * @param clientPtr The StreamClient pointer.
+     * @param tokenBytes The token bytes for StreamClient.
+     */
+    private static native void updateTokenNative(long clientPtr, byte[] tokenBytes);
+
+    /**
+     * Use JNI to invoke the UpdateAkSk interface of C++.
+     *
+     * @param clientPtr The StreamClient pointer.
+     * @param accessKey The accessKey for StreamClient.
+     * @param secretKeyBytes The secretKey bytes for StreamClient.
+     */
+    private static native void updateAkSkNative(long clientPtr, String accessKey, byte[] secretKeyBytes);
 }

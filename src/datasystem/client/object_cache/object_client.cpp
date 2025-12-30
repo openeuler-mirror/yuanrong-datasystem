@@ -21,7 +21,6 @@
 #include "datasystem/object_client.h"
 
 #include "datasystem/client/object_cache/object_client_impl.h"
-#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/utils/status.h"
 
@@ -113,6 +112,18 @@ Status ObjectClient::GDecreaseRef(const std::vector<std::string> &objectKeys,
     reqParam.objectKey = objectKeysToString(objectKeys);
     accessPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
     return rc;
+}
+
+Status ObjectClient::UpdateToken(SensitiveValue token)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    return impl_->UpdateToken(token);
+}
+
+Status ObjectClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretkey)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    return impl_->UpdateAkSk(accesskey, secretkey);
 }
 
 int ObjectClient::QueryGlobalRefNum(const std::string &objectKey)

@@ -111,6 +111,21 @@ spec:
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
         - -eviction_thread_num={{ $.Values.global.spill.evictionThreadNum }}
+        - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
+        - -iam_kit={{ $.Values.global.tenantAuth.iamKit }}
+        - -yuanrong_iam_url={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamUrl }}
+        {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamCa "") }}
+        - -yuanrong_iam_ca={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam_ca.crt
+        {{- end }}
+        {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamCert "") }}
+        - -yuanrong_iam_cert={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.crt
+        {{- end }}
+        {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamKey "") }}
+        - -yuanrong_iam_key={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.key
+        {{- end }}
+        {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamPassphrase "") }}
+        - -yuanrong_iam_passphrase={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.passphrase
+        {{- end }}
         - -eviction_reserve_mem_threshold_mb={{ $.Values.global.spill.evictionReserveMemThresholdMB }}
         - -sc_worker_worker_direct_port={{ $.Values.global.rpc.scWorkerWorkerDirectPort }}
         - -sc_worker_worker_pool_size={{ $.Values.global.rpc.scWorkerWorkerPoolSize }}
@@ -310,6 +325,8 @@ spec:
             value: "{{ $.Values.global.rpc.enableCurveZmq }}"
           - name: ETCD_CERT_DIR
             value: {{ $.Values.global.etcd.etcdCertDir }}
+          - name: YUANRONG_IAM_DIR
+            value: {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}
           - name: HEALTH_CHECK_PATH
             value: "/home/yuanrong/datasystem/health/healthy"
           - name: READY_CHECK_PATH
@@ -368,6 +385,12 @@ spec:
         - mountPath: {{ $.Values.global.etcd.etcdCertDir }}
           name: etcd-cert-empty-dir
         {{- end }}
+        {{- if $.Values.global.tenantAuth.authorizationEnable }}
+        {{- if (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
+        - mountPath: {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}
+          name: secret-yuanrong-iam
+        {{- end }}
+        {{- end }}
         - mountPath: /dev/shm
           name: sharememory
         - mountPath: /home/yuanrong/datasystem/logs
@@ -405,6 +428,7 @@ spec:
         - name: auth
         - name: auth-etcd
         - name: secret-key
+        - name: secret-yuanrong-iam
         - name: default-secret
       initContainers:
       - name: worker-init
@@ -444,6 +468,19 @@ spec:
             chown -R -h yuanrong:yuanrong {{ $.Values.global.ipc.udsDir }} &&
             chmod 700 /home/yuanrong/datasystem/rocksdb &&
             chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/rocksdb
+            {{- if $.Values.global.tenantAuth.authorizationEnable }}
+            {{- if (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
+            cp -rH /home/sn/yuanrong_iam/* {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }} &&
+            chmod 700 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }} &&
+            chown -R -h sn:sn {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }} &&
+            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam_ca.crt &&
+            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.crt &&
+            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.key &&
+            {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamPassphrase "") }}
+            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.passphrase &&
+            {{- end }}
+            {{- end }}
+            {{- end }}
         resources:
           limits:
             cpu: 150m
@@ -464,6 +501,14 @@ spec:
         - mountPath: "/home/yuanrong/etcd-cert"
           name: etcd-cert
         {{- end }}
+        {{- if $.Values.global.tenantAuth.authorizationEnable }}
+        {{- if (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
+        - mountPath: {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}
+          name: secret-yuanrong-iam
+        - mountPath: "/home/sn/yuanrong_iam"
+          name: yuanrong-iam
+        {{- end}}
+        {{- end}}
         - mountPath: /home/yuanrong/datasystem/logs
           name: logs
         - mountPath: {{ $.Values.global.ipc.udsDir }}
@@ -510,6 +555,27 @@ spec:
                 path: client.key
               - key: passphrase
                 path: passphrase
+        {{- end }}
+        {{- if $.Values.global.tenantAuth.authorizationEnable }}
+        {{- if (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
+        - emptyDir: {}
+          name: secret-yuanrong-iam
+        - name: yuanrong-iam
+          secret:
+            secretName: secret-yuanrong-iam
+            defaultMode: 0400
+            items:
+              - key: yuanrong_iam_ca.crt
+                path: yuanrong_iam_ca.crt
+              - key: yuanrong_iam.crt
+                path: yuanrong_iam.crt
+              - key: yuanrong_iam.key
+                path: yuanrong_iam.key
+              {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamPassphrase "") }}
+              - key: yuanrong_iam.passphrase
+                path: yuanrong_iam.passphrase
+              {{- end }}
+        {{- end }}
         {{- end }}
         - name: time-zone
           hostPath:

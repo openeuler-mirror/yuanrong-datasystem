@@ -167,6 +167,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     ipAddress_ = HostPort(connectOptions.host, connectOptions.port);
     connectTimeoutMs_ = connectOptions.connectTimeoutMs;
     requestTimeoutMs_ = connectOptions.requestTimeoutMs != 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
+    token_ = connectOptions.token;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableExclusiveConnection_ = connectOptions.enableExclusiveConnection;
@@ -257,8 +258,8 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
     workerApi_[LOCAL_WORKER] =
-        std::make_shared<ClientWorkerApi>(ipAddress_, cred_, heartbeatType, signature_.get(), tenantId_,
-                                          enableCrossNodeConnection_, enableExclusiveConnection_);
+        std::make_shared<ClientWorkerApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+                                           enableCrossNodeConnection_, enableExclusiveConnection_);
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(requestTimeoutMs_, connectTimeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
     const size_t threadCount = 8;
@@ -493,8 +494,8 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWor
         }
         HeartbeatType heartbeatType = currentApi->GetHeartbeatType();
         workerApi_[next] =
-            std::make_shared<ClientWorkerApi>(standbyWorker, cred_, heartbeatType, signature_.get(), tenantId_,
-                                              enableCrossNodeConnection_, enableExclusiveConnection_);
+            std::make_shared<ClientWorkerApi>(standbyWorker, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+                                               enableCrossNodeConnection_, enableExclusiveConnection_);
         workerApi_[next]->SetIsUseStandbyWorker(true);
         Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_);
         if (rc.IsError()) {
@@ -1274,6 +1275,16 @@ Status ObjectClientImpl::DecreaseRefCntByAccessor(TbbMemoryRefTable::accessor &a
     return Status::OK();
 }
 
+Status ObjectClientImpl::UpdateToken(SensitiveValue &token)
+{
+    return workerApi_[LOCAL_WORKER]->UpdateToken(token);
+}
+
+Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+{
+    return workerApi_[LOCAL_WORKER]->UpdateAkSk(accessKey, secretKey);
+}
+
 Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                               const std::unordered_set<std::string> &nestedObjectKeys, bool isShm)
 {
@@ -1868,7 +1879,9 @@ std::string ObjectClientImpl::ConstructObjKeyWithTenantId(const std::string &obj
 {
     std::string objKeyWithTenant = objKey;
     std::string tenantId;
-    if (g_ContextTenantId.empty()) {
+    if (!token_.Empty()) {
+        tenantId = "";
+    } else if (g_ContextTenantId.empty()) {
         tenantId = tenantId_;
     } else {
         tenantId = g_ContextTenantId;

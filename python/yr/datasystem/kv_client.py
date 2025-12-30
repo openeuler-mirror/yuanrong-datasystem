@@ -150,6 +150,7 @@ class KVClient:
         host: str = "",
         port: int = 0,
         timeout_ms=60000,
+        token: str = '',
         client_public_key: str = "",
         client_private_key: str = "",
         server_public_key: str = "",
@@ -164,9 +165,10 @@ class KVClient:
 
         Args:
             host(str): The host of the worker. If the host is not filled in, we will initialize it from the environment
-                       variable, and the initialization of other parameters (such as port, etc) is also similar.
+                       variable, and the initialization of other parameters (such as port, token, etc) is also similar.
             port(int): The port of the worker.
             timeout_ms(int): The timeout interval for the connection between the client and worker.
+            token(str): A string used for authentication.
             client_public_key(str): The client's public key, for curve authentication.
             client_private_key(str): The client's private key, for curve authentication.
             server_public_key(str): The worker server's public key, for curve authentication.
@@ -197,8 +199,9 @@ class KVClient:
             host,
             port,
             timeout_ms,
+            token,
             client_public_key,
-        client_private_key,
+            client_private_key,
             server_public_key,
             access_key,
             secret_key,

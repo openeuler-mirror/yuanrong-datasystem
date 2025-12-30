@@ -182,7 +182,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .export_values();
 
     py::class_<ObjectClientImpl, std::shared_ptr<ObjectClientImpl>>(*m, "KVClient")
-        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
+        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
@@ -192,6 +192,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                                         .connectTimeoutMs = connectTimeoutMs,
                                         .requestTimeoutMs = reqTimeoutMs,
 
+                                        .token = token,
                                         .clientPublicKey = clientPublicKey,
                                         .clientPrivateKey = clientPrivateKey,
                                         .serverPublicKey = serverPublicKey,

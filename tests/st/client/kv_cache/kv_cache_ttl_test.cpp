@@ -279,6 +279,7 @@ private:
                                           .port = workerAddress.Port(),
                                           .connectTimeoutMs = 60 * 1000,
                                           .requestTimeoutMs = 0,
+                                          .token = "",
                                           .clientPublicKey = "",
                                           .clientPrivateKey = "",
                                           .serverPublicKey = "",

@@ -88,15 +88,16 @@ public:
      * @param[in] hostPort The address of the worker node.
      * @param[in] cred The authentication credentials.
      * @param[in] heartbeatType The type of heartbeat.
+     * @param[in] token Token to be authenticated.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId The tenant id.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
      * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
      */
     explicit ClientWorkerApi(HostPort hostPort, RpcCredential cred,
-                             HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT, Signature *signature = nullptr,
-                             std::string tenantId = "", bool enableCrossNodeConnection = false,
-                             bool enableExclusiveConnection = false);
+                             HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT, SensitiveValue token = "",
+                             Signature *signature = nullptr, std::string tenantId = "",
+                             bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
 
     /**
      * @brief Initialize ClientWorkerApi.

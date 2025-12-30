@@ -543,6 +543,23 @@ public:
         return false;
     }
 
+    /**
+     * @brief Validate the value for IAMKit.
+     * @param[in] IAMKit IAM type.
+     * @param[in] value Gflags value.
+     * @return True if valid.
+     */
+    static bool ValidateIAMKit(const char *IAMKit, const std::string &value)
+    {
+        if (value == "none" || value == "yuanrong_iam") {
+            return true;
+        } else {
+            LOG(ERROR) << FormatString("The value of %s flags is %s, which must be in [none, yuanrong_iam]",
+                                       IAMKit, value);
+            return false;
+        }
+    }
+
     // The following functions are not compatible with gflag validator.
 
     /**
@@ -591,6 +608,35 @@ public:
             return true;
         }
         LOG(ERROR) << value << " is miss match";
+        return false;
+    }
+
+    /**
+     * @brief Check passed in string is a valid IPv4 address with or without a valid port.
+     * @param[in] value The string to be checked.
+     * @return True if param is a valid ipv4 address. Otherwise false.
+     */
+    static bool IsIpv4OrUrl(const std::string &value, bool allowEmpty = true)
+    {
+        // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
+        // or localhost:<port>
+        // or just a ip address or localhost
+        // or any url based on RFC 1738
+        static const re2::RE2 re(
+            "^(((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[0-9]{1,2})){3})|("
+            "localhost)|([a-zA-Z0-9\\$\\.\\-_\\+\\!\\*'\\(\\),]+))(:((6553[0-5])|(655[0-2][0-9])|(65[0-4][0-9]{2})|(6["
+            "0-4][0-9]{3})|([1-5][0-9]{4})|([0-5]{1,5})|"
+            "([0-9]{1,4})))?$|^$");
+
+        // Allow value size 0 due to certain circumstances that indicates default or function disabled.
+        if (allowEmpty == false && value.size() == 0) {
+            LOG(ERROR) << value << " empty is not a IPv4 address format.";
+            return false;
+        }
+        if (re2::RE2::FullMatch(value, re)) {
+            return true;
+        }
+        LOG(ERROR) << value << " is an illegal IPv4 address format.";
         return false;
     }
 
@@ -743,6 +789,25 @@ public:
             return false;
         }
         return true;
+    }
+
+    /**
+     * @brief whether the value is http url
+     * @param[in] value the value of the flag
+     * @return true if is http url, otherwise false
+     */
+    static bool IsHttpUrl(const std::string &value)
+    {
+        std::string::size_type pos = value.find("https://");
+        constexpr int HTTP_INDEX = 7, HTTPS_INDEX = 8;
+        if (pos != std::string::npos && pos == 0) {
+            return IsIpv4OrUrl(value.substr(HTTPS_INDEX));
+        }
+        pos = value.find("http://");
+        if (pos != std::string::npos && pos == 0) {
+            return IsIpv4OrUrl(value.substr(HTTP_INDEX));
+        }
+        return false;
     }
 
     /**

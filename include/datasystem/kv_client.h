@@ -310,6 +310,21 @@ public:
     Status GenerateKey(const std::string &prefixKey, std::string &key);
 
     /**
+     * @brief Update token for yr iam
+     * @param[in] Token message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateToken(SensitiveValue token);
+
+    /**
+     * @brief Update aksk for yr iam
+     * @param[in] acessKey message for auth certification
+     * @param[in] secretKey message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateAkSk(const std::string accessKey, SensitiveValue secretKey);
+
+    /**
      * @brief Invoke worker client to query the size of objectKeys (include the objectKeys of other AZ).
      * @param[in] objectKeys The objectKeys need to query size.
      * @param[out] outSizes The size for the objectKeys in bytes.

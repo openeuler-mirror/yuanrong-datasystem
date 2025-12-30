@@ -24,6 +24,7 @@ type ConnectArguments struct {
 	Host                      string
 	Port                      int
 	TimeoutMs                 int
+	Token                     []byte
 	ClientPublicKey           string
 	ClientPrivateKey          []byte
 	ServerPublicKey           string

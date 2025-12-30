@@ -43,15 +43,18 @@ void ExecHandlerIfParamValid(const char *str, std::function<void()> handler)
     }
 }
 
-void ConstructConnectOptions(const int timeOut, const char *clientPublicKey, size_t cClientPublicKeyLen,
-                             const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
-                             size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen,
-                             const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
-                             const char *enableCrossNodeConnection, datasystem::ConnectOptions &opts)
+void ConstructConnectOptions(const int timeOut, const char *token, size_t tokenLen, const char *clientPublicKey,
+                             size_t cClientPublicKeyLen, const char *clientPrivateKey, size_t clientPrivateKeyLen,
+                             const char *serverPublicKey, size_t cServerPublicKeyLen, const char *accessKey,
+                             size_t cAccessKeyLen, const char *secretKey, size_t secretKeyLen, const char *tenantId,
+                             size_t cTenantIdLen, const char *enableCrossNodeConnection,
+                             datasystem::ConnectOptions &opts)
 {
     if (timeOut > 0) {
         opts.connectTimeoutMs = timeOut;
     }
+    ExecHandlerIfParamValid(
+        token, [&opts, token, tokenLen]() { opts.token = datasystem::SensitiveValue(token, tokenLen); });
     ExecHandlerIfParamValid(clientPublicKey, [&opts, clientPublicKey, cClientPublicKeyLen]() {
         opts.clientPublicKey = std::string(clientPublicKey, cClientPublicKeyLen);
     });
@@ -291,11 +294,12 @@ void ContextSetTenantId(const char *cTenantId, size_t tenantIdLen)
     }
 }
 
-void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *clientPublicKey,
-                         size_t cClientPublicKeyLen, const char *clientPrivateKey, size_t clientPrivateKeyLen,
-                         const char *serverPublicKey, size_t cServerPublicKeyLen, const char *accessKey,
-                         size_t cAccessKeyLen, const char *secretKey, size_t secretKeyLen, const char *tenantId,
-                         size_t cTenantIdLen, const char *enableCrossNodeConnection)
+void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
+                         size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
+                         const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
+                         size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen, const char *secretKey,
+                         size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
+                         const char *enableCrossNodeConnection)
 {
     if (cWorkerHost == nullptr || strlen(cWorkerHost) == 0 || workerPort < 0) {
         LOG(ERROR) << "Host or Port have not been provided correctly";
@@ -306,9 +310,9 @@ void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const in
         .host = workerHost,
         .port = workerPort,
     };
-    ConstructConnectOptions(timeOut, clientPublicKey, cClientPublicKeyLen, clientPrivateKey, clientPrivateKeyLen,
-                            serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen, secretKey, secretKeyLen,
-                            tenantId, cTenantIdLen, enableCrossNodeConnection, opts);
+    ConstructConnectOptions(timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen, clientPrivateKey,
+                            clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen,
+                            secretKey, secretKeyLen, tenantId, cTenantIdLen, enableCrossNodeConnection, opts);
     auto clientSharedPtr = std::make_shared<datasystem::object_cache::ObjectClientImpl>(opts);
     auto clientUniquePtr =
         std::make_unique<std::shared_ptr<datasystem::object_cache::ObjectClientImpl>>(std::move(clientSharedPtr));

@@ -101,6 +101,10 @@ public:
 
     std::string enableDistributedMaster = "true";  // enable distributed master or not.
 
+    std::string iamKit = "yuanrong_iam";
+
+    std::string yuanrong_iam_url = "https://testyuanrongiam.com";
+
     bool enableSpill = false;
 
     // Used in object cache, where master is part of worker process. We use this index to tell which worker will work

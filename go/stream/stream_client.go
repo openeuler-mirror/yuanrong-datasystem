@@ -150,6 +150,10 @@ func CreateClient(param common.ConnectArguments) StreamClient {
 	defer C.free(unsafe.Pointer(cWorkerHost))
 	cWorkerPort := C.int(param.Port)
 	cWorkerTimeout := C.int(param.TimeoutMs)
+	// Token
+	cWorkerTokenLen := C.ulong(len(param.Token))
+	cWorkerToken := (*C.char)(C.CBytes(param.Token))
+	defer clearAndFree(cWorkerToken, cWorkerTokenLen)
 	// ClientPublicKey
 	cClientPublicKey := C.CString(param.ClientPublicKey)
 	cClientPublicKeyLen := C.ulong(len(param.ClientPublicKey))
@@ -178,7 +182,7 @@ func CreateClient(param common.ConnectArguments) StreamClient {
 	cEnableCrossNodeConnection := C.CString(strconv.FormatBool(param.EnableCrossNodeConnection))
 	defer C.free(unsafe.Pointer(cEnableCrossNodeConnection))
 
-	ret.client = C.StreamCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, 
+	ret.client = C.StreamCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, cWorkerToken, cWorkerTokenLen,
 		cClientPublicKey, cClientPublicKeyLen, cClientPrivateKey, cClientPrivateKeyLen, cServerPublicKey, 
 		cServerPublicKeyLen, cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen, 
 		cEnableCrossNodeConnection)
@@ -198,6 +202,24 @@ func (t *StreamClient) Init(reportWorkerLost bool) common.Status {
 	if int(statusC.code) != common.Ok {
 		return common.CreateStatus(int(statusC.code),
 			fmt.Sprintf("Stream cache client failed to connect. msg: %s", C.GoString(&statusC.errMsg[0])))
+	}
+	return common.CreateStatus(common.Ok, "")
+}
+
+// UpdateAkSk function update aksk for the stream client with given accessKey and secretKey, return error if failed.
+func (t *StreamClient) UpdateAkSk(accessKey string, secretKey []byte) common.Status {
+	cAccessKey := C.CString(accessKey)
+	cAccessKeyLen := C.ulong(len(accessKey))
+	defer C.free(unsafe.Pointer(cAccessKey))
+
+	cSecretKey := (*C.char)(C.CBytes(secretKey))
+	cSecretKeyLen := C.ulong(len(secretKey))
+	defer clearAndFree(cSecretKey, cSecretKeyLen)
+
+	statusC := C.StreamUpdateAkSk(t.client, cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen)
+	if int(statusC.code) != common.Ok {
+		return common.CreateStatus(int(statusC.code),
+			fmt.Sprintf("Stream cache client failed to update aksk. msg: %s", C.GoString(&statusC.errMsg[0])))
 	}
 	return common.CreateStatus(common.Ok, "")
 }

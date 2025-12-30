@@ -99,7 +99,7 @@ PybindDefineRegisterer g_pybind_define_f_Future("Future", PRIORITY_LOW, [](const
 
 PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_LOW, [](const py::module *m) {
     py::class_<HeteroClient, std::shared_ptr<HeteroClient>>(*m, "HeteroClient")
-        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs,
+        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
@@ -109,6 +109,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                 .port = port,
                 .connectTimeoutMs = connectTimeoutMs,
                 .requestTimeoutMs = reqTimeoutMs,
+                .token = token,
                 .clientPublicKey = clientPublicKey,
                 .clientPrivateKey = clientPrivateKey,
                 .serverPublicKey = serverPublicKey,

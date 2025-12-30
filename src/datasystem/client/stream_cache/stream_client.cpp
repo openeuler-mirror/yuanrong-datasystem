@@ -61,6 +61,18 @@ Status StreamClient::Init(bool reportWorkerLost)
     return rc;
 }
 
+Status StreamClient::UpdateToken(SensitiveValue token)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    return impl_->UpdateToken(token);
+}
+
+Status StreamClient::UpdateAkSk(const std::string accessKey, SensitiveValue secretKey)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    return impl_->UpdateAkSk(accessKey, secretKey);
+}
+
 Status StreamClient::CreateProducer(const std::string &streamName, std::shared_ptr<Producer> &outProducer,
                                     ProducerConf producerConf)
 {

@@ -29,6 +29,7 @@
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/httpclient/curl_http_client.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
+#include "datasystem/common/iam/yuanrong_iam.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -43,6 +44,8 @@
 #include "../../../common/binmock/binmock.h"
 
 DS_DECLARE_string(spill_directory);
+DS_DECLARE_string(iam_kit);
+DS_DECLARE_string(yuanrong_iam_url);
 
 using namespace ::testing;
 
@@ -54,6 +57,7 @@ public:
     void SetUp() override
     {
         FLAGS_v = 1;
+        FLAGS_iam_kit = "agc_oauth";
         ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
         datasystem::inject::Set("CurlHttpClient.Send.ReleaseCurlHandle", "100*call");
     }
@@ -199,6 +203,61 @@ TEST_F(AuthenticateTest, TestProtobufFilterSensitiveInfo)
     ASSERT_TRUE(respPos == std::string::npos);
 }
 
+TEST_F(AuthenticateTest, TestEnableInYuanrong)
+{
+    FLAGS_iam_kit = "yuanrong_iam";
+    const std::string accessKey = "accesskey";
+    const std::string secretKey = "secretkey";
+    auto akSkManager = std::make_shared<AkSkManager>();
+    akSkManager->SetClientAkSk(accessKey, secretKey);
+    akSkManager->SetServerAkSk(AkSkType::TENANT, accessKey_, secretKey_);
+    DS_ASSERT_OK(inject::Set("worker.akauth", "return(accesskey,secretkey,test_tenant)"));
+    TenantAuthManager::Instance()->Init(true, akSkManager);
+    std::string akSkTenantId = "test_tenant";
+    std::string tenantId;
+    DS_ASSERT_NOT_OK(RegisterReqCheck(akSkManager, "tenant1", "", tenantId));
+    DS_ASSERT_OK(RegisterReqCheck(akSkManager, akSkTenantId, "", tenantId));
+    ASSERT_EQ(tenantId, akSkTenantId);
+    DS_ASSERT_NOT_OK(RegisterReqCheck(akSkManager, "", "", tenantId));
+}
+
+TEST_F(AuthenticateTest, TestSystemRoleAuth)
+{
+    BINEXPECT_CALL(&CurlHttpClient::SendRequest, (_, _, _))
+        .WillOnce([](const std::shared_ptr<HttpRequest> &req, std::shared_ptr<HttpResponse> &rsp, CURL *curlHandle) {
+            (void)req;
+            (void)curlHandle;
+            rsp->SetStatus(HTTP_OK);
+            std::string rspStr = R"({
+                "accessKey": "accesskey",
+                "dataKey": "dataKey",
+                "expiredTimeSpan": "0",
+                "expiredTimeStamp": "0",
+                "role": "system",
+                "secretKey": "secretkey",
+                "tenantID": "faas"
+            })";
+            rsp->GetBody()->write(rspStr.c_str(), rspStr.length());
+            return Status::OK();
+        });
+    FLAGS_iam_kit = "yuanrong_iam";
+    FLAGS_yuanrong_iam_url = "http://iam-server.default.svc.cluster.local:31218";
+    const std::string accessKey = "accesskey";
+    const std::string secretKey = "secretkey";
+    auto akSkManager = std::make_shared<AkSkManager>();
+    akSkManager->SetClientAkSk(accessKey, secretKey);
+    akSkManager->SetServerAkSk(AkSkType::TENANT, accessKey_, secretKey_);
+    TenantAuthManager::Instance()->Init(true, akSkManager);
+    std::string reqTenantId = "tenant1";
+    std::string tenantId;
+    // The system role does not verify tenantId.
+    DS_ASSERT_OK(RegisterReqCheck(akSkManager, reqTenantId, "", tenantId));
+    ASSERT_EQ(tenantId, reqTenantId);
+    // Hit clientAkTable_
+    DS_ASSERT_OK(RegisterReqCheck(akSkManager, reqTenantId, "", tenantId));
+    ASSERT_EQ(tenantId, reqTenantId);
+}
+
 TEST_F(AuthenticateTest, TestOnlySystemAKSK)
 {
     auto akSkManager = std::make_shared<AkSkManager>();
@@ -220,6 +279,37 @@ TEST_F(AuthenticateTest, TestOnlySystemAKSK)
     DS_ASSERT_NOT_OK(RegisterReqCheck(akSkManager, akSkTenantId, token, tenantId));
     akSkManager->SetClientAkSk("", "");
     DS_ASSERT_NOT_OK(RegisterReqCheck(akSkManager, akSkTenantId, token, tenantId));
+}
+
+TEST_F(AuthenticateTest, TestAKSKCompatibility)
+{
+    FLAGS_iam_kit = "yuanrong_iam";
+    const std::string accessKey = "accesskey";
+    const std::string secretKey = "secretkey";
+    auto akSkManager = std::make_shared<AkSkManager>();
+    akSkManager->SetClientAkSk(accessKey, secretKey);
+    akSkManager->SetServerAkSk(AkSkType::TENANT, accessKey_, secretKey_);
+    DS_ASSERT_OK(inject::Set("worker.akauth", "return(accesskey,secretkey,test_tenant)"));
+    TenantAuthManager::Instance()->Init(true, akSkManager);
+    std::string akSkTenantId = "test_tenant";
+
+    TestReqPbV2 req;
+    req.set_filed1(1); // set filed1 as 1.
+    req.set_field2("xxx");
+    req.set_field3(2);  // set filed3 as 2.
+    req.set_tenant_id(akSkTenantId);
+    int count = 3;
+    for (int i = 0; i < count; ++i) {
+        req.mutable_filed4()->Add(std::to_string(i));
+    }
+    req.set_filed5(1);
+    DS_ASSERT_OK(GenerateSignature(akSkManager, req));
+
+    TestReqPbV1 req1;
+    ASSERT_TRUE(req1.ParseFromString(req.SerializeAsString()));
+    std::string tenantId;
+    DS_ASSERT_OK(VerifySignature(akSkManager, req1, tenantId));
+    ASSERT_EQ(tenantId, akSkTenantId);
 }
 }  // namespace ut
 }  // namespace datasystem

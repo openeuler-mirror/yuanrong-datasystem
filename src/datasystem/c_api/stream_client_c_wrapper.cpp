@@ -32,11 +32,11 @@
 #include "datasystem/stream_client.h"
 #include "datasystem/utils/connection.h"
 
-StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut,
-                                  const char *clientPublicKey, size_t cClientPublicKeyLen, const char *clientPrivateKey,
-                                  size_t clientPrivateKeyLen, const char *serverPublicKey, size_t cServerPublicKeyLen,
-                                  const char *accessKey, size_t cAccessKeyLen, const char *secretKey,
-                                  size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
+StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
+                                  size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
+                                  const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
+                                  size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen,
+                                  const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
                                   const char *enableCrossNodeConnection)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
@@ -49,9 +49,9 @@ StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort,
         .host = workerHost,
         .port = workerPort,
     };
-    ConstructConnectOptions(timeOut, clientPublicKey, cClientPublicKeyLen, clientPrivateKey, clientPrivateKeyLen,
-                            serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen, secretKey, secretKeyLen,
-                            tenantId, cTenantIdLen, enableCrossNodeConnection, opts);
+    ConstructConnectOptions(timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen, clientPrivateKey,
+                            clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen,
+                            secretKey, secretKeyLen, tenantId, cTenantIdLen, enableCrossNodeConnection, opts);
     auto clientSharedPtr = std::make_shared<datasystem::StreamClient>(opts);
     auto clientUniquePtr = std::make_unique<std::shared_ptr<datasystem::StreamClient>>(std::move(clientSharedPtr));
     return reinterpret_cast<void *>(clientUniquePtr.release());
@@ -65,6 +65,20 @@ struct StatusC StreamConnectWorker(StreamClient_p clientPtr, bool reportWorkerLo
     }
     auto client = reinterpret_cast<std::shared_ptr<datasystem::StreamClient> *>(clientPtr);
     datasystem::Status rc = (*client)->Init(reportWorkerLost);
+    if (rc.IsError()) {
+        return ToStatusC(rc);
+    }
+    return StatusC{ datasystem::K_OK, {} };
+}
+
+struct StatusC StreamUpdateAkSk(StreamClient_p clientPtr, const char *cAccessKey, size_t cAccessKeyLen,
+                                const char *cSecretKey, size_t cSecretKeyLen)
+{
+    auto client = reinterpret_cast<std::shared_ptr<datasystem::StreamClient> *>(clientPtr);
+    std::string accessKey(cAccessKey, cAccessKeyLen);
+    accessKey.assign(cAccessKey, cAccessKeyLen);
+    datasystem::SensitiveValue secretKey(cSecretKey, cSecretKeyLen);
+    datasystem::Status rc = (*client)->UpdateAkSk(accessKey, secretKey);
     if (rc.IsError()) {
         return ToStatusC(rc);
     }

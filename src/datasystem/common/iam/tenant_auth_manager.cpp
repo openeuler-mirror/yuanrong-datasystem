@@ -27,6 +27,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/httpclient/curl_http_client.h"
+#include "datasystem/common/iam/yuanrong_iam.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -34,6 +35,10 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 
+DS_DEFINE_string(
+    iam_kit, "none",
+    "The type of iam kit, none is default, value range: [none, yuanrong_iam]");
+DS_DEFINE_validator(iam_kit, &Validator::ValidateIAMKit);
 
 namespace datasystem {
 TenantAuthManager *TenantAuthManager::Instance()
@@ -42,54 +47,24 @@ TenantAuthManager *TenantAuthManager::Instance()
     return &tenantAuthManager;
 }
 
+std::string IAMKitToString(IAMKit kit)
+{
+    if (kit == YUANRONG_IAM) {
+        return "yuanrong iam";
+    }
+    return "";
+}
+
 Status TenantAuthManager::Init(bool authEnable, std::shared_ptr<AkSkManager> akSkManager)
 {
-    LOG(INFO) << "Init TenantAuthManager, authorization_enable_enable flag is " << authEnable;
+    IAMKit iamKit = YUANRONG_IAM;
+    LOG(INFO) << "Init TenantAuthManager, authorization_enable_enable flag is " << authEnable
+              << ", iam_kit is: " << IAMKitToString(iamKit);
     authEnable_ = authEnable;
     akSkManager_ = std::move(akSkManager);
-    return Status::OK();
+    iamAuth_ = std::make_shared<YuanRongIAM>(akSkManager_);
+    return iamAuth_->Init(authEnable_);
 }
-
-namespace {
-bool WorkerAuthInjection(const SensitiveValue &token, std::string &tenantId, uint64_t &expireSec)
-{
-    // for release version, avoid the compile warning of "unused parameter"
-    (void)token;
-    (void)tenantId;
-    (void)expireSec;
-    INJECT_POINT("worker.auth", [&token, &tenantId, &expireSec](const std::string &key, const std::string &val) {
-        if (!token.Empty() && key == token.GetData()) {
-            const uint64_t expireTime = 30 * 60;
-            tenantId = val;
-            expireSec = expireTime;
-            return true;
-        }
-        return false;
-    });
-    return false;
-}
-
-bool WorkerAkskInjection(const std::string &accessKey, SensitiveValue &secretKey, std::string &tenantId,
-                         uint64_t &expireSec)
-{
-    (void)accessKey;
-    (void)secretKey;
-    (void)tenantId;
-    (void)expireSec;
-    INJECT_POINT("worker.akauth", [&accessKey, &secretKey, &tenantId, &expireSec](
-                                      const std::string &key, const std::string &val1, const std::string &val2) {
-        if (!accessKey.empty() && key == accessKey) {
-            const uint64_t expireTime = 30 * 60;
-            secretKey = SensitiveValue(val1);
-            tenantId = val2;
-            expireSec = expireTime;
-            return true;
-        }
-        return false;
-    });
-    return false;
-}
-}  // namespace
 
 Status TenantAuthManager::TenantTokenAuth(const SensitiveValue &token, std::string &tenantId)
 {
@@ -99,9 +74,8 @@ Status TenantAuthManager::TenantTokenAuth(const SensitiveValue &token, std::stri
     } else {
         LOG(INFO) << "Unable to get tenantId from cache, trying to get from iam.";
         uint64_t expireSec = 0;
-        if (!WorkerAuthInjection(token, tenantId, expireSec)) {
-            return Status(K_RUNTIME_ERROR, "auth failed, token auth is not support");
-        }
+        RETURN_IF_NOT_OK(iamAuth_->VerifyTenantToken(token, tenantId, expireSec));
+        LOG(INFO) << FormatString("Successfully obtained tenantId(%s) from iam, TTL: %llu", tenantId, expireSec);
         (void)clientTokenTable_.insert({ token, tenantId });
         // Add timer and callback func for client token.
         TimerQueue::TimerImpl timer;
@@ -138,9 +112,7 @@ Status TenantAuthManager::TenantAkAuth(const std::string &accessKey, const std::
         SensitiveValue secretKey;
         bool isSystemRole = false;
         auto tmpTenantId = reqTenantId;
-        if (!WorkerAkskInjection(accessKey, secretKey, tenantId, expireSec)) {
-            return Status(K_RUNTIME_ERROR, "auth failed, ak sk iam auth is not support");
-        }
+        RETURN_IF_NOT_OK(iamAuth_->VerifyTenantAkSk(accessKey, secretKey, tmpTenantId, expireSec, isSystemRole));
         if (isSystemRole) {
             tenantId = reqTenantId;
         } else {

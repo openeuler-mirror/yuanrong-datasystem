@@ -47,16 +47,15 @@ public:
 
     void InitTestKVClient(std::shared_ptr<KVClient> &client)
     {
-        ConnectOptions connectOptions{ .host = workerAddr_.Host(),
-                                       .port = workerAddr_.Port(),
-                                       .connectTimeoutMs = 60 * 1000,  // 60s
-                                       .requestTimeoutMs = 0,
-                                       .clientPublicKey = "",
-                                       .clientPrivateKey = "",
-                                       .serverPublicKey = "",
-                                       .accessKey = "QTWAOYTTINDUT2QVKYUC",
-                                       .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
-                                       .tenantId = "tenantId1" };
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", "return(token1,tenant1)"));
+        ConnectOptions connectOptions;
+        connectOptions.host = workerAddr_.Host();
+        connectOptions.port = workerAddr_.Port();
+        connectOptions.connectTimeoutMs = 60000;  // 60000 ms is timeout
+        connectOptions.token = "token1";
+        connectOptions.requestTimeoutMs = 0;
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
@@ -70,6 +69,23 @@ public:
 protected:
     HostPort workerAddr_;
 };
+
+TEST_F(KVClientTenantAuthTest, TestUpdateToken)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(client);
+    std::string key = "key";
+    std::string key1 = "key1";
+    std::string value = "value";
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
+    ASSERT_EQ(client->Set(key, value, param), Status::OK());
+    std::string token = "qqqqqq";
+    SensitiveValue token1(token);
+    DS_ASSERT_OK(client->UpdateToken(token1));
+    ASSERT_NE(client->Set(key1, value, param), Status::OK());
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", "return(qqqqqq,tenant1)"));
+    ASSERT_EQ(client->Set(key1, value, param), Status::OK());
+}
 
 TEST_F(KVClientTenantAuthTest, TestSetWriteMode)
 {
@@ -216,6 +232,7 @@ public:
                                        .port = workerAddr_.Port(),
                                        .connectTimeoutMs = 60 * 1000,  // 60s
                                        .requestTimeoutMs = 0,
+                                       .token = "",
                                        .clientPublicKey = "",
                                        .clientPrivateKey = "",
                                        .serverPublicKey = "",

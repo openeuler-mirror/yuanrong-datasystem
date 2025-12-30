@@ -63,6 +63,7 @@ StreamClientImpl::StreamClientImpl(const ConnectOptions &connectOptions)
 {
     (void)Provider::Instance();
     clientStateManager_ = std::make_unique<ClientStateManager>();
+    token_ = connectOptions.token;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     tenantId_ = connectOptions.tenantId;
     connectTimeoutMs_ = connectOptions.connectTimeoutMs;
@@ -121,7 +122,7 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     RpcCredential cred;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred));
 
-    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, cred, signature_.get(), tenantId_);
+    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, cred, token_, signature_.get(), tenantId_);
     RETURN_IF_NOT_OK(clientWorkerApi_->Init(requestTimeoutMs_, connectTimeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(
@@ -160,6 +161,16 @@ Status StreamClientImpl::CreatePrefetchPoolIfNotExist()
         RETURN_IF_EXCEPTION_OCCURS(prefetchThdPool_ = std::make_unique<ThreadPool>(numPrefetchThreads));
     }
     return Status::OK();
+}
+
+Status StreamClientImpl::UpdateToken(SensitiveValue &token)
+{
+    return clientWorkerApi_->UpdateToken(token);
+}
+
+Status StreamClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+{
+    return clientWorkerApi_->UpdateAkSk(accessKey, secretKey);
 }
 
 uint32_t StreamClientImpl::GetLockId() const

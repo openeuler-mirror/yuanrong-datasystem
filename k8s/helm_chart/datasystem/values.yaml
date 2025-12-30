@@ -423,6 +423,29 @@ global:
     requestExpireTimeS: 300
     # Skip authentication for worker requests
     skipAuthenticate: false
+
+  tenantAuth:
+    # Indicates whether to enable the tenant authentication, default is false.
+    # Tenant authorization is forbidden in the case of stream cache.
+    authorizationEnable: false
+    # The type of iam kit, none is default, value range: [none, yuanrong_iam].
+    iamKit: "none"
+    yuanrong:
+      # The access yuanrong token or accessKey server url. Example: http(s)://xxx.xxx , for different auth methods, the following URI will be automatically added.
+      yuanrongIamUrl: ""
+      # The access yuanrong token or accessKey server url.
+      # yuanrongIamCa, yuanrongIamCert, yuanrongIamKey, yuanrongIamPassphrase are configured with base64 to avoid the special characters problem when restore to files.
+      # root yuanrong iam server certificate, default is none.
+      # if ca , cert, key is all empty, connect with yuanrong iam without tls.
+      yuanrongIamCa: ""
+      # Client's yuanrong iam server certificate, default is none.
+      yuanrongIamCert: ""
+      # Encrypted client's yuanrong iam server key, default is none.
+      yuanrongIamKey: ""
+      # Encrypted yuanrong iam passphrase
+      yuanrongIamPassphrase: ""
+      # The path that mounts yuanrong cert ciphertext. Must be specified when enable kmc yuanrong token auth.
+      yuanrongIamDir: "/home/sn/datasystem/yuanrong_iam"
     
   # fsGroup configuration
   # All processes of the container are also part of the supplementary group ID.

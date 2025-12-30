@@ -60,6 +60,7 @@ TEST_F(ObjectClientTenantTest, TestAuthFailed)
     InitConnectOpt(0, connectOptions1);
     connectOptions1.accessKey = "";
     connectOptions1.secretKey = "";
+    connectOptions1.token = "fake-token";
     auto client1 = std::make_shared<ObjectClient>(connectOptions1);
     DS_EXPECT_NOT_OK(client1->Init());
 
@@ -76,7 +77,7 @@ TEST_F(ObjectClientTenantTest, TestDiffAuthType)
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", "1*return(token1,tenant1)"));
-    InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
+    InitTestClient(0, client1, [](ConnectOptions &opts) { opts.token = "token1"; });
     InitTestClient(0, client2,
                    [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "akskTenant"); });
 
@@ -115,13 +116,13 @@ TEST_F(ObjectClientTenantTest, TestCreateObject)
         cluster_->SetInjectAction(WORKER, 0, "worker.auth", "1*return(token1,tenant1)->1*return(token2,tenant2)"));
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 1, "worker.auth", "1*return(token1,tenant1)->1*return(token2,tenant2)"));
-    InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
-    InitTestClient(0, client2, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant2"); });
+    InitTestClient(0, client1, [](ConnectOptions &opts) { opts.token = "token1"; });
+    InitTestClient(0, client2, [](ConnectOptions &opts) { opts.token = "token2"; });
 
     std::shared_ptr<ObjectClient> client3;
     std::shared_ptr<ObjectClient> client4;
-    InitTestClient(1, client3, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
-    InitTestClient(1, client4, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant2"); });
+    InitTestClient(1, client3, [](ConnectOptions &opts) { opts.token = "token1"; });
+    InitTestClient(1, client4, [](ConnectOptions &opts) { opts.token = "token2"; });
 
     const size_t size = 1024 * 1024;
     std::string objectKey = "id";
@@ -155,9 +156,9 @@ TEST_F(ObjectClientTenantTest, TestCacheInvalid)
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "worker.auth", "1*return(token1,tenant1)->1*return(token2,tenant2)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.auth", "1*return(token2,tenant2)"));
-    InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
-    InitTestClient(0, client2, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
-    InitTestClient(1, client3, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant2"); });
+    InitTestClient(0, client1, [](ConnectOptions &opts) { opts.token = "token1"; });
+    InitTestClient(0, client2, [](ConnectOptions &opts) { opts.token = "token1"; });
+    InitTestClient(1, client3, [](ConnectOptions &opts) { opts.token = "token2"; });
 
     const size_t size = 1024 * 1024;
     std::string objectKey = "id";
@@ -188,8 +189,8 @@ TEST_F(ObjectClientTenantTest, TestUsingDiffAllocator)
     std::shared_ptr<ObjectClient> client2;
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "worker.auth", "1*return(token1,tenant1)->1*return(token2,tenant2)"));
-    InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1"); });
-    InitTestClient(0, client2, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant2"); });
+    InitTestClient(0, client1, [](ConnectOptions &opts) { opts.token = "token1"; });
+    InitTestClient(0, client2, [](ConnectOptions &opts) { opts.token = "token2"; });
 
     const size_t size = 40 * 1024 * 1024;  // 40MB
     std::string objectKey1 = "id1";
@@ -307,7 +308,7 @@ TEST_F(ObjectClientGetMetaTest, GetFromDifferentTenant)
     InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "user1"); });
     std::shared_ptr<ObjectClient> client2;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", "return(token1,user2)"));
-    InitTestClient(0, client2, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "user2"); });
+    InitTestClient(0, client2, [](ConnectOptions &opts) { opts.token = "token1"; });
 
     const size_t size1 = 40 * 1024;
     const size_t size2 = 10;
@@ -340,6 +341,16 @@ TEST_F(ObjectClientGetMetaTest, GetFromDifferentTenant)
     DS_ASSERT_OK(client0->GetObjMetaInfo("user1", { objectKey2 }, objMetas));
     ASSERT_EQ(objMetas.size(), 1);
     ASSERT_EQ(objMetas[0].objSize, 0);  // not found, size is 0.
+}
+
+TEST_F(ObjectClientGetMetaTest, NoAuth)
+{
+    std::shared_ptr<ObjectClient> client1;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", "return(token1,tenant1)"));
+    InitTestClient(0, client1, [](ConnectOptions &opts) { opts.token = "token1"; });
+    std::vector<ObjMetaInfo> objMetas;
+    auto status = client1->GetObjMetaInfo("tenant1", { "anyObj" }, objMetas);
+    ASSERT_EQ(status.GetCode(), K_NOT_AUTHORIZED) << status;
 }
 
 TEST_F(ObjectClientGetMetaTest, GetFailed)
@@ -442,10 +453,8 @@ TEST_F(ObjectClientTenantSpillTest, DISABLED_TestSpill)
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "worker.auth", "1*return(token1,tenant1x)->1*return(token3,tenant3x)"));
     InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1x"); });
-    InitTestClient(0, client1, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant1x"); });
     InitTestClient(0, client2,
                    [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "akskTenant"); });
-    InitTestClient(0, client3, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant3x"); });
     InitTestClient(0, client3, [this](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, "tenant3x"); });
 
     const size_t size1 = 20 * 1024 * 1024;

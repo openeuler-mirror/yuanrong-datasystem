@@ -60,7 +60,7 @@ namespace client {
 std::atomic<int32_t> ClientWorkerCommonApi::exclusiveIdGen_ = 0;
 
 ClientWorkerCommonApi::ClientWorkerCommonApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
-                                             Signature *signature, std::string tenantId,
+                                             SensitiveValue token, Signature *signature, std::string tenantId,
                                              bool enableCrossNodeConnection, bool enableExclusiveConnection)
     : hostPort_(std::move(hostPort)),
       cred_(std::move(cred)),
@@ -73,6 +73,7 @@ ClientWorkerCommonApi::ClientWorkerCommonApi(HostPort hostPort, RpcCredential cr
       enableExclusiveConnection_(enableExclusiveConnection)
 {
     recvPageThread_ = Thread(&ClientWorkerCommonApi::RecvPageFd, this);
+    clientAccessToken_ = std::make_unique<ClientAccessToken>(std::move(token));
 }
 
 ClientWorkerCommonApi::~ClientWorkerCommonApi()
@@ -177,6 +178,7 @@ Status ClientWorkerCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bool &is
 {
     Timer timer(timeoutMs);
     GetSocketPathReqPb req;
+    RETURN_IF_NOT_OK(SetToken(req));
     req.set_tenant_id(tenantId_);
     GetSocketPathRspPb reply;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -269,6 +271,7 @@ Status ClientWorkerCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemo
     HeartbeatRspPb rsp;
     req.set_client_id(clientId_);
     req.set_removable(removable_.load(std::memory_order_relaxed));
+    RETURN_IF_NOT_OK(SetToken(req));
     *req.mutable_released_worker_fds() = { releasedFds.begin(), releasedFds.end() };
 
     RpcOptions opts;
@@ -339,6 +342,7 @@ void ClientWorkerCommonApi::SetHealthy(bool healthy)
 
 Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs)
 {
+    RETURN_IF_NOT_OK(SetToken(req));
     req.set_version(DATASYSTEM_VERSION);
     req.set_git_hash(GetGitHash());
     req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
@@ -412,6 +416,24 @@ int64_t ClientWorkerCommonApi::GetClientDeadTimeoutMs()
     return clientDeadTimeoutMs_;
 }
 
+Status ClientWorkerCommonApi::UpdateToken(SensitiveValue &token)
+{
+    LOG(INFO) << "update token for client, clientId: " << clientId_;
+    CHECK_FAIL_RETURN_STATUS(!token.Empty(), K_INVALID, "token is empty");
+    clientAccessToken_->UpdateToken(token);
+    return Status::OK();
+}
+
+Status ClientWorkerCommonApi::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+{
+    std::hash<std::string> hasher;
+    LOG(INFO) << FormatString("[%s] update ak/sk (ak hash: %s, sk hash: %s)", tenantId_, hasher(accessKey),
+                              GetTruncatedStr(std::to_string(hasher(secretKey.GetData()))));
+    CHECK_FAIL_RETURN_STATUS(!accessKey.empty(), K_INVALID, "accessKey is empty");
+    CHECK_FAIL_RETURN_STATUS(!secretKey.Empty(), K_INVALID, "secretKey is empty");
+    return signature_->SetClientAkSk(accessKey, secretKey);
+}
+
 Status ClientWorkerCommonApi::Disconnect(bool isDestruct)
 {
     CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr, StatusCode::K_OK,
@@ -420,6 +442,7 @@ Status ClientWorkerCommonApi::Disconnect(bool isDestruct)
     DisconnectClientReqPb req;
     DisconnectClientRspPb rsp;
     req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK(SetToken(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     // Millions of objects will cost worker dozens of seconds to process, set 10 min RPC timeout to prevent the client
     // from timeout error while the worker doesn't finish processing.
@@ -510,6 +533,7 @@ Status ClientWorkerCommonApi::GetClientFd(const std::vector<int> &workerFds, std
     reqTimeoutDuration.Init(ClientGetRequestTimeout(recvClientFdState_.getClientFdTimeoutMs));
     if (!tenantId.empty()) {
         req.set_tenant_id(tenantId);
+        RETURN_IF_NOT_OK(SetToken(req));
     } else {
         RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     }

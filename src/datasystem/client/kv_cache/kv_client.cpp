@@ -210,6 +210,18 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
     return key;
 }
 
+Status KVClient::UpdateToken(SensitiveValue token)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    return impl_->UpdateToken(token);
+}
+
+Status KVClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretkey)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    return impl_->UpdateAkSk(accesskey, secretkey);
+}
+
 Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                            const MSetParam &param)
 {

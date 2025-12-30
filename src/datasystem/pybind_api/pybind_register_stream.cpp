@@ -45,9 +45,10 @@ PybindDefineRegisterer g_pybind_define_f_StreamClient("StreamClient", PRIORITY_L
     py::class_<StreamClient, std::shared_ptr<StreamClient>>(*m, "StreamClient")
         .def(py::init([](const std::string &host, int32_t port, const std::string &clientPublicKey,
                          const std::string &clientPrivateKey, const std::string &serverPublicKey,
-                         const std::string &accessKey, const std::string &secretKey,
+                         const std::string &accessKey, const std::string &secretKey, const std::string &token,
                          const std::string &tenantId, bool enableExclusiveConnection) {
             ConnectOptions connectOpts{ .host = host, .port = port };
+            connectOpts.token = token;
             connectOpts.clientPublicKey = clientPublicKey;
             connectOpts.clientPrivateKey = clientPrivateKey;
             connectOpts.serverPublicKey = serverPublicKey;

@@ -97,8 +97,6 @@ std::string GetErrNameFromStatus(int i)
 
 Status YuanRongIAM::GetTslConfig()
 {
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(FLAGS_encrypt_kit != ENCRYPT_KIT_STS, K_INVALID,
-                                         "yuanrong_iam not support sts encrypt");
     TlsConfig config;
     config.passPhrasePath = FLAGS_yuanrong_iam_passphrase;
     config.caPath = FLAGS_yuanrong_iam_ca;
@@ -230,6 +228,25 @@ Status YuanRongIAM::GetAkSkAuthInfo(const std::shared_ptr<HttpResponse> &respons
 }
 
 namespace {
+bool WorkerAuthInjection(const SensitiveValue &token, std::string &tenantId, uint64_t &expireSec)
+{
+    // for release version, avoid the compile warning of "unused parameter"
+    (void)token;
+    (void)tenantId;
+    (void)expireSec;
+    INJECT_POINT("worker.auth", [&token, &tenantId, &expireSec](const std::string &key, const std::string &val) {
+        if (!token.Empty() && key == token.GetData()) {
+            const uint64_t expireTime = 30 * 60;
+            tenantId = val;
+            LOG(INFO) << "12222";
+            expireSec = expireTime;
+            return true;
+        }
+        return false;
+    });
+    return false;
+}
+
 bool WorkerAkskInjection(const std::string &accessKey, SensitiveValue &secretKey, std::string &tenantId,
                          uint64_t &expireSec)
 {
@@ -312,6 +329,9 @@ Status YuanRongIAM::SendRequestAndRetry(
 
 Status YuanRongIAM::VerifyTenantToken(const SensitiveValue &token, std::string &tenantId, uint64_t &expireSec)
 {
+    if (WorkerAuthInjection(token, tenantId, expireSec)) {
+        return Status::OK();
+    }
     auto response = std::make_shared<HttpResponse>();
     auto respStream = std::make_shared<std::stringstream>();
     response->SetBody(respStream);

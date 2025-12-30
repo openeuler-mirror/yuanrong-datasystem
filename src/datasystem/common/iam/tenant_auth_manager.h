@@ -29,6 +29,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/iam/iam.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
@@ -39,6 +40,8 @@
 
 namespace datasystem {
 const std::string K_SEPARATOR = "$";
+
+enum IAMKit : int { YUANRONG_IAM };
 
 struct SensitiveValueHashCompare {
     static size_t hash(const SensitiveValue &a)
@@ -142,6 +145,7 @@ public:
     TbbTokenTimerTable clientTokenTimer_;
 
 protected:
+    std::shared_ptr<IAM> iamAuth_ = nullptr;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
 private:

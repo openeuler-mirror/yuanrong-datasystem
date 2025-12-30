@@ -42,6 +42,11 @@ public class ConnectOptions {
     private int connectTimeoutMs = 60 * 1000;
 
     /**
+     * Specify a tenant's token for tenant authentication.
+     */
+    private byte[] token;
+
+    /**
      *
      */
     private int requestTimeoutMs = 0;
@@ -112,6 +117,10 @@ public class ConnectOptions {
         this.enableCrossNodeConnection = enableCrossNodeConnection;
     }
 
+    public void setToken(byte[] token) {
+        this.token = token == null ? null : token.clone();
+    }
+
     public void setClientPublicKey(String clientPublicKey) {
         this.clientPublicKey = clientPublicKey;
     }
@@ -157,6 +166,7 @@ public class ConnectOptions {
                 && requestTimeoutMs == otherConnectOptions.requestTimeoutMs
                 && enableCrossNodeConnection == otherConnectOptions.enableCrossNodeConnection
                 && host.equals(otherConnectOptions.host)
+                && Arrays.equals(token, otherConnectOptions.token)
                 && clientPublicKey.equals(otherConnectOptions.clientPublicKey)
                 && Arrays.equals(clientPrivateKey, otherConnectOptions.clientPrivateKey)
                 && serverPublicKey.equals(otherConnectOptions.serverPublicKey)
@@ -167,7 +177,7 @@ public class ConnectOptions {
 
     @Override
     public int hashCode() {
-        return Objects.hash(host, port, clientPublicKey, clientPrivateKey, serverPublicKey, accessKey, secretKey,
+        return Objects.hash(host, port, token, clientPublicKey, clientPrivateKey, serverPublicKey, accessKey, secretKey,
                             tenantID, enableCrossNodeConnection);
     }
 }

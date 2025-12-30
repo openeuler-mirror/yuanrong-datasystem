@@ -202,6 +202,7 @@ TEST_F(ValidatorTest, ValidateFailed)
     ASSERT_FALSE(Validator::ValidatePathString("", "￥"));
     ASSERT_FALSE(Validator::ValidateRpcThreadNum("", -1));
     ASSERT_FALSE(Validator::ValidateClientNum("", -1));
+    ASSERT_FALSE(Validator::ValidateIAMKit("", "xxx"));
     ASSERT_FALSE(Validator::IsInNonNegativeInt32(INT64_MAX));
     ASSERT_FALSE(Validator::ValidateInt32(-1));
     ASSERT_FALSE(Validator::ValidateSharedMemSize("", 0));

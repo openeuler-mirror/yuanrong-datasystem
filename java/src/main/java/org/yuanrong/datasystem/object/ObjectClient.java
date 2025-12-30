@@ -229,6 +229,37 @@ public class ObjectClient {
         }
     }
 
+    /**
+     * To update token for the object client.
+     *
+     * @param tokenBytes The token bytes for the object client.
+     */
+    public void updateToken(byte[] tokenBytes) {
+        rLock.lock();
+        try {
+            ensureOpen();
+            updateTokenNative(clientPtr, tokenBytes);
+        } finally {
+            rLock.unlock();
+        }
+    }
+
+    /**
+     * To update aksk for the object client.
+     *
+     * @param accessKey The accessKey of the object client.
+     * @param secretKeyBytes The secretKey bytes of the object client.
+     */
+    public void updateAkSk(String accessKey, byte[] secretKeyBytes) {
+        rLock.lock();
+        try {
+            ensureOpen();
+            updateAkSkNative(clientPtr, accessKey, secretKeyBytes);
+        } finally {
+            rLock.unlock();
+        }
+    }
+
     @Override
     public int hashCode() {
         return Objects.hash(clientPtr);
@@ -333,4 +364,21 @@ public class ObjectClient {
      * @param clientPtr The ObjectClient pointer.
      */
     private static native void freeObjectClientPtr(long clientPtr);
+
+    /**
+     * Use JNI to invoke the UpdateToken interface of C++.
+     *
+     * @param clientPtr The ObjectClient pointer.
+     * @param tokenBytes The token bytes for ObjectClient.
+     */
+    private static native void updateTokenNative(long clientPtr, byte[] tokenBytes);
+
+    /**
+     * Use JNI to invoke the UpdateAkSk interface of C++.
+     *
+     * @param clientPtr The ObjectClient pointer.
+     * @param accessKeyJO The accessKey for ObjectClient.
+     * @param secretKeyBytes The secretKey bytes for ObjectClient.
+     */
+    private static native void updateAkSkNative(long clientPtr, String accessKey, byte[] secretKeyBytes);
 }
