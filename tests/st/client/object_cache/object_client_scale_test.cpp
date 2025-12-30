@@ -1292,7 +1292,7 @@ TEST_F(OCVoluntaryScaleDownTest, TestVoluntaryDownMigrateWhenMetaAddressIsEmpty)
     std::string value = "data";
     SetObjOnWorker(0, client, value, noneL2CacheObjects);
     client.reset();
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOcService.MigrateData.GetMasterAddr", "1*call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "DataMigrator.GetMasterAddr", "1*call()"));
     VoluntaryScaleDownInject(0);  // worker index is 0
 
     worker1MasterApi_ = nullptr;

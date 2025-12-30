@@ -38,6 +38,7 @@
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"

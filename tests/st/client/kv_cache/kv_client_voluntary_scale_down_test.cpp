@@ -731,7 +731,7 @@ TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryWorkersOneByOne)
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "OCMetadataManager.ReplacePrimary", "1*sleep(5000)"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "worker.migrate_service.return", "1*return(K_NOT_READY)"));
     }
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServiceImpl.MigrateData.Delay", "call(3000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "VoluntaryScaledown.MigrateData.Delay", "sleep(3000)"));
     std::vector<std::string> objectKey(objectCnt);
     std::vector<std::string> objectKey1(objectCnt1);
     std::vector<std::string> data(objectCnt);
