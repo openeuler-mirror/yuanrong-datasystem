@@ -36,17 +36,81 @@ SensitiveValue
             - **str** - 需要读取的字符串指针。
             - **size** - 需要读取的大小。
 
-    .. cpp:function:: SensitiveValue(std::unique_ptr<char[]> data, size_t size);
+    .. cpp:function:: SensitiveValue(std::unique_ptr<char[]> data, size_t size)
 
         拷贝传入数据指针上的敏感数据并构造实例。
 
         参数：
             - **data** - 需要读取的数据指针。
             - **size** - 需要读取的大小。
+
+    .. cpp:function:: SensitiveValue(SensitiveValue &&) noexcept
+
+        移动构造函数。
+
+        参数：
+            - **SensitiveValue &&** - 被移动的SensitiveValue对象。
+
+    .. cpp:function:: SensitiveValue(const SensitiveValue &)
+
+        拷贝构造函数。
+
+        参数：
+            - **SensitiveValue &** - 被拷贝的SensitiveValue对象。
     
     .. cpp:function:: ~SensitiveValue()
 
         析构函数，析构时会释放保存的敏感数据。
+
+    .. cpp:function:: SensitiveValue &operator=(const SensitiveValue &)
+
+        拷贝赋值运算符。
+
+        参数：
+            - **SensitiveValue &** - 被拷贝的SensitiveValue对象。
+
+        返回：
+            当前对象的引用。
+
+    .. cpp:function:: SensitiveValue &operator=(SensitiveValue &&) noexcept
+
+        移动赋值运算符。
+
+        参数：
+            - **SensitiveValue &&** - 被移动的SensitiveValue对象。
+
+        返回：
+            当前对象的引用。
+
+    .. cpp:function:: SensitiveValue &operator=(const char *str)
+
+        使用字符串指针赋值。
+
+        参数：
+            - **str** - 字符串指针。
+
+        返回：
+            当前对象的引用。
+
+    .. cpp:function:: SensitiveValue &operator=(const std::string &str)
+
+        使用字符串赋值。
+
+        参数：
+            - **str** - 字符串。
+
+        返回：
+            当前对象的引用。
+
+    .. cpp:function:: bool operator==(const SensitiveValue &other) const
+
+        判断两个SensitiveValue对象是否相等。
+
+        参数：
+            - **other** - 另一个SensitiveValue对象。
+
+        返回：
+            如果相等返回 ``true``，否则返回 ``false``。
 
     .. cpp:function:: bool Empty() const
 
@@ -82,4 +146,4 @@ SensitiveValue
 
     .. cpp:function:: void Clear()
 
-        清理实例内的敏感数据，
+        清理实例内的敏感数据。

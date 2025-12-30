@@ -74,9 +74,20 @@ KVClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
+    .. cpp:function:: std::string Set(const StringView &val, const SetParam &param)
+
+        设置键值对数据缓存到数据系统，并返回生成的键。
+
+        参数：
+            - **val** - 需要缓存的值.
+            - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
+
+        返回：
+            返回生成的键，如果设置失败则返回空字符串。
+
     .. cpp:function:: Status MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes, const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 
-        创建数据系统共享内存Buffer，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。该接口应用于避免创建临时内存，减少内存拷贝的场景。
+        批量创建数据系统共享内存Buffer，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。该接口应用于避免创建临时内存，减少内存拷贝的场景。
 
         参数： 
             - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``·-_!@#%^*()+=:;``，单个key最大长度为255字节. key的最大个数为10,000，推荐单次设置的key个数小于等于64个。
@@ -109,6 +120,18 @@ KVClient
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+
+    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals, const MSetParam &param)
+
+        事务性批量设置键值对接口。保证所有键要么全部创建成功，要么全部不创建。键的数量范围应为 1 到 8。
+
+        参数：
+            - **keys** - 需要设置的一组key.
+            - **vals** - 需要设置的一组key对应的value.
+            - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
+
+        返回：
+            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
     
     .. cpp:function:: Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)
 
@@ -117,6 +140,22 @@ KVClient
         参数：
             - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节。
             - **val** - 传出参数，返回缓存数据。
+            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+        返回：
+            - 返回 ``StatusCode::K_OK`` 表示获取成功。
+            - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 校验不通过。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示 ``key`` 不存在。
+            - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
+
+    .. cpp:function:: Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs)
+
+        获取键对应的只读共享内存 :cpp:class:`ReadOnlyBuffer`。
+
+        参数：
+            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节。
+            - **readOnlyBuffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
         返回：
@@ -157,6 +196,36 @@ KVClient
             - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
             - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
+            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
+
+    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers, int32_t subTimeoutMs)
+
+        批量获取多个键对应的只读共享内存 :cpp:class:`ReadOnlyBuffer`。
+
+        参数：
+            - **keys** - 需要获取的一组key.
+            - **readOnlyBuffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
+            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+        返回：
+            - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
+            - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
+            - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
+            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
+
+    .. cpp:function:: Status Read(const std::vector<ReadParam> &readParams, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
+
+        根据指定的键和参数读取对象中的部分数据。在某些场景下可避免读取放大。
+
+        参数：
+            - **readParams** - 包含键和偏移量的读取参数列表。
+            - **readOnlyBuffers** - 传出参数，返回读取到的只读共享内存 :cpp:class:`ReadOnlyBuffer` 列表。
+
+        返回：
+            - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
+            - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示key不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
 
@@ -200,12 +269,42 @@ KVClient
             - 返回值状态码为 ``StatusCode::K_RPC_UNAVAILABLE`` 时表示请求遇到了网络错误。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
-    .. cpp:function:: std::future<Status> DelAll()
+    .. cpp:function:: std::string GenerateKey(const std::string &prefixKey = "")
 
-        异步删除集群中所有的键值对。
+        生成带有 Worker ID 的键。
+
+        参数：
+            - **prefixKey** - 用户指定的键前缀。
 
         返回：
-            ``future`` 代表 ``DelAll`` 操作的未来结果，可以通过 ``std::future::get()`` 函数获取异步结果。
+            返回带有 Worker ID 的键，如果生成失败返回空字符串。
+
+    .. cpp:function:: Status GenerateKey(const std::string &prefixKey, std::string &key)
+
+        生成带有 Worker ID 的键。
+
+        参数：
+            - **prefixKey** - 用户指定的键前缀。
+            - **key** - 传出参数，返回带有 Worker ID 的键，如果生成失败返回空字符串。
+
+        返回：
+            返回值状态码为 ``StatusCode::K_OK`` 时表示成功，否则返回其他错误码。
+
+    .. cpp:function:: Status QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)
+
+        查询对象键的大小（包括其他 AZ 的objectKeys）。
+
+        参数：
+            - **objectKeys** - 需要查询大小的对象键列表。
+            - **outSizes** - 传出参数，返回对象键的大小（以字节为单位）。
+
+        返回：
+            - 返回 ``StatusCode::K_OK`` 表示成功。
+            - 返回 ``StatusCode::K_INVALID`` 表示 objectKeys 为空或无效。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 objectKeys 未找到。
+            - 返回 ``StatusCode::K_RPC_UNAVAILABLE`` 表示网络错误。
+            - 返回 ``StatusCode::K_NOT_READY`` 表示 Worker 未就绪。
+            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 Worker 获取 objectKey 大小。
     
     .. cpp:function:: Status HealthCheck()
 

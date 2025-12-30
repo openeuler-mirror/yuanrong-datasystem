@@ -70,14 +70,11 @@ openYuanrong datasystem 的部署视图如上图所示：
 
 #### pip 方式安装
 
+**前置要求：** Python 版本需为 3.9、3.10 或 3.11。
+
 - 安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
   ```bash
-  pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem-0.5.0-cp39-cp39-manylinux_2_34_x86_64.whl
-  ```
-
-- 仅安装 openYuanrong datasystem Python SDK（不包含C++ SDK以及命令行工具）：
-  ```bash
-  pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem_sdk-0.5.0-cp39-cp39-manylinux_2_34_x86_64.whl
+  pip install openyuanrong-datasystem
   ```
 
 #### 源码编译方式安装
