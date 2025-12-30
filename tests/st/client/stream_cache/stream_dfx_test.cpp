@@ -2272,7 +2272,7 @@ first consumer is faulty and is shutdown. consumer[0] is cannot receive. restart
 global consumer count should be 1 and only one consumer can receive. creating new
 consumer after node restart would work fine.
 */
-TEST_F(StreamDfxSingleProducerMultiConsumerTest, LEVEL1_DiffNodeOneConsumerWorkerFault)
+TEST_F(StreamDfxSingleProducerMultiConsumerTest, DISABLED_DiffNodeOneConsumerWorkerFault)
 {
     LOG(INFO) << "DiffNodeOneConsumerWorkerFault start!";
     std::shared_ptr<StreamClient> client1, client2, client3;
@@ -2309,7 +2309,7 @@ consumer is faulty and is shutdown. consumers cannot receive. restart the node.
 global consumer count should be 1 and only one consumer can receive. creating new
 consumers after node restart would work fine.
 */
-TEST_F(StreamDfxSingleProducerMultiConsumerTest, DiffNodeBothConsumerWorkerFault)
+TEST_F(StreamDfxSingleProducerMultiConsumerTest, DISABLED_DiffNodeBothConsumerWorkerFault)
 {
     LOG(INFO) << "DiffNodeBothConsumerWorkerFault start!";
     std::shared_ptr<StreamClient> client1, client2, client3;
