@@ -476,6 +476,8 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusEv"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusERR6Status"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatusaSERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatusaSERR6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusE10StatusCodeNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusE10StatusCodeiRKNSt6stringERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatusD0Ev"><code class="docutils literal notranslate"><span class="pre">Status::~Status()</span></code></a></li>
@@ -484,6 +486,10 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Status7GetCodeEv"><code class="docutils literal notranslate"><span class="pre">Status::GetCode()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6GetMsgEv"><code class="docutils literal notranslate"><span class="pre">Status::GetMsg()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status9AppendMsgERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Status::AppendMsg()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatuslsERNSt7ostreamERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator&lt;&lt;()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6StatuscvbEv"><code class="docutils literal notranslate"><span class="pre">Status::operator</span> <span class="pre">bool()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6StatuseqERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator==()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6StatusneERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator!=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Status4IsOkEv"><code class="docutils literal notranslate"><span class="pre">Status::IsOk()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Status7IsErrorEv"><code class="docutils literal notranslate"><span class="pre">Status::IsError()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status14StatusCodeNameE10StatusCode"><code class="docutils literal notranslate"><span class="pre">Status::StatusCodeName()</span></code></a></li>
@@ -541,6 +547,34 @@ document.write(`
 <dd><p>移动构造函数。</p>
 <dl class="simple">
 <dt>返回：</dt><dd><p>移动构造后的 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6StatusaSERK6Status">
+<span id="_CPPv3N6StatusaSERK6Status"></span><span id="_CPPv2N6StatusaSERK6Status"></span><span id="Status::assign-operator__StatusCR"></span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N6StatusaSERK6Status" title="Link to this definition">#</a><br /></dt>
+<dd><p>拷贝赋值运算符。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 其他 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例引用。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6StatusaSERR6Status">
+<span id="_CPPv3N6StatusaSERR6Status"></span><span id="_CPPv2N6StatusaSERR6Status"></span><span id="Status::assign-operator__StatusRR"></span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N6StatusaSERR6Status" title="Link to this definition">#</a><br /></dt>
+<dd><p>移动赋值运算符。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 其他 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例引用。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -636,6 +670,59 @@ document.write(`
 </dd></dl>
 
 <dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6StatuslsERNSt7ostreamERK6Status">
+<span id="_CPPv3N6StatuslsERNSt7ostreamERK6Status"></span><span id="_CPPv2N6StatuslsERNSt7ostreamERK6Status"></span><span id="Status::lshift-operator__osR.StatusCR"></span><span class="k"><span class="pre">friend</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">ostream</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">&lt;&lt;</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">ostream</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">os</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">s</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6StatuslsERNSt7ostreamERK6Status" title="Link to this definition">#</a><br /></dt>
+<dd><p>重载输出流运算符。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>os</strong> - 输出流。</p></li>
+<li><p><strong>s</strong> - <code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>输出流引用。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK6StatuscvbEv">
+<span id="_CPPv3NK6StatuscvbEv"></span><span id="_CPPv2NK6StatuscvbEv"></span><span id="Status::castto-b-operatorC"></span><span class="k"><span class="pre">explicit</span></span><span class="w"> </span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK6StatuscvbEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>显式布尔转换运算符，判断 Status 的状态码是否为 <code class="docutils literal notranslate"><span class="pre">K_OK</span></code>。</p>
+<dl class="simple">
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">true</span></code> 表示 Status 的状态码为 <code class="docutils literal notranslate"><span class="pre">K_OK</span></code>。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK6StatuseqERK6Status">
+<span id="_CPPv3NK6StatuseqERK6Status"></span><span id="_CPPv2NK6StatuseqERK6Status"></span><span id="Status::eq-operator__StatusCRC"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">==</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK6StatuseqERK6Status" title="Link to this definition">#</a><br /></dt>
+<dd><p>比较两个 Status 实例的状态码是否相等。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 其他 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">true</span></code> 表示状态码相等。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK6StatusneERK6Status">
+<span id="_CPPv3NK6StatusneERK6Status"></span><span id="_CPPv2NK6StatusneERK6Status"></span><span id="Status::neq-operator__StatusCRC"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">!=</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK6StatusneERK6Status" title="Link to this definition">#</a><br /></dt>
+<dd><p>比较两个 Status 实例的状态码是否不相等。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 其他 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">true</span></code> 表示状态码不相等。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK6Status4IsOkEv">
 <span id="_CPPv3NK6Status4IsOkEv"></span><span id="_CPPv2NK6Status4IsOkEv"></span><span id="Status::IsOkC"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">IsOk</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK6Status4IsOkEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>判断 Status 的状态码是否为 <code class="docutils literal notranslate"><span class="pre">K_OK</span></code>。</p>
@@ -722,6 +809,8 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusEv"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusERR6Status"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatusaSERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatusaSERR6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusE10StatusCodeNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6StatusE10StatusCodeiRKNSt6stringERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Status::Status()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatusD0Ev"><code class="docutils literal notranslate"><span class="pre">Status::~Status()</span></code></a></li>
@@ -730,6 +819,10 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Status7GetCodeEv"><code class="docutils literal notranslate"><span class="pre">Status::GetCode()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status6GetMsgEv"><code class="docutils literal notranslate"><span class="pre">Status::GetMsg()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status9AppendMsgERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">Status::AppendMsg()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6StatuslsERNSt7ostreamERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator&lt;&lt;()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6StatuscvbEv"><code class="docutils literal notranslate"><span class="pre">Status::operator</span> <span class="pre">bool()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6StatuseqERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator==()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6StatusneERK6Status"><code class="docutils literal notranslate"><span class="pre">Status::operator!=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Status4IsOkEv"><code class="docutils literal notranslate"><span class="pre">Status::IsOk()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Status7IsErrorEv"><code class="docutils literal notranslate"><span class="pre">Status::IsError()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Status14StatusCodeNameE10StatusCode"><code class="docutils literal notranslate"><span class="pre">Status::StatusCodeName()</span></code></a></li>

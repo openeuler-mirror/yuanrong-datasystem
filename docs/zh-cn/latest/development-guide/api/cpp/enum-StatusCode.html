@@ -473,6 +473,11 @@ document.write(`
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv410StatusCode"><code class="docutils literal notranslate"><span class="pre">StatusCode</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">通用错误码 (范围: [0, 1000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rpc-1000-2000">RPC错误码 (范围: [1000, 2000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">对象错误码 (范围: [2000, 3000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">流错误码 (范围: [3000, 4000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">异构错误码 (范围: [5000, 6000))</a></li>
 </ul>
             </nav>
         </div>
@@ -499,51 +504,326 @@ document.write(`
 </dl>
 <p><cite>StatusCode</cite> 类定义Status的状态码。</p>
 <p>目前，支持以下 <cite>StatusCode</cite>：</p>
+</dd></dl>
+
+<section id="id1">
+<h2>通用错误码 (范围: [0, 1000))<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>定义</p></th>
+<th class="head"><p>状态码</p></th>
 <th class="head"><p>说明</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code></p></td>
+<td><p>0</p></td>
 <td><p>表示成功</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_DUPLICATED</span></code></p></td>
+<td><p>1</p></td>
+<td><p>表示重复</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code></p></td>
+<td><p>2</p></td>
 <td><p>表示入参检验失败</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code></p></td>
+<td><p>3</p></td>
 <td><p>表示对象不存在</p></td>
 </tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_KVSTORE_ERROR</span></code></p></td>
+<td><p>4</p></td>
+<td><p>表示KV存储错误</p></td>
+</tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code></p></td>
+<td><p>5</p></td>
 <td><p>表示运行时错误，多发生于内部错误</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OUT_OF_MEMORY</span></code></p></td>
+<td><p>6</p></td>
 <td><p>表示内存不足</p></td>
 </tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_IO_ERROR</span></code></p></td>
+<td><p>7</p></td>
+<td><p>表示IO错误</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_READY</span></code></p></td>
+<td><p>8</p></td>
+<td><p>表示未就绪</p></td>
+</tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_AUTHORIZED</span></code></p></td>
+<td><p>9</p></td>
 <td><p>表示认证鉴权失败</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_CANCELLED</span></code></p></td>
-<td><p>表示请求的连接通道被意外关闭</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_UNKNOWN_ERROR</span></code></p></td>
+<td><p>10</p></td>
+<td><p>表示未知错误</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code></p></td>
-<td><p>表示请求发生超时</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_INTERRUPTED</span></code></p></td>
+<td><p>11</p></td>
+<td><p>表示操作被中断</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_ACL_ERROR</span></code></p></td>
-<td><p>表示发生了ACL相关的错误</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OUT_OF_RANGE</span></code></p></td>
+<td><p>12</p></td>
+<td><p>表示超出范围</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_HCCL_ERROR</span></code></p></td>
-<td><p>表示发生了HCCL相关的错误</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NO_SPACE</span></code></p></td>
+<td><p>13</p></td>
+<td><p>表示空间不足</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_URMA_ERROR</span></code></p></td>
-<td><p>表示发生了URMA相关的错误</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_LEADER_MASTER</span></code></p></td>
+<td><p>14</p></td>
+<td><p>表示不是主节点</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RECOVERY_ERROR</span></code></p></td>
+<td><p>15</p></td>
+<td><p>表示恢复错误</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RECOVERY_IN_PROGRESS</span></code></p></td>
+<td><p>16</p></td>
+<td><p>表示恢复进行中</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_FILE_NAME_TOO_LONG</span></code></p></td>
+<td><p>17</p></td>
+<td><p>表示文件名过长</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_FILE_LIMIT_REACHED</span></code></p></td>
+<td><p>18</p></td>
+<td><p>表示文件数量达到限制</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_TRY_AGAIN</span></code></p></td>
+<td><p>19</p></td>
+<td><p>表示需要重试</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_DATA_INCONSISTENCY</span></code></p></td>
+<td><p>20</p></td>
+<td><p>表示数据不一致</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SHUTTING_DOWN</span></code></p></td>
+<td><p>21</p></td>
+<td><p>表示正在关闭</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_WORKER_ABNORMAL</span></code></p></td>
+<td><p>22</p></td>
+<td><p>表示Worker异常</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_CLIENT_WORKER_DISCONNECT</span></code></p></td>
+<td><p>23</p></td>
+<td><p>表示客户端Worker断开连接</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_WORKER_DEADLOCK</span></code></p></td>
+<td><p>24</p></td>
+<td><p>表示Worker死锁</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_MASTER_TIMEOUT</span></code></p></td>
+<td><p>25</p></td>
+<td><p>表示Master超时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND_IN_L2CACHE</span></code></p></td>
+<td><p>26</p></td>
+<td><p>表示在L2缓存中未找到</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_REPLICA_NOT_READY</span></code></p></td>
+<td><p>27</p></td>
+<td><p>表示副本未就绪</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_CLIENT_WORKER_VERSION_MISMATCH</span></code></p></td>
+<td><p>28</p></td>
+<td><p>表示客户端Worker版本不匹配</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SERVER_FD_CLOSED</span></code></p></td>
+<td><p>29</p></td>
+<td><p>表示服务器文件描述符已关闭</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RETRY_IF_LEAVING</span></code></p></td>
+<td><p>30</p></td>
+<td><p>表示如果正在离开则重试</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SCALE_DOWN</span></code></p></td>
+<td><p>31</p></td>
+<td><p>表示缩容</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SCALING</span></code></p></td>
+<td><p>32</p></td>
+<td><p>表示正在扩缩容</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_CLIENT_DEADLOCK</span></code></p></td>
+<td><p>33</p></td>
+<td><p>表示客户端死锁</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_LRU_HARD_LIMIT</span></code></p></td>
+<td><p>34</p></td>
+<td><p>表示LRU硬限制</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_LRU_SOFT_LIMIT</span></code></p></td>
+<td><p>35</p></td>
+<td><p>表示LRU软限制</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-</dd></dl>
-
+</section>
+<section id="rpc-1000-2000">
+<h2>RPC错误码 (范围: [1000, 2000))<a class="headerlink" href="#rpc-1000-2000" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>定义</p></th>
+<th class="head"><p>状态码</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_CANCELLED</span></code></p></td>
+<td><p>1000</p></td>
+<td><p>表示请求的连接通道被意外关闭</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_DEADLINE_EXCEEDED</span></code></p></td>
+<td><p>1001</p></td>
+<td><p>表示RPC请求超时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_UNAVAILABLE</span></code></p></td>
+<td><p>1002</p></td>
+<td><p>表示请求发生超时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RPC_STREAM_END</span></code></p></td>
+<td><p>1003</p></td>
+<td><p>表示RPC流结束</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_URMA_ERROR</span></code></p></td>
+<td><p>1004</p></td>
+<td><p>表示发生了URMA相关的错误</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_RDMA_ERROR</span></code></p></td>
+<td><p>1005</p></td>
+<td><p>表示发生了RDMA相关的错误</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id2">
+<h2>对象错误码 (范围: [2000, 3000))<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>定义</p></th>
+<th class="head"><p>状态码</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OC_ALREADY_SEALED</span></code></p></td>
+<td><p>2000</p></td>
+<td><p>表示对象已密封</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OC_OBJECT_NOT_IN_USED</span></code></p></td>
+<td><p>2001</p></td>
+<td><p>表示对象未在使用中</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH</span></code></p></td>
+<td><p>2002</p></td>
+<td><p>表示远程获取不足</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_WRITE_BACK_QUEUE_FULL</span></code></p></td>
+<td><p>2003</p></td>
+<td><p>表示写回队列已满</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OC_KEY_ALREADY_EXIST</span></code></p></td>
+<td><p>2004</p></td>
+<td><p>表示对象键已存在</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_WORKER_PULL_OBJECT_NOT_FOUND</span></code></p></td>
+<td><p>2005</p></td>
+<td><p>表示Worker拉取对象未找到</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id3">
+<h2>流错误码 (范围: [3000, 4000))<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>定义</p></th>
+<th class="head"><p>状态码</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_STREAM_NOT_FOUND</span></code></p></td>
+<td><p>3000</p></td>
+<td><p>表示流未找到</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_PRODUCER_NOT_FOUND</span></code></p></td>
+<td><p>3001</p></td>
+<td><p>表示生产者未找到</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_CONSUMER_NOT_FOUND</span></code></p></td>
+<td><p>3002</p></td>
+<td><p>表示消费者未找到</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_END_OF_PAGE</span></code></p></td>
+<td><p>3003</p></td>
+<td><p>表示页面结束</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_STREAM_IN_RESET_STATE</span></code></p></td>
+<td><p>3004</p></td>
+<td><p>表示流处于重置状态</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_WORKER_WAS_LOST</span></code></p></td>
+<td><p>3005</p></td>
+<td><p>表示Worker已丢失</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_STREAM_IN_USE</span></code></p></td>
+<td><p>3006</p></td>
+<td><p>表示流正在使用中</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_STREAM_DELETE_IN_PROGRESS</span></code></p></td>
+<td><p>3007</p></td>
+<td><p>表示流删除进行中</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_STREAM_RESOURCE_ERROR</span></code></p></td>
+<td><p>3008</p></td>
+<td><p>表示流资源错误</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_ALREADY_CLOSED</span></code></p></td>
+<td><p>3009</p></td>
+<td><p>表示流已关闭</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_SC_STREAM_NOTIFICATION_PENDING</span></code></p></td>
+<td><p>3010</p></td>
+<td><p>表示流通知待处理</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id4">
+<h2>异构错误码 (范围: [5000, 6000))<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>定义</p></th>
+<th class="head"><p>状态码</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_ACL_ERROR</span></code></p></td>
+<td><p>5000</p></td>
+<td><p>表示发生了ACL相关的错误</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_HCCL_ERROR</span></code></p></td>
+<td><p>5001</p></td>
+<td><p>表示发生了HCCL相关的错误</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_FUTURE_TIMEOUT</span></code></p></td>
+<td><p>5002</p></td>
+<td><p>表示Future超时</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 
 
@@ -592,6 +872,11 @@ document.write(`
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv410StatusCode"><code class="docutils literal notranslate"><span class="pre">StatusCode</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">通用错误码 (范围: [0, 1000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rpc-1000-2000">RPC错误码 (范围: [1000, 2000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">对象错误码 (范围: [2000, 3000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">流错误码 (范围: [3000, 4000))</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">异构错误码 (范围: [5000, 6000))</a></li>
 </ul>
   </nav></div>
 

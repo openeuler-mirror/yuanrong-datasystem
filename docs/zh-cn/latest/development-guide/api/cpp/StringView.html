@@ -474,9 +474,11 @@ document.write(`
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv410StringView"><code class="docutils literal notranslate"><span class="pre">StringView</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewEv"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewERK10StringView"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewEPKc"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewEPKc6size_t"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringViewaSERK10StringView"><code class="docutils literal notranslate"><span class="pre">StringView::operator=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringViewD0Ev"><code class="docutils literal notranslate"><span class="pre">StringView::~StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10StringView4dataEv"><code class="docutils literal notranslate"><span class="pre">StringView::data()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10StringView4sizeEv"><code class="docutils literal notranslate"><span class="pre">StringView::size()</span></code></a></li>
@@ -520,6 +522,20 @@ document.write(`
 </dd></dl>
 
 <dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10StringView10StringViewERK10StringView">
+<span id="_CPPv3N10StringView10StringViewERK10StringView"></span><span id="_CPPv2N10StringView10StringViewERK10StringView"></span><span id="StringView::StringView__StringViewCRCE"></span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">StringView</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10StringView10StringViewERK10StringView" title="StringView::StringView"><span class="n"><span class="pre">StringView</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N10StringView10StringViewERK10StringView" title="Link to this definition">#</a><br /></dt>
+<dd><p>拷贝构造函数，使用默认实现。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>StringView</strong> - 要拷贝的 <code class="docutils literal notranslate"><span class="pre">StringView</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">StringView</span></code> 实例。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N10StringView10StringViewEPKc">
 <span id="_CPPv3N10StringView10StringViewEPKc"></span><span id="_CPPv2N10StringView10StringViewEPKc"></span><span id="StringView::StringView__cCPCE"></span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">StringView</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="kt"><span class="pre">char</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n sig-param"><span class="pre">str</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10StringView10StringViewEPKc" title="Link to this definition">#</a><br /></dt>
 <dd><p>保存字符串指针上的并构造实例，这个过程不会发生拷贝。</p>
@@ -557,6 +573,22 @@ document.write(`
 <li><p><strong>str</strong> - 字符串。</p></li>
 </ul>
 </dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">StringView</span></code> 实例。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10StringViewaSERK10StringView">
+<span id="_CPPv3N10StringViewaSERK10StringView"></span><span id="_CPPv2N10StringViewaSERK10StringView"></span><span id="StringView::assign-operator__StringViewCRCE"></span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv410StringView" title="StringView"><span class="n"><span class="pre">StringView</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv410StringView" title="StringView"><span class="n"><span class="pre">StringView</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N10StringViewaSERK10StringView" title="Link to this definition">#</a><br /></dt>
+<dd><p>拷贝赋值运算符，使用默认实现。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>StringView</strong> - 要拷贝的 <code class="docutils literal notranslate"><span class="pre">StringView</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">StringView</span> <span class="pre">&amp;</span></code> 引用。</p>
+</dd>
 </dl>
 </dd></dl>
 
@@ -588,7 +620,7 @@ document.write(`
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK10StringView5emptyEv">
-<span id="_CPPv3NK10StringView5emptyEv"></span><span id="_CPPv2NK10StringView5emptyEv"></span><span id="StringView::emptyCCE"></span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><span class="n"><span class="pre">size_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">empty</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10StringView5emptyEv" title="Link to this definition">#</a><br /></dt>
+<span id="_CPPv3NK10StringView5emptyEv"></span><span id="_CPPv2NK10StringView5emptyEv"></span><span id="StringView::emptyCCE"></span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">empty</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10StringView5emptyEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>判断 StringView 是否为空。</p>
 <dl class="simple">
 <dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">true</span></code> 表示 <code class="docutils literal notranslate"><span class="pre">StringView</span></code> 为空。</p>
@@ -647,9 +679,11 @@ document.write(`
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv410StringView"><code class="docutils literal notranslate"><span class="pre">StringView</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewEv"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewERK10StringView"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewEPKc"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewEPKc6size_t"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringView10StringViewERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">StringView::StringView()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringViewaSERK10StringView"><code class="docutils literal notranslate"><span class="pre">StringView::operator=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10StringViewD0Ev"><code class="docutils literal notranslate"><span class="pre">StringView::~StringView()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10StringView4dataEv"><code class="docutils literal notranslate"><span class="pre">StringView::data()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10StringView4sizeEv"><code class="docutils literal notranslate"><span class="pre">StringView::size()</span></code></a></li>

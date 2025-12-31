@@ -206,8 +206,10 @@
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
@@ -523,22 +525,31 @@ document.write(`
 <tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient4MSetERKNSt6vectorINSt10shared_ptrI6BufferEEEE" title="KVClient::MSet"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::MSet()</span></code></a></p></td>
 <td><p>键值对批量设置接口。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t" title="KVClient::Get"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam" title="KVClient::MSetTx"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::MSetTx()</span></code></a></p></td>
+<td><p>事务性批量设置键值对接口。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t" title="KVClient::Get"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></p></td>
 <td><p>获取键对应的数据。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient4ReadERKNSt6vectorI9ReadParamEERNSt6vectorI8OptionalI14ReadOnlyBufferEEE" title="KVClient::Read"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Read()</span></code></a></p></td>
+<td><p>根据指定的键和参数读取对象中的部分数据。</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient3DelERKNSt6stringE" title="KVClient::Del"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Del()</span></code></a></p></td>
 <td><p>删除指定键值对。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient6DelAllEv" title="KVClient::DelAll"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::DelAll()</span></code></a></p></td>
-<td><p>异步删除集群中所有的键值对。</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient11GenerateKeyERKNSt6stringE" title="KVClient::GenerateKey"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::GenerateKey()</span></code></a></p></td>
+<td><p>生成带有 Worker ID 的键。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient11HealthCheckEv" title="KVClient::HealthCheck"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::HealthCheck()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE" title="KVClient::QuerySize"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::QuerySize()</span></code></a></p></td>
+<td><p>查询对象键的大小。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient11HealthCheckEv" title="KVClient::HealthCheck"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::HealthCheck()</span></code></a></p></td>
 <td><p>检查连接的 Worker 是否健康。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE" title="KVClient::Exist"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE" title="KVClient::Exist"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></p></td>
 <td><p>批量查询一组键（keys）是否存在。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE" title="KVClient::Expire"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Expire()</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE" title="KVClient::Expire"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Expire()</span></code></a></p></td>
 <td><p>批量为一组键（keys）更新过期生命周期。</p></td>
 </tr>
 </tbody>

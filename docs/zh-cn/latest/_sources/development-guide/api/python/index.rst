@@ -65,13 +65,17 @@ Tensor接口
    * - :doc:`yr.datasystem.DsTensorClient.delete <yr.datasystem.DsTensorClient.delete>`
      - 删除 host 中的 key。
    * - :doc:`yr.datasystem.DsTensorClient.dev_send <yr.datasystem.DsTensorClient.dev_send>`
-     - 订阅发布到数据系统的异构对象，并接收数据写入 tensors。
+     - 将 device 上的 tensor 缓存作为数据系统的异构对象发送。
    * - :doc:`yr.datasystem.DsTensorClient.dev_recv <yr.datasystem.DsTensorClient.dev_recv>`
-     - 将 device 上的内存发布为数据系统的异构对象，发布后的异构对象可通过 dev_recv 获取。
+     - 接收数据系统的异构对象，并将数据写入 tensors。
+   * - :doc:`yr.datasystem.DsTensorClient.exist <yr.datasystem.DsTensorClient.exist>`
+     - 检查给定 key 在数据系统中是否存在。
    * - :doc:`yr.datasystem.DsTensorClient.dev_mset <yr.datasystem.DsTensorClient.dev_mset>`
      - 通过数据系统缓存 Device 上的数据。
    * - :doc:`yr.datasystem.DsTensorClient.dev_mget <yr.datasystem.DsTensorClient.dev_mget>`
      - 获取 device 中的数据，并写入到 Tensor 中。
+   * - :doc:`yr.datasystem.DsTensorClient.dev_mget_into_tensor <yr.datasystem.DsTensorClient.dev_mget_into_tensor>`
+     - 从 device 中获取多个 key 的数据，并根据复制范围写入到单个目标 Tensor 的指定位置。
    * - :doc:`yr.datasystem.DsTensorClient.dev_local_delete <yr.datasystem.DsTensorClient.dev_local_delete>`
      - 从数据系统删除本节点上此 key 的元数据，不再管理此 key 对应的 device 内存。
    * - :doc:`yr.datasystem.DsTensorClient.dev_delete <yr.datasystem.DsTensorClient.dev_delete>`
@@ -125,6 +129,8 @@ Tensor接口
      - 生成一个带数据系统 Worker UUID 的 key。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.get_meta_info <yr.datasystem.hetero_client.HeteroClient.get_meta_info>`
      - 获取keys 对应的元数据信息。
+   * - :doc:`yr.datasystem.hetero_client.HeteroClient.exist <yr.datasystem.hetero_client.HeteroClient.exist>`
+     - 检查给定的键在数据系统中是否存在。
 
 
 KV接口
