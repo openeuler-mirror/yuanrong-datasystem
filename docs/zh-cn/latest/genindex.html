@@ -205,8 +205,10 @@
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="development-guide/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
@@ -545,15 +547,27 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer6BufferERR6Buffer">Buffer::Buffer (C++ function)</a>, <a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer6BufferEv">[1]</a>
 </li>
-      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer7GetDataEv">Buffer::GetData (C++ function)</a>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer17GetRemoteHostInfoEv">Buffer::GetRemoteHostInfo (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4NK6Buffer7GetSizeEv">Buffer::GetSize (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer13ImmutableDataEv">Buffer::ImmutableData (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer16InvalidateBufferEv">Buffer::InvalidateBuffer (C++ function)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4NK6Buffer7GetSizeEv">Buffer::GetSize (C++ function)</a>
-</li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer10MemoryCopyEPKv8uint64_t">Buffer::MemoryCopy (C++ function)</a>
 </li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer11MutableDataEv">Buffer::MutableData (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6BufferaSERR6Buffer">Buffer::operator= (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE">Buffer::Publish (C++ function)</a>
+</li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer6RLatchE8uint64_t">Buffer::RLatch (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer4SealERKNSt13unordered_setINSt6stringEEE">Buffer::Seal (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/Buffer.html#_CPPv4N6Buffer8UnRLatchEv">Buffer::UnRLatch (C++ function)</a>
 </li>
@@ -667,6 +681,8 @@ document.write(`
       </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html#yr.datasystem.DsTensorClient.dev_mget_into_tensor">dev_mget_into_tensor() (yr.datasystem.DsTensorClient method)</a>
+</li>
       <li><a href="development-guide/api/python/yr.datasystem.DsTensorClient.dev_mset.html#yr.datasystem.DsTensorClient.dev_mset">dev_mset() (yr.datasystem.DsTensorClient method)</a>
 
       <ul>
@@ -703,15 +719,17 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7Element3ptrE">Element::ptr (C++ member)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7Element4sizeE">Element::size (C++ member)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/struct-Element.html#_CPPv4N7ElementD0Ev">Element::~Element (C++ function)</a>
 </li>
-      <li><a href="development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html#yr.datasystem.hetero_client.HeteroClient.exist">exist() (yr.datasystem.hetero_client.HeteroClient method)</a>
+      <li><a href="development-guide/api/python/yr.datasystem.DsTensorClient.exist.html#yr.datasystem.DsTensorClient.exist">exist() (yr.datasystem.DsTensorClient method)</a>
 
       <ul>
+        <li><a href="development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html#yr.datasystem.hetero_client.HeteroClient.exist">(yr.datasystem.hetero_client.HeteroClient method)</a>
+</li>
         <li><a href="development-guide/api/python/yr.datasystem.kv_client.KVClient.exist.html#yr.datasystem.kv_client.KVClient.exist">(yr.datasystem.kv_client.KVClient method)</a>
 </li>
       </ul></li>
@@ -861,18 +879,18 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3DelERKNSt6stringE">KVClient::Del (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3DelERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">[1]</a>
 </li>
-      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient6DelAllEv">KVClient::DelAll (C++ function)</a>
-</li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">KVClient::Exist (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE">KVClient::Expire (C++ function)</a>
 </li>
-      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringER8OptionalI6BufferE7int32_t">KVClient::Get (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t">[1]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorI8OptionalI6BufferEEE7int32_t">[2]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE7int32_t">[3]</a>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient11GenerateKeyERKNSt6stringE">KVClient::GenerateKey (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient11GenerateKeyERKNSt6stringERNSt6stringE">[1]</a>
+</li>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringER8OptionalI14ReadOnlyBufferE7int32_t">KVClient::Get (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringER8OptionalI6BufferE7int32_t">[1]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t">[2]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorI8OptionalI14ReadOnlyBufferEEE7int32_t">[3]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorI8OptionalI6BufferEEE7int32_t">[4]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3GetERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE7int32_t">[5]</a>
+</li>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient11HealthCheckEv">KVClient::HealthCheck (C++ function)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient11HealthCheckEv">KVClient::HealthCheck (C++ function)</a>
-</li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient4InitEv">KVClient::Init (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient8KVClientERK14ConnectOptions">KVClient::KVClient (C++ function)</a>
@@ -881,7 +899,13 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient4MSetERKNSt6vectorINSt10shared_ptrI6BufferEEEE">KVClient::MSet (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient4MSetERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERNSt6vectorINSt6stringEEERK9MSetParam">[1]</a>
 </li>
-      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3SetERKNSt10shared_ptrI6BufferEE">KVClient::Set (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3SetERKNSt6stringERK10StringViewRK8SetParam">[1]</a>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam">KVClient::MSetTx (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE">KVClient::QuerySize (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient4ReadERKNSt6vectorI9ReadParamEERNSt6vectorI8OptionalI14ReadOnlyBufferEEE">KVClient::Read (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3SetERK10StringViewRK8SetParam">KVClient::Set (C++ function)</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3SetERKNSt10shared_ptrI6BufferEE">[1]</a>, <a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient3SetERKNSt6stringERK10StringViewRK8SetParam">[2]</a>
 </li>
       <li><a href="development-guide/api/cpp/KVClient.html#_CPPv4N8KVClient8ShutDownEv">KVClient::ShutDown (C++ function)</a>
 </li>
@@ -1083,7 +1107,11 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue6MoveToERNSt10unique_ptrIA_cEER6size_t">SensitiveValue::MoveTo (C++ function)</a>
 </li>
-      <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t">SensitiveValue::SensitiveValue (C++ function)</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueEPKc">[1]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueEPKc6size_t">[2]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueERKNSt6stringE">[3]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueEv">[4]</a>
+      <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValueaSEPKc">SensitiveValue::operator= (C++ function)</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValueaSERK14SensitiveValue">[1]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValueaSERKNSt6stringE">[2]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValueaSERR14SensitiveValue">[3]</a>
+</li>
+      <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4NK14SensitiveValueeqERK14SensitiveValue">SensitiveValue::operator== (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t">SensitiveValue::SensitiveValue (C++ function)</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueEPKc">[1]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueEPKc6size_t">[2]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueERK14SensitiveValue">[3]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueERKNSt6stringE">[4]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueERR14SensitiveValue">[5]</a>, <a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValue14SensitiveValueEv">[6]</a>
 </li>
       <li><a href="development-guide/api/cpp/SensitiveValue.html#_CPPv4N14SensitiveValueD0Ev">SensitiveValue::~SensitiveValue (C++ function)</a>
 </li>
@@ -1113,18 +1141,28 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6Status2OKEv">Status::OK (C++ function)</a>
 </li>
+      <li><a href="development-guide/api/cpp/Status.html#_CPPv4NK6StatuscvbEv">Status::operator bool (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Status.html#_CPPv4NK6StatusneERK6Status">Status::operator!= (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6StatuslsERNSt7ostreamERK6Status">Status::operator&lt;&lt; (C++ function)</a>
+</li>
+      <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6StatusaSERK6Status">Status::operator= (C++ function)</a>, <a href="development-guide/api/cpp/Status.html#_CPPv4N6StatusaSERR6Status">[1]</a>
+</li>
+      <li><a href="development-guide/api/cpp/Status.html#_CPPv4NK6StatuseqERK6Status">Status::operator== (C++ function)</a>
+</li>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6Status6StatusE10StatusCodeNSt6stringE">Status::Status (C++ function)</a>, <a href="development-guide/api/cpp/Status.html#_CPPv4N6Status6StatusE10StatusCodeiRKNSt6stringERKNSt6stringE">[1]</a>, <a href="development-guide/api/cpp/Status.html#_CPPv4N6Status6StatusERK6Status">[2]</a>, <a href="development-guide/api/cpp/Status.html#_CPPv4N6Status6StatusERR6Status">[3]</a>, <a href="development-guide/api/cpp/Status.html#_CPPv4N6Status6StatusEv">[4]</a>
 </li>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6Status14StatusCodeNameE10StatusCode">Status::StatusCodeName (C++ function)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4NK6Status8ToStringEv">Status::ToString (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/Status.html#_CPPv4N6StatusD0Ev">Status::~Status (C++ function)</a>
 </li>
       <li><a href="development-guide/api/cpp/enum-StatusCode.html#_CPPv410StatusCode">StatusCode (C++ class)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv412StreamClient">StreamClient (C++ class)</a>
 </li>
       <li><a href="development-guide/api/cpp/StreamClient.html#_CPPv4N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf">StreamClient::CreateProducer (C++ function)</a>
@@ -1153,9 +1191,11 @@ document.write(`
 </li>
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv4NK10StringView5emptyEv">StringView::empty (C++ function)</a>
 </li>
+      <li><a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringViewaSERK10StringView">StringView::operator= (C++ function)</a>
+</li>
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv4NK10StringView4sizeEv">StringView::size (C++ function)</a>
 </li>
-      <li><a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEPKc">StringView::StringView (C++ function)</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEPKc6size_t">[1]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewERKNSt6stringE">[2]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEv">[3]</a>
+      <li><a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEPKc">StringView::StringView (C++ function)</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEPKc6size_t">[1]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewERK10StringView">[2]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewERKNSt6stringE">[3]</a>, <a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringView10StringViewEv">[4]</a>
 </li>
       <li><a href="development-guide/api/cpp/StringView.html#_CPPv4N10StringViewD0Ev">StringView::~StringView (C++ function)</a>
 </li>

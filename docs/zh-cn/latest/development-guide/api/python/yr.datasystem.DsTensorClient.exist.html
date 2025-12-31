@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>yr.datasystem.DsTensorClient &#8212; openYuanrong datasystem  documentation</title>
+    <title>yr.datasystem.DsTensorClient.exist &#8212; openYuanrong datasystem  documentation</title>
   
   
   
@@ -52,12 +52,12 @@
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.DsTensorClient';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.DsTensorClient.exist';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="yr.datasystem.DsTensorClient.init" href="yr.datasystem.DsTensorClient.init.html" />
-    <link rel="prev" title="yr.datasystem.DsClient.object" href="yr.datasystem.DsClient.object.html" />
+    <link rel="next" title="yr.datasystem.DsTensorClient.dev_mset" href="yr.datasystem.DsTensorClient.dev_mset.html" />
+    <link rel="prev" title="yr.datasystem.DsTensorClient.dev_recv" href="yr.datasystem.DsTensorClient.dev_recv.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   </head>
@@ -197,7 +197,7 @@
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
 </ul>
 </details></li>
-<li class="toctree-l4 current active has-children"><a class="current reference internal" href="#">yr.datasystem.DsTensorClient</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 current active has-children"><a class="reference internal" href="yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
@@ -206,7 +206,7 @@
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
-<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5 current active"><a class="current reference internal" href="#">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
@@ -464,7 +464,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>yr.datasystem.DsTensorClient</h1>
+    <h1>yr.datasystem.DsTensorClient.exist</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -474,7 +474,7 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.DsTensorClient"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.DsTensorClient</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.DsTensorClient.exist"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.DsTensorClient.exist()</span></code></a></li>
 </ul>
             </nav>
         </div>
@@ -486,99 +486,29 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="yr-datasystem-dstensorclient">
-<h1>yr.datasystem.DsTensorClient<a class="headerlink" href="#yr-datasystem-dstensorclient" title="Link to this heading">#</a></h1>
-<dl class="py class">
-<dt class="sig sig-object py" id="yr.datasystem.DsTensorClient">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">yr.datasystem.</span></span><span class="sig-name descname"><span class="pre">DsTensorClient</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">port</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connect_timeout_ms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">60000</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_public_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_private_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">server_public_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">req_timeout_ms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enable_remote_h2d</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.DsTensorClient" title="Link to this definition">#</a></dt>
-<dd><p>异构对象客户端。</p>
+  <section id="yr-datasystem-dstensorclient-exist">
+<h1>yr.datasystem.DsTensorClient.exist<a class="headerlink" href="#yr-datasystem-dstensorclient-exist" title="Link to this heading">#</a></h1>
+<dl class="py method">
+<dt class="sig sig-object py" id="yr.datasystem.DsTensorClient.exist">
+<span class="sig-prename descclassname"><span class="pre">yr.datasystem.DsTensorClient.</span></span><span class="sig-name descname"><span class="pre">exist</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.DsTensorClient.exist" title="Link to this definition">#</a></dt>
+<dd><p>检查给定 key 在数据系统中是否存在。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>host</strong> (str) - 数据系统 Worker 的主机 IP 地址。</p></li>
-<li><p><strong>port</strong> (int) - 数据系统 Worker 的端口号。</p></li>
-<li><p><strong>device_id</strong> (int) - 客户端所在进程绑定的device id。</p></li>
-<li><p><strong>connect_timeout_ms</strong> (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： <code class="docutils literal notranslate"><span class="pre">60000</span></code> 。</p></li>
-<li><p><strong>client_public_key</strong> (str) - 用于 curve 认证的客户端公钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
-<li><p><strong>client_private_key</strong> (str) - 用于 curve 认证的客户端私钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
-<li><p><strong>server_public_key</strong> (str) - 用于 curve 认证的服务端公钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
-<li><p><strong>req_timeout_ms</strong> (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms&lt;=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： <code class="docutils literal notranslate"><span class="pre">0</span></code> 。</p></li>
-<li><p><strong>enable_remote_h2d</strong> (bool) - 如果为 <code class="docutils literal notranslate"><span class="pre">True</span></code> ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： <code class="docutils literal notranslate"><span class="pre">False</span></code> 。</p></li>
+<li><p><strong>keys</strong> (list) - 待查询的 key 列表。约束：传入的key的数量不能超过1万。</p></li>
 </ul>
 </dd>
-<dt>输出：</dt><dd><p>DsTensorClient</p>
+<dt>返回：</dt><dd><ul class="simple">
+<li><p><strong>exists</strong> (list) - 对应 key 的存在性，返回布尔值列表。</p></li>
+</ul>
+</dd>
+<dt>异常：</dt><dd><ul class="simple">
+<li><p><strong>TypeError</strong> - 输入参数存在非法值。</p></li>
+<li><p><strong>RuntimeError</strong> - 查询所有 key 是否存在失败时抛出运行时错误。</p></li>
+</ul>
 </dd>
 </dl>
-<p><strong>方法</strong>：</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 40.0%" />
-<col style="width: 60.0%" />
-</colgroup>
-<tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.init.html"><span class="doc">init</span></a></p></td>
-<td><p>初始化数据系统客户端。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mset_d2h.html"><span class="doc">mset_d2h</span></a></p></td>
-<td><p>将 device 的数据写入到 host 中。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mget_h2d.html"><span class="doc">mget_h2d</span></a></p></td>
-<td><p>从 host 中获取数据并写入 device 中。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.async_mset_d2h.html"><span class="doc">async_mset_d2h</span></a></p></td>
-<td><p>将 device 的数据写入到 host 中的异步接口。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.async_mget_h2d.html"><span class="doc">async_mget_h2d</span></a></p></td>
-<td><p>从 host 中获取数据并写入 device 中的异步接口。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.delete.html"><span class="doc">delete</span></a></p></td>
-<td><p>删除 host 中的 key。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_send.html"><span class="doc">dev_send</span></a></p></td>
-<td><p>将 device 上的内存发布为数据系统的异构对象，发布后的异构对象可通过 dev_recv 获取。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_recv.html"><span class="doc">dev_recv</span></a></p></td>
-<td><p>订阅发布到数据系统的异构对象，并接收数据写入 tensors。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.exist.html"><span class="doc">exist</span></a></p></td>
-<td><p>检查给定 key 在数据系统中是否存在。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_mset.html"><span class="doc">dev_mset</span></a></p></td>
-<td><p>通过数据系统缓存 Device 上的数据。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_mget.html"><span class="doc">dev_mget</span></a></p></td>
-<td><p>获取 device 中的数据，并写入到 Tensor 中。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_mget_into_tensor.html"><span class="doc">dev_mget_into_tensor</span></a></p></td>
-<td><p>从 device 中获取多个 key 的数据，并根据用户定义的复制范围将每个数据段复制到单个目标 Tensor 的指定位置。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_local_delete.html"><span class="doc">dev_local_delete</span></a></p></td>
-<td><p>从数据系统删除本节点上此 key 的元数据，不再管理此 key 对应的 device 内存。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_delete.html"><span class="doc">dev_delete</span></a></p></td>
-<td><p>从数据系统删除此 key 的元数据，不再管理此 key 对应的 device 内存。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.async_dev_delete.html"><span class="doc">async_dev_delete</span></a></p></td>
-<td><p>从数据系统删除此 key 的元数据的异步接口，删除成功后不再管理此 key 对应的 device 内存。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html"><span class="doc">put_page_attn_layerwise_d2d</span></a></p></td>
-<td><p>将 PagedAttention 的层级 Tensor 发布为数据系统的异构对象。发布后的异构对象可通过 get_page_attn_layerwise_d2d 获取。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html"><span class="doc">get_page_attn_layerwise_d2d</span></a></p></td>
-<td><p>根据 key 获取缓存在数据系统的 PagedAttention 的层级 Tensor。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html"><span class="doc">mset_page_attn_blockwise_d2h</span></a></p></td>
-<td><p>将 PagedAttention 的层级 Tensor 异步写入 Host 中。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html"><span class="doc">mget_page_attn_blockwise_h2d</span></a></p></td>
-<td><p>从 Host 中获取 PagedAttention 的层级 Tensor 并写入 Device 中。</p></td>
-</tr>
-</tbody>
-</table>
-</div>
 </dd></dl>
 
-<div class="toctree-wrapper compound">
-</div>
 </section>
 
 
@@ -593,20 +523,20 @@ document.write(`
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="yr.datasystem.DsClient.object.html"
+       href="yr.datasystem.DsTensorClient.dev_recv.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">yr.datasystem.DsClient.object</p>
+        <p class="prev-next-title">yr.datasystem.DsTensorClient.dev_recv</p>
       </div>
     </a>
     <a class="right-next"
-       href="yr.datasystem.DsTensorClient.init.html"
+       href="yr.datasystem.DsTensorClient.dev_mset.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">yr.datasystem.DsTensorClient.init</p>
+        <p class="prev-next-title">yr.datasystem.DsTensorClient.dev_mset</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -626,7 +556,7 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.DsTensorClient"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.DsTensorClient</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.DsTensorClient.exist"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.DsTensorClient.exist()</span></code></a></li>
 </ul>
   </nav></div>
 

@@ -186,6 +186,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../../example/hetero.html">异构对象</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../../example/kv.html">KV</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../../example/object.html">Object</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../example/tensor.html">Tensor</a></li>
 </ul>
 </details></li>
 <li class="toctree-l2 current active has-children"><a class="reference internal" href="../index.html">API</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -206,8 +207,10 @@
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
@@ -478,7 +481,14 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueEPKc6size_t"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueERR14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueERK14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueD0Ev"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::~SensitiveValue()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSERK14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSERR14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSEPKc"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValueeqERK14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator==()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValue5EmptyEv"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::Empty()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValue7GetDataEv"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::GetData()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValue7GetSizeEv"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::GetSize()</span></code></a></li>
@@ -557,7 +567,7 @@ document.write(`
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t">
-<span id="_CPPv3N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t"></span><span id="_CPPv2N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t"></span><span id="SensitiveValue::SensitiveValue__std::unique_ptr:cA:.s"></span><span class="sig-name descname"><span class="n"><span class="pre">SensitiveValue</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">unique_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">char</span></span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">data</span></span>, <span class="n"><span class="pre">size_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">size</span></span><span class="sig-paren">)</span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t" title="Link to this definition">#</a><br /></dt>
+<span id="_CPPv3N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t"></span><span id="_CPPv2N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t"></span><span id="SensitiveValue::SensitiveValue__std::unique_ptr:cA:.s"></span><span class="sig-name descname"><span class="n"><span class="pre">SensitiveValue</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">unique_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">char</span></span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">data</span></span>, <span class="n"><span class="pre">size_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">size</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t" title="Link to this definition">#</a><br /></dt>
 <dd><p>拷贝传入数据指针上的敏感数据并构造实例。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
@@ -569,9 +579,103 @@ document.write(`
 </dd></dl>
 
 <dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValue14SensitiveValueERR14SensitiveValue">
+<span id="_CPPv3N14SensitiveValue14SensitiveValueERR14SensitiveValue"></span><span id="_CPPv2N14SensitiveValue14SensitiveValueERR14SensitiveValue"></span><span id="SensitiveValue::SensitiveValue__SensitiveValueRR"></span><span class="sig-name descname"><span class="n"><span class="pre">SensitiveValue</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#_CPPv4N14SensitiveValue14SensitiveValueERR14SensitiveValue" title="SensitiveValue::SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N14SensitiveValue14SensitiveValueERR14SensitiveValue" title="Link to this definition">#</a><br /></dt>
+<dd><p>移动构造函数。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>SensitiveValue &amp;&amp;</strong> - 被移动的SensitiveValue对象。</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValue14SensitiveValueERK14SensitiveValue">
+<span id="_CPPv3N14SensitiveValue14SensitiveValueERK14SensitiveValue"></span><span id="_CPPv2N14SensitiveValue14SensitiveValueERK14SensitiveValue"></span><span id="SensitiveValue::SensitiveValue__SensitiveValueCR"></span><span class="sig-name descname"><span class="n"><span class="pre">SensitiveValue</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N14SensitiveValue14SensitiveValueERK14SensitiveValue" title="SensitiveValue::SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValue14SensitiveValueERK14SensitiveValue" title="Link to this definition">#</a><br /></dt>
+<dd><p>拷贝构造函数。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>SensitiveValue &amp;</strong> - 被拷贝的SensitiveValue对象。</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValueD0Ev">
 <span id="_CPPv3N14SensitiveValueD0Ev"></span><span id="_CPPv2N14SensitiveValueD0Ev"></span><span id="SensitiveValue::~SensitiveValue"></span><span class="sig-name descname"><span class="n"><span class="pre">~SensitiveValue</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValueD0Ev" title="Link to this definition">#</a><br /></dt>
 <dd><p>析构函数，析构时会释放保存的敏感数据。</p>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValueaSERK14SensitiveValue">
+<span id="_CPPv3N14SensitiveValueaSERK14SensitiveValue"></span><span id="_CPPv2N14SensitiveValueaSERK14SensitiveValue"></span><span id="SensitiveValue::assign-operator__SensitiveValueCR"></span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValueaSERK14SensitiveValue" title="Link to this definition">#</a><br /></dt>
+<dd><p>拷贝赋值运算符。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>SensitiveValue &amp;</strong> - 被拷贝的SensitiveValue对象。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>当前对象的引用。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValueaSERR14SensitiveValue">
+<span id="_CPPv3N14SensitiveValueaSERR14SensitiveValue"></span><span id="_CPPv2N14SensitiveValueaSERR14SensitiveValue"></span><span id="SensitiveValue::assign-operator__SensitiveValueRR"></span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N14SensitiveValueaSERR14SensitiveValue" title="Link to this definition">#</a><br /></dt>
+<dd><p>移动赋值运算符。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>SensitiveValue &amp;&amp;</strong> - 被移动的SensitiveValue对象。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>当前对象的引用。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValueaSEPKc">
+<span id="_CPPv3N14SensitiveValueaSEPKc"></span><span id="_CPPv2N14SensitiveValueaSEPKc"></span><span id="SensitiveValue::assign-operator__cCP"></span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="kt"><span class="pre">char</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n sig-param"><span class="pre">str</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValueaSEPKc" title="Link to this definition">#</a><br /></dt>
+<dd><p>使用字符串指针赋值。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>str</strong> - 字符串指针。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>当前对象的引用。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValueaSERKNSt6stringE">
+<span id="_CPPv3N14SensitiveValueaSERKNSt6stringE"></span><span id="_CPPv2N14SensitiveValueaSERKNSt6stringE"></span><span id="SensitiveValue::assign-operator__ssCR"></span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">str</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValueaSERKNSt6stringE" title="Link to this definition">#</a><br /></dt>
+<dd><p>使用字符串赋值。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>str</strong> - 字符串。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>当前对象的引用。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK14SensitiveValueeqERK14SensitiveValue">
+<span id="_CPPv3NK14SensitiveValueeqERK14SensitiveValue"></span><span id="_CPPv2NK14SensitiveValueeqERK14SensitiveValue"></span><span id="SensitiveValue::eq-operator__SensitiveValueCRC"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">==</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv414SensitiveValue" title="SensitiveValue"><span class="n"><span class="pre">SensitiveValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK14SensitiveValueeqERK14SensitiveValue" title="Link to this definition">#</a><br /></dt>
+<dd><p>判断两个SensitiveValue对象是否相等。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 另一个SensitiveValue对象。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>如果相等返回 <code class="docutils literal notranslate"><span class="pre">true</span></code>，否则返回 <code class="docutils literal notranslate"><span class="pre">false</span></code>。</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="cpp function">
@@ -622,7 +726,7 @@ document.write(`
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N14SensitiveValue5ClearEv">
 <span id="_CPPv3N14SensitiveValue5ClearEv"></span><span id="_CPPv2N14SensitiveValue5ClearEv"></span><span id="SensitiveValue::Clear"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Clear</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14SensitiveValue5ClearEv" title="Link to this definition">#</a><br /></dt>
-<dd><p>清理实例内的敏感数据，</p>
+<dd><p>清理实例内的敏感数据。</p>
 </dd></dl>
 
 </dd></dl>
@@ -680,7 +784,14 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueEPKc6size_t"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueENSt10unique_ptrIA_cEE6size_t"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueERR14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValue14SensitiveValueERK14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::SensitiveValue()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueD0Ev"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::~SensitiveValue()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSERK14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSERR14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSEPKc"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14SensitiveValueaSERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator=()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValueeqERK14SensitiveValue"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::operator==()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValue5EmptyEv"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::Empty()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValue7GetDataEv"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::GetData()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK14SensitiveValue7GetSizeEv"><code class="docutils literal notranslate"><span class="pre">SensitiveValue::GetSize()</span></code></a></li>

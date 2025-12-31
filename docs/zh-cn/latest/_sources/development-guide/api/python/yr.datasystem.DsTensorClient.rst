@@ -1,7 +1,7 @@
 yr.datasystem.DsTensorClient
 =====================================
 
-.. py:class:: yr.datasystem.DsTensorClient(host, port, device_id, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="")
+.. py:class:: yr.datasystem.DsTensorClient(host, port, device_id, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", req_timeout_ms=0, enable_remote_h2d=False)
 
     异构对象客户端。
 
@@ -13,6 +13,7 @@ yr.datasystem.DsTensorClient
         - **client_public_key** (str) - 用于 curve 认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于 curve 认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于 curve 认证的服务端公钥。默认值： ``""`` 。
+        - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
         - **enable_remote_h2d** (bool) - 如果为 ``True`` ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： ``False`` 。
 
     输出：
@@ -37,13 +38,17 @@ yr.datasystem.DsTensorClient
        * - :doc:`delete <yr.datasystem.DsTensorClient.delete>`
          - 删除 host 中的 key。
        * - :doc:`dev_send <yr.datasystem.DsTensorClient.dev_send>`
-         - 订阅发布到数据系统的异构对象，并接收数据写入 tensors。
-       * - :doc:`dev_recv <yr.datasystem.DsTensorClient.dev_recv>`
          - 将 device 上的内存发布为数据系统的异构对象，发布后的异构对象可通过 dev_recv 获取。
+       * - :doc:`dev_recv <yr.datasystem.DsTensorClient.dev_recv>`
+         - 订阅发布到数据系统的异构对象，并接收数据写入 tensors。
+       * - :doc:`exist <yr.datasystem.DsTensorClient.exist>`
+         - 检查给定 key 在数据系统中是否存在。
        * - :doc:`dev_mset <yr.datasystem.DsTensorClient.dev_mset>`
          - 通过数据系统缓存 Device 上的数据。
        * - :doc:`dev_mget <yr.datasystem.DsTensorClient.dev_mget>`
          - 获取 device 中的数据，并写入到 Tensor 中。
+       * - :doc:`dev_mget_into_tensor <yr.datasystem.DsTensorClient.dev_mget_into_tensor>`
+         - 从 device 中获取多个 key 的数据，并根据用户定义的复制范围将每个数据段复制到单个目标 Tensor 的指定位置。
        * - :doc:`dev_local_delete <yr.datasystem.DsTensorClient.dev_local_delete>`
          - 从数据系统删除本节点上此 key 的元数据，不再管理此 key 对应的 device 内存。
        * - :doc:`dev_delete <yr.datasystem.DsTensorClient.dev_delete>`
@@ -71,8 +76,10 @@ yr.datasystem.DsTensorClient
     yr.datasystem.DsTensorClient.delete
     yr.datasystem.DsTensorClient.dev_send
     yr.datasystem.DsTensorClient.dev_recv
+    yr.datasystem.DsTensorClient.exist
     yr.datasystem.DsTensorClient.dev_mset
     yr.datasystem.DsTensorClient.dev_mget
+    yr.datasystem.DsTensorClient.dev_mget_into_tensor
     yr.datasystem.DsTensorClient.dev_local_delete
     yr.datasystem.DsTensorClient.dev_delete
     yr.datasystem.DsTensorClient.async_dev_delete

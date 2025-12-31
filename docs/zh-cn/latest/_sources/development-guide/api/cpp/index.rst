@@ -60,12 +60,18 @@ KV接口
       - 创建数据系统共享内存Buffer，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。
     * - :cpp:func:`KVClient::MSet`
       - 键值对批量设置接口。
+    * - :cpp:func:`KVClient::MSetTx`
+      - 事务性批量设置键值对接口。
     * - :cpp:func:`KVClient::Get`
       - 获取键对应的数据。
+    * - :cpp:func:`KVClient::Read`
+      - 根据指定的键和参数读取对象中的部分数据。
     * - :cpp:func:`KVClient::Del`
       - 删除指定键值对。
-    * - :cpp:func:`KVClient::DelAll`
-      - 异步删除集群中所有的键值对。
+    * - :cpp:func:`KVClient::GenerateKey`
+      - 生成带有 Worker ID 的键。
+    * - :cpp:func:`KVClient::QuerySize`
+      - 查询对象键的大小。
     * - :cpp:func:`KVClient::HealthCheck`
       - 检查连接的 Worker 是否健康。
     * - :cpp:func:`KVClient::Exist`

@@ -206,8 +206,10 @@
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
@@ -475,14 +477,20 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv46Buffer"><code class="docutils literal notranslate"><span class="pre">Buffer</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6BufferEv"><code class="docutils literal notranslate"><span class="pre">Buffer::Buffer()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6BufferERR6Buffer"><code class="docutils literal notranslate"><span class="pre">Buffer::Buffer()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6BufferaSERR6Buffer"><code class="docutils literal notranslate"><span class="pre">Buffer::operator=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6BufferD0Ev"><code class="docutils literal notranslate"><span class="pre">Buffer::~Buffer()</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer7GetDataEv"><code class="docutils literal notranslate"><span class="pre">Buffer::GetData()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer11MutableDataEv"><code class="docutils literal notranslate"><span class="pre">Buffer::MutableData()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer13ImmutableDataEv"><code class="docutils literal notranslate"><span class="pre">Buffer::ImmutableData()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Buffer7GetSizeEv"><code class="docutils literal notranslate"><span class="pre">Buffer::GetSize()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6WLatchE8uint64_t"><code class="docutils literal notranslate"><span class="pre">Buffer::WLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer8UnWLatchEv"><code class="docutils literal notranslate"><span class="pre">Buffer::UnWLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6RLatchE8uint64_t"><code class="docutils literal notranslate"><span class="pre">Buffer::RLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer8UnRLatchEv"><code class="docutils literal notranslate"><span class="pre">Buffer::UnRLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer10MemoryCopyEPKv8uint64_t"><code class="docutils literal notranslate"><span class="pre">Buffer::MemoryCopy()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">Buffer::Publish()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer4SealERKNSt13unordered_setINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">Buffer::Seal()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer16InvalidateBufferEv"><code class="docutils literal notranslate"><span class="pre">Buffer::InvalidateBuffer()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer17GetRemoteHostInfoEv"><code class="docutils literal notranslate"><span class="pre">Buffer::GetRemoteHostInfo()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -526,23 +534,51 @@ document.write(`
 <span id="_CPPv3N6Buffer6BufferERR6Buffer"></span><span id="_CPPv2N6Buffer6BufferERR6Buffer"></span><span id="Buffer::Buffer__BufferRR"></span><span class="sig-name descname"><span class="n"><span class="pre">Buffer</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#_CPPv4N6Buffer6BufferERR6Buffer" title="Buffer::Buffer"><span class="n"><span class="pre">Buffer</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N6Buffer6BufferERR6Buffer" title="Link to this definition">#</a><br /></dt>
 <dd><p>移动构造函数。</p>
 <dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 要移动的 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 实例。</p></li>
+</ul>
+</dd>
 <dt>返回：</dt><dd><p>移动构造后的 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 实例。</p>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N6BufferD0Ev">
-<span id="_CPPv3N6BufferD0Ev"></span><span id="_CPPv2N6BufferD0Ev"></span><span id="Buffer::~Buffer"></span><span class="sig-name descname"><span class="n"><span class="pre">~Buffer</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">default</span></span><a class="headerlink" href="#_CPPv4N6BufferD0Ev" title="Link to this definition">#</a><br /></dt>
-<dd><p>默认析构函数。</p>
+<dt class="sig sig-object cpp" id="_CPPv4N6BufferaSERR6Buffer">
+<span id="_CPPv3N6BufferaSERR6Buffer"></span><span id="_CPPv2N6BufferaSERR6Buffer"></span><span id="Buffer::assign-operator__BufferRR"></span><a class="reference internal" href="#_CPPv46Buffer" title="Buffer"><span class="n"><span class="pre">Buffer</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">=</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="#_CPPv46Buffer" title="Buffer"><span class="n"><span class="pre">Buffer</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">other</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N6BufferaSERR6Buffer" title="Link to this definition">#</a><br /></dt>
+<dd><p>移动赋值运算符。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>other</strong> - 要移动的 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 实例。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>移动赋值后的 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 实例引用。</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N6Buffer7GetDataEv">
-<span id="_CPPv3N6Buffer7GetDataEv"></span><span id="_CPPv2N6Buffer7GetDataEv"></span><span id="Buffer::GetData"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">GetData</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer7GetDataEv" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4N6BufferD0Ev">
+<span id="_CPPv3N6BufferD0Ev"></span><span id="_CPPv2N6BufferD0Ev"></span><span id="Buffer::~Buffer"></span><span class="sig-name descname"><span class="n"><span class="pre">~Buffer</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6BufferD0Ev" title="Link to this definition">#</a><br /></dt>
+<dd><p>虚析构函数。</p>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6Buffer11MutableDataEv">
+<span id="_CPPv3N6Buffer11MutableDataEv"></span><span id="_CPPv2N6Buffer11MutableDataEv"></span><span id="Buffer::MutableData"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">MutableData</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer11MutableDataEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>获取 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 可读写的缓存数据指针。</p>
 <dl class="simple">
 <dt>返回：</dt><dd><p>可读写的缓存数据指针。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6Buffer13ImmutableDataEv">
+<span id="_CPPv3N6Buffer13ImmutableDataEv"></span><span id="_CPPv2N6Buffer13ImmutableDataEv"></span><span id="Buffer::ImmutableData"></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">ImmutableData</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer13ImmutableDataEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>获取 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 只读的缓存数据指针。</p>
+<dl class="simple">
+<dt>返回：</dt><dd><p>只读的缓存数据指针。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -552,7 +588,7 @@ document.write(`
 <span id="_CPPv3NK6Buffer7GetSizeEv"></span><span id="_CPPv2NK6Buffer7GetSizeEv"></span><span id="Buffer::GetSizeC"></span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GetSize</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK6Buffer7GetSizeEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>获取键值对 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 的大小。</p>
 <dl class="simple">
-<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 大小（以字节为单位）。</p>
+<dt>返回：</dt><dd><p><code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 的数据大小（以字节为单位）。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -580,7 +616,7 @@ document.write(`
 <span id="_CPPv3N6Buffer8UnWLatchEv"></span><span id="_CPPv2N6Buffer8UnWLatchEv"></span><span id="Buffer::UnWLatch"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">UnWLatch</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer8UnWLatchEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>对 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 解除写锁。</p>
 <dl class="simple">
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示加写锁成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示解除写锁成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -595,10 +631,10 @@ document.write(`
 </div>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>timeoutSec</strong> - 添加写锁的超时时间，默认为 60 秒。</p></li>
+<li><p><strong>timeoutSec</strong> - 添加读锁的超时时间，默认为 60 秒。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示加写锁成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示加读锁成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -608,7 +644,7 @@ document.write(`
 <span id="_CPPv3N6Buffer8UnRLatchEv"></span><span id="_CPPv2N6Buffer8UnRLatchEv"></span><span id="Buffer::UnRLatch"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">UnRLatch</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer8UnRLatchEv" title="Link to this definition">#</a><br /></dt>
 <dd><p>对 <code class="docutils literal notranslate"><span class="pre">Buffer</span></code> 解除读锁。</p>
 <dl class="simple">
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示加写锁成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示解除读锁成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -624,6 +660,54 @@ document.write(`
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示数据拷贝成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE">
+<span id="_CPPv3N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE"></span><span id="_CPPv2N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE"></span><span id="Buffer::Publish__std::unordered_set:ss:CR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Publish</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">unordered_set</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">nestedKeys</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">{</span></span><span class="p"><span class="pre">}</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE" title="Link to this definition">#</a><br /></dt>
+<dd><p>发布可变数据到服务器。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>nestedKeys</strong> - 嵌套对象的键集合，默认为空集合。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示发布成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6Buffer4SealERKNSt13unordered_setINSt6stringEEE">
+<span id="_CPPv3N6Buffer4SealERKNSt13unordered_setINSt6stringEEE"></span><span id="_CPPv2N6Buffer4SealERKNSt13unordered_setINSt6stringEEE"></span><span id="Buffer::Seal__std::unordered_set:ss:CR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Seal</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">unordered_set</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">nestedKeys</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">{</span></span><span class="p"><span class="pre">}</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer4SealERKNSt13unordered_setINSt6stringEEE" title="Link to this definition">#</a><br /></dt>
+<dd><p>发布不可变数据到服务器。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>nestedKeys</strong> - 嵌套对象的键集合，默认为空集合。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示发布成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6Buffer16InvalidateBufferEv">
+<span id="_CPPv3N6Buffer16InvalidateBufferEv"></span><span id="_CPPv2N6Buffer16InvalidateBufferEv"></span><span id="Buffer::InvalidateBuffer"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">InvalidateBuffer</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer16InvalidateBufferEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>使当前主机上的数据失效。</p>
+<dl class="simple">
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示操作成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N6Buffer17GetRemoteHostInfoEv">
+<span id="_CPPv3N6Buffer17GetRemoteHostInfoEv"></span><span id="_CPPv2N6Buffer17GetRemoteHostInfoEv"></span><span id="Buffer::GetRemoteHostInfo"></span><span class="n"><span class="pre">RemoteH2DHostInfo</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">GetRemoteHostInfo</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N6Buffer17GetRemoteHostInfoEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>获取远程主机信息。</p>
+<dl class="simple">
+<dt>返回：</dt><dd><p>用于 RemoteH2D 目的的远程主机信息指针。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -680,14 +764,20 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv46Buffer"><code class="docutils literal notranslate"><span class="pre">Buffer</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6BufferEv"><code class="docutils literal notranslate"><span class="pre">Buffer::Buffer()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6BufferERR6Buffer"><code class="docutils literal notranslate"><span class="pre">Buffer::Buffer()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6BufferaSERR6Buffer"><code class="docutils literal notranslate"><span class="pre">Buffer::operator=()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6BufferD0Ev"><code class="docutils literal notranslate"><span class="pre">Buffer::~Buffer()</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer7GetDataEv"><code class="docutils literal notranslate"><span class="pre">Buffer::GetData()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer11MutableDataEv"><code class="docutils literal notranslate"><span class="pre">Buffer::MutableData()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer13ImmutableDataEv"><code class="docutils literal notranslate"><span class="pre">Buffer::ImmutableData()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK6Buffer7GetSizeEv"><code class="docutils literal notranslate"><span class="pre">Buffer::GetSize()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6WLatchE8uint64_t"><code class="docutils literal notranslate"><span class="pre">Buffer::WLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer8UnWLatchEv"><code class="docutils literal notranslate"><span class="pre">Buffer::UnWLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer6RLatchE8uint64_t"><code class="docutils literal notranslate"><span class="pre">Buffer::RLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer8UnRLatchEv"><code class="docutils literal notranslate"><span class="pre">Buffer::UnRLatch()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer10MemoryCopyEPKv8uint64_t"><code class="docutils literal notranslate"><span class="pre">Buffer::MemoryCopy()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer7PublishERKNSt13unordered_setINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">Buffer::Publish()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer4SealERKNSt13unordered_setINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">Buffer::Seal()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer16InvalidateBufferEv"><code class="docutils literal notranslate"><span class="pre">Buffer::InvalidateBuffer()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N6Buffer17GetRemoteHostInfoEv"><code class="docutils literal notranslate"><span class="pre">Buffer::GetRemoteHostInfo()</span></code></a></li>
 </ul>
 </li>
 </ul>
