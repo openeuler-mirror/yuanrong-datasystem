@@ -19,7 +19,7 @@ source /etc/profile.d/*.sh
 readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
-                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-X on/off] [-e on/off]
+                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off] [-e on/off]
                      [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on]
                      [-A on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
 
@@ -41,6 +41,7 @@ Options:
        version from the system environment, off to disable the build, or a <python_root_dir> path to prioritize the Python
        at that specified location for search.
     -G Build Go sdk, choose from: on/off, default: off.
+    -v Specified version.The default value is using 'cat ./VERSION'.
     -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'on'.
 
     For communication layer
@@ -598,7 +599,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:X:R:D:C:M:x:m:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:x:m:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -703,6 +704,9 @@ function main() {
     h)
       echo -e "${USAGE}"
       exit 0
+      ;;
+    v)
+      echo "${OPTARG}" > "${BASE_DIR}/VERSION"
       ;;
     X)
       check_on_off "${OPTARG}" X
