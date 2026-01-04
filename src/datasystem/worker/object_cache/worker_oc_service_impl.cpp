@@ -92,6 +92,7 @@
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/async_rollback_manager.h"
+#include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -279,7 +280,7 @@ Status WorkerOCServiceImpl::Init()
 
     asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
     InitServiceImpl();
-
+    getProc_->Init();
     HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(
@@ -430,45 +431,6 @@ Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, Ho
     return Status::OK();
 }
 
-void WorkerOCServiceImpl::GroupAndRemoveMeta(const std::vector<std::string> &objKeys,
-                                             const master::RemoveMetaReqPb::Cause &removeCase,
-                                             std::vector<std::string> &failedIds,
-                                             std::vector<std::string> &needMigrateIds,
-                                             std::vector<std::string> &needWaitIds)
-{
-    INJECT_POINT("ProcessVoluntaryScaledown", [this] {
-        Timer timer;
-        uint64_t sleepTimeMs = 100;
-        uint64_t maxSecond = 5;
-        while (timer.ElapsedSecond() < maxSecond) {
-            std::string key = std::string(ETCD_RING_PREFIX) + "/";
-            RangeSearchResult res;
-            if (etcdStore_->RawGet(key, res).IsOk()) {
-                HashRingPb newRing;
-                if (newRing.ParseFromString(res.value) && !newRing.add_node_info().empty()) {
-                    break;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
-        }
-        return;
-    });
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objKeys);
-    for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
-        std::vector<std::string> currentObjectKeysRemove = item.second;
-        std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-        if (workerMasterApi == nullptr) {
-            failedIds.insert(failedIds.end(), currentObjectKeysRemove.begin(), currentObjectKeysRemove.end());
-            LOG(WARNING) << "master address is empty, objectKeys don't belong to any master,"
-                         << "remove meta failed, failed ids size is:" << currentObjectKeysRemove.size();
-            continue;
-        }
-        LOG(INFO) << "remove meta req send to master: " << masterAddr.ToString() << ", removeCase: " << removeCase;
-        BatchRemoveMeta(currentObjectKeysRemove, workerMasterApi, removeCase, failedIds, needMigrateIds, needWaitIds);
-    }
-}
-
 Status WorkerOCServiceImpl::ProcessVoluntaryScaledown(const std::string &taskId)
 {
     INJECT_POINT("ScaleUpTask.NotRunVoluntaryDownTask");
@@ -565,7 +527,8 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
     std::vector<std::string> removeFailedIds;
     std::vector<std::string> needMigrateDataIds;
     std::vector<std::string> needWaitIds;
-    GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds, needWaitIds);
+    GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds,
+                      needWaitIds);
 
     // if all worker exist, this voluntary sacle down node not exit, remove meta cant success, so we try 10 times for
     // removemeta here
@@ -586,122 +549,6 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
     }
     LOG(INFO) << "RemoveWriteBackIdsLocation finished, removeFailedIds :" << VectorToString(removeFailedIds);
     CHECK_FAIL_RETURN_STATUS(removeFailedIds.empty(), K_RUNTIME_ERROR, "RemoveWriteBackIdsLocation failed");
-    return Status::OK();
-}
-
-Status WorkerOCServiceImpl::RemoveMeta(const std::list<std::string> objectKeysRemoveList,
-                                       const std::shared_ptr<WorkerMasterOCApi> &workerMasterApi,
-                                       const master::RemoveMetaReqPb::Cause removeCause, const uint64_t version,
-                                       bool needRedirct, master::RemoveMetaRspPb &response)
-{
-    master::RemoveMetaReqPb request;
-    request.set_address(localAddress_.ToString());
-    request.set_cause(removeCause);
-    request.set_version(version);
-    request.set_redirect(needRedirct);
-    *request.mutable_ids() = { objectKeysRemoveList.begin(), objectKeysRemoveList.end() };
-    std::function<Status(RemoveMetaReqPb &, RemoveMetaRspPb &)> func =
-        [workerMasterApi](RemoveMetaReqPb &req, RemoveMetaRspPb &rsp) { return workerMasterApi->RemoveMeta(req, rsp); };
-    return WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, func);
-}
-
-void WorkerOCServiceImpl::BatchRemoveMeta(const std::vector<std::string> &objectKeys,
-                                          const std::shared_ptr<WorkerMasterOCApi> &workerMasterApi,
-                                          const master::RemoveMetaReqPb::Cause removeCause,
-                                          std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                                          std::vector<std::string> &needWaitIds)
-{
-    std::list<std::string> objectKeysRemoveList;
-    const uint32_t objBatch = 300;
-    uint32_t count = 0;
-    uint64_t version = UINT64_MAX;
-    for (auto &objectKey : objectKeys) {
-        objectKeysRemoveList.emplace_back(objectKey);
-        ++count;
-        if (count >= objBatch) {
-            // dest node failed or local node failed, stop remove.
-            if (etcdCM_->CheckVoluntaryScaleDown()) {
-                break;
-            }
-            auto status = etcdCM_->CheckConnection(objectKey);
-            if (status.IsError()) {
-                LOG(WARNING) << "remove meta failed: " << status.ToString();
-                failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
-                continue;
-            }
-            reqTimeoutDuration.Init(RPC_TIMEOUT);
-            master::RemoveMetaRspPb response;
-            auto result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, response);
-            if (result.IsError()) {
-                LOG(WARNING) << "remove meta failed: " << result.ToString();
-                failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
-            } else {
-                failedIds.insert(failedIds.end(), response.failed_ids().begin(), response.failed_ids().end());
-                needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(),
-                                      response.need_data_ids().end());
-                needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
-            }
-            RemoveMetadataFromRedirectMaster(response, removeCause, failedIds, needMigrateIds, needWaitIds);
-            objectKeysRemoveList.clear();
-            count = 0;
-        }
-    }
-    if (count > 0) {
-        reqTimeoutDuration.Init(RPC_TIMEOUT);
-        master::RemoveMetaRspPb response;
-        Status result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, response);
-        if (result.IsError()) {
-            LOG(WARNING) << "remove meta failed: " << result.ToString();
-            failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
-        } else {
-            failedIds.insert(failedIds.end(), response.failed_ids().begin(), response.failed_ids().end());
-            needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(),
-                                  response.need_data_ids().end());
-            needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
-        }
-        RemoveMetadataFromRedirectMaster(response, removeCause, failedIds, needMigrateIds, needWaitIds);
-    }
-}
-
-Status WorkerOCServiceImpl::RemoveMetadataFromRedirectMaster(master::RemoveMetaRspPb &rsp,
-                                                             const master::RemoveMetaReqPb::Cause removeCause,
-                                                             std::vector<std::string> &failedIds,
-                                                             std::vector<std::string> &needMigrateIds,
-                                                             std::vector<std::string> &needWaitIds)
-{
-    for (const auto &redirectInfo : rsp.info()) {
-        master::RemoveMetaReqPb redirectReq;
-        master::RemoveMetaRspPb redirectRsp;
-        std::list<std::string> redirectIds = { redirectInfo.change_meta_ids().begin(),
-                                               redirectInfo.change_meta_ids().end() };
-        HostPort redirectMasterAddr;
-        RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
-        auto status = etcdCM_->CheckConnection(redirectMasterAddr);
-        if (status.IsError()) {
-            LOG(WARNING) << "remove meta failed: " << status.ToString();
-            failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
-            continue;
-        }
-        std::shared_ptr<WorkerMasterOCApi> redirectWorkerMasterApi =
-            workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
-        if (redirectWorkerMasterApi == nullptr) {
-            failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
-            LOG(ERROR) << "failed to get redirectWorkerMasterApi, masterAddr: " << redirectInfo.redirect_meta_address();
-            continue;
-        }
-        Status result = RemoveMeta(redirectIds, redirectWorkerMasterApi, removeCause, UINT64_MAX, false, redirectRsp);
-        // save the result to rsp and payload
-        if (result.IsError()) {
-            LOG(WARNING) << "remove meta failed: " << result.ToString();
-            failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
-        } else {
-            failedIds.insert(failedIds.end(), redirectRsp.failed_ids().begin(), redirectRsp.failed_ids().end());
-            needMigrateIds.insert(needMigrateIds.end(), redirectRsp.need_data_ids().begin(),
-                                  redirectRsp.need_data_ids().end());
-            needWaitIds.insert(needWaitIds.end(), redirectRsp.need_wait_ids().begin(),
-                               redirectRsp.need_wait_ids().end());
-        }
-    }
     return Status::OK();
 }
 
@@ -2007,11 +1854,6 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
 Status WorkerOCServiceImpl::CheckWaitNodeTableComplete()
 {
     return etcdCM_->CheckWaitNodeTableComplete();
-}
-
-bool WorkerOCServiceImpl::IsInRemoteGetProgress(const std::string &objectKey)
-{
-    return getProc_->IsInRemoteGetObject(objectKey);
 }
 
 bool WorkerOCServiceImpl::IsInRollbackProgress(const std::string &objectKey)

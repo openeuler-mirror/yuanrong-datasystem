@@ -627,13 +627,32 @@ Status ObjectMetaStore::RemoveMeta(const std::string &key, bool needRemoveEtcdDa
     return Status::OK();
 }
 
-Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr)
+Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr,
+                                         const std::string &ackPersistenceVal)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_ADD_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(LOCATION_TABLE, key, ""),
+    // for compatibility: empty string "" stands for ACK, "0" stands for UNACK
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(LOCATION_TABLE, key, ackPersistenceVal),
                                      FormatString("Failed to add global ref to rocksdb: %s", key));
+    return Status::OK();
+}
+
+Status ObjectMetaStore::AddObjectLocations(const std::unordered_map<std::string, std::string> &keyLocations,
+                                          const std::string &ackPersistenceVal)
+{
+    RETURN_OK_IF_TRUE(keyLocations.empty());
+    RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
+    PerfPoint point(PerfKey::MASTER_ROCKSDB_ADD_OBJ_LOCATIONS);
+    // for compatibility: empty string "" stands for ACK, "0" stands for UNACK
+    std::unordered_map<std::string, std::string> locationInfos;
+    for (const auto &keyLocation : keyLocations) {
+        std::string key = keyLocation.second + "_" + keyLocation.first; // workerAddr + "_" + objectKey
+        locationInfos[key] = ackPersistenceVal;
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->BatchPut(LOCATION_TABLE, locationInfos),
+        FormatString("Failed to batch add global ref to rocksdb: key is %s", keyLocations.begin()->first));
     return Status::OK();
 }
 

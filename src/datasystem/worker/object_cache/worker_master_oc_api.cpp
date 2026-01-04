@@ -199,6 +199,31 @@ Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &requ
     return status;
 }
 
+Status WorkerRemoteMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
+                                                   master::CreateMultiCopyMetaRspPb &response)
+{
+    RpcOptions opts;
+    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    Status status = RetryOnErrorRepent(
+        timeoutMs,
+        [this, &opts, &request, &response](int32_t) {
+            int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     FormatString("Request timeout (%ld ms).", - remainingTime));
+            opts.SetTimeout(remainingTime);
+            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
+            Timer timer;
+            Status rc = rpcSession_->CreateMultiCopyMeta(opts, request, response);
+            workerOperationTimeCost.Append("Worker to master rpc CreateMultiCopyMeta", timer.ElapsedMilliSecond());
+            return rc;
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE });
+
+    return status;
+}
+
 Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout,
                                           master::QueryMetaRspPb &response, std::vector<RpcMessage> &payloads)
 {
@@ -240,7 +265,7 @@ Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, mas
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
             Timer timer;
             Status rc = rpcSession_->RemoveMeta(opts, request, response);
-            workerOperationTimeCost.Append("Worker to master rpc CreateCopyMeta", timer.ElapsedMilliSecond());
+            workerOperationTimeCost.Append("Worker to master rpc RemoveMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -935,6 +960,13 @@ Status WorkerLocalMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &reque
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
     return masterOC_->CreateCopyMeta(request, response);
+}
+
+Status WorkerLocalMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
+                                                  master::CreateMultiCopyMetaRspPb &response)
+{
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
+    return masterOC_->CreateMultiCopyMeta(request, response);
 }
 
 Status WorkerLocalMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout,

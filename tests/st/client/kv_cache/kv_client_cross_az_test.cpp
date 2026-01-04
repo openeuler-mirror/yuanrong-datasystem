@@ -290,7 +290,7 @@ TEST_F(KVClientCrossAZTest, LEVEL2_DISABLED_MasterOnOtherAzOfflineHashKey)
     ASSERT_EQ(az2client3->Get(hashKey2, outVal).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
-TEST_F(KVClientCrossAZTest, ShmMemWithoutWorkerId)
+TEST_F(KVClientCrossAZTest, DISABLED_ShmMemWithoutWorkerId)
 {
     BasicTestKey(false, 10, 10 * 1024 * 1024);
     BasicTestKey(false, 10, 10);

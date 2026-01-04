@@ -79,6 +79,14 @@ public:
     Status CreateCopyMeta(const CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp) override;
 
     /**
+     * @brief Create multi object copy meta in cache and rocksdb.
+     * @param[in] req The rpc req protobuf.
+     * @param[out] rsp The rpc rsp protobuf.
+     * @return Status of the call.
+     */
+    Status CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &req, CreateMultiCopyMetaRspPb &rsp) override;
+
+    /**
      * @brief Query object meta from cache or rocksdb.
      * @param[in] req The rpc req protobuf.
      * @param[out] rsp The rpc rsp protobuf.

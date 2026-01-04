@@ -296,10 +296,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
 Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKey, bool tryLock, uint64_t version,
                                                      std::shared_ptr<SafeObjType> &safeEntry)
 {
-    if (ocClientWorkerSvc_->IsInRemoteGetProgress(objectKey)) {
-        LOG(INFO) << FormatString("[ObjectKey %s] Data is in getting, now can not be get", objectKey);
-        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
-    } else if (ocClientWorkerSvc_->IsInRollbackProgress(objectKey)) {
+    if (ocClientWorkerSvc_->IsInRollbackProgress(objectKey)) {
         LOG(INFO) << FormatString("[ObjectKey %s] Data is in rolling back, now can not be get", objectKey);
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
     }
@@ -311,10 +308,7 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
     if (insert) {
         Raii innerUnlock([&safeEntry]() { safeEntry->WUnlock(); });
         StatusCode code;
-        if (ocClientWorkerSvc_->IsInRemoteGetProgress(objectKey)) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Data is in getting, now can not be get", objectKey);
-            code = StatusCode::K_NOT_FOUND;
-        } else if (ocClientWorkerSvc_->IsInRollbackProgress(objectKey)) {
+        if (ocClientWorkerSvc_->IsInRollbackProgress(objectKey)) {
             LOG(INFO) << FormatString("[ObjectKey %s] Data is in rolling back, now can not be get", objectKey);
             code = StatusCode::K_NOT_FOUND;
         } else if (!tryLock) {

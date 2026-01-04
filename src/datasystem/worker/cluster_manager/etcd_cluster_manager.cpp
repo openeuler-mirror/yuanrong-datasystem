@@ -1362,6 +1362,28 @@ Status EtcdClusterManager::GetMetaAddress(const std::string &objKey, MetaAddrInf
     return Status::OK();
 }
 
+void EtcdClusterManager::GetObjectKeysFromNotConnectedMaster(
+    const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &metaAddrInfos,
+    std::unordered_set<std::string> &objectKeys)
+{
+    for (const auto &[metaAddrInfo, keys] : metaAddrInfos) {
+        const auto &masterAddr = metaAddrInfo.GetAddress();
+        if (metaAddrInfo.IsFromOtherAz()) {
+            if (!CheckIfOtherAzNodeConnected(masterAddr)) {
+                for (const auto &key : keys) {
+                    objectKeys.emplace(key);
+                }
+            }
+        } else {
+            if (CheckConnection(masterAddr).IsError()) {
+                for (const auto &key : keys) {
+                    objectKeys.emplace(key);
+                }
+            };
+        }
+    }
+}
+
 Status EtcdClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr,
                                                                 std::string &dbName)
 {

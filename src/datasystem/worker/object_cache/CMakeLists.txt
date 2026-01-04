@@ -12,6 +12,7 @@ set(WORKER_OC_SRCS
         obj_cache_shm_unit.cpp
         async_send_manager.cpp
         async_rollback_manager.cpp
+        async_update_location_manager.cpp
         object_kv.cpp
         eviction_list.cpp
         cache_hit_info.cpp

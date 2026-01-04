@@ -83,7 +83,7 @@ public:
             ObjectMeta objectMeta;
             objectMeta.meta.set_object_key(std::to_string(i));
             objectMeta.meta.set_data_size(1000);
-            objectMeta.locations.insert(GetWorkerAddr(workerIndex));
+            objectMeta.locations[GetWorkerAddr(workerIndex)] = AckState::ACK;
             metas.emplace(objectMeta.meta.object_key(), objectMeta);
         }
     }
@@ -110,12 +110,12 @@ public:
                 CreateCopyMetaReqPb req;
                 CreateCopyMetaRspPb rsp;
                 req.set_object_key(metaInfo.meta.object_key());
-                req.set_address(*metaInfo.locations.begin());
+                req.set_address(metaInfo.locations.begin()->first);
                 status = client->CreateCopyMeta(req, rsp);
             } else {
                 CreateMetaReqPb req;
                 CreateMetaRspPb rsp;
-                req.set_address(*metaInfo.locations.begin());
+                req.set_address(metaInfo.locations.begin()->first);
                 req.mutable_meta()->CopyFrom(metaInfo.meta);
                 status = client->CreateMeta(req, rsp);
             }
@@ -401,15 +401,15 @@ TEST_F(WorkerOCMasterTest, TestUpdate)
     ObjectMeta objectMeta;
     objectMeta.meta.set_object_key("abcd");
     objectMeta.meta.set_data_size(1);
-    objectMeta.locations.emplace("127.0.0.1");
+    objectMeta.locations["127.0.0.1"] = AckState::ACK;
     UpdateMetaReqPb updateReq;
     UpdateMetaRspPb updateRsp;
     updateReq.set_object_key(objectMeta.meta.object_key());
-    updateReq.set_address(*objectMeta.locations.begin());
+    updateReq.set_address(objectMeta.locations.begin()->first);
     ASSERT_EQ(client->UpdateMeta(updateReq, updateRsp).GetCode(), StatusCode::K_NOT_FOUND);
 
     CreateMetaReqPb createReq;
-    createReq.set_address(*objectMeta.locations.begin());
+    createReq.set_address(objectMeta.locations.begin()->first);
     createReq.mutable_meta()->CopyFrom(objectMeta.meta);
     CreateMetaRspPb createRsp;
     DS_ASSERT_OK(client->CreateMeta(createReq, createRsp));

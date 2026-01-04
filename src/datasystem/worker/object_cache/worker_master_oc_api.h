@@ -92,6 +92,15 @@ public:
     virtual Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) = 0;
 
     /**
+     * @brief Create multi object copy meta in cache and rocksdb.
+     * @param[in] request The rpc request protobuf.
+     * @param[out] response The rpc response protobuf.
+     * @return Status of the call.
+     */
+    virtual Status CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
+                                        master::CreateMultiCopyMetaRspPb &response) = 0;
+
+    /**
      * @brief Query object meta from cache and rocksdb.
      * @param[in] request The rpc request protobuf.
      * @param[in] subTimeout The timeout for subscribe.
@@ -392,6 +401,8 @@ public:
     Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
                                    master::CreateMultiMetaRspPb &response) override;
     Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) override;
+    Status CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
+                                master::CreateMultiCopyMetaRspPb &response) override;
     Status QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout, master::QueryMetaRspPb &response,
                      std::vector<RpcMessage> &payloads) override;
     Status RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) override;
@@ -467,6 +478,8 @@ public:
     Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
                                    master::CreateMultiMetaRspPb &response) override;
     Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) override;
+    Status CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
+                                master::CreateMultiCopyMetaRspPb &response) override;
     Status QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout, master::QueryMetaRspPb &response,
                      std::vector<RpcMessage> &payloads) override;
     Status RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) override;

@@ -53,7 +53,7 @@ void MakeObjectMetas(size_t createNum, std::unordered_map<std::string, ObjectMet
         objectMeta.meta.set_object_key(std::to_string(i));
         objectMeta.meta.set_data_size(RandomData().GetRandomUint64());
         std::string address = "127.0.0.1:1000";
-        objectMeta.locations.insert(address);
+        objectMeta.locations[address] = AckState::ACK;
         metas.emplace(objectMeta.meta.object_key(), objectMeta);
     }
 }
