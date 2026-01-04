@@ -142,14 +142,30 @@ class Executor:
         **INTERNAL** helper method to retrieve SSH information.
         It looks up in the cached `ssh_config_map`.
         """
+        import getpass
+        
+        # Extract hostname/IP from target_address (handle port if present)
+        target_host = target_address.split(":")[0]
+
+        # Check 1: If SSH config map is empty, return None for local targets
         if not self.ssh_config_map:
+            # If target is local and no SSH config, return None (local execution)
+            if target_host in self._local_ips_cache:
+                return None
             logger.warning(
                 f"warning: SSH configuration map is empty. Ensure load_ssh_config() was called."
             )
             return None
 
-        config = self.ssh_config_map.get(target_address)
+        # Check 2: If there's any mapping for current node IP and current user, return None
+        current_user = getpass.getuser()
+        for host, config in self.ssh_config_map.items():
+            host_ip = host.split(":")[0]
+            if host_ip in self._local_ips_cache and config.get("username") == current_user:
+                return None
 
+        # Normal SSH config lookup
+        config = self.ssh_config_map.get(target_address)
         if not config:
             return None
 
@@ -196,7 +212,7 @@ class Executor:
             return self.pkg_location_cache[worker_address]
 
         pip_show_result = self.execute(
-            "source ~/.bashrc && pip show openyuanrong-datasystem", worker_address
+            'bash -l -c "source ~/.bashrc && pip show openyuanrong-datasystem"', worker_address
         )
 
         location = None
@@ -239,13 +255,14 @@ class Executor:
         It intelligently decides whether to run the command locally or remotely.
         """
         is_local = target_address.split(":")[0] in self._local_ips_cache
+        remote_info = self.get_remote_info(target_address)
 
-        remote_info = None
-        if not is_local:
-            remote_info = self.get_remote_info(target_address)
-            if not remote_info:
-                return f"Error: SSH configuration for '{target_address}' is missing or invalid."
+        # For remote targets, we need valid SSH configuration
+        if not is_local and not remote_info:
+            return f"Error: SSH configuration for '{target_address}' is missing or invalid."
 
+        # For local targets, use remote_info if available (e.g., connecting to other user on same machine)
+        # Otherwise, use local execution
         task = BenchCommandTask(command=command_str, env=env, remote=remote_info)
         task.run()
 
