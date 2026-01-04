@@ -387,4 +387,7 @@ class Command(BaseCommand):
                 k = util.validate_no_injection(k)
                 v = util.validate_no_injection(v)
                 cmd.append(f"--{k}={v}")
+        cmd_str = " ".join(cmd)
+        if use_numactl:
+            self.logger.info(f"Starting with numactl command: {cmd_str}")
         return cmd
