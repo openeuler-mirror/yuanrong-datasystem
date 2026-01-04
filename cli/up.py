@@ -219,7 +219,8 @@ class Command(BaseCommand, ParallelMixin):
             use_numactl,
             numactl_opts
         )
-
+        if use_numactl:
+            self.logger.info(f"Starting with numactl command: {remote_cmd}")
         util.ssh_execute(node, user_name, private_key, f"bash -l -c {shlex.quote(remote_cmd)}")
         self.logger.info(f"Start worker service @ {node}:{worker_port} success.")
 
