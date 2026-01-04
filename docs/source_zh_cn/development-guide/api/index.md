@@ -8,9 +8,11 @@
 
    python/index
    cpp/index
+   java/index
 ```
 
 本节向您介绍开发openYuanrong datasystem的相关 API。
 
 - [Python](./python/index.rst)
 - [C++](./cpp/index.rst)
+- [Java](./java/index.rst)
