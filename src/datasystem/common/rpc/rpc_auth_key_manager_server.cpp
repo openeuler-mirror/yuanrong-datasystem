@@ -41,6 +41,7 @@ const std::unordered_map<std::string, RawSvcToKeyMapping> DEFAULT_SERVICE_MAPPIN
         { "WorkerOCService", { "client.key", "worker.key" } },
         { "WorkerWorkerOCService", { "worker.key" } },
         { "WorkerWorkerSCService", { "worker.key" } },
+        { "WorkerWorkerTransportService", { "worker.key" } },
         { "ClientWorkerSCService", { "client.key", "worker.key" } },
         { "MasterWorkerSCService", { "master.key", "worker.key" } },
         { "MasterWorkerOCService", { "master.key", "worker.key" } },

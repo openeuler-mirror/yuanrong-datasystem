@@ -31,6 +31,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_uint32(urma_poll_size);
@@ -149,6 +150,7 @@ Status UrmaManager::InitLocalUrmaInfo(const HostPort &hostport)
     localUrmaInfo_.uasid = GetUasid();
     localUrmaInfo_.jfrIds = GetJfrIds();
     localUrmaInfo_.localAddress = hostport;
+    localUrmaInfo_.uniqueInstanceId = GetStringUuid();
     LOG(INFO) << "local urma info: " << localUrmaInfo_.ToString();
     return Status::OK();
 }
@@ -905,6 +907,25 @@ Status UrmaManager::StrToEid(const std::string &eid, urma_eid_t &out)
     return Status::OK();
 }
 
+Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId)
+{
+    RemoteDeviceMap::ConstAccessor constAccessor;
+    auto res = remoteDeviceMap_->Find(constAccessor, hostAddress);
+    if (!res) {
+        RETURN_STATUS(K_URMA_NEED_CONNECT, "No existing connection requires creation.");
+    }
+    if (!constAccessor.entry) {
+        RETURN_STATUS_LOG_ERROR(K_URMA_NEED_CONNECT, "The empty connection configuration needs to be recreated!");
+    }
+    if (!instanceId.empty()) {
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor.entry->data.urmaInfo_.uniqueInstanceId == instanceId,
+                                             K_URMA_NEED_CONNECT,
+                                             "Urma connect has disconnected and needs to be reconnected!");
+        return Status::OK();
+    }
+    RETURN_STATUS(K_URMA_NEED_CONNECT, "Urma connect unstable, need to reconnect!");
+}
+
 Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
 {
     (void)rsp;
@@ -971,7 +992,7 @@ void RemoteDevice::SetJfrs(std::vector<urma_target_jetty_t *> &jetties)
 
 Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor)
 {
-    if (remoteSegments_.Find(constAccessor, segVa)) {
+    if ((*remoteSegments_).Find(constAccessor, segVa)) {
         return Status::OK();
     }
     RETURN_STATUS(K_NOT_FOUND, "Remote segment is not found");
@@ -982,12 +1003,13 @@ Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImpo
     (void)urmaContext;
     SegmentMap::Accessor accessor;
     auto segVa = importSegmentInfo.seg().va();
-    if (!remoteSegments_.Find(accessor, segVa)) {
-        if (remoteSegments_.Insert(accessor, segVa)) {
+    auto &remoteSegments = *remoteSegments_;
+    if (!remoteSegments.Find(accessor, segVa)) {
+        if (remoteSegments.Insert(accessor, segVa)) {
             bool needErase = true;
-            Raii eraseSegment([this, &accessor, &needErase]() {
+            Raii eraseSegment([this, &accessor, &needErase, &remoteSegments]() {
                 if (needErase) {
-                    remoteSegments_.BlockingErase(accessor);
+                    remoteSegments.BlockingErase(accessor);
                 }
             });
 
@@ -1008,13 +1030,16 @@ Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImpo
 void RemoteDevice::Clear()
 {
     importJfrs_.clear();
+    remoteSegments_.reset();
+    remoteSegments_ = std::make_unique<SegmentMap>();
 }
 
 Status RemoteDevice::UnimportRemoteSeg(const uint64_t segmentAddress)
 {
     SegmentMap::Accessor accessor;
-    if (remoteSegments_.Find(accessor, segmentAddress)) {
-        remoteSegments_.BlockingErase(accessor);
+    auto &remoteSegments = *remoteSegments_;
+    if (remoteSegments.Find(accessor, segmentAddress)) {
+        remoteSegments.BlockingErase(accessor);
         return Status::OK();
     }
     RETURN_STATUS(K_NOT_FOUND, "Cannot unimport remote segment, remote segment is not imported");

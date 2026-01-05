@@ -24,7 +24,6 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/rpc_service_method.h"
 #include "datasystem/common/rpc/zmq/zmq_context.h"
@@ -96,37 +95,6 @@ Status ZmqFrontend::Init()
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(initialized_, K_RUNTIME_ERROR, "Frontend socket fails to initialize.");
     return Status::OK();
 }
-
-#ifdef USE_URMA
-Status ZmqFrontend::ExchangeJfr()
-{
-    // Exchange jfr for this channel if needed
-    if (UrmaManager::IsUrmaEnabled()) {
-        // Send our own jfr
-        UrmaHandshakeReqPb rq;
-        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(rq);
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(rq));
-        MetaPb meta = CreateMetaData("", ZMQ_EXCHANGE_JFR_METHOD, ZMQ_INVALID_PAYLOAD_INX, GetStringUuid());
-        ZmqMsgFrames p;
-        RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, p));
-        RETURN_IF_NOT_OK(PushBackProtobufToFrames(rq, p));
-        RETURN_IF_NOT_OK(frontend_->SendAllFrames(p, ZmqSendFlags::NONE));
-        // Get the other side's jfr
-        ZmqMsgFrames reply;
-        RETURN_IF_NOT_OK(frontend_->GetAllFrames(reply, ZmqRecvFlags::NONE));
-        reply.pop_front();  // client id
-        reply.pop_front();  // MetaPb;
-        RETURN_IF_NOT_OK(ZmqMessageToStatus(reply.front()));
-        // If the status is OK, then we can read the urma handshake info.
-        reply.pop_front();  // Status
-        UrmaHandshakeRspPb rsp;
-        RETURN_IF_NOT_OK(ParseFromZmqMessage(reply.front(), rsp));
-        // Response does not need to be processed,
-        // the stub side does not need to import the remote jfr in urma_write scenario.
-    }
-    return Status::OK();
-}
-#endif
 
 void ZmqFrontend::Stop()
 {
@@ -357,11 +325,6 @@ Status ZmqFrontend::WorkerEntry()
     });
     ffd_ = frontend_->GetEventFd();
     LOG(INFO) << FormatString("New gateway created %s", GetGatewayId());
-#ifdef USE_URMA
-    // It is acceptable if the ZMQ internal method is not found,
-    // it can be that the other side disables URMA, or is compiled without URMA.
-    RETURN_IF_NOT_OK_EXCEPT(ExchangeJfr(), K_NOT_FOUND);
-#endif
     INJECT_POINT("ZmqFrontend.WorkerEntry.FailInit");
     initialized_ = true;
     initializeGuard.reset();

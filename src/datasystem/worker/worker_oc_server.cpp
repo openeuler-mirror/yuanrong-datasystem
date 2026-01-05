@@ -230,6 +230,7 @@ WorkerOCServer::~WorkerOCServer()
     objCacheWorkerWkSvc_.reset();
     objCacheWorkerMsSvc_.reset();
     objCacheClientWorkerSvc_.reset();
+    objCacheWorkerTransSvc_.reset();
     streamCacheWorkerWorkerSvc_.reset();
     streamCacheClientWorkerSvc_.reset();
     streamCacheMasterSvc_.reset();
@@ -266,6 +267,18 @@ Status WorkerOCServer::InitWorkerWorkerOCService()
         FormatString("Invalid tcp/ip port value %d", FLAGS_oc_worker_worker_direct_port));
     cfg.tcpDirect_ = std::to_string(FLAGS_oc_worker_worker_direct_port);
     builder_.AddService(objCacheWorkerWkSvc_.get(), cfg);
+    return Status::OK();
+}
+
+Status WorkerOCServer::InitWorkerWorkerTransportService()
+{
+    RETURN_OK_IF_TRUE(!EnableOCService());
+    RETURN_IF_NOT_OK(objCacheWorkerTransSvc_->Init());
+    RpcServiceCfg cfg;
+    cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
+    cfg.numStreamSockets_ = 0;
+    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
+    builder_.AddService(objCacheWorkerTransSvc_.get(), cfg);
     return Status::OK();
 }
 
@@ -507,6 +520,9 @@ void WorkerOCServer::CreateWorkerServices()
         // create MasterWorkerOCService
         objCacheWorkerMsSvc_ = std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(
             objCacheClientWorkerSvc_, akSkManager_);
+        // create WorkerWorkerTransportService
+        objCacheWorkerTransSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(
+            objCacheClientWorkerSvc_);
     }
     if (EnableSCService()) {
         auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
@@ -564,6 +580,7 @@ Status WorkerOCServer::InitializeWorkerServices()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerOCService(), "InitWorkerOCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerWorkerOCService(), "InitWorkerWorkerOCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterWorkerOCService(), "InitMasterWorkerOCService failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerWorkerTransportService(), "InitWorkerWorkerTransportService failed");
     // In some cases services have dependencies between each other where they access each other via pointers.
     // For example, the WorkerOCService takes a pointer to the MasterOCService to provide a local bypass optimization.
     // However, there exist cases that have a circular dependency:

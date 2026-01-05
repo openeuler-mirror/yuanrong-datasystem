@@ -38,8 +38,7 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/meta_zmq.pb.h"
-#include "datasystem/protos/utils.pb.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -63,7 +62,7 @@ public:
     /**
      * @brief Create a new Segment object.
      */
-    Segment() : segment_(nullptr), local_(true){};
+    Segment() : segment_(nullptr), local_(true) {};
     ~Segment();
 
     /**
@@ -91,7 +90,10 @@ public:
     /**
      * @brief Create a new RemoteDevice object.
      */
-    RemoteDevice(){};
+    RemoteDevice()
+    {
+        remoteSegments_ = std::make_unique<SegmentMap>();
+    };
 
     ~RemoteDevice();
 
@@ -131,7 +133,7 @@ public:
     void Clear();
     UrmaJfrInfo urmaInfo_;
     std::vector<custom_unique_ptr<urma_target_jetty_t>> importJfrs_;
-    SegmentMap remoteSegments_;
+    std::unique_ptr<SegmentMap> remoteSegments_;
 };
 
 using RemoteDeviceMap = LockMap<std::string, RemoteDevice>;
@@ -359,6 +361,23 @@ public:
     const UrmaJfrInfo &GetLocalUrmaInfo()
     {
         return localUrmaInfo_;
+    }
+
+    /**
+     * @brief Check if the connection is stable.
+     * @param[in] hostAddress The dst port address.
+     * @param[in] instanceId The unqiue instance uuid from dst port.
+     * @return Status of the connection.
+     */
+    Status CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId = "");
+
+    /**
+     * @brief Get local transport unique instance id.
+     * @param[out] instanceId The local instance uuid.
+     */
+    void GetLocalInstanceId(std::string &instanceId)
+    {
+        instanceId = localUrmaInfo_.uniqueInstanceId;
     }
 
 private:

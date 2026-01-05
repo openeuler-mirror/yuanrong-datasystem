@@ -75,6 +75,9 @@ Status RpcStubCacheMgr::CreateRpcStub(StubType type, const std::shared_ptr<RpcCh
         case StubType::MASTER_MASTER_OC_SVC:
             stub = std::make_shared<master::MasterOCService_Stub>(channel);
             break;
+        case StubType::WORKER_WORKER_TRANS_SVC:
+            stub = std::make_shared<WorkerWorkerTransportService_Stub>(channel);
+            break;
         default:
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
     }
@@ -162,6 +165,12 @@ void RpcStubCacheMgr::InitCreators()
                 [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
                 StubType::MASTER_MASTER_OC_SVC, rpcStub);
         });
+    creators_.emplace(
+        StubType::WORKER_WORKER_TRANS_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
+                StubType::WORKER_WORKER_TRANS_SVC, rpcStub);
+        });
 }
 
 Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub)
@@ -225,6 +234,7 @@ StubPriority GetStubPriority(StubType type)
 {
     switch (type) {
         case StubType::MASTER_WORKER_OC_SVC:
+        case StubType::WORKER_WORKER_TRANS_SVC:
             return StubPriority::LOW;
         case StubType::WORKER_WORKER_OC_SVC:
         case StubType::WORKER_MASTER_OC_SVC:

@@ -42,6 +42,7 @@
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
@@ -164,6 +165,12 @@ private:
      * @return Status of the call.
      */
     Status InitWorkerWorkerOCService();
+
+    /**
+     * @brief Init object service for worker worker fast transport.
+     * @return Status of the call.
+     */
+    Status InitWorkerWorkerTransportService();
 
     /**
      * @brief Init object service for master request.
@@ -438,6 +445,8 @@ private:
     std::future<Status> clientWorkerCommonSvcStatus_;
     // Object cache rpc service for worker request.
     std::shared_ptr<datasystem::object_cache::WorkerWorkerOCServiceImpl> objCacheWorkerWkSvc_{ nullptr };
+    // Object cache rpc service for worker fast transport request.
+    std::shared_ptr<datasystem::object_cache::WorkerWorkerTransportServiceImpl> objCacheWorkerTransSvc_{ nullptr };
     // Object cache rpc service for master request.
     std::shared_ptr<datasystem::object_cache::MasterWorkerOCServiceImpl> objCacheWorkerMsSvc_{ nullptr };
     // Stream cache rpc service for client request.

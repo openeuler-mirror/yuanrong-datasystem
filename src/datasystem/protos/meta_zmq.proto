@@ -86,14 +86,3 @@ message PayloadDirectGetRspPb {
     int64 addr = 1;
     uint64 sz = 2;
 }
-
-message UrmaHandshakeReqPb {
-    bytes eid = 1;
-    uint32 uasid = 2;
-    repeated uint32 jfr_ids = 3;
-    HostPortPb address = 4;
-    repeated UrmaImportSegmentPb seg_infos = 6;
-}
-
-message UrmaHandshakeRspPb {
-}

@@ -31,7 +31,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/protos/utils.pb.h"
+#include "datasystem/protos/meta_transport.pb.h"
 
 namespace datasystem {
 /**
@@ -164,5 +164,36 @@ Status FillUcpInfo(uint64_t segAddress, uint64_t dataOffset, const std::string &
 Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
                      const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
                      std::vector<uint64_t> &keys);
+
+/**
+ * @brief Trigger UcpManager logic to import segment and write payload.
+ * @param[in] req Urma handshake request.
+ * @param[out] rsp Urma handshake response.
+ * @return Status of the call.
+ */
+Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
+
+/**
+ * @brief Check if the connection is stable.
+ * @param[in] hostAddress The dst port address.
+ * @param[in] instanceId The unqiue instance uuid from dst port.
+ * @return Status of the connection.
+ */
+Status CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId);
+
+/**
+ * @brief Get local transport unique instance id.
+ * @param[out] instanceId The local instance uuid.
+ * @return Status of the call.
+ */
+Status GetLocalTransportInstanceId(std::string &instanceId);
+
+/**
+ * @brief Construct local transport request info.
+ * @param[out] req The handshake request.
+ * @return Status of the call.
+ */
+Status ConstructHandshakePb(UrmaHandshakeReqPb &req);
+
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H

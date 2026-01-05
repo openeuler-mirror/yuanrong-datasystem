@@ -37,38 +37,6 @@ message RedirectMetaInfo {
   repeated string change_meta_ids = 2;
 }
 
-message UrmaSegPb {
-    bytes eid = 1;
-    uint32 uasid = 2;
-    uint64 va = 3;
-    uint64 len = 4;
-    uint32 attr = 5;
-    uint32 token_id = 6;
-}
-
-message UrmaBondSegInfoPb{
-  UrmaSegPb base = 1;
-  repeated UrmaSegPb slaves = 2;
-  int32 dev_num = 3;
-}
-
-message UrmaImportSegmentPb {
-  UrmaSegPb seg = 1;
-}
-
-message UrmaRemoteAddrPb {
-  uint64 seg_va = 1;
-  uint64 seg_data_offset = 2;
-  HostPortPb request_address = 3;
-}
-
-message UcpRemoteInfoPb {
-  HostPortPb remote_ip_addr = 1;
-  bytes remote_worker_addr = 2;
-  bytes rkey = 3;
-  uint64 remote_buf = 4;
-}
-
 message RemoteHostSegmentPb {
   bytes name = 1;
   uint64 seg_va = 2;

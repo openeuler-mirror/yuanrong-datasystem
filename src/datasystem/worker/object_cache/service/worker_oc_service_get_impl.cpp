@@ -910,6 +910,30 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpA
     return Status::OK();
 }
 
+Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPoint, Status &lastResult)
+{
+    if (lastResult.IsOk() || lastResult.GetCode() != K_URMA_NEED_CONNECT) {
+        return lastResult;
+    }
+
+    HostPort hostAddress;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddress.ParseString(endPoint), "ParseString failed");
+
+    TbbTransportStubTable::const_accessor constAccApi;
+    while (!tarnsportApiTable_.find(constAccApi, endPoint)) {
+        TbbTransportStubTable::accessor acc;
+        if (tarnsportApiTable_.insert(acc, endPoint)) {
+            std::shared_ptr<WorkerRemoteWorkerTransApi> transportApi =
+                std::make_shared<WorkerRemoteWorkerTransApi>(hostAddress);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
+            acc->second = std::move(transportApi);
+        }
+    }
+
+    RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange());
+    RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
+}
+
 Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &address, std::list<GetObjectInfo> &infos,
                                                         const std::shared_ptr<GetRequest> &request,
                                                         std::vector<std::string> &successIds,
@@ -932,6 +956,10 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         (*reqPb.mutable_comm_id()) = request->GetClientCommUuid();
     }
 
+    std::string transportInstanceId;
+    if (GetLocalTransportInstanceId(transportInstanceId).IsOk()) {
+        (*reqPb.mutable_urma_instance_id()) = transportInstanceId;
+    }
     bool requestReady = false;
     uint32_t objectIndex = 0;
     for (auto infoIter = infos.begin(); infoIter != infos.end(); objectIndex++) {
@@ -1022,6 +1050,10 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     if (objectKV.commId_) {
         (*reqPb.mutable_comm_id()) = (*objectKV.commId_);
     }
+    std::string transportInstanceId;
+    if (GetLocalTransportInstanceId(transportInstanceId).IsOk()) {
+        reqPb.set_urma_instance_id(transportInstanceId);
+    }
 
     bool dataSizeChange;
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> clientApi;
@@ -1037,10 +1069,11 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         INJECT_POINT("worker_oc_service_get_impl.pull_object_data_from_remote_worker.before_get_from_remote");
         Status rc = RetryOnErrorRepent(
             timeoutMs,
-            [&workerStub, &reqPb, &rspPb, &clientApi](int32_t) {
+            [&workerStub, &reqPb, &rspPb, &clientApi, &address, this](int32_t) {
                 RETURN_IF_NOT_OK(workerStub->GetObjectRemote(&clientApi));
                 RETURN_IF_NOT_OK(workerStub->GetObjectRemoteWrite(clientApi, reqPb));
-                RETURN_IF_NOT_OK(clientApi->Read(rspPb));
+                auto rc = clientApi->Read(rspPb);
+                RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                 return Status::OK();
             },
             []() { return Status::OK(); },

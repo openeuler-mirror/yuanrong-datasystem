@@ -87,6 +87,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     INJECT_POINT("worker.GetObjectRemote.afterRead");
     // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
     // is different from the request
+    RETURN_IF_NOT_OK(CheckConnectionStable(req));
     RETURN_IF_NOT_OK_EXCEPT(GetObjectRemote(req, rsp, payload), StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
     pointImpl.Record();
     PerfPoint pointWrite(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
@@ -543,6 +544,17 @@ Status WorkerWorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, Migra
     return ocClientWorkerSvc_->MigrateData(req, rsp, std::move(payloads));
 }
 
+Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReqPb &req)
+{
+    bool isFastTransportEnabled = (IsUrmaEnabled() && req.has_urma_info()) || (IsUcpEnabled() && req.has_ucp_info());
+    if (!isFastTransportEnabled) {
+        return Status::OK();
+    }
+    const HostPort requestAddress(req.urma_info().request_address().host(), req.urma_info().request_address().port());
+    RETURN_IF_NOT_OK(CheckUrmaConnectionStable(requestAddress.ToString(), req.urma_instance_id()));
+    return Status::OK();
+}
+
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>>
         serverApi)
@@ -557,6 +569,9 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
     std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    auto *signleReq = req.mutable_requests(0);
+    *(signleReq->mutable_urma_instance_id()) = req.urma_instance_id();
+    RETURN_IF_NOT_OK(CheckConnectionStable(*signleReq));
     if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
         tbb::task_arena limited;
         if (FLAGS_oc_worker_worker_parallel_nums > 0) {

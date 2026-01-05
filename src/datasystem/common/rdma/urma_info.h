@@ -28,8 +28,7 @@
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/protos/meta_zmq.pb.h"
-#include "datasystem/protos/utils.pb.h"
+#include "datasystem/protos/meta_transport.pb.h"
 
 namespace datasystem {
 struct UrmaJfrInfo {
@@ -37,6 +36,7 @@ struct UrmaJfrInfo {
     uint32_t uasid{ 0 };
     std::vector<uint32_t> jfrIds;
     HostPort localAddress;
+    std::string uniqueInstanceId;
 
     std::string ToString() const;
 
@@ -52,6 +52,7 @@ struct UrmaJfrInfo {
         }
         proto.mutable_address()->set_host(localAddress.Host());
         proto.mutable_address()->set_port(localAddress.Port());
+        proto.set_urma_instance_id(uniqueInstanceId);
     }
 
     template <class Proto>
@@ -63,6 +64,7 @@ struct UrmaJfrInfo {
             jfrIds.emplace_back(jfrId);
         }
         localAddress = HostPort(proto.address().host(), proto.address().port());
+        uniqueInstanceId = proto.urma_instance_id();
         return Status::OK();
     }
 };
