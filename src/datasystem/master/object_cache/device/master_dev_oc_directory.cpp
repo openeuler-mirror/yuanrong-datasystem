@@ -476,6 +476,7 @@ Status ObjectGetP2PMetaReqSubscriptionTable::ReturnGetP2PMetaRequest(std::shared
         if (request->objects_.find(accessor, objectKey) && accessor->second != nullptr) {
             auto childResp = resp.add_dev_obj_resp_meta();
             auto rc = request->GetObjectStatus(objectKey);
+            LOG(INFO) << FormatString("ReturnGetP2PMetaRequest satisfied, objectKey: %s, rc: %s", objectKey, rc);
             childResp->set_object_key(objectKey);
             if (rc.IsError()) {
                 childResp->mutable_error()->set_error_code(rc.GetCode());
@@ -487,7 +488,6 @@ Status ObjectGetP2PMetaReqSubscriptionTable::ReturnGetP2PMetaRequest(std::shared
             auto &srcWorkerIP = accessor->second->srcWorkerIP_;
             auto &dstWorkerIP = request->workerIP_;
             childResp->set_is_same_node(dstWorkerIP == srcWorkerIP);
-            LOG(INFO) << "ReturnGetP2PMetaRequest satisfied, objectKey: " << objectKey;
         } else {
             auto message = FormatString("GetP2PMeta can't find object: %s", objectKey);
             LOG(ERROR) << message;

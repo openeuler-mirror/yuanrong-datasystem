@@ -109,14 +109,19 @@ Status MasterDevOcManager::PutP2PMetaImpl(const PutP2PMetaReqPb &req, PutP2PMeta
         std::unordered_map<std::shared_ptr<GetP2PMetaRequest>, Status> reqVerifyResults;
         for (auto &req : p2pReqVec) {
             auto getMetaPbs = req->requestInfo_.dev_obj_meta();
-            if (getMetaPbs.size() != 1) {
-                LOG(WARNING) << "Expected 1 device object metadata for per-key subscription";
-                reqVerifyResults[req] = Status(K_RUNTIME_ERROR, "Invalid metadata size");
-                continue;
+            bool found = false;
+            for (const auto &metaPb : getMetaPbs) {
+                if (metaPb.object_key() == objectKey) {
+                    auto rc = objDirectory->VerifyDataRangeLegality(metaPb);
+                    reqVerifyResults[req] = rc;
+                    found = true;
+                    break;
+                }
             }
-
-            auto rc = objDirectory->VerifyDataRangeLegality(getMetaPbs[0]);
-            reqVerifyResults[req] = rc;
+            if (!found) {
+                LOG(WARNING) << "Object key " << objectKey
+                             << "not found in DeviceObjectMetaPb list from GetP2PMetaRequest.";
+            }
         }
 
         // For subscriptions of unary key buffers only
