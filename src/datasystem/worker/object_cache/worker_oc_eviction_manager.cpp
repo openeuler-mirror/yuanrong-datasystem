@@ -41,11 +41,8 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
-DS_DEFINE_uint32(
-    eviction_reserve_mem_threshold_mb, 10240,
-    "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb). "
-    "Eviction begins when memory drops below this threshold.The valid range is 100-102400.");
-DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
+
+DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DEFINE_uint32(eviction_thread_num, 1, "Thread number of eviction for object cache.");
 DS_DEFINE_validator(eviction_thread_num, &Validator::ValidateThreadNum);
 DS_DECLARE_uint32(spill_thread_num);

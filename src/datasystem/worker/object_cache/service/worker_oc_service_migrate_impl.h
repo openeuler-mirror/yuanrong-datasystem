@@ -108,7 +108,7 @@ private:
 
     /**
      * @brief Fill objects in lock state.
-     * @param[in] infoList Object info list.
+     * @param[in] req Migrate data request.
      * @param[in] lockedEntries Locked object list.
      * @param[in] metas Query meta list.
      * @param[in] payloads Object datas.
@@ -117,7 +117,7 @@ private:
      * @param[out] needSendMasterIds Need send master object keys.
      * @return K_OK on success, the error otherwise.
      */
-    Status FillObjectsLocked(const ObjInfoPbList &infoList, LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
+    Status FillObjectsLocked(const MigrateDataReqPb &req, LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
                              std::vector<RpcMessage> &payloads, std::unordered_set<std::string> &successIds,
                              std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds);
 
@@ -127,22 +127,32 @@ private:
      * @param[in] info Object info.
      * @param[in] meta Metadata query from master.
      * @param[in] payloads Data.
+     * @param[in] type Migrate type.
      * @param[out] needSendMasterIds Need send master object keys.
      * @return K_OK on success, the error otherwise.
      */
     Status FillOneObjectLocked(std::shared_ptr<SafeObjType> &entry, const MigrateDataReqPb::ObjectInfoPb &info,
                                const master::QueryMetaInfoPb &meta, std::vector<RpcMessage> &payloads,
-                               ObjectInfoMap &needSendMasterIds);
+                               const MigrateType &type, ObjectInfoMap &needSendMasterIds);
     /**
      * @brief Notify master to replace object primary copy.
      * @param[in] originAddr Original primary worker address.
      * @param[in] needSendMasterIds Need replace primary copy objects.
+     * @param[in] type Migrate type.
      * @param[out] successIds Success object key list.
      * @param[out] failedIds Failed object key list.
      * @return K_OK on success, the error otherwise.
      */
     Status ReplacePrimaryImpl(const std::string &originAddr, const ObjectInfoMap &needSendMasterIds,
-                              std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds);
+                              const MigrateType &type, std::unordered_set<std::string> &successIds,
+                              std::unordered_set<std::string> &failedIds);
+
+    /**
+     * @brief Calculate remain bytes according to migrate type.
+     * @param[in] type Migrate type.
+     * @return The remain bytes.
+     */
+    uint64_t CalcRemainBytes(const MigrateType &type);
 
     /**
      * @brief Fill migrate data response.
@@ -191,10 +201,11 @@ private:
      * @param[in] entry Object entry.
      * @param[in] info Object info.
      * @param[in] payloads Data.
+     * @param[in] type Migrate type.
      * @return K_OK on success, the error otherwise.
      */
     Status SaveDataWithObjectLocked(std::shared_ptr<SafeObjType> &entry, const MigrateDataReqPb::ObjectInfoPb &info,
-                                    std::vector<RpcMessage> &payloads);
+                                    std::vector<RpcMessage> &payloads, const MigrateType &type);
 
     /**
      * @brief Allocate memory and assign data to object.
@@ -296,9 +307,10 @@ private:
     /**
      * @brief Indicate if memory is available.
      * @param[in] size Memory size.
+     * @param[in] type Migrate type.
      * @return True if memory is available.
      */
-    bool IsMemroyAvailable(uint64_t size = 0) const;
+    bool IsMemoryAvailable(uint64_t size = 0, MigrateType type = MigrateType::SCALE_DOWN) const;
 
     /**
     * @brief Indicate if disk space is available.
@@ -309,10 +321,12 @@ private:
 
     /**
      * @brief Indicate if resource space is available.
+     * @param[in] type Migrate type.
+     * @param[in] cacheType Cache type.
      * @param[in] size The resource size.
      * @return True if resource space is available.
      */
-    bool IsResourceAvailable(CacheType cacheType, uint64_t size) const;
+    bool IsResourceAvailable(const MigrateType &type, CacheType cacheType, uint64_t size) const;
 
     /**
      * @brief Indicate if spill disk is available.
@@ -326,6 +340,14 @@ private:
      * @return True if status is OOM or No space.
      */
     bool IsNoSpace(const Status &status) const;
+
+    /**
+     * @brief Check resource before migrate data.
+     * @param[in] req Migrate data request.
+     * @param[out] rsp Migrate data response.
+     * @return K_OK on success, the error otherwise.
+     */
+    Status CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
 
     /**
      * @brief Galculate the limit rate can be provied for the worker.

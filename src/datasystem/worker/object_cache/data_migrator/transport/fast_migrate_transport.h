@@ -15,20 +15,20 @@
  */
 
 /**
- * Description: TCP migrate transport.
+ * Description: Fast migrate transport.
  */
-#ifndef DATASYSTEM_MIGRATE_DATA_TCP_TRANSPORT_H
-#define DATASYSTEM_MIGRATE_DATA_TCP_TRANSPORT_H
+#ifndef DATASYSTEM_MIGRATE_DATA_FAST_TRANSPORT_H
+#define DATASYSTEM_MIGRATE_DATA_FAST_TRANSPORT_H
 
 #include "datasystem/worker/object_cache/data_migrator/transport/migrate_transport.h"
 
 namespace datasystem {
 namespace object_cache {
-class TcpMigrateTransport : public MigrateTransport {
+class FastMigrateTransport : public MigrateTransport {
 public:
-    TcpMigrateTransport() = default;
+    FastMigrateTransport() = default;
 
-    ~TcpMigrateTransport() override = default;
+    ~FastMigrateTransport() override = default;
 
     /**
      * @brief Migrate data to remote node.
@@ -36,7 +36,12 @@ public:
      * @param[out] rsp The Response of migration.
      * @return Status of the call.
      */
-    Status MigrateDataToRemote(const Request &req, Response &rsp) override;
+    Status MigrateDataToRemote(const Request &req, Response &rsp) override
+    {
+        (void)req;
+        (void)rsp;
+        RETURN_STATUS(K_RUNTIME_ERROR, "Not implemented yet.");
+    }
 };
 
 }  // namespace object_cache

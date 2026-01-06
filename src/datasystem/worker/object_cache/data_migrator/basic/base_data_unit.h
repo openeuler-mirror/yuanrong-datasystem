@@ -28,6 +28,7 @@
 
 namespace datasystem {
 namespace object_cache {
+
 class BaseDataUnit {
 public:
     BaseDataUnit(const ImmutableString &objectKey, uint64_t version) : objectKey_(objectKey), version_(version)

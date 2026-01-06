@@ -614,6 +614,7 @@ message ReplacePrimaryReqPb {
   string origin_primary_addr = 2;
   string new_primary_addr = 3;
   bool redirect = 4;
+  bool remove_location = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

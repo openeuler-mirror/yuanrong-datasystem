@@ -39,11 +39,13 @@
 #include "datasystem/common/log/log.h"
 
 DS_DECLARE_string(shared_disk_directory);
+DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 
 namespace datasystem {
 namespace memory {
 
 const int HUNDRED_PERCENT = 100;
+const double HIGH_WATER_MARK_RATIO = 0.8;
 
 void DeallocateForZmqFree(void *data, void *hint)
 {
@@ -202,6 +204,17 @@ ResourcePool *Allocator::GetPhyResourcePoolByType(CacheType cacheType) const
         return physicalDiskStats_.get();
     }
     return physicalMemoryStats_.get();
+}
+
+uint64_t Allocator::GetMemoryAvailToHighWater() const
+{
+    uint64_t memoryLimit = GetTotalMemoryLimit();
+    uint64_t highWater = std::max(static_cast<uint64_t>(memoryLimit * HIGH_WATER_MARK_RATIO),
+                                  memoryLimit > FLAGS_eviction_reserve_mem_threshold_mb * MB_TO_BYTES
+                                      ? memoryLimit - (FLAGS_eviction_reserve_mem_threshold_mb * MB_TO_BYTES)
+                                      : 0);
+    uint64_t realUsage = objectMemoryStats_->RealUsage();
+    return highWater > realUsage ? highWater - realUsage : 0;
 }
 
 void Allocator::Shutdown()

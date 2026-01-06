@@ -33,25 +33,29 @@ public:
 
     virtual ~MigrateTransport() = default;
 
+    struct Request {
+        MigrateType type;
+        std::shared_ptr<WorkerRemoteWorkerOCApi> api;
+        const std::vector<std::unique_ptr<BaseDataUnit>> *datas{nullptr};
+        std::string localAddr;
+        uint64_t batchSize{0};
+        std::shared_ptr<MigrateProgress> progress{nullptr};
+    };
+
+    struct Response {
+        uint64_t remainBytes{0};
+        std::unordered_set<ImmutableString> successKeys;
+        std::unordered_set<ImmutableString> failedKeys;
+        uint64_t limitRate{0};
+    };
+
     /**
      * @brief Migrate data to remote node.
-     * @param[in] api Remote worker api.
-     * @param[in] datas Data units to migrate.
-     * @param[in] localAddr Local node address.
-     * @param[in] batchSize Batch size for migration.
-     * @param[in] progress Migration progress tracker.
-     * @param[out] remainBytes Remaining bytes of remote worker.
-     * @param[out] successKeys Keys migrated successfully.
-     * @param[out] failedKeys Keys failed to migrate.
-     * @param[out] limitRate Current migration rate limit.
+     * @param[in] req The Requestparameters for migration.
+     * @param[out] rsp The Response of migration.
      * @return Status of the call.
      */
-    virtual Status MigrateDataToRemote(const std::shared_ptr<WorkerRemoteWorkerOCApi> &api,
-                                       const std::vector<std::unique_ptr<BaseDataUnit>> &datas,
-                                       const std::string &localAddr, const uint64_t &batchSize,
-                                       std::shared_ptr<MigrateProgress> progress, uint64_t &remainBytes,
-                                       std::unordered_set<ImmutableString> &successKeys,
-                                       std::unordered_set<ImmutableString> &failedKeys, uint64_t &limitRate) = 0;
+    virtual Status MigrateDataToRemote(const Request &req, Response &rsp) = 0;
 
 protected:
     const int maxRetryCount_ = 3;

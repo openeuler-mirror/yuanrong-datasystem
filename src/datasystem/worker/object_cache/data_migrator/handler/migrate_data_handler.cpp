@@ -22,6 +22,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
@@ -48,10 +49,19 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       currBatchSize_(0),
       currBatchCount_(0),
       limiter_(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul),
-      strategy_(strategy),
+      strategy_(std::move(strategy)),
       progress_(std::move(progress))
 {
-    transport_ = std::make_shared<TcpMigrateTransport>();
+    if (ShouldUseFastTransport()) {
+        transport_ = std::make_shared<FastMigrateTransport>();
+    } else {
+        transport_ = std::make_shared<TcpMigrateTransport>();
+    }
+}
+
+bool MigrateDataHandler::ShouldUseFastTransport() const
+{
+    return type_ == MigrateType::SPILL && IsFastTransportEnabled();
 }
 
 void MigrateDataHandler::SplitByCacheType(std::vector<std::string> &memoryDataIds,
@@ -149,11 +159,12 @@ std::string MigrateDataHandler::ResultToString(const MigrateResult &result)
 
 Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
 {
-    if (type_ == MigrateType::SPILL && IsFastTransportEnabled()) {
+    if (ShouldUseFastTransport()) {
         // AdjustMaxBatchSize for UB
         return Status::OK();
     }
     MigrateDataReqPb req;
+    req.set_type(type_);
     MigrateDataRspPb rsp;
     Status s = MigrateDataToRemoteRetry(remoteApi_, req, {}, rsp);
 
@@ -228,22 +239,31 @@ void MigrateDataHandler::SendDataToRemote()
         return;
     }
 
-    if (limiter_.IsRemoteBusyNode()) {
-        LOG(WARNING) << FormatString("[Migrate Data] Remote node %s is busy", remoteApi_->Address());
-        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
-                       [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
-        lastRc_ = Status(StatusCode::K_NOT_READY, "[Migrate Data] Remote node is busy");
-        Clear();
-        return;
+    if (!IsFastTransportEnabled()) {
+        if (limiter_.IsRemoteBusyNode()) {
+            LOG(WARNING) << FormatString("[Migrate Data] Remote node %s is busy", remoteApi_->Address());
+            std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                           [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
+            lastRc_ = Status(StatusCode::K_NOT_READY, "[Migrate Data] Remote node is busy");
+            Clear();
+            return;
+        }
+        limiter_.WaitAllow(currBatchSize_);
     }
-    limiter_.WaitAllow(currBatchSize_);
 
-    uint64_t remainBytes = 0;
-    uint64_t limitRate = 0;
-    Status s = transport_->MigrateDataToRemote(remoteApi_, datas_, localAddr_, currBatchSize_, progress_, remainBytes,
-                                               successIds_, failedIds_, limitRate);
+    MigrateTransport::Request req{ .type = type_,
+                                   .api = remoteApi_,
+                                   .datas = &datas_,
+                                   .localAddr = localAddr_,
+                                   .batchSize = currBatchSize_,
+                                   .progress = progress_ };
+    MigrateTransport::Response rsp;
+    Status s = transport_->MigrateDataToRemote(req, rsp);
     if (s.IsOk()) {
-        AdjustMaxBatchSize(remainBytes);
+        AdjustMaxBatchSize(rsp.remainBytes);
+        successIds_.insert(rsp.successKeys.begin(), rsp.successKeys.end());
+        failedIds_.insert(rsp.failedKeys.begin(), rsp.failedKeys.end());
+        TryUpdateRate(rsp.limitRate);
     } else {
         LOG(ERROR) << FormatString("[Migrate Data] Send %ld objects[%ld bytes] data to %s failed, error message: %s",
                                    datas_.size(), currBatchSize_, remoteApi_->Address(), s.ToString());
@@ -251,7 +271,6 @@ void MigrateDataHandler::SendDataToRemote()
                        [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
         lastRc_ = s;
     }
-    TryUpdateRate(limitRate);
 
     // 3. Clear finally.
     Clear();
@@ -277,6 +296,7 @@ Status MigrateDataHandler::MigrateDataToRemoteRetry(const std::shared_ptr<Worker
 
 Status MigrateDataHandler::TryUpdateRate(uint64_t rate)
 {
+    RETURN_OK_IF_TRUE(IsFastTransportEnabled());
     const uint64_t minSleepMs = 100;
     const uint64_t maxSleepMs = 500;
     int busyNodeRetryCount = 5;

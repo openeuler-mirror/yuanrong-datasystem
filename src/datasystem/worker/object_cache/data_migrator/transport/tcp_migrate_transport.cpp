@@ -24,29 +24,25 @@
 namespace datasystem {
 namespace object_cache {
 
-Status TcpMigrateTransport::MigrateDataToRemote(const std::shared_ptr<WorkerRemoteWorkerOCApi> &api,
-                                                const std::vector<std::unique_ptr<BaseDataUnit>> &datas,
-                                                const std::string &localAddr, const uint64_t &batchSize,
-                                                std::shared_ptr<MigrateProgress> progress, uint64_t &remainBytes,
-                                                std::unordered_set<ImmutableString> &successKeys,
-                                                std::unordered_set<ImmutableString> &failedKeys, uint64_t &limitRate)
+Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rsp)
 {
     // 1. Construct request.
-    MigrateDataReqPb req;
-    req.set_worker_addr(localAddr);
-    req.set_bytes_send(batchSize);
+    MigrateDataReqPb reqPb;
+    reqPb.set_worker_addr(req.localAddr);
+    reqPb.set_bytes_send(req.batchSize);
+    reqPb.set_type(req.type);
     std::vector<MemView> payloads;
     uint32_t currPartIndex = 0;
-    for (const auto &data : datas) {
+    for (const auto &data : *req.datas) {
         // If it is the shm data, we need to lock it first.
         Status s = data->LockData();
         if (s.IsError()) {
             LOG(ERROR) << FormatString("[Migrate Data] Lock object %s failed, it will not be sent!", data->Id());
-            (void)failedKeys.emplace(data->Id());
+            (void)rsp.failedKeys.emplace(data->Id());
             continue;
         }
 
-        auto *objInfo = req.add_objects();
+        auto *objInfo = reqPb.add_objects();
         objInfo->set_object_key(data->Id());
         objInfo->set_version(data->Version());
         objInfo->set_data_size(data->Size());
@@ -60,24 +56,24 @@ Status TcpMigrateTransport::MigrateDataToRemote(const std::shared_ptr<WorkerRemo
     }
 
     // 2. Migrate data with retry.
-    MigrateDataRspPb rsp;
+    MigrateDataRspPb rspPb;
     Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
                                        [&]() {
-                                           rsp.Clear();
-                                           return api->MigrateData(req, payloads, rsp);
+                                           rspPb.Clear();
+                                           return req.api->MigrateData(reqPb, payloads, rspPb);
                                        },
                                        {});
     if (rc.IsOk()) {
-        remainBytes = rsp.remain_bytes();
-        (void)successKeys.insert(rsp.success_ids().begin(), rsp.success_ids().end());
-        (void)failedKeys.insert(rsp.fail_ids().begin(), rsp.fail_ids().end());
-        limitRate = rsp.limit_rate();
-        if (progress != nullptr) {
-            progress->Deal(rsp.success_ids().size());
+        rsp.remainBytes = rspPb.remain_bytes();
+        rsp.successKeys.insert(rspPb.success_ids().begin(), rspPb.success_ids().end());
+        rsp.failedKeys.insert(rspPb.fail_ids().begin(), rspPb.fail_ids().end());
+        rsp.limitRate = rspPb.limit_rate();
+        if (req.progress != nullptr) {
+            req.progress->Deal(rspPb.success_ids().size());
         }
-        LOG_IF(WARNING, !rsp.fail_ids().empty()) << FormatString(
-            "[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed", datas.size(), batchSize,
-            api->Address(), rsp.fail_ids_size(), VectorToString(rsp.fail_ids()));
+        LOG_IF(WARNING, !rspPb.fail_ids().empty()) << FormatString(
+            "[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed", req.datas->size(),
+            req.batchSize, req.api->Address(), rspPb.fail_ids_size(), VectorToString(rspPb.fail_ids()));
     }
     return rc;
 }

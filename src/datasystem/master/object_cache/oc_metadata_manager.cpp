@@ -4507,6 +4507,9 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
 
         accessor->second.meta.set_primary_address(req.new_primary_addr());
         accessor->second.locations[req.new_primary_addr()] = AckState::ACK;
+        if (req.remove_location()) {
+            accessor->second.locations.erase(req.origin_primary_addr());
+        }
         rsp.add_success_ids(objectKey);
         VLOG(1) << FormatString("[ObjectKey %s] Change primary copy from %s to %s", objectKey,
                                 req.origin_primary_addr(), req.new_primary_addr());

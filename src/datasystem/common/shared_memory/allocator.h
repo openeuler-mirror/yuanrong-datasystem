@@ -249,7 +249,7 @@ public:
      * @param[in] type The service type for which total real memory limit is requested.
      * @return The total real memory limit.
      */
-    uint64_t GetTotalMemoryLimit(ServiceType type = ServiceType::OBJECT)
+    uint64_t GetTotalMemoryLimit(ServiceType type = ServiceType::OBJECT) const
     {
         if (type == ServiceType::OBJECT) {
             return std::min(objectMemoryStats_->FootprintLimit(),
@@ -277,6 +277,12 @@ public:
         }
         return limit > realUsage ? limit - realUsage : 0;
     }
+
+    /**
+     * @brief Get the memory available to high water mark.
+     * @return The memory available to high water mark.
+     */
+    uint64_t GetMemoryAvailToHighWater() const;
 
     /**
      * @brief Get the memory available ratio based on the cache type.
