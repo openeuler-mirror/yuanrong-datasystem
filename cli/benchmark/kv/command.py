@@ -26,6 +26,8 @@ from yr.datasystem.cli.benchmark.kv.bench_suite_builder import KVBenchSuiteBuild
 from yr.datasystem.cli.benchmark.kv.bench_test_case import KVBenchOutputHandler
 from yr.datasystem.cli.benchmark.task import BenchArgs, BenchCommandOutput
 
+from yr.datasystem.cli.benchmark.system_info import SystemInfoCollector
+
 
 class KVCommand(BaseCommand):
     name = "kv"
@@ -73,13 +75,6 @@ class KVCommand(BaseCommand):
     def pre_run(self) -> bool:
         """Logs hardware and software configuration summary before running tests."""
 
-        header_start = "=" * 30
-        header_text = " Print Hardware & Software Configuration Summary "
-        header_end = "=" * 30
-
-        full_header = f"{header_start}{header_text}{header_end}"
-        self.logger.info(full_header)
-
         raw_workers = (
             f"{self.args.set_worker_addresses},{self.args.get_worker_addresses}"
         )
@@ -90,19 +85,83 @@ class KVCommand(BaseCommand):
                 "  * No worker addresses are configured. Configuration check completed."
             )
             return True
+        ip_to_address_map = {addr.split(":")[0]: addr for addr in all_worker_addresses}
+        # Get unique IP list from all worker addresses
+        unique_ips = sorted(list(set(addr.split(":")[0] for addr in all_worker_addresses)))
+        # Print node information table
+        self._print_node_info_table(unique_ips, ip_to_address_map)
 
-        for idx, worker_address in enumerate(all_worker_addresses, 1):
-            self._log_system_info_for_node(worker_address)
-
-            self._print_worker_params(
-                worker_address,
-                idx,
-            )
-
-            if idx < len(all_worker_addresses):
-                self.logger.info("=" * 109)
+        # Print worker parameters table
+        self._print_worker_params_table(all_worker_addresses)
 
         return True
+
+    def _print_node_info_table(self, unique_ips: list[str], ip_to_address_map: dict[str, str]):
+        """Print node information table for all unique IPs."""
+        self.logger.info("Node Information:")
+        col_widths = {
+            "ip": 15,
+            "version": 10,
+            "commit_id": 40,
+            "total_mem": 15,
+            "free_mem": 15,
+            "thp": 10,
+            "hugepages": 15,
+            "cpu_mhz": 10,
+        }
+
+        header = (
+            f"{'IP':<{col_widths['ip']}}"
+            f"{'Version':<{col_widths['version']}}"
+            f"{'Commit ID':<{col_widths['commit_id']}}"
+            f"{'Total Memory':>{col_widths['total_mem']}}"
+            f"{'Free Memory':>{col_widths['free_mem']}}"
+            f"{'THP':>{col_widths['thp']}}"
+            f"{'HugePages':>{col_widths['hugepages']}}"
+            f"{'CPU MHz':>{col_widths['cpu_mhz']}}"
+        )
+        self.logger.info("=" * len(header))
+        self.logger.info(header)
+        self.logger.info("-" * len(header))
+        for idx, ip in enumerate(unique_ips, 1):
+            original_address = ip_to_address_map.get(ip, ip)
+
+            if ip in executor.local_ips_cache:
+                node_info = SystemInfoCollector.get_node_info(ip)
+            else:
+                node_info = self._get_remote_node_info(original_address)
+            row = (
+                f"{node_info['IP']:<{col_widths['ip']}}"
+                f"{node_info['Version']:<{col_widths['version']}}"
+                f"{node_info['Commit ID']:>{col_widths['commit_id']}}"
+                f"{node_info['Total Memory']:>{col_widths['total_mem']}}"
+                f"{node_info['Free Memory']:>{col_widths['free_mem']}}"
+                f"{node_info['THP']:>{col_widths['thp']}}"
+                f"{node_info['HugePages']:>{col_widths['hugepages']}}"
+                f"{node_info['CPU MHz']:>{col_widths['cpu_mhz']}}"
+            )
+            self.logger.info(row)
+
+        self.logger.info("=" * len(header))
+
+    def _get_remote_node_info(self, address: str) -> dict[str, any]:
+        """Get node information from remote IP using dsbench show command."""
+        result = executor.execute('bash -l -c "source ~/.bashrc && dsbench show"', address)
+        node_info = {}
+
+        if hasattr(result, 'stderr'):
+            for line in result.stderr.strip().split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    node_info[key.strip()] = value.strip()
+
+        # Ensure all required fields are present
+        required_fields = ["IP", "Version", "Commit ID", "Total Memory", "Free Memory", "THP", "HugePages", "CPU MHz"]
+        for field in required_fields:
+            if field not in node_info:
+                node_info[field] = ""
+
+        return node_info
 
     def build_suite(self, bench_args: BenchArgs) -> BenchSuite:
         """Builds a benchmark suite for KV tests."""
@@ -230,110 +289,6 @@ class KVCommand(BaseCommand):
             default="dsbench",
             help="Absolute path to the dsbench tool (e.g., /opt/bin/dsbench).",
         )
-
-    def _log_system_info_for_node(self, worker_address: str):
-        """Helper to log all system information for a given node (IP or localhost)."""
-        self.logger.info(f"  * System Information for {worker_address}:")
-
-        mem_result = executor.execute("free -h", worker_address)
-        self._print_mem_info_table(result=mem_result, node_id=worker_address)
-        cpu_raw_result = executor.execute("lscpu", worker_address)
-        self._print_cpu_info_summary(result=cpu_raw_result)
-        thp_result = executor.execute(
-            "cat /sys/kernel/mm/transparent_hugepage/enabled", worker_address
-        )
-        self._print_tlp_status(result=thp_result, node_id=worker_address)
-        huge_result = executor.execute("grep Huge /proc/meminfo", worker_address)
-        self._print_hugepages_status(result=huge_result)
-
-        self.logger.info(f"  * Software Version Information for {worker_address}:")
-        self._log_sdk_version(worker_address)
-
-        worker_result = executor.execute(
-            'bash -l -c "source ~/.bashrc && dscli --version"', worker_address
-        )
-        self._log_worker_version(worker_result)
-
-    def _log_sdk_version(self, worker_address: str):
-        """Handles printing the Client SDK (dsbench_cpp) version information.
-
-        Dynamically locates its path and ensures execution permissions."""
-        # 1. Get the installation location of openyuanrong-datasystem
-        datasystem_location = executor.get_datasystem_pkg_location(worker_address)
-
-        if not datasystem_location:
-            self.logger.error(
-                f"      Error: Could not find the installation location for 'openyuanrong-datasystem' "
-                f"on node {worker_address}. Cannot perform Client SDK version check."
-            )
-            return
-
-        # 2. Set permissions for dsbench_cpp
-        dsbench_cpp_executable = f"{datasystem_location}/yr/datasystem/dsbench_cpp"
-        chmod_command = f"chmod +x {dsbench_cpp_executable}"
-        chmod_result = executor.execute(chmod_command, worker_address, env=None)
-        if isinstance(chmod_result, str):
-            self.logger.error(
-                f"      Error: Failed to set execute permissions for dsbench_cpp "
-                f"on node {worker_address}. Reason: {chmod_result}"
-            )
-            self.logger.error(f"      Error: Skipping Client SDK version check.")
-            return
-
-        # 3. Prepare and execute the version check command
-        command_to_run = f"{dsbench_cpp_executable} -v"
-        ld_library_path = f"{datasystem_location}/yr/datasystem/lib"
-        env = {"LD_LIBRARY_PATH": ld_library_path}
-
-        sdk_result = executor.execute(command_to_run, worker_address, env)
-
-        # 4. Delegate the result processing to a dedicated method
-        self._process_sdk_version_result(sdk_result, worker_address)
-
-    def _process_sdk_version_result(self, sdk_result: Any, worker_address: str):
-        """Processes the SDK version check result and logs the outcome."""
-        if isinstance(sdk_result, BenchCommandOutput):
-            stdout = sdk_result.stdout.strip()
-            stderr = sdk_result.stderr.strip()
-            sdk_name = "Client SDK"
-
-            if stdout:
-                version = "unknown"
-                commit = "unknown"
-
-                version_match = re.search(r"Version:\s*(.+)", stdout)
-                if version_match:
-                    version = version_match.group(1).strip()
-
-                commit_match = re.search(r"Git Commit:\s*\[?([a-f0-9]+)", stdout)
-                if commit_match:
-                    commit = commit_match.group(1).strip()
-
-                self.logger.info(
-                    f"      - Client SDK Version: {version} (commit: {commit})"
-                )
-
-                if stderr:
-                    self.logger.warning(
-                        f"      Warning: The '{sdk_name} version check' command "
-                        f"produced standard error output: {stderr}"
-                    )
-            elif not stdout and not stderr:
-                self.logger.warning(
-                    f"      Warning: The '{sdk_name} version check' command "
-                    f"did not return any standard output or error information."
-                )
-
-        elif isinstance(sdk_result, str):
-            self.logger.error(
-                f"      Error: A fatal error occurred while executing the 'Client SDK version check' "
-                f"on node {worker_address}. Reason: {sdk_result}"
-            )
-        else:
-            self.logger.error(
-                f"      Error: Encountered an unexpected data type while getting the Client SDK version: "
-                f"{type(sdk_result)}"
-            )
 
     def _log_worker_version(self, result: Any):
         if isinstance(result, BenchCommandOutput):
@@ -545,20 +500,27 @@ class KVCommand(BaseCommand):
                 f"    Received unexpected result type for HugePages info: {type(result)}."
             )
 
-    def _print_worker_params(self, worker_addr: str, worker_idx: int):
-        """Parses and prints key startup parameters for a single Worker process."""
+    def _get_worker_params(self, worker_addr: str) -> dict:
+        """Parses and returns key startup parameters for a single Worker process."""
 
+        # Parameter defaults according to the requirements
         param_defaults = {
             "shared_memory_size_mb": "1024",
             "enable_urma": "false",
             "enable_thp": "false",
+            "enable_huge_tlb": "false",
+            "minloglevel": "0",
+            "numa": "N/A",
         }
 
+        # Map between parameter names in the command line and display names
         param_display_map = {
             "shared_memory_size_mb": "Shared Memory",
-            "enable_urma": "URMA enabled",
-            "numa": "NUMA binding",
-            "enable_thp": "THP enabled",
+            "enable_urma": "URMA",
+            "enable_thp": "THP",
+            "enable_huge_tlb": "HugePages",
+            "minloglevel": "Log Level",
+            "numa": "NUMA Node",
         }
 
         parsed_params = param_defaults.copy()
@@ -580,23 +542,91 @@ class KVCommand(BaseCommand):
                 (k, v) for k, v in extracted_params.items() if k in param_display_map
             )
 
-        self.logger.info(
-            f"  * Worker Process {worker_idx} (Address: {worker_addr}, PID: {worker_pid}):"
-        )
+        # Convert boolean values to "enable"/"disable" format
+        def bool_to_enable_disable(value):
+            return "enable" if value.lower() == "true" else "disable"
 
-        if has_valid_output:
-            log_params = {
-                param_display_map["shared_memory_size_mb"]: f"{parsed_params['shared_memory_size_mb']} MB",
-                param_display_map["enable_urma"]: parsed_params["enable_urma"],
-                param_display_map["enable_thp"]: parsed_params["enable_thp"],
-                param_display_map["numa"]: "N/A",
+        # Map minloglevel to log level names
+        def minloglevel_to_name(value):
+            log_level_map = {
+                "0": "INFO",
+                "1": "WARNING",
+                "2": "ERROR"
             }
-            for name, value in log_params.items():
-                self.logger.info(f"      - {name}: {value}")
-        else:
-            self.logger.info(
-                "      - Could not retrieve parameters for worker. See above errors for details."
-            )
+            return log_level_map.get(value, "UNKNOWN")
+
+        # Get CPU affinity using taskset if we have a valid PID
+        cpu_affinity = "N/A"
+        if worker_pid and worker_pid != "N/A":
+            taskset_cmd = f"taskset -cp {worker_pid}"
+            taskset_result = self._execute_taskset_command(taskset_cmd, worker_addr)
+            if taskset_result:
+                cpu_affinity = taskset_result
+
+        # Return parameters in table row format
+        return {
+            "Worker address": worker_addr,
+            "Shared Memory": f"{parsed_params['shared_memory_size_mb']}MB",
+            "URMA": bool_to_enable_disable(parsed_params["enable_urma"]),
+            "THP": bool_to_enable_disable(parsed_params["enable_thp"]),
+            "HugePages": bool_to_enable_disable(parsed_params["enable_huge_tlb"]),
+            "Affinity CPU": cpu_affinity,
+            "Log Level": minloglevel_to_name(parsed_params["minloglevel"]),
+            "PID": worker_pid,
+            "has_valid_output": has_valid_output
+        }
+
+    def _execute_taskset_command(self, taskset_cmd: str, worker_addr: str) -> str:
+        """Executes taskset command to get CPU affinity for a given PID."""
+        result = executor.execute(taskset_cmd, worker_addr)
+        if isinstance(result, BenchCommandOutput):
+            stdout = result.stdout.strip()
+            if stdout:
+                # Extract CPU affinity from taskset output
+                # Example output: "pid 1234's current affinity list: 0,1,2,3"
+                affinity_match = re.search(r"affinity list:\s*(.+)", stdout)
+                if affinity_match:
+                    return affinity_match.group(1).strip()
+            if result.stderr.strip():
+                self.logger.warning(
+                    f"    'taskset' command for worker {worker_addr} produced stderr: {result.stderr.strip()}"
+                )
+        return "N/A"
+
+    def _print_worker_params_table(self, all_worker_addresses: list[str]):
+        """Prints worker parameters in a formatted table."""
+        self.logger.info("Worker Parameters:")
+        self.logger.info("=" * 100)
+
+        # Print table header
+        self.logger.info(f"{'Worker address':<20} {'Shared Memory':<15} {'URMA':<10} {'THP':<10} {'HugePages':<12} {'Affinity CPU':<15} {'Log Level':<12}")
+        self.logger.info("-" * 100)
+
+        # Collect and print worker parameters line by line
+        for worker_address in all_worker_addresses:
+            worker_params = self._get_worker_params(worker_address)
+            if worker_params and worker_params["has_valid_output"]:
+                # Build row data
+                row_line = f"{worker_params['Worker address']:<20} "
+                row_line += f"{worker_params['Shared Memory']:<15} "
+                row_line += f"{worker_params['URMA']:<10} "
+                row_line += f"{worker_params['THP']:<10} "
+                row_line += f"{worker_params['HugePages']:<12} "
+                row_line += f"{worker_params['Affinity CPU']:<15} "
+                row_line += f"{worker_params['Log Level']:<12}"
+                self.logger.info(row_line)
+            else:
+                # Print row with default values if parameters cannot be retrieved
+                row_line = f"{worker_address:<20} "
+                row_line += f"{'N/A':<15} "
+                row_line += f"{'N/A':<10} "
+                row_line += f"{'N/A':<10} "
+                row_line += f"{'N/A':<12} "
+                row_line += f"{'N/A':<15} "
+                row_line += f"{'N/A':<12}"
+                self.logger.info(row_line)
+
+        self.logger.info("=" * 100)
 
     def _parse_and_extract_worker_params(
         self, full_ps_command: str, worker_addr: str, param_names_to_find: set[str]
