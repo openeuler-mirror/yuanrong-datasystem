@@ -68,7 +68,9 @@ if (BUILD_HETERO)
             PERMISSIONS OWNER_READ GROUP_READ)
 endif()
 
+set(etcdapi_proto_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
 set(ds_router_client_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+install_datasystem_target(etcdapi_proto EXPORT_NAME DatasystemTargets)
 install_datasystem_target(ds_router_client EXPORT_NAME DatasystemTargets)
 
 set(SDK_SPDLOG_LIB
@@ -100,6 +102,14 @@ set(SDK_USER_LIB_PATTERNS
        "${OpenSSL_LIB_PATH}/libssl.so*"
        "${OpenSSL_LIB_PATH}/libcrypto.so*"
        ${RPC_LIB_PATH}
+       "${CURL_LIB_PATH}/libcurl.so*"
+       "${OBS_LIB_PATH}/libeSDKLogAPI.so"
+       "${OBS_LIB_PATH}/libeSDKOBS.so"
+       "${OBS_LIB_PATH}/libiconv.so*"
+       "${OBS_LIB_PATH}/libpcre.so*"
+       "${OBS_LIB_PATH}/libxml2.so*"
+       "${OBS_LIB_PATH}/libcjson.so*"
+       "${absl_LIB_PATH}/libabseil_dll*"
 )
 
 install_file_pattern(
@@ -131,7 +141,8 @@ if (BUILD_PYTHON_API)
     # install target first to change install rpath to $ORIGIN
     set(DEPEND_TARGETS
             datasystem
-            ds_client_py)
+            ds_client_py
+            rpc_option_protos)
 
     if (BUILD_HETERO)
         list(APPEND DEPEND_TARGETS acl_plugin)
@@ -145,6 +156,7 @@ if (BUILD_PYTHON_API)
             "${SecureC_LIB_PATH}/libsecurec.so"
             "${TBB_LIB_PATH}/libtbb.so*"
             "${OpenSSL_LIB_PATH}/libssl.so*"
+            "${OpenSSL_LIB_PATH}/libcrypto.so*"
             ${RPC_LIB_PATH}
     )
 
@@ -174,6 +186,12 @@ if (BUILD_GO_API)
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/utilC.h
             DESTINATION ${DATASYSTEM_GO_INCLUDEDIR}/datasystem/c_api)
 
+    set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
+    install_datasystem_target(common_flags)
+
+    set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
+    install_datasystem_target(rpc_option_protos)
+
     set(datasystem_c_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
     install_datasystem_target(datasystem_c)
 
@@ -197,6 +215,7 @@ if (BUILD_GO_API)
            "${gRPC_LIB_PATH}/libaddress_sorting.so*"
            "${SPDLOG_LIB_PATH}/libds-spdlog.so*"
            ${RPC_LIB_PATH}
+           "${absl_LIB_PATH}/libabseil_dll*"
     )
 
     install_file_pattern(
@@ -219,8 +238,31 @@ endif ()
 set(DATASYSTEM_SERVICE_BINPATH datasystem/service)
 set(DATASYSTEM_SERVICE_LIBPATH datasystem/service/lib)
 
-set(datasystem_worker_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
-install_datasystem_target(datasystem_worker)
+set(datasystem_worker_shared_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+set(etcdapi_proto_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
+set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+install_datasystem_target(etcdapi_proto)
+install_datasystem_target(common_flags)
+install_datasystem_target(datasystem_worker_shared)
+set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
+set(datasystem_worker_shared_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
+install_datasystem_target(common_flags)
+install_datasystem_target(datasystem_worker_shared)
+set(datasystem_worker_shared_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
+set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
+set(etcdapi_proto_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
+install_datasystem_target(etcdapi_proto)
+install_datasystem_target(datasystem_worker_shared)
+install_datasystem_target(common_flags)
+set(datasystem_worker_bin_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
+install_datasystem_target(datasystem_worker_bin)
+
+set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+install_datasystem_target(rpc_option_protos)
+set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
+install_datasystem_target(rpc_option_protos)
+set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
+install_datasystem_target(rpc_option_protos)
 
 set(SERVICE_LIB_PATTERNS
      ${SDK_SPDLOG_LIB}
@@ -245,6 +287,7 @@ set(SERVICE_LIB_PATTERNS
     "${OBS_LIB_PATH}/libxml2.so*"
     ${RPC_LIB_PATH}
     "${OBS_LIB_PATH}/libcjson.so*"
+    "${absl_LIB_PATH}/libabseil_dll*"
 )
 
 install_file_pattern(

@@ -24,6 +24,7 @@
 
 #include "common.h"
 #include "../../../common/binmock/binmock.h"
+#include "datasystem/worker/worker.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 

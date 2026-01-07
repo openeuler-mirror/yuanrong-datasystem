@@ -15,45 +15,22 @@
  */
 
 /**
- * Description: Defines the worker client class to communicate with the worker service.
+ * Description: Defines the worker client remote class to communicate with the worker service.
  */
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 
 #include <cstdint>
 #include <shared_mutex>
 #include <utility>
+#include <vector>
 
-#include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/common/device/device_helper.h"
-#include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/log/log.h"
-#include "datasystem/common/object_cache/object_base.h"
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-#include "datasystem/protos/meta_transport.pb.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_constants.h"
-#include "datasystem/common/rpc/unix_sock_fd.h"
-#include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/common/util/format.h"
-#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/util/timer.h"
-#include "datasystem/protos/meta_transport.pb.h"
-#include "datasystem/protos/object_posix.pb.h"
-#include "datasystem/protos/object_posix.stub.rpc.pb.h"
-#include "datasystem/protos/p2p_subscribe.pb.h"
-#include "datasystem/protos/rpc_option.pb.h"
-#include "datasystem/protos/share_memory.pb.h"
-#include "datasystem/utils/status.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
 namespace datasystem {
 namespace object_cache {
-static constexpr uint64_t MAX_PUB_SIZE = 256 * 1024 * 1024 * 1024ul;
 static constexpr uint32_t BIT_NUM_OF_INT = 32;
 const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
                                                        StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -64,8 +41,8 @@ constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
                                              SensitiveValue token, Signature *signature, std::string tenantId,
                                              bool enableCrossNodeConnection, bool enableExclusiveConnection)
-    : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection),
-      IClientWorkerApi(hostPort, heartbeatType, enableCrossNodeConnection),
+    : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
+      ClientWorkerBaseApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
       ClientWorkerRemoteCommonApi(hostPort, cred, heartbeatType, std::move(token), signature, std::move(tenantId),
                                   enableCrossNodeConnection, enableExclusiveConnection)
 {
@@ -168,7 +145,6 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     shmBuf->id = ShmKey::Intern(rsp.shm_id());
     metadataSize = rsp.metadata_size();
     version = workerVersion_.load(std::memory_order_relaxed);
-
 #ifdef USE_URMA
     // Extract URMA info from response when enabled (for Create+MemoryCopy+Publish path).
     if (IsUrmaEnabled() && rsp.has_urma_info()) {
@@ -178,47 +154,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
         urmaDataInfo->CopyFrom(rsp.urma_info());
     }
 #endif
-
     return Status::OK();
-}
-
-void ClientWorkerRemoteApi::PostMultiCreate(bool skipCheckExistence, const MultiCreateRspPb &rsp,
-                                            std::vector<MultiCreateParam> &createParams, bool &useShmTransfer,
-                                            PerfPoint &point, uint32_t &version, std::vector<bool> &exists)
-{
-    auto checkUseShm = [this, &rsp, &skipCheckExistence]() {
-        // Don't use shared memory transfer if client doesn't support it
-        if (!shmEnabled_) {
-            return false;
-        }
-        if (skipCheckExistence) {
-            return shmEnabled_;
-        }
-        for (const auto &res : rsp.results()) {
-            if (!res.shm_id().empty()) {
-                return true;
-            }
-        }
-        return false;
-    };
-    useShmTransfer = checkUseShm();
-    if (!useShmTransfer) {
-        return;
-    }
-    point.RecordAndReset(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
-    for (auto i = 0ul; i < createParams.size(); i++) {
-        if (!skipCheckExistence && exists[i]) {
-            continue;
-        }
-        auto &shmBuf = createParams[i].shmBuf;
-        auto subRsp = rsp.results()[i];
-        shmBuf->fd = subRsp.store_fd();
-        shmBuf->mmapSize = subRsp.mmap_size();
-        shmBuf->offset = static_cast<ptrdiff_t>(subRsp.offset());
-        shmBuf->id = ShmKey::Intern(subRsp.shm_id());
-        createParams[i].metadataSize = subRsp.metadata_size();
-    }
-    version = workerVersion_.load(std::memory_order_relaxed);
 }
 
 Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams,
@@ -293,115 +229,18 @@ bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
     return true;
 }
 
-Status ClientWorkerRemoteApi::PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req, int64_t &rpcTimeout)
-{
-    const std::vector<std::string> &objectKeys = getParam.objectKeys;
-    const std::vector<ReadParam> &readParams = getParam.readParams;
-    LOG(INFO) << FormatString("Begin to get object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), VectorToString(objectKeys));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        Validator::IsInNonNegativeInt32(subTimeoutMs), K_INVALID,
-        FormatString("subTimeoutMs %lld is out of range, which should be between[%d, %d]", subTimeoutMs, 0, INT32_MAX));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() == readParams.size() || readParams.empty(), K_INVALID,
-                                         FormatString("Invalid offset read param, object count %zu, params count %zu",
-                                                      objectKeys.size(), readParams.size()));
-    // the max count of objectKeys is 10000.
-    auto size = static_cast<int>(objectKeys.size());
-    if (size > 0) {
-        req.mutable_object_keys()->Reserve(size);
-        if (!readParams.empty()) {
-            req.mutable_read_offset_list()->Reserve(size);
-            req.mutable_read_size_list()->Reserve(size);
-        }
-    }
-    for (int i = 0; i < size; i++) {
-        req.add_object_keys(objectKeys[i]);
-        if (!readParams.empty()) {
-            req.add_read_offset_list(readParams[i].offset);
-            req.add_read_size_list(readParams[i].size);
-        }
-    }
-    req.set_no_query_l2cache(!getParam.queryL2Cache);
-    req.set_sub_timeout(ClientGetRequestTimeout(subTimeoutMs));
-    req.set_client_id(clientId_);
-    req.set_return_object_index(true);
-    // Add and fill the request with client communicator root info, if RH2D is both supported and enabled.
-    if (getParam.isRH2DSupported) {
-        RETURN_IF_NOT_OK(GetClientCommUuid(*req.mutable_comm_id()));
-    }
-
-    rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
-    INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
-        rpcTimeout = timeout;
-        requestTimeoutMs_ = timeout;
-        return Status::OK();
-    });
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when get data.");
-    return Status::OK();
-}
-
-#ifdef USE_URMA
-void ClientWorkerRemoteApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
-                                              uint8_t *&ubBufferPtr, uint64_t &ubBufferSize)
-{
-    if (IsUrmaEnabled() && !shmEnabled_) {
-        Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubBufferHandle);
-        if (ubRc.IsOk() && ubBufferHandle != nullptr) {
-            UrmaRemoteAddrPb urmaInfo;
-            ubRc = UrmaManager::Instance().GetMemoryBufferInfo(ubBufferHandle->GetOffset(), ubBufferPtr, ubBufferSize,
-                                                               urmaInfo);
-            if (ubRc.IsOk()) {
-                req.set_ub_buffer_size(ubBufferSize);
-                *req.mutable_urma_info() = urmaInfo;
-            }
-        }
-        if (ubRc.IsError()) {
-            LOG(WARNING) << "Prepare UB Get request failed: " << ubRc.ToString() << ", fallback to TCP/IP payload.";
-            ubBufferHandle.reset();
-            ubBufferPtr = nullptr;
-            ubBufferSize = 0;
-        }
-    }
-}
-
-Status ClientWorkerRemoteApi::FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, GetRspPb &rsp,
-                                             std::vector<RpcMessage> &payloads, uint8_t *ubBufferPtr,
-                                             uint64_t ubBufferSize)
-{
-    if (ubBufferHandle != nullptr && ubBufferPtr != nullptr && rsp.payload_info_size() > 0) {
-        uint64_t ubReadOffset = 0;
-        for (int i = 0; i < rsp.payload_info_size(); ++i) {
-            auto *payloadInfo = rsp.mutable_payload_info(i);
-            if (payloadInfo->part_index_size() != 0) {
-                continue;
-            }
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(payloadInfo->data_size() >= 0, K_RUNTIME_ERROR,
-                                                 FormatString("Invalid UB payload size for object %s: %ld",
-                                                              payloadInfo->object_key(), payloadInfo->data_size()));
-            uint64_t payloadSize = static_cast<uint64_t>(payloadInfo->data_size());
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                ubReadOffset <= ubBufferSize && payloadSize <= ubBufferSize - ubReadOffset, K_RUNTIME_ERROR,
-                FormatString("UB payload overflow, object %s, payload size %llu, consumed %llu, buffer size %llu",
-                             payloadInfo->object_key(), payloadSize, ubReadOffset, ubBufferSize));
-            payloads.emplace_back();
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                payloads.back().CopyBuffer(ubBufferPtr + ubReadOffset, static_cast<size_t>(payloadSize)),
-                "Build UB payload rpc message failed");
-            payloadInfo->add_part_index(static_cast<uint32_t>(payloads.size() - 1));
-            ubReadOffset += payloadSize;
-        }
-    }
-    return Status::OK();
-}
-#endif
-
 Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
                                   std::vector<RpcMessage> &payloads)
 {
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
-    int64_t rpcTimeout;
-    RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req, rpcTimeout));
+    RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
+    int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
+    INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
+        rpcTimeout = timeout;
+        requestTimeoutMs_ = timeout;
+        return Status::OK();
+    });
 #ifdef USE_URMA
     std::shared_ptr<UrmaManager::BufferHandle> ubBufferHandle;
     uint8_t *ubBufferPtr = nullptr;
@@ -452,65 +291,6 @@ Status ClientWorkerRemoteApi::InvalidateBuffer(const std::string &objectKey)
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_INVALIDATE_BUFFER);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     return stub_->InvalidateBuffer(opts, req, rsp);
-}
-
-Status ClientWorkerRemoteApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
-                                                const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
-                                                int existence, PublishReqPb &req)
-{
-    LOG(INFO) << FormatString("Begin to publish object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), bufferInfo->objectKey);
-    *req.mutable_nested_keys() = { nestedKeys.begin(), nestedKeys.end() };
-    req.set_client_id(clientId_);
-    req.set_object_key(bufferInfo->objectKey);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when publish date.");
-    req.set_ttl_second(ttlSecond);
-    req.set_existence(static_cast<::datasystem::ExistenceOptPb>(existence));
-
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(UINT64_MAX - bufferInfo->dataSize >= bufferInfo->metadataSize,
-                                         StatusCode::K_RUNTIME_ERROR,
-                                         FormatString("data size[%llu] + meta size [%llu] > UINT64_MAX",
-                                                      bufferInfo->dataSize, bufferInfo->metadataSize));
-    auto bufferSize = bufferInfo->dataSize + bufferInfo->metadataSize;
-    CHECK_FAIL_RETURN_STATUS(
-        bufferSize < MAX_PUB_SIZE, K_INVALID,
-        FormatString("Buffer size should not be too large, curr: %llu, max: %llu", bufferSize, MAX_PUB_SIZE));
-
-    req.set_data_size(bufferInfo->dataSize);
-    req.set_write_mode(static_cast<uint32_t>(bufferInfo->objectMode.GetWriteMode()));
-    req.set_consistency_type(static_cast<uint32_t>(bufferInfo->objectMode.GetConsistencyType()));
-    req.set_cache_type(static_cast<uint32_t>(bufferInfo->objectMode.GetCacheType()));
-    req.set_is_seal(isSeal);
-    req.set_shm_id(bufferInfo->shmId);
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
-                                              uint64_t length)
-{
-    (void)bufferInfo;
-    (void)data;
-    (void)length;
-#ifdef USE_URMA
-    std::vector<uint64_t> keys;
-    const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
-    std::shared_ptr<UrmaManager::BufferHandle> handle;
-    if (UrmaManager::Instance().GetMemoryBufferHandle(handle).IsOk() && handle && totalSize <= handle->GetSlotSize()) {
-        void *poolBuf = handle->GetPointer();
-        if (poolBuf != nullptr) {
-            memcpy(poolBuf, data, totalSize);
-            Status st = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), handle->GetSegmentAddress(),
-                                         handle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
-                                         bufferInfo->dataSize, bufferInfo->metadataSize, true, keys);
-            if (st.IsOk()) {
-                bufferInfo->ubDataSentByMemoryCopy = true;
-                LOG(INFO) << "[UB Put] UrmaWritePayload done (memory pool path), dataSize=" << bufferInfo->dataSize;
-                return Status::OK();
-            }
-        }
-    }
-#endif
-    return Status(K_INVALID, "Failed to send buffer via UB");
 }
 
 Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
@@ -905,26 +685,6 @@ Status ClientWorkerRemoteApi::QueryGlobalRefNum(
     return Status::OK();
 }
 
-void ClientWorkerRemoteApi::ParseGlbRefPb(
-    QueryGlobalRefNumRspCollectionPb &rsp,
-    std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap)
-{
-    gRefMap.clear();
-    for (auto &workerRsp : rsp.objs_glb_refs()) {
-        std::vector<GRefDistributionPb> GRefDistPb = { workerRsp.objs_glb_ref().begin(),
-                                                       workerRsp.objs_glb_ref().end() };
-        for (auto &dist : GRefDistPb) {
-            if (dist.referred_addr_size() == 0) {
-                continue;
-            }
-            std::string object_key = dist.object_key().data();
-            std::vector<std::string> refClientUuids = { dist.referred_addr().begin(), dist.referred_addr().end() };
-            std::unordered_set<std::string> rmDuplicate{ refClientUuids.begin(), refClientUuids.end() };
-            gRefMap[object_key].push_back(std::move(rmDuplicate));
-        }
-    }
-}
-
 Status ClientWorkerRemoteApi::PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize,
                                                   bool isShm, void *nonShmPointer)
 {
@@ -955,21 +715,19 @@ Status ClientWorkerRemoteApi::GetDeviceObject(const std::vector<std::string> &de
         Validator::IsInNonNegativeInt32(timeoutMs), K_INVALID,
         FormatString("timeoutMs %d is out of range., which should be between [%d, %d]", timeoutMs, 0, INT32_MAX));
     GetDeviceObjectReqPb req;
-    RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
+
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     *req.mutable_device_object_keys() = { devObjKeys.begin(), devObjKeys.end() };
 
     int64_t subTimeout = ClientGetRequestTimeout(timeoutMs);
     req.set_sub_timeout(subTimeout);
+    RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RpcOptions opts;
     auto rpcTimeout = std::max<int32_t>(timeoutMs, rpcTimeoutMs_);
     opts.SetTimeout(rpcTimeout);
     reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GetDeviceObject data.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create date.");
     return stub_->GetDeviceObject(opts, req, rsp, payloads);
 }
 
@@ -998,22 +756,6 @@ Status ClientWorkerRemoteApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeR
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
     return stub_->SubscribeReceiveEvent(opts, req, resp);
-}
-
-void ClientWorkerRemoteApi::FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                           const std::vector<Blob> &blobs, DeviceObjectMetaPb *metaPb)
-{
-    metaPb->set_object_key(bufferInfo->devObjKey);
-    metaPb->set_lifetime(LifetimeParamPb(static_cast<int>(bufferInfo->lifetimeType)));
-    auto loc = metaPb->add_locations();
-    loc->set_client_id(clientId_);
-    loc->set_device_id(bufferInfo->deviceIdx);
-    for (const auto &blob : blobs) {
-        const auto &blobInfos = metaPb->add_data_infos();
-        blobInfos->set_data_type(static_cast<int32_t>(DataType::DATA_TYPE_INT8));
-        blobInfos->set_count(blob.size);
-    }
-    metaPb->set_src_offset(bufferInfo->srcOffset);
 }
 
 Status ClientWorkerRemoteApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
@@ -1247,7 +989,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
     if (keys.size() != static_cast<size_t>(rsp.exists().size())) {
         LOG(ERROR) << "Exist response size " << rsp.exists().size() << " is not equal to key size " << keys.size();
         exists.assign(keys.size(), false);
-        return status.IsOk() ? Status(StatusCode::K_RUNTIME_ERROR, "Exist response size mismatch.") : status;
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Exist response size mismatch.");
     }
     exists.assign(rsp.exists().begin(), rsp.exists().end());
     LOG(INFO) << "Check existence success.";

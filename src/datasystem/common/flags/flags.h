@@ -25,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/utils/embedded_config.h"
+
 // clang-format off
 #define DS_DEFINE_TYPE(name, defvalue, meaning, type, shorttype, enumtype)                                 \
     namespace datasystem {                                                                                 \
@@ -117,6 +119,13 @@ struct FlagInfo {
  * @param[in] argv Command line argument values.
  */
 void ParseCommandLineFlags(int argc, char **argv);
+
+/**
+ * @brief Looks for flags in argv and parses them.
+ * @param[in] config worker configs.
+ * @param[in] errMsg errMsg if prase failed.
+ */
+bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
 
 /**
  * @brief Get program invocation short name.

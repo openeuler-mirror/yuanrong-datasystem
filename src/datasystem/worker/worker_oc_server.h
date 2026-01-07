@@ -137,6 +137,16 @@ public:
         return objCacheMasterSvc_.get();
     }
 
+    WorkerServiceImpl *GetWorkerService()
+    {
+        return workerSvc_.get();
+    }
+
+    object_cache::WorkerOCServiceImpl *GetWorkerOCService()
+    {
+        return objCacheClientWorkerSvc_.get();
+    }
+
 private:
     /**
      * @brief Init the access key and secret key for AK/SK authentication.

@@ -72,6 +72,24 @@ Status KVClient::Init()
     return rc;
 }
 
+KVClient &KVClient::EmbeddedInstance()
+{
+    ConnectOptions opts;
+    opts.port = -1;
+    static KVClient instance(opts);
+    return instance;
+}
+
+Status KVClient::InitEmbedded(const EmbeddedConfig &config)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    bool needRollbackState;
+    auto &instance = KVClient::EmbeddedInstance();
+    auto rc = instance.impl_->InitEmbedded(config, needRollbackState);
+    instance.impl_->CompleteHandler(rc.IsError(), needRollbackState);
+    return rc;
+}
+
 Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 {
     CHECK_FAIL_RETURN_STATUS(param.existence != ExistenceOpt::NX, K_INVALID, "Not support NX setting.");

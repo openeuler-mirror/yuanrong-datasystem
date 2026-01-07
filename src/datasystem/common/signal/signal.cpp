@@ -27,15 +27,7 @@
 
 namespace datasystem {
 volatile sig_atomic_t g_exitFlag = 0;
-std::condition_variable g_termSignalCv;
 std::mutex g_termSignalMutex;
-
-void SignalHandler(int signum)
-{
-    (void)signum;
-    g_exitFlag = 1;
-    g_termSignalCv.notify_all();
-}
 
 bool IsTermSignalReceived()
 {

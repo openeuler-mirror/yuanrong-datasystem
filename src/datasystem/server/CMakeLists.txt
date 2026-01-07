@@ -7,7 +7,6 @@ set(SERVER_SRCS
 set(SERVER_DEPEND_LIBS
         common_event_loop
         common_log
-        common_inject
         common_perf
         common_metrics
         common_rpc_zmq

@@ -35,10 +35,7 @@
 #include "datasystem/common/log/trace.h"
 
 DS_DEFINE_int32(v, 0, "Show all VLOG(m) messages for m <= this.");
-DS_DEFINE_string(
-    cluster_name, "",
-    "cluster_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, "
-    "allowing different clusters to be distinguished by the cluster_name.");
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 // thread_local for store log info

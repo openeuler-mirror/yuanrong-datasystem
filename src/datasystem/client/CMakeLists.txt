@@ -6,9 +6,12 @@ list(APPEND CLIENT_SRCS
         listen_worker.cpp
         mmap_manager.cpp
         client_flags_monitor.cpp
+        embedded_client_worker_api.cpp
         service_discovery.cpp
         context/context.cpp
-        object_cache/client_worker_api.cpp
+        object_cache/client_worker_api/client_worker_base_api.cpp
+        object_cache/client_worker_api/client_worker_local_api.cpp
+        object_cache/client_worker_api/client_worker_remote_api.cpp
         object_cache/object_client.cpp
         object_cache/object_client_impl.cpp
         object_cache/client_memory_ref_table.cpp
@@ -40,7 +43,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         ak_sk_signature
         common_buffer
         common_event_loop
-        common_inject
         common_log
         common_perf
         common_sc
@@ -58,6 +60,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_shared_memory
         common_rdma
         common_parallel
+        dl
         client_mmap_static
         gRPC::grpc++
         common_etcd_client

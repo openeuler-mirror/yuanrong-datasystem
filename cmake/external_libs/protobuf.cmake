@@ -11,7 +11,7 @@ adjuice_thirdparty_version(protobuf)
 
 set(protobuf_CMAKE_OPTIONS
     -Dprotobuf_BUILD_TESTS:BOOL=OFF
-    -Dprotobuf_BUILD_SHARED_LIBS:BOOL=OFF
+    -Dprotobuf_BUILD_SHARED_LIBS:BOOL=ON
     -DCMAKE_BUILD_TYPE:STRING=Release
     -Dprotobuf_ABSL_PROVIDER:STRING=package
     -Dabsl_DIR:PATH=${absl_PKG_PATH}
@@ -36,6 +36,7 @@ add_thirdparty_lib(Protobuf
   CXX_FLAGS ${protobuf_CXX_FLAGS}
   PATCHES ${protobuf_PATCHES})
 
+set(Protobuf_DIR ${Protobuf_ROOT})
 find_package(Protobuf 25.5.0 REQUIRED PATHS ${Protobuf_ROOT} CONFIG)
 
 get_property(Protobuf_INCLUDE_DIR TARGET protobuf::libprotobuf PROPERTY INTERFACE_INCLUDE_DIRECTORIES)

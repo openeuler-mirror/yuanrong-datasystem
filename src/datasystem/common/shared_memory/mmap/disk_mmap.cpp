@@ -30,10 +30,7 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/utils/status.h"
 
-DS_DEFINE_string(
-    shared_disk_directory, "",
-    "Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.");
-DS_DEFINE_validator(shared_disk_directory, &Validator::ValidatePathString);
+DS_DECLARE_string(shared_disk_directory);
 
 namespace datasystem {
 namespace memory {

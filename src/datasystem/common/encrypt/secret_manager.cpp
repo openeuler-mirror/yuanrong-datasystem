@@ -34,10 +34,7 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/utils/sensitive_value.h"
 
-DS_DEFINE_string(
-    encrypt_kit, "plaintext",
-    "Choose the encryptService, can be 'plaintext'. Default is 'plaintext'.");
-DS_DEFINE_validator(encrypt_kit, &Validator::ValidateEncryptKit);
+DS_DECLARE_string(encrypt_kit);
 
 namespace datasystem {
 

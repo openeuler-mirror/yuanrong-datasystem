@@ -24,7 +24,6 @@ set(WORKER_SC_DEPEND_LIBS
         common_util
         common_perf
         common_rpc_zmq
-        common_inject
         common_event_loop
         common_shared_memory
         common_sc

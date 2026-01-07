@@ -38,7 +38,6 @@
 namespace datasystem {
 bool ZmqStubConnMgr::logging_ = true;
 std::once_flag ZmqStubConnMgr::init_;
-std::unique_ptr<ZmqStubConnMgr> ZmqStubConnMgr::instance_ = nullptr;
 static const int K_ONE_SECOND = 1000;
 static const int K_HALF_A_SECOND = 500;
 
@@ -996,8 +995,8 @@ void ZmqStubConnMgrImpl::Shutdown()
 
 ZmqStubConnMgr *ZmqStubConnMgr::Instance()
 {
-    std::call_once(init_, []() { instance_ = std::make_unique<ZmqStubConnMgr>(Token(), *(Logging::GetInstance())); });
-    return instance_.get();
+    static ZmqStubConnMgr instance(Token(), *(Logging::GetInstance()));
+    return &instance;
 }
 
 ZmqStubConnMgr::ZmqStubConnMgr(Token t, Logging &inject) : log_(inject)

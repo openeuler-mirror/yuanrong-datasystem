@@ -31,6 +31,7 @@
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
+#include "datasystem/utils/embedded_config.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -84,6 +85,17 @@ public:
     /// \return Status of the call.
     Status Init();
 
+    /// \brief Init KVClient object with worker in the same process.
+    /// \param[in] config configs of the embedded worker.
+    ///
+    /// \return Status of the call.
+    static Status InitEmbedded(const EmbeddedConfig &config);
+ 
+    /// \brief Returns the embedded instance of KVClient.
+    ///
+    /// \return Client instance.
+    static KVClient &EmbeddedInstance();
+ 
     /// \brief Invoke worker client to set the value of a key.
     ///
     /// \param[in] key The key.

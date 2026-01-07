@@ -185,6 +185,7 @@ TEST_F(HeteroD2HTest, TestNoExist)
         DS_ASSERT_TRUE(failedKeys.empty(), true);
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }
+    client->ShutDown();
 }
 
 TEST_F(HeteroD2HTest, TestAllExist)
@@ -241,6 +242,7 @@ TEST_F(HeteroD2HTest, TestAllExist)
             DS_ASSERT_OK(IsSameContent(secondPartGet, secondPartSet, 'c'));
         }
     }
+    client->ShutDown();
 }
 
 TEST_F(HeteroD2HTest, TestPartExist)
@@ -269,6 +271,7 @@ TEST_F(HeteroD2HTest, TestPartExist)
         DS_ASSERT_TRUE(failedKeys.empty(), true);
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }
+    client->ShutDown();
 }
 
 TEST_F(HeteroD2HTestEvcit, SpillTest)

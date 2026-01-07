@@ -185,9 +185,10 @@ public:
     /**
      * @brief Init time cost logger.
      * @param[in] isClient Whether is client.
+     * @param[in] isEmbeddedClient Whether is embedded client.
      * @return Status of the call.
      */
-    Status Init(bool isClient);
+    Status Init(bool isClient, bool isEmbeddedClient);
 
     /**
      * @brief Write the log message to log cache buffer.
@@ -209,7 +210,7 @@ public:
      * @brief Reset the logger.
      * @return Status of the call.
      */
-    Status ResetWriteLogger();
+    Status ResetWriteLogger(bool isEmbeddedClient);
 
     /**
      * @brief Write message and submit to flush pool directly.

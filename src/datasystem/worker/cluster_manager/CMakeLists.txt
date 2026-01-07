@@ -11,6 +11,7 @@ set(CLUSTER_MANAGER_DEPEND_LIBS
         worker_object_protos
         worker_hash_ring
         common_signal
+        etcdapi_proto
         )
 
 add_library(cluster_manager STATIC ${CLUSTER_MANAGER_SRCS})

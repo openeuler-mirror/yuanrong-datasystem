@@ -186,7 +186,7 @@ function(GENERATE_GRPC_CPP SRCS HDRS TARGET_DIR)
         get_property(_GRPC_CPP_PLUGIN TARGET gRPC::grpc_cpp_plugin PROPERTY IMPORTED_LOCATION_RELEASE)
         add_custom_command(
             OUTPUT "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.cc" "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h"
-            COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
+            COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
                     $<TARGET_FILE:protobuf::protoc>
             ARGS ${_PROTO_IMPORT_ARGS}
                  -I ${_PROTO_DIR}

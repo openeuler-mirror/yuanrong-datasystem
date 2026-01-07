@@ -219,17 +219,15 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
         RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is exiting and unhealthy now!");
     }
 
-    {
+    if (req.shm_enabled() && req.server_fd() > 0) {
         std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-        if (req.shm_enabled()) {
-            INJECT_POINT("WorkerServiceImpl.RegisterClient.BlowAuth");
-            CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(req.server_fd()) != unboundedUnixSockFds_.end(),
-                                     K_SERVER_FD_CLOSED, FormatString("Fd %d has been released", req.server_fd()));
-            (void)unboundedUnixSockFds_.erase(req.server_fd());
-        }
+        INJECT_POINT("WorkerServiceImpl.RegisterClient.BlowAuth");
+        CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(req.server_fd()) != unboundedUnixSockFds_.end(),
+                                 K_SERVER_FD_CLOSED, FormatString("Fd %d has been released", req.server_fd()));
+        (void)unboundedUnixSockFds_.erase(req.server_fd());
     }
     RaiiPlus raiiP([&req]() {
-        if (req.shm_enabled()) {
+        if (req.shm_enabled() && req.server_fd() > 0) {
             RETRY_ON_EINTR(close(req.server_fd()));
         }
     });

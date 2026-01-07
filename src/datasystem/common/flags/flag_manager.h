@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/utils/embedded_config.h"
 
 namespace datasystem {
 /**
@@ -201,6 +202,14 @@ public:
     void ParseCommandLineFlags(int argc, char **argv);
 
     /**
+     * @brief Looks for flags in argv and parses them.
+     * @param[in] config Command line argument counts.
+     * @param[in] errMsg errMsg if prase failed.
+     * @return return true if parse success.
+     */
+    bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
+
+    /**
      * @brief Get program invocation short name.
      * @return Program invocation short name.
      */
@@ -292,9 +301,10 @@ private:
 
     /**
      * @brief Check if need report error.
+     * @brief if need to report err, get errmsg.
      * @return Ture if need to report error.
      */
-    bool CheckAndReportErrors() const;
+    bool CheckAndReportErrors(std::string &errMsg) const;
 
     std::map<std::string, Flag> flagMap_;
 

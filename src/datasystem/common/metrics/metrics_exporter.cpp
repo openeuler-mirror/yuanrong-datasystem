@@ -23,8 +23,7 @@
 
 #include "datasystem/common/flags/flags.h"
 
-DS_DEFINE_string(log_monitor_exporter, "harddisk",
-              "Specify the type of exporter, either harddisk or backend. Only takes effect when log_monitor is true.");
+DS_DECLARE_string(log_monitor_exporter);
 
 namespace datasystem {
 const int32_t MAX_BUFFER_BYTE = 200 * 1024;  // 200k

@@ -36,7 +36,7 @@ Status EmbeddedMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerF
     std::lock_guard<std::shared_timed_mutex> l(mutex_);
     auto entry = mmapTable_.find(workerFd);
     if (entry == mmapTable_.end()) {
-        // Check the workerFd and clientFd whether is valid.
+        // Check the workerFd whether is valid.
         if (workerFd > 0) {
             LOG(INFO) << FormatString("Worker fd: %d, mmap size is %llu", workerFd, mmapSize);
             auto newEntry = std::make_unique<EmbeddedMmapTableEntry>(workerFd, mmapSize);
@@ -44,7 +44,7 @@ Status EmbeddedMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerF
             mmapTable_[workerFd] = std::move(newEntry);
         }
     } else {
-        LOG(INFO) << FormatString("The client fd %d exists, no need to mmap again", clientFd);
+        LOG(INFO) << FormatString("The fd %d exists, no need to mmap again", workerFd);
     }
     return Status::OK();
 }

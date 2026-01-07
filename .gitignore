@@ -2,6 +2,9 @@ build/
 output
 coverage_report
 example/datasystem
+example/build/*
+example/cpp/build/*
+config.cmake
 
 # for java
 target

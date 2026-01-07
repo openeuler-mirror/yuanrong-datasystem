@@ -7,7 +7,7 @@ add_library(zmq_perf_protos STATIC ${PERF_ZMQ_SRCS})
 set_target_properties(zmq_perf_protos PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
 
 add_executable(zmq_perf_client zmq_perf_main.cpp zmq_perf_run.cpp ${PERF_ZMQ_HDRS})
-target_link_libraries(zmq_perf_client common_rpc_zmq common_log utils_protos zmq_meta_protos zmq_perf_protos common_util)
+target_link_libraries(zmq_perf_client common_rpc_zmq common_log utils_protos zmq_meta_protos zmq_perf_protos common_util rpc_option_protos)
 if (BUILD_WITH_URMA)
     target_link_libraries(zmq_perf_client common_rdma)
 endif()

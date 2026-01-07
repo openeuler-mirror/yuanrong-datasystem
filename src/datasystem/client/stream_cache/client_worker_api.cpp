@@ -38,7 +38,7 @@ namespace client {
 namespace stream_cache {
 ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, RpcCredential cred, SensitiveValue token,
                                  Signature *signature, std::string tenantId)
-    : IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false),
+    : IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false, signature),
       ClientWorkerRemoteCommonApi(hostPort, cred, HeartbeatType::RPC_HEARTBEAT, std::move(token), signature,
                                   std::move(tenantId))
 {

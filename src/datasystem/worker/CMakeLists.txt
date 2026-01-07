@@ -13,6 +13,8 @@ set(WORKER_SRCS
         worker_liveness_check.cpp
         worker_update_flag_check.cpp
         worker_cli.cpp
+        worker.cpp
+        worker_api_c_wrapper.cpp
         )
 
 set(WORKER_DEPEND_LIBS
@@ -54,20 +56,30 @@ if (ENABLE_PERF)
     list(APPEND WORKER_DEPEND_LIBS perf_posix_protos)
 endif ()
 
-# add worker lib
-add_library(ds_worker STATIC ${WORKER_SRCS})
-target_link_libraries(ds_worker PRIVATE ${WORKER_DEPEND_LIBS})
+add_library(datasystem_worker_static STATIC ${WORKER_SRCS})
+target_link_libraries(datasystem_worker_static PRIVATE ${WORKER_DEPEND_LIBS})
+add_dependencies(datasystem_worker_static
+        master_heartbeat_protos
+        share_memory_protos
+        posix_protos)
 
-add_dependencies(ds_worker
+add_library(datasystem_worker_shared SHARED ${WORKER_SRCS})
+target_link_libraries(datasystem_worker_shared PUBLIC ${WORKER_DEPEND_LIBS})
+add_dependencies(datasystem_worker_shared
         master_heartbeat_protos
         share_memory_protos
         posix_protos)
 
 # generate datasystem_worker bin
-add_executable(datasystem_worker worker_main.cpp)
-set_target_properties(datasystem_worker PROPERTIES LINK_FLAGS "-fPIE -pie")
-target_link_libraries(datasystem_worker PRIVATE ${JEMALLOC_SHARED_LIBRARY} nlohmann_json::nlohmann_json ds_worker)
-target_link_options(datasystem_worker PRIVATE -Wl,--no-as-needed ${JEMALLOC_SHARED_LIBRARY} -Wl,--as-needed)
+add_executable(datasystem_worker_bin worker_main.cpp)
+set_target_properties(datasystem_worker_bin PROPERTIES LINK_FLAGS "-fPIE -pie")
+target_link_libraries(datasystem_worker_bin PRIVATE ${JEMALLOC_SHARED_LIBRARY} nlohmann_json::nlohmann_json datasystem_worker_shared)
+target_link_options(datasystem_worker_bin PRIVATE -Wl,--no-as-needed ${JEMALLOC_SHARED_LIBRARY} -Wl,--as-needed)
+
+set_target_properties(datasystem_worker_bin PROPERTIES
+    OUTPUT_NAME datasystem_worker)
+set_target_properties(datasystem_worker_shared PROPERTIES
+    OUTPUT_NAME datasystem_worker)
 
 # for ut test
 if (WITH_TESTS)
