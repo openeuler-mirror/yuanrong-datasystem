@@ -6,12 +6,45 @@
 
 ### pip 方式安装
 
-**前置要求：** Python 版本需为 3.9、3.10 或 3.11。
+openYuanrong datasystem 已发布至 [PyPI](https://pypi.org/project/openyuanrong-datasystem/)，您可以通过 pip 直接安装。
 
-- 安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
-  ```bash
-    pip install openyuanrong-datasystem
-  ```
+**前置要求**
+
+通过pip安装 openYuanrong datasystem 之前，请确保满足以下要求：
+
+- **Python 版本**：Python 3.9、3.10 或 3.11
+- **操作系统**：Linux（推荐 glibc 2.34+）
+- **架构**：x86-64
+
+您可以通过以下命令检查：
+
+```bash
+# python版本
+python --version
+# 操作系统
+uname -s
+# 架构
+uname -m
+# glibc版本
+ldd --version
+```
+
+**安装完整发行版**（包含 Python SDK、C++ SDK 以及命令行工具）：
+
+```bash
+pip install openyuanrong-datasystem
+```
+
+
+**验证安装**：
+
+安装完成后，您可以通过以下命令验证安装是否成功：
+
+```bash
+python -c "import yr.datasystem; print('openYuanrong datasystem installed successfully')"
+
+dscli --version
+```
 
 
 ### 源码编译方式安装

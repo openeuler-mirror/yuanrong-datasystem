@@ -362,6 +362,24 @@
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
 </ul>
 </details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/java/index.html">Java</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</details></li>
 </ul>
 </details></li>
 </ul>
@@ -507,14 +525,36 @@ document.write(`
 <h2>安装 openYuanrong datasystem<a class="headerlink" href="#openyuanrong-datasystem" title="Link to this heading">#</a></h2>
 <section id="pip">
 <h3>pip 方式安装<a class="headerlink" href="#pip" title="Link to this heading">#</a></h3>
-<p><strong>前置要求：</strong> Python 版本需为 3.9、3.10 或 3.11。</p>
-<ul>
-<li><p>安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">  </span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
+<p>openYuanrong datasystem 已发布至 <a class="reference external" href="https://pypi.org/project/openyuanrong-datasystem/">PyPI</a>，您可以通过 pip 直接安装。</p>
+<p><strong>前置要求</strong></p>
+<p>通过pip安装 openYuanrong datasystem 之前，请确保满足以下要求：</p>
+<ul class="simple">
+<li><p><strong>Python 版本</strong>：Python 3.9、3.10 或 3.11</p></li>
+<li><p><strong>操作系统</strong>：Linux（推荐 glibc 2.34+）</p></li>
+<li><p><strong>架构</strong>：x86-64</p></li>
+</ul>
+<p>您可以通过以下命令检查：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># python版本</span>
+python<span class="w"> </span>--version
+<span class="c1"># 操作系统</span>
+uname<span class="w"> </span>-s
+<span class="c1"># 架构</span>
+uname<span class="w"> </span>-m
+<span class="c1"># glibc版本</span>
+ldd<span class="w"> </span>--version
 </pre></div>
 </div>
-</li>
-</ul>
+<p><strong>安装完整发行版</strong>（包含 Python SDK、C++ SDK 以及命令行工具）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
+</pre></div>
+</div>
+<p><strong>验证安装</strong>：</p>
+<p>安装完成后，您可以通过以下命令验证安装是否成功：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import yr.datasystem; print(&#39;openYuanrong datasystem installed successfully&#39;)&quot;</span>
+
+dscli<span class="w"> </span>--version
+</pre></div>
+</div>
 </section>
 <section id="id2">
 <h3>源码编译方式安装<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
@@ -1034,7 +1074,7 @@ By openYuanrong datasystem with CC BY 4.0 LICENSE
 
   <p class="copyright">
     
-      © Copyright 2025, openEuler openYuanrong datasystem.
+      © Copyright 2026, openEuler openYuanrong datasystem.
       <br/>
     
   </p>
