@@ -176,7 +176,7 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
             offset += part.Size();
         }
     } else if (rsp.has_shm_info()) {
-        std::shared_ptr<client::MmapTableEntry> mmapEntry;
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry;
         uint8_t *pointer;
         auto &shmInfo = rsp.shm_info();
         (void)objClientImpl_->MmapShmUnit(shmInfo.store_fd(), shmInfo.mmap_size(), shmInfo.offset(), mmapEntry,

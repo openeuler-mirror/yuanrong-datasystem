@@ -147,7 +147,7 @@ Status ConsumerImpl::ExtractBigElements(std::shared_ptr<StreamDataPage> &dataPag
             ShmView v;
             RETURN_IF_NOT_OK(StreamDataPage::ParseShmViewPb(recvElements[i].ptr, recvElements[i].size, v));
             std::shared_ptr<ShmUnitInfo> shmInfo;
-            std::shared_ptr<client::MmapTableEntry> mmapEntry;
+            std::shared_ptr<client::IMmapTableEntry> mmapEntry;
             RETURN_IF_NOT_OK(GetShmInfo(v, shmInfo, mmapEntry));
             auto bigElementPage = std::make_shared<StreamLobPage>(shmInfo, true, mmapEntry);
             RETURN_IF_NOT_OK(bigElementPage->Init());
@@ -205,7 +205,7 @@ Status ConsumerImpl::PrefetchElements(uint32_t timeoutMs, std::shared_ptr<Stream
 Status ConsumerImpl::GetDataPage(const ShmView &shmView, std::shared_ptr<StreamDataPage> &out)
 {
     std::shared_ptr<ShmUnitInfo> pageUnit;
-    std::shared_ptr<client::MmapTableEntry> mmapEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetShmInfo(shmView, pageUnit, mmapEntry), "GetShmInfo");
     auto page = std::make_shared<StreamDataPage>(pageUnit, lockId_, true, false, mmapEntry);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(page->Init(), "Page Init");

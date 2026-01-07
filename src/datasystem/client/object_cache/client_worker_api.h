@@ -27,7 +27,7 @@
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/client/listen_worker.h"
 #include "datasystem/client/mmap_manager.h"
-#include "datasystem/client/mmap_table.h"
+#include "datasystem/client/mmap/immap_table.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/string_intern/string_ref.h"

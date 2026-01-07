@@ -17,7 +17,7 @@
 /**
  * Description: Mmap table class test.
  */
-#include "datasystem/client/mmap_table.h"
+#include "datasystem/client/mmap/immap_table.h"
 
 #ifdef __linux__
 #include <linux/memfd.h>
@@ -25,6 +25,8 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 
+#include "datasystem/client/mmap/shm_mmap_table.h"
+#include "datasystem/client/mmap/shm_mmap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
 #include "common.h"
 
@@ -36,7 +38,7 @@ class MmapTableTest : public CommonTest {
 public:
     void SetUp() override
     {
-        mmapTable_ = std::make_unique<MmapTable>(false);
+        mmapTable_ = std::make_unique<ShmMmapTable>(false);
         int32_t mmapSize = 1024;
         clientFd1_ = CreateFd(mmapSize);
         clientFd2_ = CreateFd(mmapSize);
@@ -48,7 +50,9 @@ public:
     void TearDown() override
     {
         close(clientFd1_);
+        clientFd1_ = 0;
         close(clientFd2_);
+        clientFd2_ = 0;
     };
 
     int32_t CreateFd(int32_t size)
@@ -64,7 +68,7 @@ public:
 
     int32_t clientFd1_;
     int32_t clientFd2_;
-    std::unique_ptr<MmapTable> mmapTable_;
+    std::unique_ptr<IMmapTable> mmapTable_;
 };
 
 TEST_F(MmapTableTest, TestMmapTableBasicFunction)
@@ -72,10 +76,10 @@ TEST_F(MmapTableTest, TestMmapTableBasicFunction)
     LOG(INFO) << "Test mmap table basic function.";
 
     // Add to the mmapTable.
-    int fakeFd = -1;
-    int workerFd = 10;
-    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd1_, workerFd, 1024));
-    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd2_, workerFd, 1024));
+    int fakeFd = -1; // fake fd is -1
+    int workerFd = 10; // worker fd is 10
+    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd1_, workerFd, 1024, ""));  // size is 1024
+    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd2_, workerFd, 1024, ""));  // size is 1024
 
     uint8_t *pointer;
     DS_ASSERT_OK(mmapTable_->LookupFdPointer(workerFd, &pointer));
@@ -92,12 +96,12 @@ TEST_F(MmapTableTest, TestMmapTableEntryInvalidParameter)
     LOG(INFO) << "Test mmap table entry invalid parameter.";
 
     int fakeFd = -1;
-    auto entry = std::make_unique<MmapTableEntry>(clientFd1_, 0);
-    Status status = entry->Init(false);
+    auto entry = std::make_unique<ShmMmapTableEntry>(clientFd1_, 0);
+    Status status = entry->Init(false, "");
     ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
 
-    auto entry1 = std::make_unique<MmapTableEntry>(fakeFd, 5120);
-    status = entry1->Init(false);
+    auto entry1 = std::make_unique<ShmMmapTableEntry>(fakeFd, 5120);
+    status = entry1->Init(false, "");
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR);
 }
  
@@ -108,8 +112,8 @@ TEST_F(MmapTableTest, TestGetMmapEntry)
     int workerFd1 = 10;
     int workerFd2 = 11;
     int32_t mmapSize = 1024;
-    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd1_, workerFd1, mmapSize));
-    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd2_, workerFd2, mmapSize));
+    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd1_, workerFd1, mmapSize, ""));
+    DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd2_, workerFd2, mmapSize, ""));
     ASSERT_TRUE(mmapTable_->FindFd(workerFd1));
     ASSERT_TRUE(mmapTable_->FindFd(workerFd2));
  

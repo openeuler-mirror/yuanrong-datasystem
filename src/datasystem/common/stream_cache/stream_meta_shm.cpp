@@ -24,7 +24,7 @@
 #include "datasystem/stream/stream_config.h"
 
 namespace datasystem {
-Status StreamMetaShm::Init(std::shared_ptr<client::MmapTableEntry> mmapTableEntry)
+Status StreamMetaShm::Init(std::shared_ptr<client::IMmapTableEntry> mmapTableEntry)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(shmPtr_);
     auto *data = shmPtr_;

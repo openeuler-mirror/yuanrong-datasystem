@@ -186,7 +186,7 @@ Status ProducerImpl::HandleNoSpaceFromInsert(int64_t timeoutMs, const Status &rc
         // Now we will seal the current page, acquire the next page.
         auto func = [this](const ShmView &nextPage, std::shared_ptr<StreamDataPage> &out) {
             std::shared_ptr<ShmUnitInfo> pageInfo;
-            std::shared_ptr<client::MmapTableEntry> mmapEntry;
+            std::shared_ptr<client::IMmapTableEntry> mmapEntry;
             RETURN_IF_NOT_OK(GetShmInfo(nextPage, pageInfo, mmapEntry));
             auto page = std::make_shared<StreamDataPage>(pageInfo, lockId_, true, false, mmapEntry);
             RETURN_IF_NOT_OK(page->Init());
@@ -214,7 +214,7 @@ Status ProducerImpl::InsertBigElement(const HeaderAndData &element, Optional<int
         }
     });
     std::shared_ptr<ShmUnitInfo> pageUnit;
-    std::shared_ptr<client::MmapTableEntry> mmapEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetShmInfo(pageView, pageUnit, mmapEntry), "GetShmInfo");
     auto page = std::make_shared<StreamLobPage>(pageUnit, true, mmapEntry);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(page->Init(), "Page Init");
@@ -479,7 +479,7 @@ Status ProducerImpl::CreatePagePostProcessing(const ShmView &lastPageView, std::
     PerfPoint point(PerfKey::PAGE_POST_PROCESSING);
     if (writePage_ == nullptr || pageUnit_->fd != lastPageView.fd || pageUnit_->offset != lastPageView.off) {
         VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s] Next page ShmInfo: %s", LogPrefix(), lastPageView.ToStr());
-        std::shared_ptr<client::MmapTableEntry> mmapEntry;
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry;
         RETURN_IF_NOT_OK(GetShmInfo(lastPageView, pageUnit_, mmapEntry));
         auto page = std::make_shared<StreamDataPage>(pageUnit_, lockId_, true, false, mmapEntry);
         RETURN_IF_NOT_OK(page->Init());
@@ -523,7 +523,7 @@ Status ProducerImpl::GetLastPageView(ShmView &lastPageView, bool &switchToShared
     }
 
     auto func = [this](const ShmView &lastPageRefView, std::shared_ptr<ShmUnitInfo> &shmUnitInfo,
-                       std::shared_ptr<client::MmapTableEntry> &mmapEntry) {
+                       std::shared_ptr<client::IMmapTableEntry> &mmapEntry) {
         VLOG(SC_DEBUG_LOG_LEVEL) << LogPrefix() << " lastPageRefView:" << lastPageRefView.ToStr();
         return GetShmInfo(lastPageRefView, shmUnitInfo, mmapEntry);
     };

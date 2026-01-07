@@ -377,7 +377,7 @@ Cursor::Cursor(void *ptr, size_t sz, uint32_t lockId) : ptr_(reinterpret_cast<ui
 {
 }
 
-Status Cursor::Init(std::shared_ptr<client::MmapTableEntry> mmapEntry)
+Status Cursor::Init(std::shared_ptr<client::IMmapTableEntry> mmapEntry)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(ptr_);
 #define CURSOR_INIT_FIELD(start, cur, field)                                                   \

@@ -36,7 +36,7 @@ TEST_F(MmapManagerTest, TestCleanRef)
     // This testcase is just for increased coverage.
     HostPort hostPort("127.0.0.1", 8080);
     auto clientApi = std::make_shared<ClientWorkerRemoteCommonApi>(hostPort);
-    MmapManager mmapManager(clientApi);
+    MmapManager mmapManager(clientApi, false);
 
     mmapManager.CleanInvalidMmapTable();
     mmapManager.GetMmapEntryByFd(-1);

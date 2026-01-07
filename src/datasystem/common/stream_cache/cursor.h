@@ -182,7 +182,7 @@ public:
     /**
      * Initialization
      */
-    Status Init(std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
+    Status Init(std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr);
 
     /**
      * Get ShmView of the last page
@@ -210,7 +210,7 @@ public:
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(lastPageRefView.fd > 0 && lastPageRefView.sz == sizeof(SharedMemView),
                                              K_RUNTIME_ERROR,
                                              FormatString("Invalid lastPageRefView %s", lastPageRefView.ToStr()));
-        std::shared_ptr<client::MmapTableEntry> mmapEntry;
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry;
         std::shared_ptr<ShmUnitInfo> lastPageRefUnit;
         RETURN_IF_NOT_OK(toShmInfo(lastPageRefView, lastPageRefUnit, mmapEntry));
         SharedMemView *memView = reinterpret_cast<SharedMemView *>(
@@ -354,10 +354,10 @@ private:
     const uint32_t lockId_;
     std::shared_ptr<SharedMemViewImpl> lastPageShmView_;
     std::shared_ptr<SharedMemViewImpl> lastLockedShmView_;
-    std::shared_ptr<client::MmapTableEntry> mmapEntry_;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry_;
 
     std::shared_ptr<SharedMemViewImpl> lastPageRefShmView_;
-    std::shared_ptr<client::MmapTableEntry> refMmapEntry_;
+    std::shared_ptr<client::IMmapTableEntry> refMmapEntry_;
 
     /**
      * @brief Get ShmView from a SharedMemViewImpl

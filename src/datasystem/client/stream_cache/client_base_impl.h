@@ -160,7 +160,7 @@ protected:
     virtual Status CheckState() const;
 
     Status GetShmInfo(const ShmView &shmView, std::shared_ptr<ShmUnitInfo> &out,
-                      std::shared_ptr<client::MmapTableEntry> &mmapEntry);
+                      std::shared_ptr<client::IMmapTableEntry> &mmapEntry);
 
     const std::string streamName_;
     std::shared_ptr<StreamClientImpl> client_;

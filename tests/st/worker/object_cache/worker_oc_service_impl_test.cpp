@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-#include "datasystem/client/mmap_table_entry.h"
+#include "datasystem/client/mmap/shm_mmap_table_entry.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -234,13 +234,13 @@ public:
     }
 
     static void Write(const CreateRspPb &rsp, const std::string &str,
-                      std::shared_ptr<client::MmapTableEntry> &mmapTableEntryPtr)
+                      std::shared_ptr<client::IMmapTableEntry> &mmapTableEntryPtr)
     {
         if (mmapTableEntryPtr == nullptr) {
-            mmapTableEntryPtr = std::make_shared<client::MmapTableEntry>(rsp.store_fd(), rsp.mmap_size());
+            mmapTableEntryPtr = std::make_shared<client::ShmMmapTableEntry>(rsp.store_fd(), rsp.mmap_size());
         }
         auto &mmapTableEntry = *mmapTableEntryPtr;
-        ASSERT_EQ(mmapTableEntry.Init(false), Status::OK());
+        ASSERT_EQ(mmapTableEntry.Init(false, ""), Status::OK());
         size_t dataSz = str.size();
         auto objPtr = mmapTableEntry.Pointer() + rsp.offset() + CalBufferMetaSize();
         int ret = memcpy_s((void *)objPtr, dataSz, str.data(), dataSz);
@@ -385,7 +385,7 @@ TEST_F(WorkerOCServiceImplTest, TestPut)
     shmId = createRspPb.shm_id();
 
     // Write.
-    std::shared_ptr<client::MmapTableEntry> mmapTableEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapTableEntry;
     Write(createRspPb, str, mmapTableEntry);
 
     // Publish.
@@ -453,7 +453,7 @@ TEST_F(WorkerOCServiceImplTest, DISABLED_TestSealAfterSealVarySz)
     Create(clientId, objectKey, bigStr, createRspPb);
 
     // Write.
-    std::shared_ptr<client::MmapTableEntry> mmapTableEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapTableEntry;
     Write(createRspPb, bigStr, mmapTableEntry);
 
     // Publish.

@@ -1,8 +1,9 @@
+add_subdirectory(mmap)
+
 list(APPEND CLIENT_SRCS
         datasystem.cpp
         client_worker_common_api.cpp
         listen_worker.cpp
-        mmap_table.cpp
         mmap_manager.cpp
         client_flags_monitor.cpp
         context/context.cpp
@@ -54,7 +55,8 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_acl_device
         common_shared_memory
         common_rdma
-        common_parallel)
+        common_parallel
+        client_mmap_static)
 
 if (ENABLE_PERF)
     file(GLOB_RECURSE PERF_CLIENT_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} perf_client/*.cpp )

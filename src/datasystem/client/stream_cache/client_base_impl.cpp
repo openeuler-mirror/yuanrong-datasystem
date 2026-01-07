@@ -124,7 +124,7 @@ bool ClientBaseImpl::CheckStreamNameAndTenantId(const std::string &streamName, c
 }
 
 Status ClientBaseImpl::GetShmInfo(const ShmView &shmView, std::shared_ptr<ShmUnitInfo> &out,
-                                  std::shared_ptr<client::MmapTableEntry> &mmapEntry)
+                                  std::shared_ptr<client::IMmapTableEntry> &mmapEntry)
 {
     // Do a preliminary check if the fd makes any sense. There is no reason a file descriptor
     // can grow beyond the size of an unsigned short.
