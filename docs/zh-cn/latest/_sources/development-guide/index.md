@@ -18,3 +18,4 @@ openYuanrong datasystem 开发指南：
 openYuanrong datasystem API：
 - [Python](api/python/index.rst)
 - [C++](api/cpp/index.rst)
+- [Java](api/java/index.rst)

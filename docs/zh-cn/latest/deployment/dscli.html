@@ -206,8 +206,10 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
@@ -358,6 +360,24 @@
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/java/index.html">Java</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
 </ul>
 </details></li>
 </ul>
@@ -1093,39 +1113,43 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>–worker_config_path &lt;FILE&gt;</p></td>
+<tr class="row-even"><td><p>–timeout &lt;SECONDS&gt;</p></td>
+<td><p>-t &lt;SECONDS&gt;</p></td>
+<td><p>等待 worker 服务就绪的最大时间（默认：90秒）</p></td>
+</tr>
+<tr class="row-odd"><td><p>–worker_config_path &lt;FILE&gt;</p></td>
 <td><p>-f &lt;FILE&gt;</p></td>
 <td><p>使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成</p></td>
 </tr>
-<tr class="row-odd"><td><p>–worker_args &lt;…&gt;</p></td>
+<tr class="row-even"><td><p>–worker_args &lt;…&gt;</p></td>
 <td><p>-w &lt;…&gt;</p></td>
-<td><p>使用参数启动数据系统worker, 以 “ –&lt;Args&gt;  &lt;Value&gt;”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379” 需要放在numactl选项后，否则会报错</p></td>
+<td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379”<br><strong>注意</strong>：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数</p></td>
 </tr>
-<tr class="row-even"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
+<tr class="row-odd"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
 <td><p>替换配置文件中当前路径的目录。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 datasystem_home_dir 的值</p></td>
 </tr>
-<tr class="row-odd"><td><p>–cpunodebind</p></td>
+<tr class="row-even"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
 <td><p>numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点</p></td>
 </tr>
-<tr class="row-even"><td><p>–physcpubind</p></td>
+<tr class="row-odd"><td><p>–physcpubind</p></td>
 <td><p>-C</p></td>
 <td><p>按物理 CPU 编号将进程绑定到指定核心</p></td>
 </tr>
-<tr class="row-odd"><td><p>–interleave</p></td>
+<tr class="row-even"><td><p>–interleave</p></td>
 <td><p>-i</p></td>
 <td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面</p></td>
 </tr>
-<tr class="row-even"><td><p>–preferred</p></td>
+<tr class="row-odd"><td><p>–preferred</p></td>
 <td><p>-p</p></td>
 <td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点</p></td>
 </tr>
-<tr class="row-odd"><td><p>–membind</p></td>
+<tr class="row-even"><td><p>–membind</p></td>
 <td><p>-m</p></td>
 <td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败</p></td>
 </tr>
-<tr class="row-even"><td><p>–localalloc</p></td>
+<tr class="row-odd"><td><p>–localalloc</p></td>
 <td><p>-l</p></td>
 <td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
@@ -1177,35 +1201,39 @@ dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span cla
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>–cluster_config_path &lt;FILE&gt;</p></td>
+<tr class="row-even"><td><p>–timeout &lt;SECONDS&gt;</p></td>
+<td><p>-t &lt;SECONDS&gt;</p></td>
+<td><p>等待 worker 服务就绪的最大时间（默认：90秒）</p></td>
+</tr>
+<tr class="row-odd"><td><p>–cluster_config_path &lt;FILE&gt;</p></td>
 <td><p>-f &lt;FILE&gt;</p></td>
 <td><p>指定集群配置文件的路径，配置文件（JSON格式）可通过generate_config生成</p></td>
 </tr>
-<tr class="row-odd"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
+<tr class="row-even"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
 <td><p>替换配置文件中当前路径的目录为<code class="docutils literal notranslate"><span class="pre">datasystem_home_dir</span></code>的值</p></td>
 </tr>
-<tr class="row-even"><td><p>–cpunodebind</p></td>
+<tr class="row-odd"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
 <td><p>仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点</p></td>
 </tr>
-<tr class="row-odd"><td><p>–physcpubind</p></td>
+<tr class="row-even"><td><p>–physcpubind</p></td>
 <td><p>-C</p></td>
 <td><p>按物理 CPU 编号将进程绑定到指定核心</p></td>
 </tr>
-<tr class="row-even"><td><p>–interleave</p></td>
+<tr class="row-odd"><td><p>–interleave</p></td>
 <td><p>-i</p></td>
 <td><p>设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面</p></td>
 </tr>
-<tr class="row-odd"><td><p>–preferred</p></td>
+<tr class="row-even"><td><p>–preferred</p></td>
 <td><p>-p</p></td>
 <td><p>设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点</p></td>
 </tr>
-<tr class="row-even"><td><p>–membind</p></td>
+<tr class="row-odd"><td><p>–membind</p></td>
 <td><p>-m</p></td>
 <td><p>强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败</p></td>
 </tr>
-<tr class="row-odd"><td><p>–localalloc</p></td>
+<tr class="row-even"><td><p>–localalloc</p></td>
 <td><p>-l</p></td>
 <td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
@@ -2223,7 +2251,7 @@ By openYuanrong datasystem with CC BY 4.0 LICENSE
 
   <p class="copyright">
     
-      © Copyright 2025, openEuler openYuanrong datasystem.
+      © Copyright 2026, openEuler openYuanrong datasystem.
       <br/>
     
   </p>

@@ -18,16 +18,45 @@
 
 ## 安装 PyPI 正式发布版本（推荐）
 
-openYuanrong datasystem 在 PyPI 提供两个包，根据实际需求选一条命令安装即可：
 
-安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：
+openYuanrong datasystem 已发布至 [PyPI](https://pypi.org/project/openyuanrong-datasystem/)，您可以通过 pip 直接安装。
+
+**前置要求**
+
+通过pip安装 openYuanrong datasystem 之前，请确保满足以下要求：
+
+- **Python 版本**：Python 3.9、3.10 或 3.11
+- **操作系统**：Linux（推荐 glibc 2.34+）
+- **架构**：x86-64
+
+您可以通过以下命令检查：
+
+```bash
+# python版本
+python --version
+# 操作系统
+uname -s
+# 架构
+uname -m
+# glibc版本
+ldd --version
+```
+
+**安装完整发行版**（包含 Python SDK、C++ SDK 以及命令行工具）：
+
 ```bash
 pip install openyuanrong-datasystem
 ```
 
-仅安装 openYuanrong datasystem Python SDK（不包含C++ SDK以及命令行工具）：
+
+**验证安装**：
+
+安装完成后，您可以通过以下命令验证安装是否成功：
+
 ```bash
-pip install openyuanrong-datasystem-sdk
+python -c "import yr.datasystem; print('openYuanrong datasystem installed successfully')"
+
+dscli --version
 ```
 
 > 如果在安装过程中遇到如 `pip: command not found` 等报错，请参照[环境准备](#环境准备)章节安装相关依赖
@@ -195,6 +224,8 @@ openYuanrong_datasystem_sdk-{version}-cp{major}{minor}-cp{major}{minor}-manylinu
 - major / minor：Python 解释器版本，例如 Python 3.9 → `39`
 - glibc_major / glibc_minor：GLIBC 版本，例如 GLIBC 2.34 → `2_34`
 - arch：CPU 架构，`x86_64` 或 `aarch64`
+
+各版本 wheel 包的文件名与下载链接可在 openYuanrong 官方「版本发布」页面中查询（包含最新稳定版本与历史版本）：[版本发布与下载](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/reference/releases.html)。
 
 下面示例安装 0.5.0，Python3.9，GLIBC2.34，aarch64 的完整版wheel包：
 ```bash

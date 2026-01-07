@@ -206,8 +206,10 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
@@ -358,6 +360,24 @@
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/java/index.html">Java</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
 </ul>
 </details></li>
 </ul>
@@ -528,13 +548,34 @@ document.write(`
 <!-- /TOC -->
 <section id="pypi">
 <h2>安装 PyPI 正式发布版本（推荐）<a class="headerlink" href="#pypi" title="Link to this heading">#</a></h2>
-<p>openYuanrong datasystem 在 PyPI 提供两个包，根据实际需求选一条命令安装即可：</p>
-<p>安装 openYuanrong datasystem 完整发行版（包含Python SDK、C++ SDK以及命令行工具）：</p>
+<p>openYuanrong datasystem 已发布至 <a class="reference external" href="https://pypi.org/project/openyuanrong-datasystem/">PyPI</a>，您可以通过 pip 直接安装。</p>
+<p><strong>前置要求</strong></p>
+<p>通过pip安装 openYuanrong datasystem 之前，请确保满足以下要求：</p>
+<ul class="simple">
+<li><p><strong>Python 版本</strong>：Python 3.9、3.10 或 3.11</p></li>
+<li><p><strong>操作系统</strong>：Linux（推荐 glibc 2.34+）</p></li>
+<li><p><strong>架构</strong>：x86-64</p></li>
+</ul>
+<p>您可以通过以下命令检查：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># python版本</span>
+python<span class="w"> </span>--version
+<span class="c1"># 操作系统</span>
+uname<span class="w"> </span>-s
+<span class="c1"># 架构</span>
+uname<span class="w"> </span>-m
+<span class="c1"># glibc版本</span>
+ldd<span class="w"> </span>--version
+</pre></div>
+</div>
+<p><strong>安装完整发行版</strong>（包含 Python SDK、C++ SDK 以及命令行工具）：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
 </pre></div>
 </div>
-<p>仅安装 openYuanrong datasystem Python SDK（不包含C++ SDK以及命令行工具）：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem-sdk
+<p><strong>验证安装</strong>：</p>
+<p>安装完成后，您可以通过以下命令验证安装是否成功：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import yr.datasystem; print(&#39;openYuanrong datasystem installed successfully&#39;)&quot;</span>
+
+dscli<span class="w"> </span>--version
 </pre></div>
 </div>
 <blockquote>
@@ -756,6 +797,7 @@ openYuanrong_datasystem_sdk-<span class="o">{</span>version<span class="o">}</sp
 <li><p>glibc_major / glibc_minor：GLIBC 版本，例如 GLIBC 2.34 → <code class="docutils literal notranslate"><span class="pre">2_34</span></code></p></li>
 <li><p>arch：CPU 架构，<code class="docutils literal notranslate"><span class="pre">x86_64</span></code> 或 <code class="docutils literal notranslate"><span class="pre">aarch64</span></code></p></li>
 </ul>
+<p>各版本 wheel 包的文件名与下载链接可在 openYuanrong 官方「版本发布」页面中查询（包含最新稳定版本与历史版本）：<a class="reference external" href="https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/reference/releases.html">版本发布与下载</a>。</p>
 <p>下面示例安装 0.5.0，Python3.9，GLIBC2.34，aarch64 的完整版wheel包：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem-0.5.0-cp39-cp39-manylinux_2_34_aarch64.whl
 </pre></div>
@@ -901,7 +943,7 @@ By openYuanrong datasystem with CC BY 4.0 LICENSE
 
   <p class="copyright">
     
-      © Copyright 2025, openEuler openYuanrong datasystem.
+      © Copyright 2026, openEuler openYuanrong datasystem.
       <br/>
     
   </p>
