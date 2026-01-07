@@ -127,6 +127,10 @@ class BaseCommand(ABC):
         BaseCommand.logger.addHandler(file_handler)
 
     @abstractmethod
+    def add_arguments(self, parser: argparse.ArgumentParser):
+        pass
+
+    @abstractmethod
     def validate(self, args: Any) -> bool:
         """Validate command-line arguments. Return False if invalid."""
         pass

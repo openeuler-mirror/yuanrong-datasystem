@@ -118,9 +118,10 @@ class Executor:
         self.ssh_config_path: Optional[str] = None
 
         self.pkg_location_cache: dict[str, Optional[str]] = {}
+        self.dsbench_cpp_permissions_cache: dict[str, bool] = {}
 
         # Cache local IPs on initialization for performance
-        self._local_ips_cache: list[str] = _get_local_ips()
+        self.local_ips_cache: list[str] = _get_local_ips()
 
     @classmethod
     def get_instance(cls) -> "Executor":
@@ -143,14 +144,14 @@ class Executor:
         It looks up in the cached `ssh_config_map`.
         """
         import getpass
-        
+
         # Extract hostname/IP from target_address (handle port if present)
         target_host = target_address.split(":")[0]
 
         # Check 1: If SSH config map is empty, return None for local targets
         if not self.ssh_config_map:
             # If target is local and no SSH config, return None (local execution)
-            if target_host in self._local_ips_cache:
+            if target_host in self.local_ips_cache:
                 return None
             logger.warning(
                 f"warning: SSH configuration map is empty. Ensure load_ssh_config() was called."
@@ -161,7 +162,7 @@ class Executor:
         current_user = getpass.getuser()
         for host, config in self.ssh_config_map.items():
             host_ip = host.split(":")[0]
-            if host_ip in self._local_ips_cache and config.get("username") == current_user:
+            if host_ip in self.local_ips_cache and config.get("username") == current_user:
                 return None
 
         # Normal SSH config lookup
@@ -247,6 +248,54 @@ class Executor:
         self.pkg_location_cache[worker_address] = location
         return location
 
+    def ensure_dsbench_cpp_executable(self, worker_address: str) -> Union[str, None]:
+        """Ensures dsbench_cpp has execute permissions on the specified worker.
+        Only sets permissions once per worker address.
+
+        Returns:
+            str: The full path to dsbench_cpp if successful, None otherwise.
+        """
+        # Check if we've already set permissions for this worker
+        if worker_address in self.dsbench_cpp_permissions_cache:
+            if self.dsbench_cpp_permissions_cache[worker_address]:
+                # We've already successfully set permissions, return the path
+                location = self.get_datasystem_pkg_location(worker_address)
+                if location:
+                    return f"{location}/yr/datasystem/dsbench_cpp"
+                return None
+            else:
+                # We tried before and failed, don't try again
+                return None
+
+        # Get the installation location
+        datasystem_location = self.get_datasystem_pkg_location(worker_address)
+        if not datasystem_location:
+            logger.error(
+                f"    [DEBUG] Could not find openyuanrong-datasystem location on {worker_address}."
+            )
+            self.dsbench_cpp_permissions_cache[worker_address] = False
+            return None
+
+        # Set permissions for dsbench_cpp
+        dsbench_cpp_executable = f"{datasystem_location}/yr/datasystem/dsbench_cpp"
+        chmod_command = f"chmod +x {dsbench_cpp_executable}"
+        chmod_result = self.execute(chmod_command, worker_address, env=None)
+
+        if isinstance(chmod_result, str):
+            logger.error(
+                f"    [DEBUG] Failed to set execute permissions for dsbench_cpp on {worker_address}: {chmod_result}"
+            )
+            self.dsbench_cpp_permissions_cache[worker_address] = False
+            return None
+
+        # Successfully set permissions, cache the result
+        self.dsbench_cpp_permissions_cache[worker_address] = True
+        logger.debug(
+            f"    [DEBUG] Successfully set execute permissions for dsbench_cpp on {worker_address}."
+        )
+
+        return dsbench_cpp_executable
+
     def execute(
         self, command_str: str, target_address: str, env=None
     ) -> Union[BenchCommandOutput, str]:
@@ -254,7 +303,7 @@ class Executor:
         Public interface to execute a command.
         It intelligently decides whether to run the command locally or remotely.
         """
-        is_local = target_address.split(":")[0] in self._local_ips_cache
+        is_local = target_address.split(":")[0] in self.local_ips_cache
         remote_info = self.get_remote_info(target_address)
 
         # For remote targets, we need valid SSH configuration

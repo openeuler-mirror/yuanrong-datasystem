@@ -20,6 +20,7 @@ from yr.datasystem.cli.benchmark.executor import executor
 
 COMMAND_REGISTRY = {
     "kv": "yr.datasystem.cli.benchmark.kv.command.KVCommand",
+    "show": "yr.datasystem.cli.benchmark.show_command.ShowCommand",
 }
 
 

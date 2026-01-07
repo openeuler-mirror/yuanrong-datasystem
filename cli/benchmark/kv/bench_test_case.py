@@ -118,7 +118,12 @@ class KVBenchTestCase(BenchTestCase):
         else:
             env["LD_LIBRARY_PATH"] = lib_path
 
-        executable_bin_path = f"{datasystem_location}/yr/datasystem/dsbench_cpp"
+        # Get dsbench_cpp path and ensure execute permissions (only once per worker)
+        executable_bin_path = executor.ensure_dsbench_cpp_executable(worker_address)
+        if not executable_bin_path:
+            # Use the constructed path even if permission setting failed
+            # This allows the command to fail with a permission error rather than a path error
+            executable_bin_path = f"{datasystem_location}/yr/datasystem/dsbench_cpp"
 
         command_str = self.generate_commands(command_args, bin_path=executable_bin_path)
 
@@ -178,10 +183,10 @@ class KVBenchOutputHandler(BenchOutputHandler):
 
         self.column_definitions = {
             "index": {"width": 5, "align": ">"},
-            "action": {"width": 8, "align": ">"},
-            "size": {"width": 10, "align": ">"},
+            "action": {"width": 6, "align": ">"},
+            "size": {"width": 8, "align": ">"},
             "count": {"width": 8, "align": ">"},
-            "batch": {"width": 8, "align": ">"},
+            "batch": {"width": 6, "align": ">"},
             "thread": {"width": 6, "align": ">"},
             "worker": {"width": 21, "align": ">"},
             "avg[ms]": {"width": 14, "align": ">"},
@@ -189,7 +194,7 @@ class KVBenchOutputHandler(BenchOutputHandler):
             "p90[ms]": {"width": 14, "align": ">"},
             "p99[ms]": {"width": 14, "align": ">"},
             "max[ms]": {"width": 14, "align": ">"},
-            "tps[count/sec]": {"width": 15, "align": ">"},
+            "tps[count/sec]": {"width": 14, "align": ">"},
             "throughput[MB/sec]": {
                 "width": 17,
                 "align": ">",
