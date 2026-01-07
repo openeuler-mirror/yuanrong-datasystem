@@ -382,10 +382,10 @@ class KVBenchOutputHandler(BenchOutputHandler):
         try:
             formatted_values = {
                 "avg_str": f"{float(value_list[0]):.3f}",
-                "min_val_str": f"{float(value_list[1]):.3f}",
+                "min_str": f"{float(value_list[1]):.3f}",
                 "p90_str": f"{float(value_list[2]):.3f}",
                 "p99_str": f"{float(value_list[3]):.3f}",
-                "max_val_str": f"{float(value_list[4]):.3f}",
+                "max_str": f"{float(value_list[4]):.3f}",
                 "tps_str": f"{int(round(float(value_list[5])))}",
                 "throughput_str": f"{float(value_list[6]):.1f}",
             }

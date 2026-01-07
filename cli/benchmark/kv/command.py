@@ -250,7 +250,7 @@ class KVCommand(BaseCommand):
         self._log_sdk_version(worker_address)
 
         worker_result = executor.execute(
-            "source ~/.bashrc && dscli --version", worker_address
+            'bash -l -c "source ~/.bashrc && dscli --version"', worker_address
         )
         self._log_worker_version(worker_result)
 
