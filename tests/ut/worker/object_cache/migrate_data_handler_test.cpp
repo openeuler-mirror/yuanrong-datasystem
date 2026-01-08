@@ -17,8 +17,6 @@
 /**
  * Description: Test interface to HashRingHealthCheck
  */
-#include "datasystem/worker/object_cache/migrate_data_handler.h"
-
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -37,6 +35,9 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
+#include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "eviction_manager_common.h"
 
@@ -49,41 +50,42 @@ DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 namespace datasystem {
 namespace ut {
 
-class MigrateStrategyTest : public CommonTest {};
+class ScaleDownNodeSelectorTest : public CommonTest {};
 
-TEST_F(MigrateStrategyTest, TestCheckCondition)
+TEST_F(ScaleDownNodeSelectorTest, TestCheckCondition)
 {
-    MigrateStrategy migrateStrategy;
+    HostPort address;
+    ScaleDownNodeSelector migrateStrategy(nullptr, address);
     MigrateDataRspPb rsp;
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 0, 60, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 60, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), true);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 0, 30, 1)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 30, 1)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), true);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 0, 15, 2)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 15, 2)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), true);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 1, 15, 3)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 15, 3)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 0, 60, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 60, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::DISK), true);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 0, 30, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 30, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 0, 10, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 10, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 1, 60, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 60, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 1, 30, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 30, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 
-    datasystem::inject::Set("MigrateStrategy.CheckCondition", "call(0, 1, 10, 0)");
+    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 10, 0)");
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 }
 
@@ -156,6 +158,7 @@ public:
         hostPort_ = HostPort("127.0.0.1", 18481);
         remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, nullptr);
         objectTable_ = std::make_shared<ObjectTable>();
+        strategy_ = std::make_shared<ScaleDownNodeSelector>(nullptr, hostPort_);
     }
 
     void CreateObjects(const std::string &prefix, uint64_t dataSize, uint32_t count,
@@ -221,7 +224,11 @@ public:
 protected:
     HostPort hostPort_;
 
+    MigrateType type_ = MigrateType::SCALE_DOWN;
+
     std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi_;
+
+    std::shared_ptr<SelectionStrategy> strategy_;
 };
 
 TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
@@ -235,12 +242,12 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
         .Times(1)
         .WillRepeatedly(DoAll(SetArgReferee<2>(fakeRsp), Return(Status::OK())));
 
-    MigrateDataHandler handler1("127.0.0.1:18888", {}, objectTable_, remoteApi_);
+    MigrateDataHandler handler1(type_, "127.0.0.1:18888", {}, objectTable_, remoteApi_, strategy_);
     auto result1 = handler1.MigrateDataToRemote();
     DS_ASSERT_OK(result1.status);
 
     DS_ASSERT_OK(CreateObject("xxx", 1));
-    MigrateDataHandler handler2("127.0.0.1:18888", { "xxx" }, objectTable_, remoteApi_);
+    MigrateDataHandler handler2(type_, "127.0.0.1:18888", { "xxx" }, objectTable_, remoteApi_, strategy_);
     auto result2 = handler2.MigrateDataToRemote();
     EXPECT_EQ(result2.status.GetCode(), StatusCode::K_NO_SPACE);
 }
@@ -284,7 +291,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateSmallMemoryObjects)
     std::vector<ImmutableString> objectKeys;
     CreateObjects("League_of_Legends", size, count, objectKeys);
 
-    MigrateDataHandler handler("127.0.0.1:18888", objectKeys, objectTable_, remoteApi_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -307,7 +314,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateNoExistObjects)
     for (size_t i = 0; i < count; ++i) {
         objectKeys.emplace_back("No_Exist_Object_" + std::to_string(i));
     }
-    MigrateDataHandler handler("127.0.0.1:18888", objectKeys, objectTable_, remoteApi_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -336,9 +343,9 @@ TEST_F(MigrateDataHandlerTest, TestMigrateObjectsButLockFail)
     CreateObjects("Locked", size2, failCount, failObjectKeys, true);
 
     (void)objectKeys.insert(objectKeys.end(), failObjectKeys.begin(), failObjectKeys.end());
-    MigrateDataHandler handler("127.0.0.1:18888", objectKeys, objectTable_, remoteApi_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
     auto result = handler.MigrateDataToRemote();
-    DS_ASSERT_NOT_OK(result.status);
+    DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
     ASSERT_EQ(result.successIds.size(), succCount);
     ASSERT_TRUE(result.skipIds.empty());
@@ -387,7 +394,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError1)
     std::vector<ImmutableString> objectKeys;
     CreateObjects("League_of_Legends", size, count, objectKeys);
 
-    MigrateDataHandler handler("127.0.0.1:18888", objectKeys, objectTable_, remoteApi_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
     auto result = handler.MigrateDataToRemote();
 
     ASSERT_EQ(result.status.GetCode(), StatusCode::K_NO_SPACE);
@@ -417,7 +424,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateSpilledObjects)
 
     std::vector<ImmutableString> objectKeys(smallObjects);
     objectKeys.insert(objectKeys.end(), bigObjects.begin(), bigObjects.end());
-    MigrateDataHandler handler("127.0.0.1:18888", objectKeys, objectTable_, remoteApi_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -448,7 +455,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateBigObjectsWithLimitedRate)
     // Rate limit is 1MB/s, 6MB data would cost 6s.
     std::vector<ImmutableString> objectKeys(smallObjects);
     objectKeys.insert(objectKeys.end(), bigObjects.begin(), bigObjects.end());
-    MigrateDataHandler handler("127.0.0.1:18888", objectKeys, objectTable_, remoteApi_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
 
     Timer timer;
     auto result = handler.MigrateDataToRemote();

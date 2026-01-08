@@ -551,6 +551,15 @@ public:
     Status GetMetaAddress(const std::string &objKey, MetaAddrInfo &metaAddrInfo);
 
     /**
+     * @brief Gets object keys that master is not connected
+     * @param[in] metaAddrInfos Master info and it's object keys
+     * @param[out] objectKeys the objectKeys
+     */
+    void GetObjectKeysFromNotConnectedMaster(
+        const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &metaAddrInfos,
+        std::unordered_set<std::string> &objectKeys);
+
+    /**
      * @brief Gets master address for object key
      * @param[in] objKey Object key
      * @param[out] metaAddrInfo for the objectKey

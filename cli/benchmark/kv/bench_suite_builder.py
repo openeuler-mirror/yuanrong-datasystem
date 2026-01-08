@@ -132,10 +132,11 @@ def validate_kv_args_config(tc_config: dict):
 
 class KVBenchSuite(BenchSuite):
     def run(self):
-        logger.info("=" * 180)
+        logger.info(f"Running test cases...")
+        logger.info("=" * 175)
         for testcase in self.testcases:
             testcase.run()
-        logger.info("=" * 180)
+        logger.info("=" * 175)
 
 
 class KVBenchSuiteBuilder:

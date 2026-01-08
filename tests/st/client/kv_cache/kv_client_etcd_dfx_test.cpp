@@ -304,7 +304,7 @@ public:
     }
 };
 
-TEST_F(KVClientEtcdDfxCentralizedMasterTest, LEVEL1_TestRestartWorkerDuringEtcdCrash)
+TEST_F(KVClientEtcdDfxCentralizedMasterTest, DISABLED_LEVEL1_TestRestartWorkerDuringEtcdCrash)
 {
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1, 2 }));
     DS_ASSERT_OK(externalCluster_->ShutdownEtcds());

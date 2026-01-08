@@ -103,17 +103,8 @@ Status WorkerOcServiceDeleteImpl::DeleteObjectFromNotification(const std::string
     RETURN_IF_NOT_OK(objectTable_->ReserveGetAndLock(objectKey, entry, insert, false, false));
     if (insert) {
         Raii innerUnlock([&entry]() { entry->WUnlock(); });
-        if (getProc_->IsInRemoteGetObject(objectKey)) {
-            // This scenario occurs before the Remote Get QueryMeta response is returned, and the
-            // object is notified to be deleted. But now the object data still not be get. So we
-            // just set the state as needToDelete and then the object would be free immediately since
-            // the object return to client.
-            SetEmptyObjectEntry(objectKey, *entry);
-            (*entry)->stateInfo.SetNeedToDelete(true);
-        } else {
-            (void)objectTable_->Erase(objectKey, *entry);
-            RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
-        }
+        (void)objectTable_->Erase(objectKey, *entry);
+        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
     } else if (async) {
         ObjectKV objectKV(objectKey, *entry);
         if (entry->IsWLockedByCurrentThread()) {

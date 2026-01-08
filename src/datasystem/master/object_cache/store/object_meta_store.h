@@ -155,9 +155,20 @@ public:
      * @brief Add object location to rocksdb.
      * @param[in] objectKey Object key to be added.
      * @param[in] workerAddr Location of the object.
+     * @param[in] ackPersistenceVal Persistence value to be added.
      * @return Status of the call.
      */
-    Status AddObjectLocation(const std::string &objectKey, const std::string &workerAddr);
+    Status AddObjectLocation(const std::string &objectKey, const std::string &workerAddr,
+                                const std::string &ackPersistenceVal = "");
+
+    /**
+     * @brief Add object location to rocksdb.
+     * @param[in] keyLocations The key and location address pair of the object to be added.
+     * @param[in] ackState Ack state, all keyLocations use the same ack state.
+     * @return Status of the call.
+     */
+    Status AddObjectLocations(const std::unordered_map<std::string, std::string> &keyLocations,
+                                const std::string &ackPersistenceVal);
 
     /**
      * @brief Remove object location from rocksdb.

@@ -128,6 +128,7 @@ message CreateCopyMetaReqPb {
   uint32 data_format = 2;
   string address = 3; // object store server address
   bool redirect = 4;
+  uint64 version = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -140,6 +141,28 @@ message CreateCopyMetaRspPb {
   uint32 life_state = 2;
   RedirectMetaInfo info = 3;
   bool meta_is_moving = 4;
+}
+message MultiCopyMetaReqElem {
+  string object_key = 1;
+  uint32 data_format = 2;
+  uint64 version = 3;
+}
+
+message CreateMultiCopyMetaReqPb {
+  repeated MultiCopyMetaReqElem multi_copy_meta_req_elems = 1;
+  string address = 2; // object store server address
+  bool redirect = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CreateMultiCopyMetaRspPb {
+  repeated string failed_object_keys = 1; // failed keys, not retry
+  repeated RedirectMetaInfo info = 2;
+  bool meta_is_moving = 3;
 }
 
 message QueryMetaReqPb {
@@ -470,6 +493,11 @@ message AsyncElementPb {
   string trace_id = 6;
 }
 
+message LocationInfoPb {
+  string location = 1;
+  bool ack = 2;
+}
+
 message MetaForMigrationPb {
   string object_key = 1;
   bytes meta = 2;
@@ -484,6 +512,7 @@ message MetaForMigrationPb {
   uint64 nested_ref = 11;
   repeated GlobalCacheDelPb global_cache_dels = 12;
   repeated AsyncElementPb wait_async_to_l2_elements = 13;
+  repeated LocationInfoPb new_locations = 14;
 }
 
 message RootInfoForMigrationPb {
@@ -638,6 +667,7 @@ message ExpireRspPb {
 service MasterOCService {
   rpc CreateMeta (CreateMetaReqPb) returns (CreateMetaRspPb) {}
   rpc CreateCopyMeta (CreateCopyMetaReqPb) returns (CreateCopyMetaRspPb) {}
+  rpc CreateMultiCopyMeta (CreateMultiCopyMetaReqPb) returns (CreateMultiCopyMetaRspPb) {}
   rpc QueryMeta(QueryMetaReqPb) returns (QueryMetaRspPb) {
     option (datasystem.recv_payload_option) = true;
   }

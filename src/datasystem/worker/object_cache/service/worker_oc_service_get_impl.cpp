@@ -446,7 +446,16 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
     } while (!needRemoteGetIds.empty());
     if (!failedIds.empty()) {
         cacheHitInfo_->IncMissHit(failedIds.size());
+        std::unordered_map<std::string, uint64_t> failedKeyVersions;
+        failedKeyVersions.reserve(failedIds.size());
+        // it's in sync flow, so we can use current time as the delete version.
+        uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
+        for (const auto &id : failedIds) {
+            failedKeyVersions.emplace(id, version);
+        }
+        DeleteObjectsMetaUnacked(failedKeyVersions);
     }
+
     pointRemote.Record();
     if (status.GetCode() == K_OUT_OF_MEMORY) {
         LOG(INFO) << "TryGetObjectFromRemote failed, detail: " << status.ToString();
@@ -470,6 +479,55 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
         }
     }
     return Status::OK();
+}
+
+void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
+    const std::unordered_map<std::string, uint64_t> &deleteKeyVersions)
+{
+    if (deleteKeyVersions.empty()) {
+        return;
+    }
+    LOG(INFO) << "delete unacked object meta, size: " << deleteKeyVersions.size();
+    const int32_t maxRetry = 3;
+    int32_t retry = 0;
+    std::vector<std::string> objKeys;
+    std::vector<std::string> failedIds;
+    std::vector<std::string> needMigrateIds;
+    std::vector<std::string> needWaitIds;
+    objKeys.reserve(deleteKeyVersions.size());
+    for (const auto &kv : deleteKeyVersions) {
+        objKeys.emplace_back(kv.first);
+    }
+    while (!objKeys.empty() && retry < maxRetry) {
+        if (objKeys.size() == 1) {
+            auto status = RemoveLocation(objKeys.front(), deleteKeyVersions.at(objKeys.front()));
+            if (status.IsOk()) {
+                objKeys.clear();
+                break;
+            }
+            retry++;
+            continue;
+        }
+        GroupAndRemoveMeta(objKeys, RemoveMetaReqPb_Cause_EVICTION, localAddress_.ToString(), deleteKeyVersions,
+                          failedIds, needMigrateIds, needWaitIds);
+        objKeys.clear();
+        if (!failedIds.empty() || !needMigrateIds.empty() || !needWaitIds.empty()) {
+            objKeys.insert(objKeys.end(), std::make_move_iterator(failedIds.begin()),
+                          std::make_move_iterator(failedIds.end()));
+            objKeys.insert(objKeys.end(), std::make_move_iterator(needMigrateIds.begin()),
+                          std::make_move_iterator(needMigrateIds.end()));
+            objKeys.insert(objKeys.end(), std::make_move_iterator(needWaitIds.begin()),
+                          std::make_move_iterator(needWaitIds.end()));
+            failedIds.clear();
+            needMigrateIds.clear();
+            needWaitIds.clear();
+        }
+        retry++;
+    }
+    if (!objKeys.empty()) {
+        LOG(WARNING) << "When delete unacked locations, failed to remove meta, objKeys are "
+                     << VectorToString(objKeys);
+    }
 }
 
 Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetObjInfo &info,
@@ -605,11 +663,6 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     PerfPoint point(PerfKey::WORKER_PROCESS_NOT_EXISTS_ADD_IN_REMOTE_GET);
     LOG(INFO) << "Begin to process " << objectsNeedGetRemote.size() << " objects that doesn't exist in local: ["
               << VectorToString(objectsNeedGetRemote) << "]";
-    AddInRemoteGetObjects(objectsNeedGetRemote);
-    Raii raii([this, &objectsNeedGetRemote]() {
-        PerfPoint point(PerfKey::WORKER_PROCESS_NOT_EXISTS_DEL_IN_REMOTE_GET);
-        RemoveInRemoteGetObjects(objectsNeedGetRemote);
-    });
 
     INJECT_POINT("worker.after_add_remote_get_objects");
 
@@ -735,7 +788,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectsFromPrimaryWorker(const std::string 
                               objectKey, primaryAddress, localAddress_.ToString());
     Status status = Status(StatusCode::K_RUNTIME_ERROR, "Try to get object from primary worker failed");
     if (!primaryAddress.empty() && (primaryAddress != localAddress_.ToString())) {
-        status = GetObjectFromRemoteWorkerAndDump(primaryAddress, "", false, dataSize, objectKV);
+        status = GetObjectFromRemoteWorkerAndDump(primaryAddress, "", dataSize, objectKV, false);
         if (status.IsError()) {
             LOG(INFO) << "Try to Pull from primary worker failed. The system will obtain from other worker or "
                          "l2 cache again. Detail: "
@@ -772,7 +825,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerWithoutDump(const std::s
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(bool updateLocation, ReadObjectKV &objectKV)
+Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(ReadObjectKV &objectKV, bool isAsyncBatchGet)
 {
     auto &entry = objectKV.GetObjEntry();
     uint64_t version = entry->GetCreateTime();
@@ -781,35 +834,37 @@ Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(bool updateLoca
     }
     entry->stateInfo.SetNeedToDelete(false);
     const auto &objectKey = objectKV.GetObjKey();
-    if (updateLocation) {
-        HostPort masterHostAddress;
-        // If we can't connect to the master (e.g., due to cross_cluster_get_meta_from_worker=false
-        // or because the master is actually faulty), we cannot update the location to the master.
-        // In this case, just set the delete flag and return.
-        if (GetMetaAddress(objectKey, masterHostAddress).IsError()) {
-            LOG(WARNING) << "Can't connect with master " << masterHostAddress.ToString()
-                         << ". Data will be automatically deleted after it is returned.";
-            entry->stateInfo.SetNeedToDelete(true);
-            return Status::OK();
-        }
-        VLOG(1) << "Sync meta data to master as an object data copy provider.";
-        RETURN_IF_NOT_OK(UpdateLocation(objectKey, objectKV));
+    if (isAsyncBatchGet) {
+        VLOG(1) << FormatString("[ObjectKey %s] Will be updateLocation in batch later.", objectKey);
+        return Status::OK();
     }
-    // Entry version may has been increase when we are in getting, so refresh the version here.
-    entry->SetCreateTime(version);
+    HostPort masterHostAddress;
+    // If we can't connect to the master (could be multiple reasons like cross_az_get_meta_from_worker=false or the
+    // master is indeed faulty), then we can't update the location to the master so just set the delete flag and
+    // return
+    if (GetMetaAddress(objectKey, masterHostAddress).IsError()) {
+        LOG(WARNING) << "Can't connect with master " << masterHostAddress.ToString()
+                        << ". Data will be automatically deleted after it is returned.";
+        entry->stateInfo.SetNeedToDelete(true);
+        return Status::OK();
+    }
+    VLOG(1) << "Sync meta data to master as an object data copy provider.";
+    UpdateLocationParam param = {
+        objectKey, version, static_cast<uint32_t>(entry->stateInfo.GetDataFormat())};
+    UpdateLocationTask task = UpdateLocationTask(param);
+    RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
     INJECT_POINT("create_copy_meta");
     VLOG(1) << FormatString("[ObjectKey %s] Remote get object data success.", objectKey);
     return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::string &address,
-                                                                const std::string &primaryAddress, bool updateLocation,
-                                                                uint64_t dataSize, ReadObjectKV &objectKV)
+    const std::string &primaryAddress, uint64_t dataSize, ReadObjectKV &objectKV, bool isAsyncBatchGet)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA_FROM_WORKER);
     RETURN_IF_NOT_OK(GetObjectFromRemoteWorkerWithoutDump(address, primaryAddress, dataSize, objectKV));
     if (FLAGS_enable_data_replication) {
-        RETURN_IF_NOT_OK(ProcessObjectEntryAndSyncMetadata(updateLocation, objectKV));
+        RETURN_IF_NOT_OK(ProcessObjectEntryAndSyncMetadata(objectKV, isAsyncBatchGet));
     }
     return Status::OK();
 }
@@ -1163,7 +1218,6 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetR
             ReadObjectKV objectKV(readKey, *entry);
             RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
             RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
-            RemoveInRemoteGetObject(readKey.objectKey);
             entry->WUnlock();
             return Status::OK();
         }
@@ -1622,11 +1676,11 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhere(std::vector<master::QueryM
 }
 
 Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                                                const std::shared_ptr<GetRequest> &request,
-                                                                std::vector<RpcMessage> &payloads,
-                                                                std::map<ReadKey, LockedEntity> &lockedEntries,
-                                                                std::unordered_set<std::string> &failedIds,
-                                                                std::set<ReadKey> &needRetryIds)
+                                                               const std::shared_ptr<GetRequest> &request,
+                                                               std::vector<RpcMessage> &payloads,
+                                                               std::map<ReadKey, LockedEntity> &lockedEntries,
+                                                               std::unordered_set<std::string> &failedIds,
+                                                               std::set<ReadKey> &needRetryIds)
 {
     const size_t kMinParallelRequests = 2;
     if (queryMetas.size() < kMinParallelRequests) {
@@ -1782,8 +1836,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
                                                              const master::QueryMetaInfoPb &queryMeta,
                                                              std::vector<RpcMessage> &payloads)
 {
-    Raii raii([this, &entry, &queryMeta]() {
-        RemoveInRemoteGetObject(queryMeta.meta().object_key());
+    Raii raii([&entry]() {
         entry->WUnlock();
     });
 
@@ -1871,10 +1924,9 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
             etcdCM_->CheckConnection(hostAddr, false, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
         if (checkConnectStatus.IsOk()) {
             ifWorkerConnected = true;
-            ConsistencyType type = ConsistencyType(meta.config().consistency_type());
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
-            status = GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(), IsUpdateLocation(type),
-                                                      meta.data_size(), objectKV);
+            status = GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(),
+                                                        meta.data_size(), objectKV, false);
             if (status.GetCode() == K_OUT_OF_MEMORY || IsRpcTimeoutOrTryAgain(status)) {
                 return status;
             }
@@ -1885,7 +1937,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                                         objKey));
             }
         }
-        TryGetObjectFromOtherAZ(meta, hostAddr, objectKV, status);
+        TryGetObjectFromOtherAZ(meta, hostAddr, objectKV, status, false);
     } else {
         status = Status(K_RUNTIME_ERROR,
                         FormatString("Fail to get object %s from remote worker, no object copy exists.", objKey));
@@ -1916,7 +1968,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
 }
 
 void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr,
-                                                     ReadObjectKV &objectKV, Status &status)
+                                                     ReadObjectKV &objectKV, Status &status,
+                                                     bool isBatchGet)
 {
     if (!FLAGS_cross_cluster_get_data_from_worker || !etcdCM_->CheckIfOtherAzNodeConnected(hostAddr)) {
         return;
@@ -1928,9 +1981,8 @@ void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, c
     // this cluster or other clusters when deleting it. It may be a feasible method to store the keys of each cluster in
     // separate tables, but unfortunately it is not currently implemented, so an additional judgment is needed here.
     if (HasWorkerId(objKey)) {
-        ConsistencyType consistencyType = ConsistencyType(meta.config().consistency_type());
-        status = GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(), IsUpdateLocation(consistencyType),
-                                                  meta.data_size(), objectKV);
+        status = GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(),
+                                                  meta.data_size(), objectKV, isBatchGet);
     } else {
         Timer timer;
         status = GetObjectFromRemoteWorkerWithoutDump(address, meta.primary_address(), meta.data_size(), objectKV);
@@ -2030,11 +2082,12 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
     if (queryMeta.is_from_other_az() && !HasWorkerId(meta.object_key())) {
         objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
     } else {
-        ConsistencyType consistencyType = ConsistencyType(meta.config().consistency_type());
-        if (IsUpdateLocation(consistencyType)) {
-            RETURN_IF_NOT_OK(UpdateLocation(objectKey, objectKV));
-        }
         if (FLAGS_enable_data_replication) {
+            UpdateLocationParam param = {
+            objectKey, objectKV.GetObjEntry()->GetCreateTime(),
+            static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat())};
+            UpdateLocationTask task = UpdateLocationTask(param);
+            RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
             evictionManager_->Add(objectKey);
         } else {
             objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
@@ -2045,7 +2098,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
     return UpdateRequestForSuccess(objectKV, request);
 }
 
-Status WorkerOcServiceGetImpl::CreateCopyMetaToMaster(ObjectKV &objectKV)
+Status WorkerOcServiceGetImpl::CreateCopyMetaToMaster(ObjectKV &objectKV, uint64_t version)
 {
     INJECT_POINT("worker.CreateCopyMetaToMaster");
     const auto &objectKey = objectKV.GetObjKey();
@@ -2056,6 +2109,7 @@ Status WorkerOcServiceGetImpl::CreateCopyMetaToMaster(ObjectKV &objectKV)
     req.set_address(localAddress_.ToString());
     req.set_data_format(static_cast<uint32_t>(entry->stateInfo.GetDataFormat()));
     req.set_redirect(true);
+    req.set_version(version);
 
     VLOG(1) << FormatString("Send copy metadata to master for object: %s, address: %s", req.object_key(),
                             localAddress_.ToString());
@@ -2078,14 +2132,187 @@ Status WorkerOcServiceGetImpl::CreateCopyMetaToMaster(ObjectKV &objectKV)
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::UpdateLocation(const std::string &objectKey, ObjectKV &objectKV)
+void WorkerOcServiceGetImpl::AsyncUpdateLocationFunc(UpdateLocationTask &&task)
 {
-    Status rc = CreateCopyMetaToMaster(objectKV);
-    if (rc.IsError()) {
-        LOG(ERROR) << "Create copy meta to master failed, detail: " << rc.ToString();
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ClearObject(objectKV), FormatString("ClearObject %s failed.", objectKey));
+    VLOG(1) << "AsyncUpdateLocationFunc, the size is " << task.GetParams().size();
+    if (task.GetParams().empty()) {
+        return;
     }
-    return rc;
+    PerfPoint point(PerfKey::WORKER_ASYNC_UPDATE_LOCATION_FUNCTION);
+    if (task.GetParams().size() == 1) {
+        return AsyncUpdateSingleLocationFunc(std::move(task));
+    }
+    return AsyncBatchUpdateLocationFunc(std::move(task));
+}
+
+void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&task)
+{
+    master::CreateCopyMetaReqPb req;
+    req.set_object_key(task.GetParams().front().objectKey);
+    req.set_address(localAddress_.ToString());
+    req.set_data_format(task.GetParams().front().data_format);
+    req.set_redirect(true);
+    req.set_version(task.GetParams().front().version);
+    VLOG(1) << FormatString("Send copy metadata to master req: %s", LogHelper::IgnoreSensitive(req));
+    master::CreateCopyMetaRspPb rsp;
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
+        workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, etcdCM_);
+    if (workerMasterApi == nullptr) {
+        LOG(ERROR) << "GetWorkerMasterApi failed, objectKey: " << task.GetParams().front().objectKey;
+        DeleteObjectsMetaUnacked({{task.GetParams().front().objectKey, task.GetParams().front().version}});
+        ClearObjectsByObjectKeys({{task.GetParams().front().objectKey, task.GetParams().front().version}});
+        return;
+    }
+    std::function<Status(CreateCopyMetaReqPb &, CreateCopyMetaRspPb &)> func =
+        [&workerMasterApi](CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp) {
+            return workerMasterApi->CreateCopyMeta(req, rsp);
+        };
+    Status rc = RedirectRetryWhenMetaMoving(req, rsp, workerMasterApi, func);
+    if (IsRpcTimeout(rc)) {
+        Status status = asyncUpdateLocationManager_->AddTask(std::move(task));
+        if (status.IsError()) {
+            LOG(WARNING) << FormatString("Add retry task failed: %s", rc.ToString());
+            DeleteObjectsMetaUnacked({{task.GetParams().front().objectKey, task.GetParams().front().version}});
+            ClearObjectsByObjectKeys({{task.GetParams().front().objectKey, task.GetParams().front().version}});
+        }
+    } else if (rc.IsError()) {
+        LOG(ERROR) << "Update location info failed, the object key is " << task.GetParams().front().objectKey;
+        DeleteObjectsMetaUnacked({{task.GetParams().front().objectKey, task.GetParams().front().version}});
+        ClearObjectsByObjectKeys({{task.GetParams().front().objectKey, task.GetParams().front().version}});
+    }
+}
+
+void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&task)
+{
+    std::vector<UpdateLocationParam> retryParams;
+    std::unordered_map<std::string, uint64_t> clearMetaKeys;
+    std::unordered_map<std::string, uint64_t> clearObjectKeys;
+    std::vector<std::string> objectKeys;
+    for (const auto &param : task.GetParams()) {
+        objectKeys.emplace_back(param.objectKey);
+    }
+    // grouped by master address
+    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> paramsGroupByAddress;
+    paramsGroupByAddress.reserve(objKeysGrpByMaster.size());
+    std::vector<UpdateLocationParam> params = task.ExtractParams();
+    bool found;
+    for (auto param : params) {
+        found = false;
+        for (auto groupInfo : objKeysGrpByMaster) {
+            auto it = std::find(groupInfo.second.begin(), groupInfo.second.end(), param.objectKey);
+            if (it != groupInfo.second.end()) {
+                paramsGroupByAddress[groupInfo.first].reserve(groupInfo.second.size());
+                paramsGroupByAddress[groupInfo.first].emplace_back(param);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            LOG(INFO) << "AsyncUpdateLocation not found the object key " << param.objectKey;
+            retryParams.emplace_back(param);
+        }
+    }
+    GroupSendCreateMultiCopyMeta(paramsGroupByAddress, params, retryParams, clearMetaKeys, clearObjectKeys);
+    if (!retryParams.empty()) {
+        UpdateLocationTask retryTask = UpdateLocationTask(retryParams);
+        Status rc = asyncUpdateLocationManager_->AddTask(std::move(retryTask));
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString("Add retry task failed: %s", rc.ToString());
+            for (const auto &param : retryParams) {
+                clearMetaKeys.insert({param.objectKey, param.version});
+                clearObjectKeys.insert({param.objectKey, param.version});
+            }
+        }
+    }
+    DeleteObjectsMetaUnacked(clearMetaKeys);
+    ClearObjectsByObjectKeys(clearObjectKeys);
+}
+
+void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
+    std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> &paramsGroupByAddress,
+    std::vector<UpdateLocationParam> &params,
+    std::vector<UpdateLocationParam> &retryParams,
+    std::unordered_map<std::string, uint64_t> &clearMetaKeys,
+    std::unordered_map<std::string, uint64_t> &clearObjectKeys)
+{
+    // grouped send batch request
+    for (const auto &group : paramsGroupByAddress) {
+        if (group.second.empty()) {
+            continue;
+        }
+        std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+        workerMasterApiManager_->GetWorkerMasterApi(group.first.GetAddress(), workerMasterApi);
+        if (workerMasterApi == nullptr) {
+            retryParams.insert(retryParams.end(), group.second.begin(), group.second.end());
+            continue;
+        }
+        master::CreateMultiCopyMetaReqPb req;
+        master::CreateMultiCopyMetaRspPb rsp;
+        req.set_address(localAddress_.ToString());
+        req.set_redirect(true);
+        for (const auto &elem : group.second) {
+            auto reqElem = req.add_multi_copy_meta_req_elems();
+            reqElem->set_object_key(elem.objectKey);
+            reqElem->set_data_format(elem.data_format);
+            reqElem->set_version(elem.version);
+        }
+        std::function<Status(CreateMultiCopyMetaReqPb &, CreateMultiCopyMetaRspPb &)> func =
+            [&workerMasterApi](CreateMultiCopyMetaReqPb &multiCopyReq, CreateMultiCopyMetaRspPb &multiCopyRsp) {
+                return workerMasterApi->CreateMultiCopyMeta(multiCopyReq, multiCopyRsp);
+            };
+        Status status = RedirectRetryWhenMetasMoving(req, rsp, func);
+        if (status.IsError()) {
+            VLOG(1) << "CreateMultiCopyMeta failed, status: " << status.ToString();
+            if (IsRpcTimeout(status)) {
+                retryParams.insert(retryParams.end(), group.second.begin(), group.second.end());
+            } else {
+                for (const auto &param : group.second) {
+                    clearMetaKeys.insert({param.objectKey, param.version});
+                    clearObjectKeys.insert({param.objectKey, param.version});
+                }
+            }
+            continue;
+        }
+        // if success, deal the failed_object_keys returned by res
+        if (rsp.failed_object_keys().empty()) {
+            continue;
+        }
+        for (const auto &failedKey : rsp.failed_object_keys()) {
+            const auto &it = std::find_if(params.begin(), params.end(),
+                [&](const UpdateLocationParam &param) {return param.objectKey == failedKey;});
+            clearMetaKeys.insert({it->objectKey, it->version});
+            clearObjectKeys.insert({it->objectKey, it->version});
+        }
+    }
+}
+void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(
+    const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
+{
+    LOG(INFO) << "clear objects by update location params";
+    for (auto &keyVersion : clearKeyVersions) {
+        std::shared_ptr<SafeObjType> entry;
+        auto status = objectTable_->Get(keyVersion.first, entry);
+        if (status.IsError()) {
+            if (status.GetCode() == StatusCode::K_NOT_FOUND) {
+                continue;
+            }
+            LOG(WARNING) << FormatString("objectKey: %s get failed, status: %s", keyVersion.first,
+                                        status.ToString());
+            continue;
+        }
+        Status rc = TryLockWithRetry(keyVersion.first, entry);
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString("objectKey: %s lock failed, status: %s", keyVersion.first, rc.ToString());
+            continue;
+        }
+        Raii unlock([&entry]() { entry->WUnlock(); });
+        if ((*entry)->GetCreateTime() == keyVersion.second) {
+            ObjectKV objectKV(keyVersion.first, *entry);
+            LOG_IF_ERROR(ClearObject(objectKV),
+                        FormatString("Failed to erase object %s from object table", keyVersion.first));
+        }
+    }
 }
 
 Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint64_t version)
@@ -2115,20 +2342,6 @@ Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPor
     RETURN_IF_NOT_OK(etcdCM_->GetMetaAddress(objKey, metaAddrInfo));
     masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
     return Status::OK();
-}
-
-bool WorkerOcServiceGetImpl::IsUpdateLocation(ConsistencyType consistencyType)
-{
-    if (consistencyType == ConsistencyType::PRAM || !FLAGS_enable_data_replication) {
-        // In PRAM consistency scenarios, location information is inserted immediately after QueryMeta,
-        // reducing one RPC request and improves performance.
-        return false;
-    }
-
-    // In Causal consistency scenarios, CacheInvalidation is updated synchronously.
-    // Therefore, to avoid the remote get execution of the worker who does not hold data, the master location
-    // information is updated only when the worker obtains the copied data success.
-    return true;
 }
 
 bool WorkerOcServiceGetImpl::IsNearDeathObject(const std::string &location, const ObjectMetaPb &meta)
@@ -2211,46 +2424,6 @@ void WorkerOcServiceGetImpl::BatchUnlockForGet(const std::map<std::string, uint6
         safeObj->WUnlock();
         (void)lockedEntries.erase(iter);
     }
-}
-
-bool WorkerOcServiceGetImpl::IsInRemoteGetObject(const std::string &objectKey)
-{
-    if (!FLAGS_enable_data_replication) {
-        return false;
-    }
-    std::shared_lock<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
-    return inRemoteGetIds_.find(objectKey) != inRemoteGetIds_.end();
-}
-
-void WorkerOcServiceGetImpl::AddInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote)
-{
-    if (!FLAGS_enable_data_replication) {
-        return;
-    }
-    std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
-    for (const auto &id : objectsNeedGetRemote) {
-        inRemoteGetIds_.insert(id.objectKey);
-    }
-}
-
-void WorkerOcServiceGetImpl::RemoveInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote)
-{
-    if (!FLAGS_enable_data_replication) {
-        return;
-    }
-    std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
-    for (const auto &id : objectsNeedGetRemote) {
-        inRemoteGetIds_.erase(id.objectKey);
-    }
-}
-
-void WorkerOcServiceGetImpl::RemoveInRemoteGetObject(const std::string &objectKey)
-{
-    if (!FLAGS_enable_data_replication) {
-        return;
-    }
-    std::lock_guard<std::shared_timed_mutex> l(inRemoteGetIdsMutex_);
-    inRemoteGetIds_.erase(objectKey);
 }
 
 void WorkerOcServiceGetImpl::FillGetObjMetaInfoRspPb(

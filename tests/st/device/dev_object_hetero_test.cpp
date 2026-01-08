@@ -1616,28 +1616,40 @@ TEST_F(DevObjectHeteroTest, DISABLED_TestBlobNumInConsistent)
 {
     int srcDevice = 0;
     int dstDevice = 1;
-    size_t numOfObjs = 1;
+    size_t numOfObjs = 10;
     size_t blksPerObj = 10;
     size_t blkSz = 30;
     std::vector<std::string> objectIds;
-    objectIds.emplace_back(GetStringUuid());
+    for (size_t i = 0; i < numOfObjs; i++) {
+        objectIds.emplace_back(GetStringUuid());
+    }
     std::vector<std::string> failedIdList;
     std::vector<DeviceBlobList> devGetBlobList;
     std::vector<DeviceBlobList> devSetBlobList;
     std::shared_ptr<HeteroClient> client;
     auto child1 = ForkForTest([&]() {
         InitAcl(srcDevice);
+        auto halfObjNum = int(numOfObjs / 2);
         auto halfBlobs = int(blksPerObj / 2);
-        PrePareDevData(numOfObjs, halfBlobs, blkSz, devGetBlobList, devSetBlobList, srcDevice);
+        std::vector<DeviceBlobList> devGetBlobList1;
+        std::vector<DeviceBlobList> devSetBlobList1;
+        PrePareDevData(halfObjNum, halfBlobs, blkSz, devGetBlobList1, devSetBlobList1, srcDevice);
+        std::vector<DeviceBlobList> devGetBlobList2;
+        std::vector<DeviceBlobList> devSetBlobList2;
+        PrePareDevData(numOfObjs - halfObjNum, blksPerObj - halfBlobs, blkSz, devGetBlobList2, devSetBlobList2,
+                       srcDevice);
+        devSetBlobList1.insert(devSetBlobList1.end(), devSetBlobList2.begin(), devSetBlobList2.end());
         InitTestHeteroClient(0, client);
         std::this_thread::sleep_for(std::chrono::seconds(SHORT_WAIT_TIME));
-        DS_ASSERT_OK(client->DevMSet(objectIds, devSetBlobList, failedIdList));
+        DS_ASSERT_OK(client->DevMSet(objectIds, devSetBlobList1, failedIdList));
         DS_ASSERT_TRUE(failedIdList.empty(), true);
         std::this_thread::sleep_for(std::chrono::seconds(LONG_WAIT_TIME));
         exit(0);
     });
     auto child2 = ForkForTest([&]() {
         InitAcl(dstDevice);
+        std::vector<DeviceBlobList> devGetBlobList;
+        std::vector<DeviceBlobList> devSetBlobList;
         PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, dstDevice);
         InitTestHeteroClient(1, client);
         ASSERT_EQ(client->DevMGet(objectIds, devGetBlobList, failedIdList, RPC_TIMEOUT).GetCode(),

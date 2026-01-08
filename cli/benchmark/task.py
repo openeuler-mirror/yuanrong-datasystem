@@ -103,7 +103,7 @@ class BenchCommandTask(BenchTask):
             stderr=subprocess.PIPE,
         )
         try:
-            stdout, stderr = process.communicate(timeout=30)
+            stdout, stderr = process.communicate(timeout=300)
         except subprocess.TimeoutExpired:
             process.kill()
             error_msg = f"Local command execution timed out: '{self.command}'"
@@ -128,7 +128,7 @@ class BenchCommandTask(BenchTask):
             stderr=subprocess.PIPE,
         )
         try:
-            stdout, stderr = process.communicate(timeout=30)
+            stdout, stderr = process.communicate(timeout=300)
         except subprocess.TimeoutExpired:
             process.kill()
             error_msg = (

@@ -67,7 +67,6 @@
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
-#include "datasystem/worker/object_cache/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -135,20 +134,6 @@ public:
     Status ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs);
 
     /**
-     * @brief
-     * @param[in] objectKeys objects to remove meta location.
-     * @param[in] workerMasterApi the worker master api.
-     * @param[in] removeCase Remove meta case
-     * @param[out] failedIds Failed Ids.
-     * @param[out] needMigrateIds need to migrate ids.
-     * @param[out] needWaitIds Need wait ids.
-     */
-    void BatchRemoveMeta(const std::vector<std::string> &objectKeys,
-                         const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-                         const master::RemoveMetaReqPb::Cause removeCause, std::vector<std::string> &failedIds,
-                         std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds);
-
-    /**
      * @brief GroupAndRemoveMeta
      * @param[in] objKeys ObjKeys need to remove meta
      * @param[in] removeCase Remove meta case
@@ -158,7 +143,27 @@ public:
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds);
+                            std::vector<std::string> &needWaitIds)
+    {
+        INJECT_POINT("ProcessVoluntaryScaledown", [this] {
+            Timer timer;
+            uint64_t sleepTimeMs = 100;
+            uint64_t maxSecond = 5;
+            while (timer.ElapsedSecond() < maxSecond) {
+                std::string key = std::string(ETCD_RING_PREFIX) + "/";
+                RangeSearchResult res;
+                HashRingPb newRing;
+                if (etcdStore_->RawGet(key, res).IsOk() && newRing.ParseFromString(res.value) &&
+                    !newRing.add_node_info().empty()) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            }
+            return;
+        });
+        getProc_->GroupAndRemoveMeta(objKeys, removeCase, localAddress_.ToString(),
+            std::unordered_map<std::string, uint64_t> {}, failedIds, needMigrateIds, needWaitIds);
+    }
 
     /**
      * @brief HealthCheck the worker health check handler
@@ -205,81 +210,9 @@ public:
      * @param[in] objectKeys Need migrate data object key list.
      * @param[in] taskId task id of voluntary scale down task, if task id is empty, it means we
      *                   careless about the task id.
-     * @param[in] stage Migration sttrategy stage.
      * @return Status of the call
      */
-    Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
-                       MigrateStrategy::MigrationStrategyStage stage = MigrateStrategy::MigrationStrategyStage::FIRST);
-
-    /**
-     * @brief Handle migrate data future results.
-     * @param[in] taskId task id of voluntary scale down task.
-     * @param[in] progress Migrate progress instance.
-     * @param[in] threadPool Migrate data thread pool.
-     * @param[in] futures Migrate data futures.
-     * @param[out] newFutures New added migrate data futures.
-     * @return Status of the call.
-     */
-    Status HandleMigrateDataResult(const std::string &taskId, const std::shared_ptr<MigrateProgress> progress,
-                                   const std::unique_ptr<ThreadPool> &threadPool,
-                                   std::vector<std::future<MigrateDataHandler::MigrateResult>> &futures,
-                                   std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
-
-    /**
-     * @brief Redirect the remote node to migrate data.
-     * @param[in] originAddr Origin remote node ip address.
-     * @param[in] needRetryIds Need retry object keys.
-     * @param[in] progress Migrate progress instance.
-     * @param[in] threadPool Migrate data thread pool.
-     * @param[in] migrateDataStrategy Migration data strategy instance used to select the target node for data
-     * migration.
-     */
-    std::future<MigrateDataHandler::MigrateResult> RedirectMigrateData(
-        const std::string &originAddr, const std::unordered_set<ImmutableString> &needRetryIds,
-        const std::shared_ptr<MigrateProgress> progress, const std::unique_ptr<ThreadPool> &threadPool,
-        MigrateStrategy &migrateDataStrategy);
-
-    /**
-     * @brief Migrate data to remote node via addr.
-     * @param[in] addr Remote node address.
-     * @param[in] objectKeys Need migrate data object keys.
-     * @param[in] progress Migrate progress instance.
-     * @param[in] threadPool Migrate data thread pool.
-     * @param[in] migrateDataStrategy Migration data strategy instance used to select the target node for data
-     * migration.
-     * @return Task future.
-     */
-    std::future<MigrateDataHandler::MigrateResult> MigrateDataByNode(const MetaAddrInfo &addr,
-                                                                     const std::vector<std::string> &objectKeys,
-                                                                     const std::shared_ptr<MigrateProgress> progress,
-                                                                     const std::unique_ptr<ThreadPool> &threadPool,
-                                                                     const MigrateStrategy &migrateDataStrategy);
-    /**
-     * @brief Migrate data to remote node implemetation.
-     * @param[in] remoteWorkerStub Remote node rpc stub.
-     * @param[in] objectKeys Need migrate data object keys.
-     * @param[in] progress Migrate progress instance.
-     * @param[in] migrateDataStrategy Migration data strategy instance used to select the target node for data
-     * migration.
-     * @return Task future.
-     */
-    MigrateDataHandler::MigrateResult MigrateDataByNodeImpl(
-        const std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub, const std::vector<std::string> &objectKeys,
-        const std::shared_ptr<MigrateProgress> progress, const MigrateStrategy &migrateDataStrategy);
-
-    /**
-     * @brief Construct failed migrate result.
-     * @param[in] workerAddr Worker address.
-     * @param[in] status Status of the call.
-     * @param[in] objectKeys Failed object list.
-     * @param[in] migrateDataStrategy Migration data strategy instance used to select the target node for data
-     * migration.
-     * @return Migrate data result future.
-     */
-    std::future<MigrateDataHandler::MigrateResult> ConstructFailedFuture(const std::string &workerAddr,
-                                                                         const Status &status,
-                                                                         const std::vector<std::string> &objectKeys,
-                                                                         const MigrateStrategy &migrateDataStrategy);
+    Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId);
 
     /**
      * @brief Handle Put/Publish/Seal request from the client.
@@ -367,36 +300,6 @@ public:
      * @return Status of the call.
      */
     Status DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp) override;
-
-    /**
-     * @brief Remove meta location
-     * @param objectKeysRemoveList The obj keys too remove
-     * @param workerMasterApi Worker master api
-     * @param removeCause Remove cause
-     * @param version Obj version
-     * @param needRedirct If need redirect or not on master
-     * @param response Response of the call
-     * @return Status
-     */
-    Status RemoveMeta(const std::list<std::string> objectKeysRemoveList,
-                      const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-                      const master::RemoveMetaReqPb::Cause removeCause, const uint64_t version, bool needRedirct,
-                      master::RemoveMetaRspPb &response);
-
-    /**
-     * @brief Remove metadata redirect master
-     * @param rsp Response info of redirect master
-     * @param removeCause RemoveCause
-     * @param failedIds Remove meta failed ids
-     * @param needMigrateIds Need migrateIds.
-     * @param needWaitIds Need waited Ids
-     * @return Status of the call
-     */
-    Status RemoveMetadataFromRedirectMaster(master::RemoveMetaRspPb &rsp,
-                                            const master::RemoveMetaReqPb::Cause removeCause,
-                                            std::vector<std::string> &failedIds,
-                                            std::vector<std::string> &needMigrateIds,
-                                            std::vector<std::string> &needWaitIds);
 
     /**
      * @brief Get the Primary Replica Addr object
@@ -792,14 +695,6 @@ public:
     Status MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp) override;
 
     /**
-     * @brief Checks the connection to the target Worker node and creates a remote Worker API if connected.
-     * @param[in,out] remoteWorkerStub Pointer to the remote Worker API.
-     * @param[in] workerAddr Address of the target Worker node.
-     * @return Status The status of the connection and API creation.
-     */
-    Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub, HostPort workerAddr);
-
-    /**
      * @brief Check local node is exiting or not.
      * @return True if local node is exiting
      */
@@ -1064,13 +959,6 @@ private:
      * @return OK if success.
      */
     Status GetReadyToWork(const PushMetaToWorkerReqPb &req);
-
-    /**
-     * @brief Check if object is in remote get progress.
-     * @param[in] objectKey Object key.
-     * @return True if object is in remote get progress.
-     */
-    bool IsInRemoteGetProgress(const std::string &objectKey);
 
     /**
      * @brief Check if object is in rollback progress.

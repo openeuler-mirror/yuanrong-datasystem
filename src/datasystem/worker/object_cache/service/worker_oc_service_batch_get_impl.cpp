@@ -38,6 +38,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/common/util/validator.h"
@@ -221,8 +222,62 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                    << VectorToString(successIds) << "], meta data num: " << queryMetas.size()
                    << " lastRc: " << lastRc.ToString();
     }
+    BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_OTHER);
     return lastRc;
+}
+
+void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::string> &successIds,
+    const std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<ReadKey, LockedEntity> &entries)
+{
+    if (!FLAGS_enable_data_replication) {
+        return;
+    }
+    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(successIds);
+    std::unordered_set<std::string> needSetDeleteObjectKeys;
+    needSetDeleteObjectKeys.reserve(successIds.size());
+    etcdCM_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
+    for (const auto &objectKey : needSetDeleteObjectKeys) {
+        auto it = entries.find(ReadKey(objectKey));
+        if (it != entries.end()) {
+            auto rc = TryLockWithRetry(objectKey, it->second.safeObj);
+            if (rc.IsError()) {
+                continue;
+            }
+            it->second.safeObj->Get()->stateInfo.SetNeedToDelete(true);
+            it->second.safeObj->WUnlock();
+        }
+    }
+    std::vector<UpdateLocationParam> asyncUpdateLocationParams;
+    if (successIds.size() == queryMetas.size()) {
+        for (auto &queryMeta : queryMetas) {
+            if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
+                continue;
+            }
+            asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
+                queryMeta.meta().object_key(),
+                queryMeta.meta().version(),
+                static_cast<uint32_t>(queryMeta.meta().config().data_format())
+            });
+        }
+    } else {
+        for (auto &queryMeta : queryMetas) {
+            if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
+                continue;
+            }
+            const auto &meta = queryMeta.meta();
+            const auto &objectKey = meta.object_key();
+            if (std::find(successIds.begin(), successIds.end(), objectKey) != successIds.end()) {
+                asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
+                    objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format())});
+            }
+        }
+    }
+    if (asyncUpdateLocationParams.empty()) {
+        return;
+    }
+    UpdateLocationTask asyncUpdateTask = UpdateLocationTask(asyncUpdateLocationParams);
+    asyncUpdateLocationManager_->AddTask(std::move(asyncUpdateTask));
 }
 
 void WorkerOcServiceGetImpl::GroupQueryMeta(
@@ -332,9 +387,8 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
         needEvictIds.emplace_back(objectKey);
         entry->stateInfo.SetNeedToDelete(true);
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_SYNC_META);
-        ConsistencyType type = ConsistencyType(meta->config().consistency_type());
         if (FLAGS_enable_data_replication) {
-            subRc = ProcessObjectEntryAndSyncMetadata(IsUpdateLocation(type), objectKV);
+            subRc = ProcessObjectEntryAndSyncMetadata(objectKV, true);
         }
         point.Record();
     }
@@ -395,7 +449,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             HostPort hostAddr;
             hostAddr.ParseString(address);
             // Note that rc can change upon TryGetObjectFromOtherAZ.
-            TryGetObjectFromOtherAZ(*metaIter, hostAddr, objectKV, subRc);
+            TryGetObjectFromOtherAZ(*metaIter, hostAddr, objectKV, subRc, true);
         }
         if (subRc.IsError() && tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_L2);
@@ -517,10 +571,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
     // Unlock entries at exit.
-    Raii raii([this, &infos]() {
+    Raii raii([&infos]() {
         for (auto &info : infos) {
-            const auto &objectKey = info.queryMeta->meta().object_key();
-            RemoveInRemoteGetObject(objectKey);
             info.entry->safeObj->WUnlock();
         }
     });
@@ -528,7 +580,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
     Timer endToEndTimer;
     Status rc =
         BatchGetObjectFromRemoteWorker(address, infos, request, successIds, needRetryIds, failedIds, failedMetas);
-    LOG(INFO) << FormatString("object get from remote finish, use %f millisecond.", endToEndTimer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("object get from remote finish, use %f millisecond.",
+                             endToEndTimer.ElapsedMilliSecond());
     return rc;
 }
 

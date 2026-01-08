@@ -177,17 +177,15 @@ void P2PSubscribe::ProcessP2PSend(
                     size_t length = npuEvent.length();
                     std::vector<Blob> blobs = putRequest->GetBlobsStorage();
                     // Calculate minimum size from all blobs
-                    size_t minSize =
-                        std::min_element(blobs.begin(), blobs.end(), [](const Blob &a, const Blob &b) {
-                            return a.size < b.size;
-                        })->size;
+                    size_t minSize = std::min_element(blobs.begin(), blobs.end(), [](const Blob &a, const Blob &b) {
+                                         return a.size < b.size;
+                                     })->size;
                     // Execute if receiver expects only partial data
                     if (srcOffset > 0 || length < minSize) {
                         VLOG(1) << "Adjusting data info parameters: srcOffset=" << srcOffset << ", length=" << length
                                 << ", minSize=" << minSize;
                         for (auto &blob : blobs) {
-                            blob.pointer =
-                                static_cast<void *>(static_cast<uint8_t *>(blob.pointer) + srcOffset);
+                            blob.pointer = static_cast<void *>(static_cast<uint8_t *>(blob.pointer) + srcOffset);
                             blob.size = npuEvent.length();
                         }
                     }
@@ -199,8 +197,7 @@ void P2PSubscribe::ProcessP2PSend(
                     auto rc = comm->SubmitPipelineTask(std::move(sendTask));
                     if (rc.IsError()) {
                         LOG(ERROR) << FormatString(
-                            "Submitted P2P send task execution failed for object: %s, error msg: [%s]",
-                            objectKey,
+                            "Submitted P2P send task execution failed for object: %s, error msg: [%s]", objectKey,
                             rc.GetMsg());
                         LOG_IF_ERROR(putRequest->SetPromiseValue(rc), "promise set value failed.");
                         return;
@@ -423,8 +420,8 @@ void P2PSubscribe::ProcessP2PRecv(
                     const auto &objectKey = p2pGetRequest->GetObjectKey();
                     const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
                     auto blobStorage = p2pGetRequest->GetBlobsStorage();
-                    LOG(INFO) << FormatString(
-                        "Start submit recv task for object key: %s, to comm: %s", objectKey, comm->GetCommId());
+                    LOG(INFO) << FormatString("Start submit recv task for object key: %s, to comm: %s", objectKey,
+                                              comm->GetCommId());
                     acl::P2PRecvTask recvTask{ .destBuffers = blobStorage,
                                                .totalSize = p2pGetRequest->GetTotalSize(),
                                                .comm = comm,
@@ -432,8 +429,7 @@ void P2PSubscribe::ProcessP2PRecv(
                     auto rc = comm->SubmitPipelineTask(std::move(recvTask));
                     if (rc.IsError()) {
                         LOG(ERROR) << FormatString(
-                            "Submitted P2P receive task execution failed for object: %s, error msg: [%s]",
-                            objectKey,
+                            "Submitted P2P receive task execution failed for object: %s, error msg: [%s]", objectKey,
                             rc.GetMsg());
                         LOG_IF_ERROR(p2pGetRequest->SetPromiseValue(rc), "promise set value failed.");
                         continue;
@@ -486,11 +482,10 @@ Status P2PSubscribe::ProcessP2PResponse(
         respKeys << objectKey;
         first = false;
     }
-    if (groupedSubResp.empty()) {
-        return Status::OK();
-    }
     VLOG(1) << FormatString("Start processing the keys that were successfully queried, keys:[%s]", respKeys.str());
-    ProcessP2PRecv(groupedSubResp, objKeyToP2PRequest, finishedList);
+    if (!groupedSubResp.empty()) {
+        ProcessP2PRecv(groupedSubResp, objKeyToP2PRequest, finishedList);
+    }
     std::stringstream retryKeys;
     first = true;
     auto remainTasks =
@@ -556,8 +551,8 @@ Status P2PSubscribe::PublishDeviceObject(const std::shared_ptr<DeviceBuffer> &bu
         auto &storageBlobVec = buffAcc->second->GetBlobsStorage();
         auto &newBlobVec = buffer->GetDeviceMemUnit()->GetBlobsStorage();
         auto sameDataPtr =
-            std::equal(storageBlobVec.begin(), storageBlobVec.end(), newBlobVec.begin(),
-                       newBlobVec.end(), [](const Blob &a, const Blob &b) { return a.pointer == b.pointer; });
+            std::equal(storageBlobVec.begin(), storageBlobVec.end(), newBlobVec.begin(), newBlobVec.end(),
+                       [](const Blob &a, const Blob &b) { return a.pointer == b.pointer; });
         if (sameDataPtr) {
             return Status::OK();
         }
@@ -567,7 +562,7 @@ Status P2PSubscribe::PublishDeviceObject(const std::shared_ptr<DeviceBuffer> &bu
     }
     auto devMemUnit = buffer->GetDeviceMemUnit();
     auto putRequest = AddSubscribe(bufferInfo, devMemUnit->GetBlobsStorage());
-    VLOG(1) << "PutP2PMeta to worker, objectKey: " << buffer->GetObjectKey();
+    LOG(INFO) << "PutP2PMeta to worker, objectKey: " << buffer->GetObjectKey();
     auto rc = clientWorkerApi_->PutP2PMeta(bufferInfo, devMemUnit->GetBlobsStorage());
     INJECT_POINT("PublishDeviceObject.PutP2PMeta.Timeout", [&rc]() {
         rc = Status(StatusCode::K_RUNTIME_ERROR, "timeout");
@@ -678,8 +673,8 @@ Status P2PSubscribe::AsyncGet(const std::vector<std::shared_ptr<DeviceBuffer>> &
             const std::vector<Blob> blobsInPut = putRequest->GetBlobsStorage();
             std::vector<Blob> blobsInGet = buffer->GetDevBlobList();
             for (size_t i = 0; i < blobsInPut.size(); i++) {
-                auto adjustedPtr = static_cast<void *>(static_cast<uint8_t *>(blobsInPut[i].pointer)
-                                                       + buffer->bufferInfo_->srcOffset);
+                auto adjustedPtr =
+                    static_cast<void *>(static_cast<uint8_t *>(blobsInPut[i].pointer) + buffer->bufferInfo_->srcOffset);
                 RETURN_IF_NOT_OK(aclImpl_->MemCopyD2D(blobsInGet[i].pointer, blobsInGet[i].size,
                                                       static_cast<void *>(adjustedPtr), blobsInGet[i].size));
             }

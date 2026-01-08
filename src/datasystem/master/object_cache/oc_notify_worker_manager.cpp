@@ -603,7 +603,7 @@ Status OCNotifyWorkerManager::SyncSendUpdateObject(const std::string &objectKey,
                                                    ObjectLifeState lifeState, const std::vector<std::string> &fields)
 {
     for (auto iter = objectMeta.locations.begin(); iter != objectMeta.locations.end();) {
-        const std::string &address = *iter;
+        const std::string &address = iter->first;
         if (address == sourceWorker) {
             ++iter;
             continue;
@@ -645,13 +645,13 @@ Status OCNotifyWorkerManager::AsyncSendUpdateObject(const std::string &objectKey
 {
     RETURN_IF_NOT_OK(RemoveAsyncWorkerOp(sourceWorker, { objectKey }, NotifyWorkerOpType::CACHE_INVALID));
     for (const auto &address : objectMeta.locations) {
-        if (address == sourceWorker) {
+        if (address.first == sourceWorker) {
             continue;
         }
         LOG(INFO) << FormatString("Insert async worker operation(%d), workerId:%s",
-                                  static_cast<uint32_t>(NotifyWorkerOpType::CACHE_INVALID), address);
+                                  static_cast<uint32_t>(NotifyWorkerOpType::CACHE_INVALID), address.first);
         RETURN_IF_NOT_OK(
-            InsertAsyncWorkerOp(address, objectKey, { NotifyWorkerOpType::CACHE_INVALID }, true,
+            InsertAsyncWorkerOp(address.first, objectKey, { NotifyWorkerOpType::CACHE_INVALID }, true,
                                 OCMetadataManager::WriteMode2MetaType(objectMeta.meta.config().write_mode())));
     }
     return Status::OK();

@@ -245,12 +245,19 @@ class DsTensorClient:
                 )
 
     @staticmethod
-    def _get_kv_tensor_data_ptr(tensor: Tensor) -> int:
-        """Get kvtensor start data pointer"""
+    def _get_tensor_data_ptr(tensor: Tensor) -> int:
+        """Get tensor start data pointer"""
+        data_ptr = tensor.data_ptr()
+        if data_ptr == 0:
+            raise RuntimeError(
+                "The input tensor has no valid data storage (data_ptr is null). "
+                "Please ensure the tensor is properly initialized and not empty."
+            )
+
         if DsTensorClient._is_ms_tensor(tensor):
             element_size = tensor.element_size()
-            return tensor.data_ptr() + (tensor.storage_offset() * element_size)
-        return tensor.data_ptr()
+            return data_ptr + (tensor.storage_offset() * element_size)
+        return data_ptr
 
     @classmethod
     def _page_attn_blockwise_dbls(
@@ -283,7 +290,7 @@ class DsTensorClient:
             if tensor.device.index != layer_tensors[0].device.index:
                 raise ValueError("Tensors not from a same device")
 
-        kvc_tensors = [ds.Tensor(cls._get_kv_tensor_data_ptr(t), t.element_size(), list(t.shape))
+        kvc_tensors = [ds.Tensor(cls._get_tensor_data_ptr(t), t.element_size(), list(t.shape))
                        for t in layer_tensors]
         return kvc_tensors
 
@@ -551,7 +558,7 @@ class DsTensorClient:
 
         self._check_tensor_device_type(tensor)
         dev_blob_lists = []
-        start_ptr = self._get_start_data_ptr(tensor)
+        start_ptr = self._get_tensor_data_ptr(tensor)
         for copy_range in copy_ranges:
             blob = Blob(start_ptr + copy_range.dst_offset, copy_range.length)
             dev_blob_lists.append(DeviceBlobList(self._device_id, [blob], copy_range.src_offset))
@@ -867,17 +874,6 @@ class DsTensorClient:
         dev_blob_list = self._page_attn_blockwise_dbls(layer_tensors, block_ids, self._device_id)
         return self._hetero_client.async_mget_h2d(keys, dev_blob_list, sub_timeout_ms)
 
-    def _get_start_data_ptr(self, tensor: Tensor) -> int:
-        if self._is_ms_tensor(tensor):
-            element_size = tensor.element_size()
-        else:
-            element_size = tensor.dtype.itemsize
-        data_ptr = tensor.data_ptr()
-        if data_ptr == 0:
-            raise RuntimeError("The input tensor has no valid data storage (data_ptr is null). "
-                               "Please ensure the tensor is properly initialized and not empty.")
-        return data_ptr + (tensor.storage_offset() * element_size)
-
     def _tensor_2_bloblist(self, tensor: Tensor) -> DeviceBlobList:
         """
         Convert a PyTorch tensor into a DeviceBlobList.
@@ -892,5 +888,5 @@ class DsTensorClient:
             TypeError: If the input is not a PyTorch tensor.
         """
         self._check_tensor_device_type(tensor)
-        blob = Blob(self._get_start_data_ptr(tensor), tensor.nbytes)
+        blob = Blob(self._get_tensor_data_ptr(tensor), tensor.nbytes)
         return DeviceBlobList(self._device_id, [blob])

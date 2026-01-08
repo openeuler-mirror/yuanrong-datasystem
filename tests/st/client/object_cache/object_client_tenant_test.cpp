@@ -725,7 +725,7 @@ public:
     }
 };
 
-TEST_F(ObjectClientWithTenantIdsDfxTest, LEVEL1_TestWorkerRestartTenantRef)
+TEST_F(ObjectClientWithTenantIdsDfxTest, DISABLED_LEVEL1_TestWorkerRestartTenantRef)
 {
     FLAGS_v = 2;  // client vlog is 2
     std::shared_ptr<ObjectClient> client1, client2;

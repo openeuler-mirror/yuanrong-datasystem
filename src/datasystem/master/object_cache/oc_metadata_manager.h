@@ -84,10 +84,15 @@ struct SubscribeMeta {
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
 };
 
+enum class AckState: int {
+    UNACK = 0,
+    ACK = 1
+};
+
 struct ObjectMeta {
     ObjectMetaPb meta;
     int64_t value = 0;
-    std::unordered_set<ImmutableString> locations;
+    std::unordered_map<ImmutableString, AckState> locations;
     MULTI_SET_STATE multiSetState = MULTI_SET_STATE::IDLE;
     int64_t multiSetTimestamp = 0;
 
@@ -180,7 +185,7 @@ struct ObjectMeta {
      */
     bool IsPrimaryWithoutCopy(const std::string &address) const
     {
-        return locations.size() == 1 && *locations.begin() == address;
+        return locations.size() == 1 && locations.begin()->first == address;
     }
 
     /**
@@ -316,11 +321,12 @@ public:
      * @brief Create Migration Meta data
      * @param[in] metaCache meta info
      * @param[in] addr worker location
+     * @param[in] ackState ack state
      * @param[in] objectKey object key
      * @param[in] metaPb meta info
      * @return Status of the call
      */
-    Status AddLocation(ObjectMeta &metaCache, const std::string &addr, const std::string objectKey,
+    Status AddLocation(ObjectMeta &metaCache, const std::string &addr, AckState ackState, const std::string &objectKey,
                        const ObjectMetaPb &metaPb);
 
     /**
@@ -330,6 +336,14 @@ public:
      * @return Status of the call.
      */
     Status CreateCopyMeta(const CreateCopyMetaReqPb &request, CreateCopyMetaRspPb &response);
+
+    /**
+     * @brief Create multi object copy meta info in cache and rocksdb.
+     * @param[in] request The multi meta of object.
+     * @param[out] response The response to worker.
+     * @return Status of the call.
+     */
+    Status CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &request, CreateMultiCopyMetaRspPb &response);
 
     /**
      * @brief Query metas by objectKeys.
@@ -1161,6 +1175,26 @@ public:
      */
     Status Expire(const ExpireReqPb &req, ExpireRspPb &rsp);
 
+protected:
+    /**
+     * @brief Recovery object locations
+     * @param[in] objLocMap The map record object and locations.
+     * @return Status of the call
+     */
+    Status RecoverObjectLocations(
+        const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
+
+    /**
+     * @brief Load object locations
+     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
+     * @param[out] objLocMap The map record object and locations.
+     * @return Status of the call
+     */
+    Status LoadObjectLocations(bool isFromRocksdb,
+        std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
+
+    std::shared_timed_mutex metaTableMutex_;
+    TbbMetaTable metaTable_;  // Metadata table.
 private:
     friend class MasterOCServiceImpl;
     friend class OCNotifyWorkerManager;
@@ -1254,22 +1288,6 @@ private:
                       bool &firstOne);
 
     /**
-     * @brief Recovery object locations
-     * @param[in] objLocMap The map record object and locations.
-     * @return Status of the call
-     */
-    Status RecoverObjectLocations(const std::unordered_map<std::string, std::vector<std::string>> &objLocMap);
-
-    /**
-     * @brief Load object locations
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[out] objLocMap The map record object and locations.
-     * @return Status of the call
-     */
-    Status LoadObjectLocations(bool isFromRocksdb,
-                               std::unordered_map<std::string, std::vector<std::string>> &objLocMap);
-
-    /**
      * @brief Selete primary copy if old primary copy node is crash in scale-in scenarios
      * @param[in] objectKey The key of object.
      * @param[in] primaryAddress The old primary copy address.
@@ -1278,7 +1296,7 @@ private:
      */
     std::string SelectPrimaryCopyWhenScaleIn(
         const std::string &objectKey, const std::string &primaryAddress,
-        const std::unordered_map<std::string, std::vector<std::string>> &objLocMap);
+        const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
 
     /**
      * @brief Load meta into the cache from the object meta table.
@@ -1294,9 +1312,9 @@ private:
      * @return Status of the call.
      */
     Status HandleLoadMeta(std::vector<std::pair<std::string, std::string>> &metas,
-                          std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-                          std::unordered_map<std::string, std::vector<std::string>> objLocMap, bool &isFromRocksdb,
-                          const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges);
+        std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
+        const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
+        bool &isFromRocksdb, const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges);
 
     /**
      * @brief Load meta into the cache from the object meta table.
@@ -1528,7 +1546,7 @@ private:
      * @return Selected location.
      */
     std::string SelectObjectLocation(const std::string &objectKey, const std::string &sourceWorker,
-                                     const std::unordered_set<ImmutableString> &locations);
+                                     const std::unordered_map<ImmutableString, AckState> &locations);
 
     template <class F, class... Args>
     void ExecuteAsyncTask(F &&f, Args &&... args)
@@ -1750,8 +1768,21 @@ private:
 
     bool IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address);
 
-    std::shared_timed_mutex metaTableMutex_;
-    TbbMetaTable metaTable_;  // Metadata table.
+    std::set<std::string> GetValidWorkersInHashRing();
+
+    /**
+     * @brief Check if the object is binary.
+     * @param[in] address The location address.
+     * @param[in] objectKey The object key.
+     * @param[in] version The object version.
+     * @param[in] dataFormat The object data format.
+     * @param[out] accessor The accessor for meta table.
+     * @param[out] isExpired The version is expired.
+     * @return Status of the call.
+     */
+    Status ProcessCopyMetaHelper(const std::string &address, const std::string &objectKey, uint64_t version,
+                                    uint32_t dataFormat, TbbMetaTable::accessor &accessor, bool &isExpired);
+
     std::string masterAddress_;
 
     std::shared_ptr<AkSkManager> akSkManager_;

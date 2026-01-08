@@ -31,6 +31,7 @@
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/cache_hit_info.h"
+#include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -44,6 +45,14 @@ public:
     WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM, EtcdStore *etcdStore,
                            std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress);
+
+    ~WorkerOcServiceGetImpl()
+    {
+        if (asyncUpdateLocationManager_) {
+            asyncUpdateLocationManager_->Stop();
+            asyncUpdateLocationManager_ = nullptr;
+        }
+    };
 
     /**
      * @brief Deal with the request for object data from client.
@@ -99,13 +108,6 @@ public:
                           const std::string &masterAddr, bool redirect, bool isFromOtherAz);
 
     /**
-     * @brief Check is in remote get object or not.
-     * @param[in] objectKey Object key.
-     * @return True if object is in remote get.
-     */
-    bool IsInRemoteGetObject(const std::string &objectKey);
-
-    /**
      * @brief Check and set status K_WORKER_PULL_OBJECT_NOT_FOUND to retry.
      * @param[in] meta object meta
      * @param[in] address object location addr
@@ -154,6 +156,24 @@ public:
      */
     std::string GetHitInfo();
 
+    /**
+     * @brief Init the async update location manager.
+     */
+    Status Init()
+    {
+        asyncUpdateLocationManager_ = std::make_unique<AsyncUpdateLocationManager>();
+        return asyncUpdateLocationManager_->Init(
+            [this](UpdateLocationTask &&task) {
+                return this->AsyncUpdateLocationFunc(std::move(task));
+                });
+    };
+
+    /**
+     * @brief Used In AsyncUpdateLocationManager to update location async.
+     * @param[in] task The async UpdateLocationTask.
+     */
+    void AsyncUpdateLocationFunc(UpdateLocationTask &&task);
+
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
 
@@ -179,6 +199,42 @@ private:
         LockedEntity *entry = nullptr;
         master::QueryMetaInfoPb *queryMeta = nullptr;
     };
+
+    /**
+     * @brief Async update location function, it deal only one objectKey.
+     * @param[in] task The update location task.
+     */
+    void AsyncUpdateSingleLocationFunc(UpdateLocationTask &&task);
+
+    /**
+     * @brief Async update location function, it deal multi objectKeys.
+     * @param[in] task The update location task.
+     */
+    void AsyncBatchUpdateLocationFunc(UpdateLocationTask &&task);
+
+    /**
+     * @brief Group send create multi copy meta.
+     * @param[in] paramGroupByAddress The params grouped by address.
+     * @param[in] params The update location params.
+     * @param[out] retryParams The retry params.
+     * @param[out] clearMetaKeys The objectKey that need clear location meta.
+     * @param[out] retryParams The objectKey that need clear objects.
+     */
+    void GroupSendCreateMultiCopyMeta(
+        std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> &paramsGroupByAddress,
+        std::vector<UpdateLocationParam> &params,
+        std::vector<UpdateLocationParam> &retryParams,
+        std::unordered_map<std::string, uint64_t> &clearMetaKeys,
+        std::unordered_map<std::string, uint64_t> &clearObjectKeys);
+
+    /**
+     * @brief Batch update location helper function.
+     * @param[in] successIds The success objectKeys.
+     * @param[in] queryMetas The query metas.
+     * @param[in] entries The entries.
+     */
+    void BatchUpdateLocationHelper(const std::vector<std::string> &successIds,
+        const std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<ReadKey, LockedEntity> &entries);
 
     /**
      * @brief Get map of objectKeys grouped by master.
@@ -218,6 +274,12 @@ private:
      */
     Status TryGetObjectFromRemote(int64_t subTimeout, std::shared_ptr<GetRequest> &request,
                                   std::set<ReadKey> remoteObjectKeys);
+
+    /**
+     * @brief Delete failed objects not ack meta info.
+     * @param[in] failedKeyVersions The failed object id with version list.
+     */
+    void DeleteObjectsMetaUnacked(const std::unordered_map<std::string, uint64_t> &deleteKeyVersions);
 
     /**
      * @brief Preprocess for get one object.
@@ -275,30 +337,29 @@ private:
      * @return Status of the call.
      */
     Status GetObjectFromRemoteWorkerAndDump(const std::string &address, const std::string &primaryAddress,
-                                            bool updateLocation, uint64_t dataSize, ReadObjectKV &objectKV);
+                                            uint64_t dataSize, ReadObjectKV &objectKV, bool isAsyncBatchGet);
 
     /**
      * @brief Helper function to process entry and sync metadata after successful pull.
-     * @param[in] updateLocation Determines whether to update the location information of the master.
      * @param[out] objectKV The reserved and locked safe object and its corresponding objectKey.
      * @return Status of the call.
      */
-    Status ProcessObjectEntryAndSyncMetadata(bool updateLocation, ReadObjectKV &objectKV);
+    Status ProcessObjectEntryAndSyncMetadata(ReadObjectKV &objectKV, bool isAsyncBatchGet);
 
     /**
      * @brief Create a copy object metadata to master.
      * @param[in/out] objectKV The object to be sealed and its corresponding objectKey.
+     * @param[in] version the version of this object.
      * @return Status of the call.
      */
-    Status CreateCopyMetaToMaster(ObjectKV &objectKV);
+    Status CreateCopyMetaToMaster(ObjectKV &objectKV, uint64_t version);
 
     /**
      * @brief Update location to master.
-     * @param[in] objectKey Object key.
-     * @param[in] objectKV The reserved and locked safe object and its corresponding objectKey.
+     * @param[in] clearKeyVersions Object key and version map.
      * @return Status of the call.
      */
-    Status UpdateLocation(const std::string &objectKey, ObjectKV &objectKV);
+    void ClearObjectsByObjectKeys(const std::unordered_map<std::string, uint64_t> &clearKeyVersions);
 
     /**
      * @brief Helper function to allocate aggregated memory for objects at Batch Get.
@@ -622,7 +683,7 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
-    Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<GetObjectInfo> &metas,
+    Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<GetObjectInfo> &infos,
                                           const std::shared_ptr<GetRequest> &request,
                                           std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                           std::unordered_set<std::string> &failedIds,
@@ -692,7 +753,7 @@ private:
                                 const std::shared_ptr<GetRequest> &request, const Status &status,
                                 BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads,
                                 std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-                                std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas,
+                                std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedInfos,
                                 bool &dataSizeChange);
 
     /**
@@ -703,7 +764,7 @@ private:
      * @param[out] status Status of the call.
      */
     void TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr, ReadObjectKV &objectKV,
-                                 Status &status);
+                                 Status &status, bool isBatchGet);
 
     /**
      * @brief Try to get object from L2 cache when object not found in other worker.
@@ -750,13 +811,6 @@ private:
      * @return Status of the call.
      */
     Status GetMetaAddress(const std::string &objKey, HostPort &masterAddr) const;
-
-    /**
-     * @brief Determines whether to update the location information of the master node..
-     * @param[in] consistencyType Determines whether to update location information based on the consistency type.
-     * @return bool Update location information.
-     */
-    static bool IsUpdateLocation(ConsistencyType consistencyType);
 
     /**
      * @brief Check if object is near-death.
@@ -807,24 +861,6 @@ private:
      */
     void BatchUnlockForGet(const std::map<std::string, uint64_t> &objectKeys,
                            std::map<ReadKey, LockedEntity> &lockedEntries);
-
-    /**
-     * @brief Add remote get object key list.
-     * @param[in] objectKeys Object key list.
-     */
-    void AddInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote);
-
-    /**
-     * @brief Remove remote get object key list.
-     * @param[in] objectKeys Object key list.
-     */
-    void RemoveInRemoteGetObjects(const std::set<ReadKey> &objectsNeedGetRemote);
-
-    /**
-     * @brief Remove remote get object key.
-     * @param[in] objectKey Object key.
-     */
-    void RemoveInRemoteGetObject(const std::string &objectKey);
 
     /**
      * @brief Fill the GetObjMetaInfoRspPb.
@@ -924,12 +960,10 @@ private:
 
     HostPort localAddress_;
 
-    std::shared_timed_mutex inRemoteGetIdsMutex_;  // the mutex for inRemoteGetIds_
-
-    std::unordered_set<std::string> inRemoteGetIds_;  // the object keys that in remote get
-
     std::vector<std::string> otherAZNames_;
     std::shared_ptr<CacheHitInfo> cacheHitInfo_;  // the cache hit info
+
+    std::unique_ptr<AsyncUpdateLocationManager> asyncUpdateLocationManager_{ nullptr };
 
     static constexpr size_t OBJECTS_NOT_EXIST_IDX = 0;
     static constexpr size_t OBJECTS_PUZZLED_IDX = 1;

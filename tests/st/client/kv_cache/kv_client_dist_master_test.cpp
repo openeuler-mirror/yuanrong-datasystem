@@ -505,56 +505,6 @@ TEST_F(STCClientDistMasterTest, TestGetAndDelSameKeyConcurrency)
     ASSERT_EQ(client_->Get(key, getVal).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
-TEST_F(STCClientDistMasterTest, TestMockRemoteGetConcurrency)
-{
-    LOG(INFO) << "Test multi-worker remote get a key concurrency";
-    // During the remote get operation, the location is updated when the QueryMeta request is sent tp master. However,
-    // worker has no data at this time and still getting. There is a situation that can cause a potential deadlock:
-    // 1. w0 set the key.
-    // 2. w1 and w2 get the key concurrently.
-    // 3. w0 tell w1 the location is w2, and tell w2 the location is w1.
-    // 4. In present implementation, deadlock happen.
-    StartClustersAndWaitReady();
-    GetWorkerUuids();
-    std::string key = ObjectKeyWithOwner(0, uuidMap_);
-    std::string val = RandomData().GetRandomString(1024ul * 1024ul);
-    DS_ASSERT_OK(client_->Set(key, val));
-    std::atomic<int> succCount{ 0 };
-
-    HostPort w1Addr;
-    HostPort w2Addr;
-    cluster_->GetWorkerAddr(1, w1Addr);
-    cluster_->GetWorkerAddr(2, w2Addr);
-    Timer timer;
-    std::thread t1([this, &key, &val, &w2Addr, &succCount]() {
-        std::string getVal;
-        std::stringstream call;
-        call << "return(" << w2Addr.ToString() << ")";
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.select_location", call.str()));
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.GetObjectFromAnywhere", "sleep(1500)"));
-        DS_ASSERT_OK(client1_->Get(key, getVal));
-        ASSERT_EQ(getVal, val);
-        succCount += 1;
-    });
-
-    std::thread t2([this, &key, &val, &w1Addr, &succCount]() {
-        sleep(1);
-        std::string getVal;
-        std::stringstream call;
-        call << "return(" << w1Addr.ToString() << ")";
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.select_location", call.str()));
-        DS_ASSERT_OK(client2_->Get(key, getVal));
-        ASSERT_EQ(getVal, val);
-        succCount += 1;
-    });
-
-    t1.join();
-    t2.join();
-
-    ASSERT_EQ(succCount, 2);
-    ASSERT_LE(timer.ElapsedMilliSecond(), 10'000);
-}
-
 TEST_F(STCClientDistMasterTest, TestLocationConcurrencyScenario)
 {
     LOG(INFO) << "Test remote get add and remove location concurrency";
