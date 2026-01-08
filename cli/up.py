@@ -16,8 +16,7 @@
 import json
 import os
 import shlex
-
-from typing import Dict, Any
+from typing import Any, Dict
 
 import yr.datasystem.cli.common.util as util
 from yr.datasystem.cli.command import BaseCommand
@@ -83,6 +82,15 @@ class Command(BaseCommand, ParallelMixin):
             ),
         )
 
+        parser.add_argument(
+            "--enable_ums",
+            action="store_true",
+            default=False,
+            help=(
+                "Enable UMS, if enabled, the RPC messages between datasystem workers will be transmitted through ub (default: False)"
+            ),
+        )
+
         ng = parser.add_argument_group("numactl options (optional, passed straight to numactl)")
         ng.add_argument(
             "-N", "--cpunodebind",
@@ -90,7 +98,8 @@ class Command(BaseCommand, ParallelMixin):
             help="Restricts process execution to only the CPUs belonging to the specified NUMA node(s)."
         )
         ng.add_argument(
-            "-C", "--physcpubind",
+            "-C",
+            "--physcpubind",
             metavar="CPUS",
             help="Binds the process to specific physical CPU cores by their numeric IDs."
         )
@@ -157,8 +166,9 @@ class Command(BaseCommand, ParallelMixin):
             self._timeout = args.timeout
             self.execute_parallel(
                 self._config[ClusterConfig.WORKER_NODES],
+                use_ums=args.enable_ums,
                 use_numactl=use_numactl,
-                numactl_opts=numactl_opts
+                numactl_opts=numactl_opts,
             )
         except Exception as e:
             self.logger.error(f"Up cluster failed: {e}")
@@ -178,6 +188,7 @@ class Command(BaseCommand, ParallelMixin):
 
         use_numactl = kwargs.get("use_numactl", False)
         numactl_opts = kwargs.get("numactl_opts") or {}
+        use_ums = kwargs.get("use_ums", False)
 
         self._hidden_config_path = util.validate_no_injection(self._hidden_config_path)
         util.ssh_execute(
@@ -215,22 +226,28 @@ class Command(BaseCommand, ParallelMixin):
         )
 
         remote_cmd = self.build_remote_start_cmd(
-            self._hidden_config_path,
-            use_numactl,
-            numactl_opts
+            self._hidden_config_path, use_ums, use_numactl, numactl_opts
         )
         if use_numactl:
             self.logger.info(f"Starting with numactl command: {remote_cmd}")
         util.ssh_execute(node, user_name, private_key, f"bash -l -c {shlex.quote(remote_cmd)}")
         self.logger.info(f"Start worker service @ {node}:{worker_port} success.")
 
-    def build_remote_start_cmd(self, config_path: str,
-                                use_numactl: bool,
-                                numactl_opts: Dict[str, Any]) -> str:
+    def build_remote_start_cmd(
+        self,
+        config_path: str,
+        use_ums: bool,
+        use_numactl: bool,
+        numactl_opts: Dict[str, Any],
+    ) -> str:
         """
         Update the remote cmd command to execute.
         """
-        base_cmd = f"dscli start -t {self._timeout} -f {shlex.quote(config_path)}"
+        if use_ums:
+            base_cmd = f"dscli start -t {self._timeout} --enable_ums -f {shlex.quote(config_path)}"
+        else:
+            base_cmd = f"dscli start -t {self._timeout} -f {shlex.quote(config_path)}"
+
         if not use_numactl:
             return base_cmd
 
