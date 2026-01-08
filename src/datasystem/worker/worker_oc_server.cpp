@@ -129,7 +129,10 @@ DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
 DS_DEFINE_bool(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
-DS_DEFINE_bool(cross_az_get_data_from_worker, true, "Control whether try to get data from other AZ's worker firstly.");
+DS_DEFINE_bool(
+    cross_cluster_get_data_from_worker,
+    true,
+    "Control whether try to get data from other cluster's worker firstly.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");

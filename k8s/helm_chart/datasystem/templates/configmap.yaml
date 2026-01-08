@@ -19,6 +19,6 @@ data:
     -add_node_wait_time_s={{ .Values.global.reliability.addNodeWaitTimeS }}
     -async_delete={{ .Values.global.performance.asyncDelete}}
     -auto_del_dead_node={{ .Values.global.reliability.autoDelDeadNode }}
-    -cross_az_get_data_from_worker={{ .Values.global.reliability.crossAzGetDataFromWorker }}
+    -cross_cluster_get_data_from_worker={{ .Values.global.reliability.crossAzGetDataFromWorker }}
     -enable_hash_ring_self_healing={{ .Values.global.reliability.enableHashRingSelfHealing }}
     -enable_lossless_data_exit_mode={{ .Values.global.gracefulShutdown.enableLosslessDataExitMode }}

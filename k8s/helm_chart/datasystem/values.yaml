@@ -226,7 +226,7 @@ global:
     # This path must be specified when zmq authentication is enabled.
     curveKeyDir: /home/yuanrong/datasystem/curve_key_dir
     curveZmqKey:
-      # Control whether try to get data from other AZ's worker firstly, if false then get data from L2 cache directly.
+      # Control whether try to get data from other cluster's worker firstly, if false then get data from L2 cache directly.
       # The service mapping, public key and private key are configured with base64 to avoid the special characters problem when restore to files.
       # These keys must be replaced.
       # The format example: workerPublicKey: V11lTG59ZC5wYX0lTkNrMmlrUFZXJkBTRz5LVHtpMjhBWVhaTlA5Kw==
@@ -403,9 +403,9 @@ global:
   crossAz:
     # Specify other az names using the same etcd. Only split by ','
     otherClusterNames: ""
-    # Control whether to try to get data from other AZ's worker first. If false, data will be retrieved directly from the L2 cache.
+    # Control whether to try to get data from other cluster's worker first. If false, data will be retrieved directly from the L2 cache.
     crossAzGetDataFromWorker: true
-    # Control whether to get meta data from other AZ's worker, if false then get meta data from local AZ.
+    # Control whether to get meta data from other cluster's worker, if false then get meta data from local cluster.
     crossAzGetMetaFromWorker: false
 
   akSk:

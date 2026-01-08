@@ -1068,7 +1068,7 @@ private:
                                        std::optional<RouteInfo> &routeInfo);
 
     /**
-     * @brief Process GetMetaAddress in case[cross_az_get_meta_from_worker = true; hasWorkerId = true].
+     * @brief Process GetMetaAddress in case[cross_cluster_get_meta_from_worker = true; hasWorkerId = true].
      * @param[in] objKey Object key.
      * @param[in] workerIdInObjKey The workerId in objectKey.
      * @param[out] dbName The dbName.
@@ -1083,7 +1083,7 @@ private:
                                                                       std::optional<RouteInfo> &routeInfo);
 
     /**
-     * @brief Process GetMetaAddress in case[cross_az_get_meta_from_worker = false; hasWorkerId = true].
+     * @brief Process GetMetaAddress in case[cross_cluster_get_meta_from_worker = false; hasWorkerId = true].
      * @param[in] workerIdInObjKey The workerId in objectKey.
      * @param[out] dbName The dbName.
      * @param[out] masterAddr The address of the master that manages metadata for objKey.

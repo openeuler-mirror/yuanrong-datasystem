@@ -116,8 +116,8 @@ DS_DECLARE_string(worker_address);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_bool(cross_az_get_data_from_worker);
-DS_DECLARE_bool(cross_az_get_meta_from_worker);
+DS_DECLARE_bool(cross_cluster_get_data_from_worker);
+DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(enable_distributed_master);
 
 using namespace datasystem::master;

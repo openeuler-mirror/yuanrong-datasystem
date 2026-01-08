@@ -791,8 +791,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | other_cluster_names | string | `""` | 指定其他可用区的名称，如果需要指定多个可用区通过','进行分隔 |
-| cross_az_get_data_from_worker | bool | `true` | 是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 `false`，则将直接从二级缓存中检索数据 |
-| cross_az_get_meta_from_worker | bool | `false` | 是否从其他可用区的datasystem-worker获取元数据，如果为 `false`，则从本地可用区获取元数据 |
+| cross_cluster_get_data_from_worker | bool | `true` | 是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 `false`，则将直接从二级缓存中检索数据 |
+| cross_cluster_get_meta_from_worker | bool | `false` | 是否从其他可用区的datasystem-worker获取元数据，如果为 `false`，则从本地可用区获取元数据 |
 
 #### 元数据相关配置
 

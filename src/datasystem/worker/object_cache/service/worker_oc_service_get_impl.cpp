@@ -63,8 +63,8 @@
 
 DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(cross_az_get_data_from_worker);
-DS_DECLARE_bool(cross_az_get_meta_from_worker);
+DS_DECLARE_bool(cross_cluster_get_data_from_worker);
+DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(authorization_enable);
 DS_DECLARE_bool(enable_data_replication);
@@ -1268,7 +1268,7 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
     std::vector<std::string> &absentObjectKeys)
 {
     std::unordered_set<std::string> objectKeysNotExistNeedQueryInEtcd;
-    if (HaveOtherAZ() && !FLAGS_cross_az_get_meta_from_worker) {
+    if (HaveOtherAZ() && !FLAGS_cross_cluster_get_meta_from_worker) {
         for (auto it = objectKeysNotExist.begin(); it != objectKeysNotExist.end();) {
             if (!HasWorkerId(*it)) {
                 objectKeysNotExistNeedQueryInEtcd.insert(std::move(*it));
@@ -1468,7 +1468,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
 
     // 4. Handle objKeys needed to try to get metadata in other AZ
     std::unordered_set<std::string> objectKeysMayInOtherAz;
-    if (FLAGS_cross_az_get_meta_from_worker) {
+    if (FLAGS_cross_cluster_get_meta_from_worker) {
         point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_CROSS_AZ);
         LOG_IF_ERROR(ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(subTimeout, objKeysUndecidedMaster,
                                                                      objectKeysQueryMetaFailed, objectKeysMayInOtherAz,
@@ -1971,7 +1971,7 @@ void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, c
                                                      ReadObjectKV &objectKV, Status &status,
                                                      bool isBatchGet)
 {
-    if (!FLAGS_cross_az_get_data_from_worker || !etcdCM_->CheckIfOtherAzNodeConnected(hostAddr)) {
+    if (!FLAGS_cross_cluster_get_data_from_worker || !etcdCM_->CheckIfOtherAzNodeConnected(hostAddr)) {
         return;
     }
     const std::string &objKey = meta.object_key();

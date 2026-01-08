@@ -37,8 +37,8 @@
 
 DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(cross_az_get_data_from_worker);
-DS_DECLARE_bool(cross_az_get_meta_from_worker);
+DS_DECLARE_bool(cross_cluster_get_data_from_worker);
+DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -107,7 +107,9 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     }
 
     std::unordered_set<std::string> objectKeysMayInOtherAz;
-    if (!absentObjectKeys.empty() && FLAGS_cross_az_get_data_from_worker && FLAGS_cross_az_get_meta_from_worker) {
+    if (!absentObjectKeys.empty() &&
+        FLAGS_cross_cluster_get_data_from_worker &&
+        FLAGS_cross_cluster_get_meta_from_worker) {
         rc = TryExpireObjKeyFromOtherAZ(objectKeysMayInOtherAz, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
     }
     objKeysExpireFailed.insert(absentObjectKeys.begin(), absentObjectKeys.end());
