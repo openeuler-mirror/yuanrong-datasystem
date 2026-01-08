@@ -1445,8 +1445,8 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_VoluntaryScaleDownLocatio
     InitTestKVClient(0, client0_);        // Init client0 to worker 0 with 2000ms timeout
     InitTestKVClient(1, client1_, 1000);  // Init client1 to worker 1 with 1000ms timeout
     std::vector<std::string> keys;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "CreateCopyMetaToMaster.failed",  // index is 1
-                                           "return(K_RPC_DEADLINE_EXCEEDED)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "AsyncUpdateLocationAddTask.failed",  // index is 1
+                                           "return(K_RUNTIME_ERROR)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remove_location",  // index is 1
                                            "return(K_RPC_DEADLINE_EXCEEDED)"));
     for (int i = 0; i < 10; i++) {  // obj num is 10

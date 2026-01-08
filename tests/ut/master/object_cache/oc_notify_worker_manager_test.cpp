@@ -63,16 +63,16 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
     {
         ObjectMeta objectMeta;
         objectMeta.meta.set_object_key(objectKey);
-        objectMeta.locations.emplace(worker2);
-        objectMeta.locations.emplace(worker3);
+        objectMeta.locations[worker2] = AckState::ACK;
+        objectMeta.locations[worker3] = AckState::ACK;
         EXPECT_EQ(manager->AsyncSendUpdateObject(objectKey, worker1, objectMeta), Status::OK());
     }
 
     {
         ObjectMeta objectMeta;
         objectMeta.meta.set_object_key(objectKey);
-        objectMeta.locations.emplace(worker1);
-        objectMeta.locations.emplace(worker2);
+        objectMeta.locations[worker1] = AckState::ACK;
+        objectMeta.locations[worker2] = AckState::ACK;
         EXPECT_EQ(manager->AsyncSendUpdateObject(objectKey, worker3, objectMeta), Status::OK());
     }
 
@@ -89,8 +89,8 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
     {
         ObjectMeta objectMeta;
         objectMeta.meta.set_object_key(objectKey);
-        objectMeta.locations.emplace(worker1);
-        objectMeta.locations.emplace(worker3);
+        objectMeta.locations[worker1] = AckState::ACK;
+        objectMeta.locations[worker3] = AckState::ACK;
         EXPECT_EQ(manager->AsyncSendUpdateObject(objectKey, worker2, objectMeta), Status::OK());
     }
 

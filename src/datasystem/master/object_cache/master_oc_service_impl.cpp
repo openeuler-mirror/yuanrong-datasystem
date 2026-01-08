@@ -215,6 +215,31 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     return status;
 }
 
+Status MasterOCServiceImpl::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &req, CreateMultiCopyMetaRspPb &rsp)
+{
+    masterOperationTimeCost.Clear();
+    Timer timer;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    PerfPoint point(PerfKey::MASTER_CREATE_MULTI_COPY_META);
+    LOG(INFO) << FormatString("Processing CreateMultiCopyMeta, req: ") << LogHelper::IgnoreSensitive(req);
+    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+                                     "GetOcMetadataManager failed");
+
+    Status status = ocMetadataManager->CreateMultiCopyMeta(req, rsp);
+    if (status.IsError()) {
+        LOG(ERROR) << FormatString("CreateMultiCopyMeta objects failed with error: %s", status.ToString());
+    } else {
+        LOG(INFO) << "CreateMultiCopyMeta finished";
+        VLOG(1) << FormatString("Master %s CreateMultiCopyMeta rsp: %s", GetLocalAddr().ToString(),
+                                LogHelper::IgnoreSensitive(rsp));
+    }
+    point.Record();
+    masterOperationTimeCost.Append("Total CreateMultiCopyMeta", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master CreateMultiCopyMeta %s", masterOperationTimeCost.GetInfo());
+    return status;
+}
+
 Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads)
 {
     PerfPoint point(PerfKey::MASTER_QUERY_META);

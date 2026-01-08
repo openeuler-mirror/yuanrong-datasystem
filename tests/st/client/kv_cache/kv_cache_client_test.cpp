@@ -1892,25 +1892,6 @@ TEST_F(KVClientDfxTest, LEVEL2_TestWorkerRestartAddresEmpty)
     ASSERT_TRUE(timer.ElapsedMilliSecond() < 3000);  // not wait for 10s, time is less than 3000ms
 }
 
-TEST_F(KVClientDfxTest, TestWorkerDeadlineExceeded)
-{
-    std::shared_ptr<KVClient> client1;
-    std::shared_ptr<KVClient> client2;
-    int timeoutSec = 5000;
-    InitTestKVClient(0, client1, timeoutSec);
-    InitTestKVClient(1, client2, timeoutSec);
-    uint64_t size = 1024 * 1024;
-    std::string data = GenRandomString(size);
-    auto key = client1->Set(data);
-    ASSERT_TRUE(!key.empty());
-
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "worker.CreateCopyMetaToMaster", "return(K_RPC_DEADLINE_EXCEEDED)"));
-    std::string val;
-    auto rc = client2->Get(key, val);
-    ASSERT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
-}
-
 class KVClientQuerySizeTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

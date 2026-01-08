@@ -446,7 +446,7 @@ void OCMetadataManager::SetMetaInfo(const ObjectMetaPb &newMeta, const std::stri
     metaCache.meta.set_version(version);
     metaCache.meta.set_primary_address(address);
     metaCache.meta.set_ttl_second(newMeta.ttl_second());
-    (void)metaCache.locations.emplace(address);
+    metaCache.locations[address] = AckState::ACK;
 }
 
 Status OCMetadataManager::NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version,
@@ -817,7 +817,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
     for (int i = 0; i < req.metas_size(); i++) {
         const ObjectBaseInfoPb &info = req.metas(i);
         ObjectMeta &meta = newMetas.emplace_back();
-        meta.locations.emplace(req.address());
+        meta.locations[req.address()] = AckState::ACK;
         ConstructMetaInfo(req, info, version, meta.meta);
     }
     point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_IMPL);
@@ -1042,27 +1042,99 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
         std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
         masterOperationTimeCost.Append("CreateCopyMeta get lock", timer.ElapsedMilliSecond());
         TbbMetaTable::accessor accessor;
-        auto found = metaTable_.find(accessor, objectKey);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            found, StatusCode::K_NOT_FOUND,
-            FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(accessor->second.meta.config().data_format() == request.data_format(),
-                                             K_INVALID,
-                                             FormatString("Invalid data format of objectKey(%s)", objectKey));
-
+        bool isExpired;
+        Raii raii([&accessor]() { accessor.release(); });
+        RETURN_IF_NOT_OK(ProcessCopyMetaHelper(address, objectKey, request.version(),
+                                              request.data_format(), accessor, isExpired));
+        // If old version worker request this, it's in sync process, so it must not be expired.
+        // And when new version worker request this, it's in async process, and should ignore the expired meta.
+        RETURN_OK_IF_TRUE(isExpired);
         response.set_version(accessor->second.meta.version());
         response.set_life_state(accessor->second.meta.life_state());
-        // If the address already exists, return success.
-        if (!accessor->second.locations.insert(address).second) {
-            return Status::OK();
+    }
+    return objectStore_->AddObjectLocation(objectKey, address, "");
+}
+
+Status OCMetadataManager::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &request,
+                                             CreateMultiCopyMetaRspPb &response)
+{
+    std::vector<std::string> ids;
+    ids.reserve(request.multi_copy_meta_req_elems().size());
+    for (const auto &elem : request.multi_copy_meta_req_elems()) {
+        ids.emplace_back(elem.object_key());
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        !ids.empty() && !request.address().empty(), K_INVALID,
+        "CreateMultiCopyMeta: Cannot CreateMultiCopyMeta with empty ids or server address.");
+    FillRedirectResponseInfos(response, ids, request.redirect());
+    RETURN_OK_IF_TRUE(response.meta_is_moving() || !response.info().empty());
+    std::unordered_map<std::string, std::string> updateKeyLocations; // key: objectKey, value: workerAddr
+    {
+        // Check meta info in cache and rocksdb.
+        Timer timer;
+        std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
+        TbbMetaTable::accessor accessor;
+        bool isExpired;
+        masterOperationTimeCost.Append("CreateMultiCopyMeta get lock", timer.ElapsedMilliSecond());
+        for (const MultiCopyMetaReqElem &elem : request.multi_copy_meta_req_elems()) {
+            if (ProcessCopyMetaHelper(request.address(), elem.object_key(), elem.version(), elem.data_format(),
+                                     accessor, isExpired).IsError()) {
+                response.add_failed_object_keys(elem.object_key());
+            }
+            if (!isExpired) {
+                updateKeyLocations.emplace(elem.object_key(), request.address());
+            }
         }
         accessor.release();
     }
-    return objectStore_->AddObjectLocation(objectKey, address);
+
+    RETURN_OK_IF_TRUE(updateKeyLocations.empty());
+    // store updateKeyLocations to rocks db
+    Status status = objectStore_->AddObjectLocations(updateKeyLocations, "");
+    if (status.IsError()) {
+        response.clear_failed_object_keys(); // reset the failed object keys
+        for (const auto &elem : request.multi_copy_meta_req_elems()) {
+            response.add_failed_object_keys(elem.object_key());
+        }
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::ProcessCopyMetaHelper(const std::string &address, const std::string &objectKey,
+    uint64_t version, uint32_t dataFormat, TbbMetaTable::accessor &accessor, bool &isExpired)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        !objectKey.empty(), StatusCode::K_INVALID, "The objectKey can not be empty.");
+    auto found = this->metaTable_.find(accessor, objectKey);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        found, StatusCode::K_NOT_FOUND,
+        FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(accessor->second.meta.config().data_format() == dataFormat,
+        K_INVALID, FormatString("Invalid data format of objectKey(%s)", objectKey));
+
+    if (version > accessor->second.meta.version()) {
+        RETURN_STATUS(StatusCode::K_INVALID,
+            FormatString("The objectKey(%s) request version [%llu] is larger than current version [%llu]",
+                objectKey, version, accessor->second.meta.version()));
+    }
+    isExpired = false; // reset isExpired
+    // For compatibility, if request version is 0, it means copy meta for current version;
+    // it's used in old version worker called this function, and it's in sync update location.
+    // When in async update location, request version must be set.
+    if (version > 0 && version < accessor->second.meta.version()) {
+        LOG(INFO) << "the objectKey (" << objectKey << ") has been updated, version: "
+            << accessor->second.meta.version() << ", request version: " << version;
+        isExpired = true;
+        return Status::OK();
+    }
+    if (!accessor->second.locations.emplace(std::pair(address, AckState::ACK)).second) {
+        accessor->second.locations.at(address) = AckState::ACK;
+    };
+    return Status::OK();
 }
 
 std::string OCMetadataManager::SelectObjectLocation(const std::string &objectKey, const std::string &sourceWorker,
-                                                    const std::unordered_set<ImmutableString> &locations)
+                                                    const std::unordered_map<ImmutableString, AckState> &locations)
 {
     PerfPoint point(PerfKey::MASTER_SELECT_LOCATION);
     static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
@@ -1071,21 +1143,22 @@ std::string OCMetadataManager::SelectObjectLocation(const std::string &objectKey
     }
     INJECT_POINT("master.select_location", [](std::string addr) { return addr; });
     if (locations.size() == 1) {
-        const std::string &addr = *locations.begin();
-        if (sourceWorker != addr
+        const std::string &addr = locations.begin()->first;
+        if (sourceWorker != addr && locations.begin()->second == AckState::ACK
             && !notifyWorkerManager_->CheckExistAsyncWorkerOp(
                 addr, objectKey, NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
             return addr;  // Return the valid address.
         }
         return "";
     }
-    std::vector<std::string> locationsVec = { locations.begin(), locations.end() };
+
+    std::vector<std::pair<std::string, AckState>> locationsVec = { locations.begin(), locations.end() };
     std::shuffle(locationsVec.begin(), locationsVec.end(), gen);
     for (const auto &addr : locationsVec) {
-        if (sourceWorker != addr
-            && !notifyWorkerManager_->CheckExistAsyncWorkerOp(
-                addr, objectKey, NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
-            return addr;  // Return the valid address.
+        if (sourceWorker != addr.first && addr.second == AckState::ACK
+            && !notifyWorkerManager_->CheckExistAsyncWorkerOp(addr.first, objectKey,
+               NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+            return addr.first;  // Return the valid address.
         }
     }
     return "";
@@ -1150,6 +1223,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             info.mutable_meta()->CopyFrom(accessor->second.meta);
             info.mutable_meta()->set_object_key(objectKey);
             info.set_address(SelectObjectLocation(objectKey, address, accessor->second.locations));
+            VLOG(1) << "select object location is: " << info.address();
             info.set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
         };
         bool isReadLock = IsUrmaEnabled() && FLAGS_enable_data_replication;
@@ -1164,10 +1238,8 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
                 getMetaInfo(accessor, info);
                 TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
-                bool updateLocation =
-                    (ConsistencyType)(accessor->second.meta.config().consistency_type()) == ConsistencyType::PRAM
-                    && FLAGS_enable_data_replication;
-                if (updateLocation && accessor->second.locations.insert(address).second) {
+                if (FLAGS_enable_data_replication) {
+                    accessor->second.locations[address] = AckState::UNACK;
                     RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
                 }
             }
@@ -1356,7 +1428,7 @@ bool OCMetadataManager::IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std:
     INJECT_POINT("OCMetadataManager.IsPrimaryCopyWithCopy", []() { return false; });
     bool allCopyIsExitingNode = true;
     for (const auto &loc : meta.locations) {
-        if (loc != address && !etcdCM_->IsPreLeaving(loc)) {
+        if (loc.first != address && !etcdCM_->IsPreLeaving(loc.first)) {
             allCopyIsExitingNode = false;
             break;
         }
@@ -1407,8 +1479,8 @@ void OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, co
         }
         bool foundCopy = false;
         for (const auto &addr : accessor->second.locations) {
-            if (addr != address && !etcdCM_->IsPreLeaving(addr)) {
-                workerForChangePrimaryIds[addr].insert(objectKey);
+            if (addr.first != address && !etcdCM_->IsPreLeaving(addr.first)) {
+                workerForChangePrimaryIds[addr.first].insert(objectKey);
                 foundCopy = true;
                 break;
             }
@@ -1468,7 +1540,7 @@ void OCMetadataManager::RetryForFailedIds(
 {
     for (const auto &info : workerForChangePrimaryIds) {
         for (const auto &id : info.second) {
-            std::unordered_set<ImmutableString> locations;
+            std::unordered_map<ImmutableString, AckState> locations;
             {
                 std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
                 TbbMetaTable::accessor accessor;
@@ -1481,7 +1553,7 @@ void OCMetadataManager::RetryForFailedIds(
             }
             bool success = false;
             for (const auto &addr : locations) {
-                if (addr == info.first || etcdCM_->IsPreLeaving(addr)) {
+                if (addr.first == info.first || etcdCM_->IsPreLeaving(addr.first)) {
                     continue;
                 }
                 std::unordered_set<std::string> successIds;
@@ -1492,12 +1564,12 @@ void OCMetadataManager::RetryForFailedIds(
                 if (injectTest()) {
                     successIds.insert(id);
                 } else {
-                    (void)notifyWorkerManager_->SendChangePrimaryCopy(addr, { id }, successIds);
+                    (void)notifyWorkerManager_->SendChangePrimaryCopy(addr.first, { id }, successIds);
                 }
                 if (successIds.find(id) == successIds.end()) {
                     continue;
                 }
-                success = ChangePrimaryCopy(addr, id).IsOk();
+                success = ChangePrimaryCopy(addr.first, id).IsOk();
                 break;
             }
             if (success) {
@@ -1536,10 +1608,18 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
                                            RemoveMetaRspPb &response, uint64_t version)
 {
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
+    std::unordered_map<std::string, uint64_t> objectsKeyAndVersion;
+    if (request.id_with_version_size() != 0) {
+        objectsKeyAndVersion.reserve(request.id_with_version_size());
+        for (const auto &idWithVersion : request.id_with_version()) {
+            objectsKeyAndVersion.emplace(idWithVersion.id(), idWithVersion.version());
+        }
+    }
     FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect());
     if (response.meta_is_moving()) {
         return;
     }
+    uint64_t compareVersion;
     LOG(INFO) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
                               address);
     for (const auto &objectKey : notRedirectObjectKeys) {
@@ -1549,6 +1629,11 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
             continue;
         }
         {
+            compareVersion = version;
+            auto it = objectsKeyAndVersion.find(objectKey);
+            if (it != objectsKeyAndVersion.end()) {
+                compareVersion = it->second;
+            }
             std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
             TbbMetaTable::accessor accessor;
             if (!metaTable_.find(accessor, objectKey)) {
@@ -1557,8 +1642,8 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
                 continue;
             }
             auto latestVersion = accessor->second.meta.version();
-            if (version < latestVersion) {
-                VLOG(1) << FormatString("Remove meta version: %zu, latest version: %zu", version, latestVersion);
+            if (compareVersion < latestVersion) {
+                VLOG(1) << FormatString("Remove meta version: %zu, latest version: %zu", compareVersion, latestVersion);
                 response.add_success_ids(objectKey);
                 continue;
             }
@@ -2045,7 +2130,7 @@ Status OCMetadataManager::ClearOneMetaInfo(const TbbMetaTable::const_accessor &a
     const auto &objectKey = accessor->first;
     // remove object location.
     for (const auto &address : accessor->second.locations) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address.first),
                                          FormatString("[ObjectKey %s] RemoveObjectLocation failed", objectKey));
     }
     // remote meta info
@@ -2128,7 +2213,7 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
     }
 
     for (const auto &address : accessor->second.locations) {
-        replicas.locations.emplace(address);
+        replicas.locations.emplace(address.first);
     }
     auto version = delMediator.GetObjectVersionInRequest(objectKey);
     replicas.version = version == -1 ? accessor->second.meta.version() : static_cast<uint64_t>(version);
@@ -2192,7 +2277,8 @@ Status OCMetadataManager::DoBinaryCacheInvalidationUnlocked(const std::string &o
         RETURN_IF_NOT_OK(notifyWorkerManager_->AsyncSendUpdateObject(objectKey, changedMeta.newAddress, prevMeta));
     }
     // Step 2: Update local meta.
-    (void)prevMeta.locations.emplace(changedMeta.newAddress);
+    const bool updateStoredAckState = prevMeta.locations[changedMeta.newAddress] != AckState::ACK;
+    prevMeta.locations[changedMeta.newAddress] = AckState::ACK;
     prevMeta.meta.set_version(changedMeta.newVersion);
     prevMeta.meta.set_life_state(changedMeta.newLifeState);
     prevMeta.meta.set_primary_address(changedMeta.newAddress);
@@ -2204,6 +2290,10 @@ Status OCMetadataManager::DoBinaryCacheInvalidationUnlocked(const std::string &o
     RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, prevMeta.meta, serializedStr));
     RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
                                                       WriteMode2MetaType(prevMeta.meta.config().write_mode())));
+    if (updateStoredAckState) {
+        // save the ack state to store
+        RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, changedMeta.newAddress, ""));
+    }
     return Status::OK();
 }
 
@@ -2282,25 +2372,36 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     return UpdateMetaByState(request, objectMeta, response);
 }
 
+std::set<std::string> OCMetadataManager::GetValidWorkersInHashRing()
+{
+    INJECT_POINT("OCMetadataManager.GetValidWorkersInHashRing", [](std::string worker) {
+        std::set<std::string> workers;
+        workers.insert(worker);
+        return workers;
+    });
+    return etcdCM_->GetValidWorkersInHashRing();
+}
+
 Status OCMetadataManager::RecoverObjectLocations(
-    const std::unordered_map<std::string, std::vector<std::string>> &objLocMap)
+    const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
 {
     INJECT_POINT("OCNotifyWorkerManager.NoNeedRecoveryMeta");
-    auto workers = etcdCM_->GetValidWorkersInHashRing();
+    auto workers = GetValidWorkersInHashRing();
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     for (const auto &it : objLocMap) {
         const std::string &objKey = it.first;
-        const std::vector<std::string> &locations = it.second;
+        const std::vector<std::pair<std::string, AckState>> &locations = it.second;
         TbbMetaTable::accessor accessor;
         if (!metaTable_.find(accessor, objKey)) {
             continue;
         }
         for (const auto &loc : locations) {
-            if (workers.find(loc) != workers.end()) {
-                LOG_IF_ERROR(AddLocation(accessor->second, loc, objKey, accessor->second.meta), "Add location failed.");
+            if (workers.find(loc.first) != workers.end()) {
+                LOG_IF_ERROR(AddLocation(accessor->second, loc.first, loc.second, objKey, accessor->second.meta),
+                    "Add location failed.");
             } else {
-                accessor->second.locations.erase(loc);
-                (void)objectStore_->RemoveObjectLocation(objKey, loc);
+                accessor->second.locations.erase(loc.first);
+                (void)objectStore_->RemoveObjectLocation(objKey, loc.first);
             }
         }
     }
@@ -2308,7 +2409,7 @@ Status OCMetadataManager::RecoverObjectLocations(
 }
 
 Status OCMetadataManager::LoadObjectLocations(bool isFromRocksdb,
-                                              std::unordered_map<std::string, std::vector<std::string>> &objLocMap)
+    std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
 {
     INJECT_POINT("OCNotifyWorkerManager.NoNeedRecoveryMeta");
     std::vector<std::pair<std::string, std::string>> objectLocations;
@@ -2320,7 +2421,11 @@ Status OCMetadataManager::LoadObjectLocations(bool isFromRocksdb,
         // key format: WorkerAddr_ObjectKey
         std::string::size_type pos = info.first.find("_", 0);
         if (pos != info.first.npos) {
-            objLocMap[info.first.substr(pos + 1)].push_back(info.first.substr(0, pos));
+            AckState ackState = AckState::ACK;
+            if (info.second == "0") {
+                ackState = AckState::UNACK;
+            }
+            objLocMap[info.first.substr(pos + 1)].push_back({info.first.substr(0, pos), ackState});
         }
     }
     return Status::OK();
@@ -2328,7 +2433,7 @@ Status OCMetadataManager::LoadObjectLocations(bool isFromRocksdb,
 
 std::string OCMetadataManager::SelectPrimaryCopyWhenScaleIn(
     const std::string &objectKey, const std::string &primaryAddress,
-    const std::unordered_map<std::string, std::vector<std::string>> &objLocMap)
+    const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
 {
     INJECT_POINT("master.SelectPrimaryCopy", [this] { return masterAddress_; });
     auto failedWorkers = etcdCM_->GetFailedWorkers();
@@ -2342,10 +2447,10 @@ std::string OCMetadataManager::SelectPrimaryCopyWhenScaleIn(
     if (it == objLocMap.end()) {
         return masterAddress_;
     }
-    for (auto addr : it->second) {
-        if (failedWorkers.find(addr) == failedWorkers.end()) {
-            VLOG(1) << "old primaryAddr:" << primaryAddress << " new primaryAddr:" << addr;
-            return addr;
+    for (const auto &addr : it->second) {
+        if (addr.second == AckState::ACK && failedWorkers.find(addr.first) == failedWorkers.end()) {
+            VLOG(1) << "old primaryAddr:" << primaryAddress << " new primaryAddr:" << addr.first;
+            return addr.first;
         }
     }
     return masterAddress_;
@@ -2362,10 +2467,10 @@ void OCMetadataManager::InsertExpireObjects(ObjectMetaPb &metaPb,
 }
 
 Status OCMetadataManager::HandleLoadMeta(std::vector<std::pair<std::string, std::string>> &metas,
-                                         std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-                                         std::unordered_map<std::string, std::vector<std::string>> objLocMap,
-                                         bool &isFromRocksdb, const std::vector<std::string> &workerUuids,
-                                         const worker::HashRange &extraRanges)
+    std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
+    const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
+    bool &isFromRocksdb, const std::vector<std::string> &workerUuids,
+    const worker::HashRange &extraRanges)
 {
     for (const auto &meta : metas) {
         ObjectMetaPb metaPb;
@@ -2395,7 +2500,7 @@ Status OCMetadataManager::HandleLoadMeta(std::vector<std::pair<std::string, std:
             if (metaCache.meta.primary_address().empty()) {
                 LOG(ERROR) << FormatString("[Obj: %s] primary address is empty", objectKey);
             } else {
-                metaCache.locations.emplace(metaCache.meta.primary_address());
+                metaCache.locations[metaCache.meta.primary_address()] = AckState::ACK;
             }
         }
         // Object key is the key in a key/value pair for the metadata table.
@@ -2419,7 +2524,7 @@ Status OCMetadataManager::LoadMeta(bool isFromRocksdb, const std::vector<std::st
 
     RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, workerUuids,
                                                       extraRanges, metas));
-    std::unordered_map<std::string, std::vector<std::string>> objLocMap;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> objLocMap;
     RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, objLocMap));
     RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, objLocMap, isFromRocksdb, workerUuids, extraRanges));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RecoverObjectLocations(objLocMap), "Recovery object locations into memory failed");
@@ -2436,7 +2541,9 @@ void OCMetadataManager::GetWorkerAddress(std::set<std::string> &workerAddresses)
 {
     std::lock_guard<std::shared_timed_mutex> lck(metaTableMutex_);
     for (const auto &meta : metaTable_) {
-        workerAddresses.insert(meta.second.locations.begin(), meta.second.locations.end());
+        for (const auto &addr : meta.second.locations) {
+            workerAddresses.insert(addr.first);
+        }
     }
 }
 
@@ -2567,8 +2674,9 @@ Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req,
             ObjectLocationInfoPb location;
             location.set_object_key(objectKey);
             if (!accessor->second.locations.empty()) {
-                *location.mutable_object_locations() = { accessor->second.locations.begin(),
-                                                         accessor->second.locations.end() };
+                for (const auto& address : accessor->second.locations) {
+                    location.mutable_object_locations()->Add()->assign(address.first);
+                }
             }
             location.set_object_size(accessor->second.meta.data_size());
             locations.emplace_back(std::move(location));
@@ -3358,12 +3466,12 @@ Status OCMetadataManager::CreateHashMeta(const ObjectMetaPb &meta, const std::st
             CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
                 accessor->second.meta.config().data_format() == meta.config().data_format(), K_INVALID,
                 FormatString("Invalid data format of objectKey(%s)", objectKey));
-            (void)accessor->second.locations.emplace(address);
+                accessor->second.locations[address] =  AckState::ACK;
         } else {
             INJECT_POINT("master.CreateHashMeta.new_object");
-            (void)metaCache.locations.emplace(address);
+            metaCache.locations[address] = AckState::ACK;
             if (!metaTable_.emplace(accessor, objectKey, metaCache)) {
-                (void)accessor->second.locations.emplace(address);
+                accessor->second.locations[address] =  AckState::ACK;
             }
         }
     }
@@ -3491,8 +3599,9 @@ Status OCMetadataManager::ReselectPrimaryCopy(const std::string &objectKey,
             RETURN_STATUS(StatusCode::K_INVALID, "The primary copy is normal. objectKey:" + objectKey);
         }
         for (const auto &addr : accessor->second.locations) {
-            if (addr != accessor->second.meta.primary_address() && excludedAddr.find(addr) == excludedAddr.end()) {
-                primaryCopy = addr;
+            if (addr.first != accessor->second.meta.primary_address()
+                && excludedAddr.find(addr.first) == excludedAddr.end()) {
+                primaryCopy = addr.first;
                 return Status::OK();
             }
         }
@@ -3653,7 +3762,7 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
                                                              { NotifyWorkerOpType::CACHE_INVALID }, true,
                                                              WriteMode2MetaType(meta.config().write_mode()));
         }
-        (void)accessor->second.locations.emplace(workerAddr);
+        accessor->second.locations[workerAddr] = AckState::ACK;
         accessor.release();
     } else {
         ObjectMeta metaCache;
@@ -3666,7 +3775,7 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
         // is stored on disk (rocksdb). In future it could be fully removed since its not used
         // anymore.
         metaCache.meta.set_allocated_object_key(NULL);
-        (void)metaCache.locations.emplace(workerAddr);
+        metaCache.locations[workerAddr] = AckState::ACK;
         (void)metaTable_.emplace(accessor, objectKey, metaCache);
         std::string serializedStr;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -3823,9 +3932,18 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
     VLOG(1) << "receive migrate object meta:" << objectKey;
     ObjectMeta metaCache;
     metaCache.meta = metaPb;
-    for (const auto &loc : objMeta.locations()) {
-        LOG_IF_ERROR(AddLocation(metaCache, loc, objectKey, metaPb), "AddLocation failed.");
+    if (objMeta.new_locations_size() > 0) {
+        for (const auto &loc : objMeta.new_locations()) {
+            LOG_IF_ERROR(AddLocation(metaCache, loc.location(), static_cast<AckState>(loc.ack()),
+                objectKey, metaPb), "AddLocation failed.");
+        }
+    } else { // Consider compatibility
+        for (const auto &loc : objMeta.locations()) {
+            LOG_IF_ERROR(AddLocation(metaCache, loc, AckState::ACK, objectKey, metaPb),
+                "AddLocation failed.");
+        }
     }
+
     metaCache.value = static_cast<int64_t>(objMeta.value());
     if (SaveMigrationData(objectKey, metaCache, status).IsError()) {
         return false;
@@ -3902,13 +4020,13 @@ Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req,
     return Status::OK();
 }
 
-Status OCMetadataManager::AddLocation(ObjectMeta &metaCache, const std::string &addr, const std::string objectKey,
-                                      const ObjectMetaPb &metaPb)
+Status OCMetadataManager::AddLocation(ObjectMeta &metaCache, const std::string &addr, AckState ackState,
+                                      const std::string &objectKey, const ObjectMetaPb &metaPb)
 {
     if (addr.empty()) {
         return { K_INVALID, "The location address is empty." };
     }
-    metaCache.locations.emplace(addr);
+    metaCache.locations[addr] = ackState;
     std::string key = addr + "_" + objectKey;
     InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_LOCATION_TABLE_PREFIX, key);
     return Status::OK();
@@ -4024,7 +4142,10 @@ Status OCMetadataManager::FillMetadataForMigration(
         meta.set_object_key(objectKey);
         meta.set_meta(serializedStr);
         for (const auto &loc : accessor->second.locations) {
-            meta.add_locations(loc);
+            meta.add_locations(loc.first);
+            auto newLocations = meta.add_new_locations();
+            newLocations->set_location(loc.first);
+            newLocations->set_ack(static_cast<int>(loc.second));
         }
         meta.set_value(accessor->second.value);
     }
@@ -4194,7 +4315,7 @@ void OCMetadataManager::TryGetObjectData(const std::string &objectKey, const Tbb
         return;
     }
     auto iter = accessor->second.locations.find(masterAddress_);
-    if (iter == accessor->second.locations.end()) {
+    if (iter == accessor->second.locations.end() || iter->second != AckState::ACK) {
         return;
     }
     if (notifyWorkerManager_->CheckExistAsyncWorkerOp(
@@ -4290,7 +4411,7 @@ Status OCMetadataManager::CreateDeviceMeta(const ObjectMetaPb &newMeta, const st
     ObjectMeta objMeta;
     objMeta.meta = newMeta;
     objMeta.meta.set_primary_address(address);
-    objMeta.locations.emplace(address);
+    objMeta.locations[address] = AckState::ACK;
     LOG(INFO) << "Master create device meta: object_key: " << objectKey << ", worker_address: " << address;
     {
         std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
@@ -4385,7 +4506,7 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
         }
 
         accessor->second.meta.set_primary_address(req.new_primary_addr());
-        accessor->second.locations.emplace(req.new_primary_addr());
+        accessor->second.locations[req.new_primary_addr()] = AckState::ACK;
         rsp.add_success_ids(objectKey);
         VLOG(1) << FormatString("[ObjectKey %s] Change primary copy from %s to %s", objectKey,
                                 req.origin_primary_addr(), req.new_primary_addr());

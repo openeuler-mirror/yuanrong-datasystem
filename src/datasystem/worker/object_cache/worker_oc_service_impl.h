@@ -134,20 +134,6 @@ public:
     Status ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs);
 
     /**
-     * @brief
-     * @param[in] objectKeys objects to remove meta location.
-     * @param[in] workerMasterApi the worker master api.
-     * @param[in] removeCase Remove meta case
-     * @param[out] failedIds Failed Ids.
-     * @param[out] needMigrateIds need to migrate ids.
-     * @param[out] needWaitIds Need wait ids.
-     */
-    void BatchRemoveMeta(const std::vector<std::string> &objectKeys,
-                         const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-                         const master::RemoveMetaReqPb::Cause removeCause, std::vector<std::string> &failedIds,
-                         std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds);
-
-    /**
      * @brief GroupAndRemoveMeta
      * @param[in] objKeys ObjKeys need to remove meta
      * @param[in] removeCase Remove meta case
@@ -157,7 +143,27 @@ public:
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds);
+                            std::vector<std::string> &needWaitIds)
+    {
+        INJECT_POINT("ProcessVoluntaryScaledown", [this] {
+            Timer timer;
+            uint64_t sleepTimeMs = 100;
+            uint64_t maxSecond = 5;
+            while (timer.ElapsedSecond() < maxSecond) {
+                std::string key = std::string(ETCD_RING_PREFIX) + "/";
+                RangeSearchResult res;
+                HashRingPb newRing;
+                if (etcdStore_->RawGet(key, res).IsOk() && newRing.ParseFromString(res.value) &&
+                    !newRing.add_node_info().empty()) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            }
+            return;
+        });
+        getProc_->GroupAndRemoveMeta(objKeys, removeCase, localAddress_.ToString(),
+            std::unordered_map<std::string, uint64_t> {}, failedIds, needMigrateIds, needWaitIds);
+    }
 
     /**
      * @brief HealthCheck the worker health check handler
@@ -294,36 +300,6 @@ public:
      * @return Status of the call.
      */
     Status DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp) override;
-
-    /**
-     * @brief Remove meta location
-     * @param objectKeysRemoveList The obj keys too remove
-     * @param workerMasterApi Worker master api
-     * @param removeCause Remove cause
-     * @param version Obj version
-     * @param needRedirct If need redirect or not on master
-     * @param response Response of the call
-     * @return Status
-     */
-    Status RemoveMeta(const std::list<std::string> objectKeysRemoveList,
-                      const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-                      const master::RemoveMetaReqPb::Cause removeCause, const uint64_t version, bool needRedirct,
-                      master::RemoveMetaRspPb &response);
-
-    /**
-     * @brief Remove metadata redirect master
-     * @param rsp Response info of redirect master
-     * @param removeCause RemoveCause
-     * @param failedIds Remove meta failed ids
-     * @param needMigrateIds Need migrateIds.
-     * @param needWaitIds Need waited Ids
-     * @return Status of the call
-     */
-    Status RemoveMetadataFromRedirectMaster(master::RemoveMetaRspPb &rsp,
-                                            const master::RemoveMetaReqPb::Cause removeCause,
-                                            std::vector<std::string> &failedIds,
-                                            std::vector<std::string> &needMigrateIds,
-                                            std::vector<std::string> &needWaitIds);
 
     /**
      * @brief Get the Primary Replica Addr object
@@ -983,13 +959,6 @@ private:
      * @return OK if success.
      */
     Status GetReadyToWork(const PushMetaToWorkerReqPb &req);
-
-    /**
-     * @brief Check if object is in remote get progress.
-     * @param[in] objectKey Object key.
-     * @return True if object is in remote get progress.
-     */
-    bool IsInRemoteGetProgress(const std::string &objectKey);
 
     /**
      * @brief Check if object is in rollback progress.
