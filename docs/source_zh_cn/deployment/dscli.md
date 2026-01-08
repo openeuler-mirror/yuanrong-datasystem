@@ -564,6 +564,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--preferred|-p | 设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点 |
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败  |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
+|--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
 
 > **绑核配置项注意事项**：
 > 
@@ -575,6 +576,24 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > # 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存
 > dscli start --cpunodebind 0 --preferred 1 -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
 > ```
+>
+> **启用ums注意事项**：
+> 
+> - 启用ums功能请确保机器已安装ums相关rpm包
+> - 配置项 enable_ums 需要位于-w worker参数之前。
+> ums安装参考
+> ```bash
+> yum install umdk-ums.aarch64
+> yum install umdk-ums-tools.aarch64
+> modprobe ums
+> ```
+>
+> 例子：
+> ```bash
+> dscli start --enable_ums -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+> ```
+
+
 
 ### dscli stop
 
@@ -596,6 +615,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--preferred|-p | 设定优先 NUMA 节点。内核首先尝试在该节点分配内存；若内存不足，则退至其他节点 |
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败 |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
+|--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
 
 
 > **绑核配置项注意事项**：
@@ -606,6 +626,15 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > ```bash
 > # 启动集群并绑核
 > dscli up --cpunodebind 0 --preferred 1 -f ./cluster_config.json 
+> ```
+>
+> **启用ums注意事项**：
+> 
+> - 启用ums功能请确保机器已安装ums相关rpm包
+>
+> 例子：
+> ```bash
+> dscli up --enable_ums -f ./cluster_config.json 
 > ```
 
 ### dscli down

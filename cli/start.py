@@ -16,11 +16,11 @@
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import time
-import shutil
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
 import yr.datasystem.cli.common.util as util
 from yr.datasystem.cli.command import BaseCommand
@@ -91,6 +91,15 @@ class Command(BaseCommand):
                 "replace leading '.' in default configuration paths with this directory, "
                 "e.g. if the configuration is './yr_datasystem/log_dir', "
                 "the '.' will be replaced with the datasystem_home_dir."
+            ),
+        )
+
+        parser.add_argument(
+            "--enable_ums",
+            action="store_true",
+            default=False,
+            help=(
+                "Enable UMS, if enabled, the RPC messages between datasystem workers will be transmitted through ub (default: False)"
             ),
         )
 
@@ -178,7 +187,7 @@ class Command(BaseCommand):
                 final_params = self.parse_cli_args(args.worker_args)
             final_params.setdefault("worker_address", self._DEFAULT_WORKER_ADDRESS)
             self._timeout = args.timeout
-            self.start_worker(final_params, use_numactl, numactl_opts)
+            self.start_worker(final_params, args.enable_ums, use_numactl, numactl_opts)
         except Exception as e:
             self.logger.error(f"Start failed: {e}")
             return self.FAILURE
@@ -282,9 +291,13 @@ class Command(BaseCommand):
                 params[key] = os.path.realpath(util.get_timestamped_path(params[key]))
         self.logger.info(f"Log directory configured at: {params['log_dir']}")
 
-    def start_worker(self, params: Dict[str, str],
-                     use_numactl: bool = False,
-                     numactl_opts: Optional[Dict[str, Any]] = None):
+    def start_worker(
+        self,
+        params: Dict[str, str],
+        use_ums: bool,
+        use_numactl: bool = False,
+        numactl_opts: Optional[Dict[str, Any]] = None,
+    ):
         """
         Start the datasystem worker service with specified parameters.
 
@@ -300,7 +313,7 @@ class Command(BaseCommand):
             if not params.get(param):
                 raise ValueError(f"Missing required parameters: {param}")
 
-        cmd = self.build_command(params, use_numactl, numactl_opts)
+        cmd = self.build_command(params, use_ums, use_numactl, numactl_opts)
         lib_dir = os.path.join(self._base_dir, "lib")
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = f"{lib_dir}:{env.get('LD_LIBRARY_PATH', '')}"
@@ -349,9 +362,13 @@ class Command(BaseCommand):
             self.logger.error("[  FAILED  ] Start worker service @ {} failed: {}".format(params["worker_address"], e))
             raise RuntimeError("The worker service exited abnormally") from e
 
-    def build_command(self, params: Dict[str, str],
-                        use_numactl: bool = False,
-                        numactl_opts: Optional[Dict[str, Any]] = None) -> list:
+    def build_command(
+        self,
+        params: Dict[str, str],
+        use_ums: bool,
+        use_numactl: bool = False,
+        numactl_opts: Optional[Dict[str, Any]] = None,
+    ) -> list:
         """
         Construct the command line parameters for starting the worker.
 
@@ -362,6 +379,13 @@ class Command(BaseCommand):
             list: List of command line arguments.
         """
         cmd = []
+        if use_ums:
+            ums_run_path = shutil.which("ums_run")
+            if not ums_run_path:
+                raise RuntimeError(
+                    "ums_run is not installed on this host. Please install it first"
+                )
+            cmd.append(ums_run_path)
         if use_numactl:
             numactl_path = shutil.which("numactl")
             if not numactl_path:
