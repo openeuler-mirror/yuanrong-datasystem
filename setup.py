@@ -239,7 +239,7 @@ setup(
     ),
     long_description=readme,
     long_description_content_type="text/markdown",
-    url="https://gitee.com/openeuler/yuanrong-datasystem",
+    url="https://gitcode.com/openeuler/yuanrong-datasystem",
     python_requires='>=3.9',
     packages=find_namespace_packages(),
     package_data=package_datas,

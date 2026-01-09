@@ -101,7 +101,7 @@ index 0000000..427919c
 +
 +#### Or install from source:
 +
-+- Refer to the yr-datasystem documentation [here](https://gitee.com/openeuler/yuanrong-datasystem)
++- Refer to the yr-datasystem documentation [here](https://gitcode.com/openeuler/yuanrong-datasystem)
 +
 +
 +
@@ -150,7 +150,7 @@ index 0000000..427919c
 +```
 +dscli stop -w --worker_address "127.0.0.1:31501"
 +```
-+#### Please refer to the [yr-datasystem gitee repo](https://gitee.com/openeuler/yuanrong-datasystem) for more information.
++#### Please refer to the [yr-datasystem gitcode repo](https://gitcode.com/openeuler/yuanrong-datasystem) for more information.
 +
 +# Run disaggregated prefill with vLLM v1
 +
