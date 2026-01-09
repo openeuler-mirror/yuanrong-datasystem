@@ -16,9 +16,12 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -29,7 +32,7 @@ public:
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        auto workerNum = 2;
+        auto workerNum = 3;
         opts.numOBS = 1;
         opts.numWorkers = workerNum;
         opts.numEtcd = 1;
@@ -152,6 +155,27 @@ TEST_F(KVClientHitTest, DiskRemoteHit)
     sleep(logInterval);
     DS_ASSERT_OK(StrInResLog(0, "hit_info:0/0/0/0/0"));
     DS_ASSERT_OK(StrInResLog(1, "hit_info:0/0/0/1/0"));
+}
+
+TEST_F(KVClientHitTest, MultiRemoteHit)
+{
+    std::shared_ptr<KVClient> client0, client1;
+    InitTestKVClient(0, client0, [&](ConnectOptions &opts) { (void)opts; });
+    InitTestKVClient(1, client1, [&](ConnectOptions &opts) { (void)opts; });
+    cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "hitinfo.prefix", "call()");
+    cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "hitinfo.prefix", "call()");
+    std::vector<std::string> keys;
+    const auto keyNum = 10;
+    for (auto i = 0; i < keyNum; i++) {
+        auto key = FormatString("key_%d", i);
+        DS_ASSERT_OK(client0->Set(key, "xxx"));
+        std::string getVal;
+        DS_ASSERT_OK(client1->Get(key, getVal));
+    }
+    // make sure the print of resource log finish
+    sleep(logInterval);
+    DS_ASSERT_OK(StrInResLog(0, "hit_info:0/0/0/0/0"));
+    DS_ASSERT_OK(StrInResLog(1, "hit_info:0/0/0/10/0"));
 }
 };  // namespace st
 }  // namespace datasystem
