@@ -58,7 +58,8 @@ DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_
 
 using worker::WorkerMasterOCApi;
 
-constexpr double MIGRATE_HIGH_WATER_FACTOR = 0.95;
+constexpr double MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR = 0.95;
+constexpr double MIGRATE_SPILL_HIGH_WATER_FACTOR = 0.8;
 
 namespace datasystem {
 namespace object_cache {
@@ -76,19 +77,36 @@ WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam 
 {
 }
 
+Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
+{
+    bool oom = false;
+    switch (req.type()) {
+        case MigrateType::SCALE_DOWN:
+            oom = !IsMemoryAvailable(0, req.type()) && !IsSpillAvaialble() && !IsDiskAvailable();
+            break;
+        case MigrateType::SPILL:
+            oom = !IsMemoryAvailable(0, req.type());
+            break;
+        default:
+            RETURN_STATUS(StatusCode::K_INVALID, "Invalid migrate type");
+    }
+    RETURN_OK_IF_TRUE(!oom);
+
+    std::unordered_set<std::string> failedIds;
+    std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                   [](const auto &info) { return info.object_key(); });
+    FillMigrateDataResponse(req, {}, failedIds, true, rsp);
+    LOG(INFO) << "[Migrate Data] OOM";
+    RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "OOM");
+}
+
 Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                                std::vector<RpcMessage> payloads)
 {
-    LOG(INFO) << "[Migrate Data] Count: " << req.objects_size() << ", Objects: " << VectorToString(GetObjects(req));
+    LOG(INFO) << FormatString("[Migrate Data] Type: %d, Count: %d, Objects: %s", static_cast<int>(req.type()),
+                              req.objects_size(), VectorToString(GetObjects(req)));
     INJECT_POINT("worker.migrate_service.return");
-    if (!IsMemroyAvailable() && !IsSpillAvaialble() && !IsDiskAvailable()) {
-        std::unordered_set<std::string> failedIds;
-        std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
-                       [](const auto &info) { return info.object_key(); });
-        FillMigrateDataResponse(req, {}, failedIds, true, rsp);
-        LOG(INFO) << "[Migrate Data] OOM";
-        RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "OOM");
-    }
+    RETURN_IF_NOT_OK(CheckResource(req, rsp));
     // 1. Lock objects.
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
@@ -117,13 +135,12 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
 
     // 3. Fill data and metadata to object entry.
     ObjectInfoMap needSendMasterIds;
-    Status status =
-        FillObjectsLocked(req.objects(), lockedEntries, metas, payloads, successIds, failedIds, needSendMasterIds);
+    Status status = FillObjectsLocked(req, lockedEntries, metas, payloads, successIds, failedIds, needSendMasterIds);
     bool oom = IsNoSpace(status);
 
     // 4. Send replace primary copy to master.
     if (!needSendMasterIds.empty()) {
-        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, successIds, failedIds);
+        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, req.type(), successIds, failedIds);
     }
 
     // 5. Fill response.
@@ -245,13 +262,14 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
     return failedSize == objectKeys.size() ? lastRc : Status::OK();
 }
 
-Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const ObjInfoPbList &infoList, LockedEntryMap &lockedEntries,
+Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const MigrateDataReqPb &req, LockedEntryMap &lockedEntries,
                                                      const QueryMetaMap &metas, std::vector<RpcMessage> &payloads,
                                                      std::unordered_set<std::string> &successIds,
                                                      std::unordered_set<std::string> &failedIds,
                                                      ObjectInfoMap &needSendMasterIds)
 {
     Status lastRc;
+    const auto &infoList = req.objects();
     auto iter = infoList.begin();
     for (auto it = infoList.begin(); it != infoList.end(); ++it) {
         const auto &objectKey = it->object_key();
@@ -266,14 +284,16 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const ObjInfoPbList &infoLi
             (void)successIds.emplace(objectKey);
             continue;
         }
-        Status status = FillOneObjectLocked(lockedIt->second, *it, metaIt->second, payloads, needSendMasterIds);
+        Status status =
+            FillOneObjectLocked(lockedIt->second, *it, metaIt->second, payloads, req.type(), needSendMasterIds);
         if (IsNoSpace(status)) {
             std::transform(it, infoList.end(), std::inserter(failedIds, failedIds.end()),
                            [](const MigrateDataReqPb::ObjectInfoPb &info) { return info.object_key(); });
             lastRc = status;
             iter = it;
             break;
-        } else if (status.IsError()) {
+        }
+        if (status.IsError()) {
             (void)failedIds.emplace(objectKey);
             lastRc = status;
         }
@@ -294,7 +314,7 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const ObjInfoPbList &infoLi
 }
 
 Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originAddr,
-                                                      const ObjectInfoMap &needSendMasterIds,
+                                                      const ObjectInfoMap &needSendMasterIds, const MigrateType &type,
                                                       std::unordered_set<std::string> &successIds,
                                                       std::unordered_set<std::string> &failedIds)
 {
@@ -312,6 +332,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         req.set_redirect(true);
         req.set_origin_primary_addr(originAddr);
         req.set_new_primary_addr(localAddr_);
+        req.set_remove_location(type == MigrateType::SPILL);
         HostPort masterAddr = item.first.GetAddressAndSaveDbName();
         const auto &ids = item.second;
         for (const auto &id : ids) {
@@ -348,6 +369,23 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
     return lastRc;
 }
 
+uint64_t WorkerOcServiceMigrateImpl::CalcRemainBytes(const MigrateType &type)
+{
+    switch (type) {
+        case MigrateType::SPILL:
+            return memory::Allocator::Instance()->GetMemoryAvailToHighWater();
+        case MigrateType::SCALE_DOWN:
+        default: {
+            constexpr double remainThreshold = 0.8;
+            uint64_t remainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree();
+            if (WorkerOcSpill::Instance()->IsEnabled()) {
+                remainBytes += WorkerOcSpill::Instance()->GetRemainActiveSpillSize();
+            }
+            return static_cast<uint64_t>(remainBytes * remainThreshold);
+        }
+    }
+}
+
 void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb &req,
                                                          const std::unordered_set<std::string> &successIds,
                                                          const std::unordered_set<std::string> &failedIds, bool oom,
@@ -365,15 +403,11 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
         rsp.set_limit_rate(0);
     } else {
         rateLimiter_.SlidingWindowUpdateRate(req.bytes_send());
-        constexpr double remainThreshold = 0.8;
-        uint64_t remainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree();
-        if (WorkerOcSpill::Instance()->IsEnabled()) {
-            remainBytes += WorkerOcSpill::Instance()->GetRemainActiveSpillSize();
-        }
-        rsp.set_remain_bytes(static_cast<uint64_t>(remainBytes * remainThreshold));
+        rsp.set_remain_bytes(CalcRemainBytes(req.type()));
         rsp.set_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio());
-        remainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree(memory::CacheType::DISK);
-        rsp.set_disk_remain_bytes(static_cast<uint64_t>(remainBytes * remainThreshold));
+        uint64_t diskRemainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree(memory::CacheType::DISK);
+        constexpr double remainThreshold = 0.8;
+        rsp.set_disk_remain_bytes(static_cast<uint64_t>(diskRemainBytes * remainThreshold));
         rsp.set_disk_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio(memory::CacheType::DISK));
         uint64_t limitRate = CalculateNewRate(req.worker_addr());
         rsp.set_limit_rate(limitRate);
@@ -507,7 +541,7 @@ Status WorkerOcServiceMigrateImpl::PureQueryMetaToRedirectMaster(
 Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjType> &entry,
                                                        const MigrateDataReqPb::ObjectInfoPb &info,
                                                        const master::QueryMetaInfoPb &meta,
-                                                       std::vector<RpcMessage> &payloads,
+                                                       std::vector<RpcMessage> &payloads, const MigrateType &type,
                                                        ObjectInfoMap &needSendMasterIds)
 {
     const auto &objectKey = info.object_key();
@@ -522,7 +556,7 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
     }
     bool isNewCreate = IsNewCreatedObject(entry);
     SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry);
-    RETURN_IF_NOT_OK(SaveDataWithObjectLocked(entry, info, payloads));
+    RETURN_IF_NOT_OK(SaveDataWithObjectLocked(entry, info, payloads, type));
     if ((*entry)->IsMemoryCache() && (*entry)->GetShmUnit() == nullptr) {
         (*entry)->stateInfo.SetSpillState(true);
     }
@@ -538,7 +572,7 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
 
 Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<SafeObjType> &entry,
                                                             const MigrateDataReqPb::ObjectInfoPb &info,
-                                                            std::vector<RpcMessage> &payloads)
+                                                            std::vector<RpcMessage> &payloads, const MigrateType &type)
 {
     const auto &objectKey = info.object_key();
     const auto &indexs = info.part_index();
@@ -562,11 +596,12 @@ Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<Safe
     }
 
     Status rc = Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
-    if (IsResourceAvailable((*entry)->modeInfo.GetCacheType(), info.data_size())) {
+    if (IsResourceAvailable(type, (*entry)->modeInfo.GetCacheType(), info.data_size())) {
         rc = AllocateAndAssignData(objectKey, entry, pairs, info.data_size());
         VLOG(1) << FormatString("[ObjectKey %s] Save data to memory, result: %s", objectKey, rc.ToString());
     }
-    if ((*entry)->IsMemoryCache() && !rc.IsOk() && IsSpillAvaialble(info.data_size())) {
+    if (type == MigrateType::SCALE_DOWN && (*entry)->IsMemoryCache() && rc.IsError()
+        && IsSpillAvaialble(info.data_size())) {
         rc = WorkerOcSpill::Instance()->Spill(objectKey, pairs, info.data_size());
         VLOG(1) << FormatString("[ObjectKey %s] Save data to spill dir, result: %s", objectKey, rc.ToString());
         LOG_IF(ERROR, rc.IsError()) << FormatString("[Migrate Data] Spill object [%s] failed: %s", objectKey,
@@ -774,7 +809,7 @@ bool WorkerOcServiceMigrateImpl::IsNewCreatedObject(std::shared_ptr<SafeObjType>
     return (*entry)->GetCreateTime() == 0 && (*entry)->GetDataSize() == 0;
 }
 
-bool WorkerOcServiceMigrateImpl::IsMemroyAvailable(uint64_t size) const
+bool WorkerOcServiceMigrateImpl::IsMemoryAvailable(uint64_t size, MigrateType type) const
 {
     INJECT_POINT("worker.migrate_service.memory_available", []() { return false; });
     INJECT_POINT("worker.migrate_service.memory_available1", []() {
@@ -787,13 +822,15 @@ bool WorkerOcServiceMigrateImpl::IsMemroyAvailable(uint64_t size) const
         // overflow check
         return false;
     }
-    usedMemory += size;
+    uint64_t memOccupied = usedMemory + size;
     uint64_t freeMemory = memory::Allocator::Instance()->GetTotalRealMemoryFree();
     if (usedMemory > UINT64_MAX - freeMemory) {
         // overflow check
         return false;
     }
-    return usedMemory <= (usedMemory + freeMemory) * MIGRATE_HIGH_WATER_FACTOR;
+    const double factor =
+        type == MigrateType::SCALE_DOWN ? MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR : MIGRATE_SPILL_HIGH_WATER_FACTOR;
+    return memOccupied <= (usedMemory + freeMemory) * factor;
 }
 
 bool WorkerOcServiceMigrateImpl::IsSpillAvaialble(uint64_t size) const
@@ -819,12 +856,13 @@ bool WorkerOcServiceMigrateImpl::IsDiskAvailable(uint64_t size) const
         memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memory::CacheType::DISK);
     uint64_t used = size < UINT64_MAX - realMemoryUsage ? realMemoryUsage + size : UINT64_MAX;
     uint64_t total = memory::Allocator::Instance()->GetMaxMemoryLimit(memory::CacheType::DISK);
-    return used <= total * MIGRATE_HIGH_WATER_FACTOR;
+    const double factor = 0.95;
+    return used <= total * factor;
 }
 
-bool WorkerOcServiceMigrateImpl::IsResourceAvailable(CacheType cacheType, uint64_t size) const
+bool WorkerOcServiceMigrateImpl::IsResourceAvailable(const MigrateType &type, CacheType cacheType, uint64_t size) const
 {
-    return cacheType == CacheType::MEMORY ? IsMemroyAvailable(size) : IsDiskAvailable(size);
+    return cacheType == CacheType::MEMORY ? IsMemoryAvailable(size, type) : IsDiskAvailable(size);
 }
 
 bool WorkerOcServiceMigrateImpl::IsNoSpace(const Status &status) const

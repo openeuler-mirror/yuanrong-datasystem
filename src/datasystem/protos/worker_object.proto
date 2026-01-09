@@ -94,6 +94,11 @@ message GetClusterStateRspPb {
   HashRingPb hash_ring = 2;
 }
 
+enum MigrateType {
+  SCALE_DOWN = 0;
+  SPILL = 1;
+}
+
 message MigrateDataReqPb {
   message ObjectInfoPb {
     string object_key = 1;
@@ -104,6 +109,7 @@ message MigrateDataReqPb {
   repeated ObjectInfoPb objects = 1;
   string worker_addr = 2;
   uint64 bytes_send =3;
+  MigrateType type = 4;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

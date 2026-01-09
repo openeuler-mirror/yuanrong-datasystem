@@ -38,6 +38,7 @@
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "eviction_manager_common.h"
 
@@ -141,7 +142,7 @@ TEST_F(MigrateDataLimiterTest, TestBoundaryCase)
 
 class MigrateDataHandlerTest : public CommonTest, public EvictionManagerCommon {
 public:
-    void SetUp() override
+    virtual void SetUp()
     {
         CommonTest::SetUp();
         Init();
@@ -153,7 +154,7 @@ public:
         LOG_IF_ERROR(inject::Set("worker.Spill.Sync", "return()"), "set inject point failed");
     }
 
-    void Init()
+    virtual void Init()
     {
         hostPort_ = HostPort("127.0.0.1", 18481);
         remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, nullptr);
@@ -255,6 +256,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
 Status MigrateDataHandlerTest::MockMigrateSmallData1(MigrateDataReqPb &req, const std::vector<MemView> &payloads,
                                                      MigrateDataRspPb &rsp)
 {
+    EXPECT_EQ(req.type(), type_);
     constexpr uint64_t remainBytes = 1024ul * 1024ul * 1024ul;
     rsp.set_remain_bytes(remainBytes);
     constexpr double availableRatio = 85.0;
@@ -355,6 +357,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateObjectsButLockFail)
 Status MigrateDataHandlerTest::MockMigrateSmallData2(MigrateDataReqPb &req, const std::vector<MemView> &payloads,
                                                      MigrateDataRspPb &rsp)
 {
+    EXPECT_EQ(req.type(), type_);
     static uint64_t remainBytes = 1024ul * 1024ul + 90'000ul - 1;
     remainBytes -= req.objects_size() * 100ul;
     rsp.set_remain_bytes(remainBytes);
@@ -478,6 +481,45 @@ TEST_F(MigrateDataHandlerTest, TestPayloadData)
     ASSERT_EQ(payloadData->Size(), payloadDataSize);
     std::vector<MemView> memViews = payloadData->GetMemViews();
     ASSERT_EQ(memViews.size(), 0);
+}
+
+class MigrateDataHandlerSpillTest : public MigrateDataHandlerTest {
+public:
+    void SetUp() override
+    {
+        Init();
+        const uint64_t memSize = 1024UL * 1024UL * 1024UL;
+        DS_ASSERT_OK(memory::Allocator::Instance()->Init(memSize));
+    }
+
+    void Init() override
+    {
+        hostPort_ = HostPort("127.0.0.1", 18481);
+        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, nullptr);
+        objectTable_ = std::make_shared<ObjectTable>();
+        strategy_ = std::make_shared<SpillNodeSelector>(nullptr, hostPort_);
+        type_ = MigrateType::SPILL;
+    }
+};
+
+TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjects)
+{
+    LOG(INFO) << "Test migrate objects for spill type.";
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(5)
+        .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
+    constexpr uint64_t size = 100;
+    constexpr uint64_t count = 1024;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("League_of_Legends", size, count, objectKeys);
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.address, hostPort_.ToString());
+    ASSERT_EQ(result.successIds.size(), count);
+    ASSERT_TRUE(result.skipIds.empty());
+    ASSERT_TRUE(result.failedIds.empty());
 }
 }  // namespace ut
 }  // namespace datasystem

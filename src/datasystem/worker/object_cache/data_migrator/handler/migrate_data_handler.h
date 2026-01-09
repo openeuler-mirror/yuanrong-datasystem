@@ -36,8 +36,6 @@
 namespace datasystem {
 namespace object_cache {
 
-enum class MigrateType { SCALE_DOWN, SPILL };
-
 class MigrateDataHandler {
 public:
     MigrateDataHandler(MigrateType type, const std::string &localAddr,
@@ -148,6 +146,12 @@ private:
      * @param[in] diskDataIds The disk data.
      */
     void SplitByCacheType(std::vector<std::string> &memoryDataIds, std::vector<std::string> &diskDataIds);
+
+    /**
+     * @brief Indicate whether to use fast transport for migration.
+     * @return True if fast transport should be used.
+     */
+    bool ShouldUseFastTransport() const;
 
     MigrateType type_;
     std::string localAddr_;

@@ -20,6 +20,7 @@
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -33,8 +34,9 @@ void DataMigrator::Init()
 std::shared_ptr<SelectionStrategy> DataMigrator::GetStrategyByType()
 {
     switch (type_) {
+        case MigrateType::SPILL:
+            return std::make_shared<SpillNodeSelector>(etcdCM_, localAddress_);
         case MigrateType::SCALE_DOWN:
-            return std::make_shared<ScaleDownNodeSelector>(etcdCM_, localAddress_);
         default:
             return std::make_shared<ScaleDownNodeSelector>(etcdCM_, localAddress_);
     }

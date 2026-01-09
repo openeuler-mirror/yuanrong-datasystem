@@ -22,6 +22,7 @@ set(WORKER_OC_SRCS
         data_migrator/basic/migrate_progress.cpp
         data_migrator/handler/migrate_data_handler.cpp
         data_migrator/strategy/scale_down_node_selector.cpp
+        data_migrator/strategy/spill_node_selector.cpp
         data_migrator/transport/tcp_migrate_transport.cpp
         data_migrator/data_migrator.cpp
         service/worker_oc_service_crud_common_api.cpp

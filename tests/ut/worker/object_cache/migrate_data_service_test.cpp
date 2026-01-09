@@ -92,7 +92,7 @@ public:
 
     void SetMemoryAvailable(bool available)
     {
-        BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::IsMemroyAvailable, (_)).WillRepeatedly(Return(available));
+        BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::IsMemoryAvailable, (_, _)).WillRepeatedly(Return(available));
     }
 
     void SetSpillAvailable(bool available)
@@ -449,6 +449,71 @@ TEST_F(MigrateDataServiceTest, TestAllocateAndAssignDataBasicFunction)
     auto shmUnit = (*entry)->GetShmUnit();
     ShmGuard guard(shmUnit, GetMetadatSize(), shmUnit->GetSize() - GetMetadatSize());
     DS_ASSERT_OK(guard.TryRLatch(true));
+}
+
+TEST_F(MigrateDataServiceTest, TestMemoryAvailableForSpill)
+{
+    LOG(INFO) << "Test CheckResource for SPILL type when memory is available";
+    SetMemoryAvailable(true);
+
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SPILL);
+    MigrateDataRspPb rsp;
+    DS_ASSERT_OK(impl_->CheckResource(req, rsp));
+    EXPECT_EQ(rsp.fail_ids_size(), 0);
+}
+
+TEST_F(MigrateDataServiceTest, TestOOMForSpill)
+{
+    LOG(INFO) << "Test CheckResource for SPILL type when oom";
+    SetMemoryAvailable(false);
+
+    constexpr uint32_t objectCount = 10;
+    constexpr uint64_t dataSize = 1024;
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SPILL);
+    for (uint32_t i = 0; i < objectCount; ++i) {
+        auto objInfo = req.add_objects();
+        objInfo->set_object_key("spill_fail_obj_" + std::to_string(i));
+        objInfo->set_data_size(dataSize);
+    }
+
+    MigrateDataRspPb rsp;
+    Status status = impl_->CheckResource(req, rsp);
+    EXPECT_EQ(status.GetCode(), StatusCode::K_OUT_OF_MEMORY);
+    EXPECT_EQ(rsp.success_ids_size(), 0);
+    EXPECT_EQ(rsp.fail_ids_size(), objectCount);
+}
+
+TEST_F(MigrateDataServiceTest, TestInvalidMigrateType)
+{
+    LOG(INFO) << "Test CheckResource with invalid migrate type";
+
+    constexpr int invalidTypeValue = 999;
+    MigrateDataReqPb req;
+    req.set_type(static_cast<MigrateType>(invalidTypeValue));
+    MigrateDataRspPb rsp;
+    ASSERT_EQ(impl_->CheckResource(req, rsp).GetCode(), StatusCode::K_INVALID);
+}
+
+TEST_F(MigrateDataServiceTest, TestSaveDataWithSpillType)
+{
+    BINEXPECT_CALL(&WorkerOcEvictionManager::Add, (_)).Times(1).WillRepeatedly(Return());
+    std::shared_ptr<SafeObjType> entry =
+        std::make_shared<SafeObjType>(std::make_unique<object_cache::ObjCacheShmUnit>());
+    MigrateDataReqPb::ObjectInfoPb info;
+    info.set_object_key("object1");
+    constexpr uint64_t dataSize = 26 * 1024 * 1024;  // 26 MB is larger than memory high water for spill type
+    info.set_data_size(dataSize);
+    info.add_part_index(0);
+    std::vector<RpcMessage> payloads(1);
+    std::string data = "1";
+    payloads[0].CopyString(data);
+    // Will oom, don't spill to disk
+    ASSERT_EQ(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL).GetCode(),
+              StatusCode::K_OUT_OF_MEMORY);
+    info.set_data_size(1);
+    DS_ASSERT_OK(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL));
 }
 
 }  // namespace ut

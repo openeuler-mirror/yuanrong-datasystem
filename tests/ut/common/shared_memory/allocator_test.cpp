@@ -60,6 +60,7 @@ DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(shared_disk_arena_per_tenant);
 DS_DECLARE_bool(enable_huge_tlb);
 DS_DECLARE_string(shared_disk_directory);
+DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 
 namespace datasystem {
 namespace ut {
@@ -1391,6 +1392,39 @@ TEST_F(AllocatorTest, SharedDiskNotEnable)
     const uint64_t allocSize = 1024ul;
     ShmUnitInfo unit;
     ASSERT_EQ(AllocateMemory(allocSize, unit).GetCode(), K_INVALID);
+}
+
+TEST_F(AllocatorTest, TestGetMemoryAvailToHighWater)
+{
+    uint64_t maxSize = 100UL * 1024UL * 1024UL; // 100 MB
+    DS_ASSERT_OK(Init(maxSize));
+    constexpr double factor = 0.8;
+    uint64_t exceptVal = static_cast<uint64_t>(maxSize * factor);
+    uint64_t avail = datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater();
+    EXPECT_EQ(exceptVal, avail);
+
+    const uint64_t allocSize = 45 * 1024UL * 1024UL; // 45 MB
+    ShmUnit unit;
+    DS_ASSERT_OK(AllocateMemory(unit, allocSize));
+    EXPECT_GT(datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater(), 0);
+    ShmUnit unit2;
+    DS_ASSERT_OK(AllocateMemory(unit2, allocSize));
+    EXPECT_EQ(datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater(), 0);
+}
+
+TEST_F(AllocatorTest, TestGetMemoryAvailToHighWaterWithReserve)
+{
+    FLAGS_eviction_reserve_mem_threshold_mb = 100; // 100 MB
+    uint64_t maxSize = 1024UL * 1024UL * 1024UL; // 1024 MB
+    DS_ASSERT_OK(Init(maxSize));
+    uint64_t highWater = maxSize - (FLAGS_eviction_reserve_mem_threshold_mb * 1024UL * 1024UL);
+    uint64_t avail = datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater();
+    EXPECT_EQ(highWater, avail);
+
+    constexpr uint64_t allocSize = 48 * 1024UL * 1024UL; // 48 MB
+    ShmUnit unit;
+    DS_ASSERT_OK(AllocateMemory(unit, allocSize));
+    EXPECT_EQ(datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater(), highWater - allocSize);
 }
 
 class AllocatorHybridTest : public CommonTest {
