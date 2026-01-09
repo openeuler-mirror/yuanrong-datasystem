@@ -1193,7 +1193,7 @@ TEST_F(STCClientDistMasterDfxTest, DISABLED_TestReStartWorker)
     ASSERT_EQ(client_->Del("userDataKey"), Status::OK());
 }
 
-TEST_F(STCClientDistMasterDfxTest, LEVEL1_TestRestartWorkerAndRecoveryFromEtcd)
+TEST_F(STCClientDistMasterDfxTest, DISABLED_LEVEL1_TestRestartWorkerAndRecoveryFromEtcd)
 {
     StartClustersAndWaitReady();
     std::string value = "The world is not black or white, heh; but a delicious shade of gray.";

@@ -110,8 +110,10 @@ private:
     struct CallbackContext {
         UcpWorker *worker;
         uint64_t request_id;
+        void *put_request;
 
-        CallbackContext(UcpWorker *w, uint64_t id) : worker(w), request_id(id)
+        CallbackContext(UcpWorker *w, uint64_t id, void *req)
+            : worker(w), request_id(id), put_request(req)
         {
         }
     };

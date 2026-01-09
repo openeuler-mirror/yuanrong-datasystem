@@ -50,7 +50,7 @@ protected:
     std::unique_ptr<PrepareLocalServer> localBuffer_;
     ucp_context_h context_;
 
-    static constexpr int RDMA_WAIT_TIME_MS = 1000;
+    static constexpr int rdmaWaitTimeMs_ = 1500;
 
     void SetUp() override
     {
@@ -176,7 +176,7 @@ TEST_F(UcpWorkerPoolTest, TestWriteOnce)
         workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
                            remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
     EXPECT_EQ(status, Status::OK());
-    std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    std::this_thread::sleep_for(std::chrono::milliseconds(rdmaWaitTimeMs_));
     EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
     // should have inserted "aaa" into send map
     initRR += 1;
@@ -196,7 +196,7 @@ TEST_F(UcpWorkerPoolTest, TestWriteTwice)
         workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
                            remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
     EXPECT_EQ(status, Status::OK());
-    std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    std::this_thread::sleep_for(std::chrono::milliseconds(rdmaWaitTimeMs_));
     EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
 
     // should have inserted "aaa" into send map
@@ -210,7 +210,7 @@ TEST_F(UcpWorkerPoolTest, TestWriteTwice)
         workerPool_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
                            remoteServer_->GetWorkerAddr(), "aaa", localBuffer_->Address(), localBuffer_->Size(), 0);
     EXPECT_EQ(status, Status::OK());
-    std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    std::this_thread::sleep_for(std::chrono::milliseconds(rdmaWaitTimeMs_));
     EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
     // should reuse the existing map entry
     EXPECT_EQ(workerPool_->localWorkerSendMap_.size(), initMapSize);

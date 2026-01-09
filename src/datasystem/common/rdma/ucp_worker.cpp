@@ -106,27 +106,36 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSeg
         RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
     }
 
-    ucp_request_param_t param{};
-    param.op_attr_mask = UCP_OP_ATTR_FIELD_CALLBACK | UCP_OP_ATTR_FIELD_USER_DATA;
-    param.cb.send = CallBack;
+    ucp_request_param_t putParam{};
 
-    CallbackContext *ctx = new CallbackContext{ this, requestID };
-    param.user_data = ctx;
-    param.datatype = ucp_dt_make_contig(1);
-
-    void *request =
-        ucp_put_nbx(ep, reinterpret_cast<const void *>(localSegAddr), localSegSize, remoteSegAddr, rkey, &param);
+    void *putRequest =
+        ucp_put_nbx(ep, reinterpret_cast<const void *>(localSegAddr), localSegSize, remoteSegAddr, rkey, &putParam);
 
     point.RecordAndReset(PerfKey::RDMA_UCP_WORKER_WRITE);
 
-    if (UCS_PTR_IS_ERR(request)) {
-        ucs_status_t status = UCS_PTR_STATUS(request);
-        CallBack(request, status, ctx);
-        ucp_request_free(request);
+    if (UCS_PTR_IS_ERR(putRequest)) {
+        ucs_status_t status = UCS_PTR_STATUS(putRequest);
+        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_put_nbx. Status: " << ucs_status_string(status);
         RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to send data immediately.");
-    } else if (request == nullptr) {
-        CallBack(nullptr, UCS_OK, ctx);
-        return Status::OK();
+    }
+
+    ucp_request_param_t flushParam{};
+    flushParam.op_attr_mask = UCP_OP_ATTR_FIELD_CALLBACK | UCP_OP_ATTR_FIELD_USER_DATA;
+    flushParam.cb.send = CallBack;
+    CallbackContext *flushCtx = new CallbackContext{ this, requestID, putRequest };
+    flushParam.user_data = flushCtx;
+
+    void *flushRequest = ucp_ep_flush_nbx(ep, &flushParam);
+    if (UCS_PTR_IS_ERR(flushRequest)) {
+        ucs_status_t status = UCS_PTR_STATUS(flushRequest);
+        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_ep_flush_nbx. Status: " << ucs_status_string(status);
+        if (putRequest != nullptr) {
+            ucp_request_free(putRequest);
+        }
+        delete flushCtx;
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to flush ep immediately.");
+    } else if (flushRequest == nullptr) {
+        CallBack(flushRequest, UCS_OK, flushCtx);
     }
 
     return Status::OK();
@@ -265,6 +274,10 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
     } else {
         LOG(ERROR) << ctx->worker->errorMsgHead_ << " Put failed. Status: " << ucs_status_string(status);
         ctx->worker->manager_->InsertFailedEvent(ctx->request_id);
+    }
+
+    if (ctx->put_request) {
+        ucp_request_free(ctx->put_request);
     }
 
     delete ctx;

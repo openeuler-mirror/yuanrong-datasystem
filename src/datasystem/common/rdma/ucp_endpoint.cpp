@@ -69,6 +69,8 @@ Status UcpEndpoint::Init()
 
 Status UcpEndpoint::UnpackRkey(const std::string &remoteRkey)
 {
+    CleanUnpackedRkey();
+    
     ucs_status_t status = ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);
     if (status != UCS_OK) {
         LOG(ERROR) << "[UcpEndpoint] Failed to unpack rkey with status " << ucs_status_string(status);
@@ -78,13 +80,18 @@ Status UcpEndpoint::UnpackRkey(const std::string &remoteRkey)
     return Status::OK();
 }
 
-void UcpEndpoint::Clean()
+void UcpEndpoint::CleanUnpackedRkey()
 {
-    // clean up rkey
     if (unpackedRkey_ != nullptr) {
         ucp_rkey_destroy(unpackedRkey_);
         unpackedRkey_ = nullptr;
     }
+}
+
+void UcpEndpoint::Clean()
+{
+    // clean up rkey
+    CleanUnpackedRkey();
 
     // clean up ep_
     if (ep_ != nullptr) {
