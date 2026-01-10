@@ -54,10 +54,10 @@ public:
 TEST_F(ClientCommonWorkerApiTest, TestGetClientFd)
 {
     int timeoutMs = 5000;
-    auto clientApi = std::make_shared<ClientWorkerApi>(workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT,
-                                                       "", signature_.get());
+    auto clientApi = std::make_shared<ClientWorkerRemoteApi>(workerHostPort_, RpcCredential(),
+                                                             HeartbeatType::RPC_HEARTBEAT,    "", signature_.get());
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
-    ASSERT_TRUE(clientApi->GetShmEnabled());
+    ASSERT_TRUE(clientApi->shmEnabled_);
 
     int64_t dataSize = 10;
     uint32_t version;
@@ -78,10 +78,10 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFd)
 TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
 {
     int timeoutMs = 5000;
-    auto clientApi = std::make_shared<ClientWorkerApi>(workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT,
-                                                       "", signature_.get(), "tenant1");
+    auto clientApi = std::make_shared<ClientWorkerRemoteApi>(
+        workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "tenant1");
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
-    ASSERT_TRUE(clientApi->GetShmEnabled());
+    ASSERT_TRUE(clientApi->shmEnabled_);
 
     int64_t dataSize = 10;
     uint32_t version;
@@ -89,8 +89,8 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
     auto shmUnitInfo = std::make_shared<ShmUnitInfo>();
     DS_ASSERT_OK(clientApi->Create("objectKey", dataSize, version, metaSize, shmUnitInfo));
 
-    auto clientApi2 = std::make_shared<ClientWorkerApi>(workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT,
-                                                       "", signature_.get(), "tenant2");
+    auto clientApi2 = std::make_shared<ClientWorkerRemoteApi>(
+        workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "tenant2");
     DS_ASSERT_OK(clientApi2->Init(timeoutMs, timeoutMs));
     std::vector<int> workerFds{ shmUnitInfo->fd };
     std::vector<int> clientFds;
@@ -101,10 +101,10 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
 TEST_F(ClientCommonWorkerApiTest, TestGetMultiClientFd)
 {
     int timeoutMs = 5000;
-    auto clientApi = std::make_shared<ClientWorkerApi>(workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT,
-                                                       "", signature_.get());
+    auto clientApi = std::make_shared<ClientWorkerRemoteApi>(workerHostPort_, RpcCredential(),
+                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
-    ASSERT_TRUE(clientApi->GetShmEnabled());
+    ASSERT_TRUE(clientApi->shmEnabled_);
 
     int64_t dataSize = 10;
     uint32_t version;

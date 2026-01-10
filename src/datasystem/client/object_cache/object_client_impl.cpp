@@ -78,7 +78,6 @@
 
 const std::string LOG_FILENAME = "ds_client";
 const size_t MSET_MAX_KEY_COUNT = 8;
-const size_t BATCH_SET_MAX_KEY_COUNT = 2000;
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 static constexpr size_t QUERY_SIZE_OBJECT_LIMIT = 10000;
 const std::string K_SEPARATOR = "$";
@@ -235,7 +234,23 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     return rc;
 }
 
-Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
+Status ObjectClientImpl::InitListenWorker(HeartbeatType heartbeatType)
+{
+    listenWorker_.resize(STANDBY2_WORKER + 1);
+    listenWorker_[LOCAL_WORKER] = std::make_shared<client::ListenWorker>(workerApi_[LOCAL_WORKER], heartbeatType,
+                                                                         LOCAL_WORKER, asyncSwitchWorkerPool_.get());
+    listenWorker_[LOCAL_WORKER]->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
+    listenWorker_[LOCAL_WORKER]->SetReleaseFdCallBack(
+        [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
+    if (enableCrossNodeConnection_) {
+        listenWorker_[LOCAL_WORKER]->SetSwitchWorkerHandle(
+            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
+    }
+    listenWorker_[LOCAL_WORKER]->SetIsLocalWorker(true);
+    return listenWorker_[LOCAL_WORKER]->StartListenWorker();
+}
+
+Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, bool initWithWorker)
 {
     Logging::GetInstance()->Start(LOG_FILENAME, true);
     FlagsMonitor::GetInstance()->Start();
@@ -257,9 +272,13 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
-    workerApi_[LOCAL_WORKER] =
-        std::make_shared<ClientWorkerApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(), tenantId_,
-                                           enableCrossNodeConnection_, enableExclusiveConnection_);
+    if (!initWithWorker) {
+        workerApi_[LOCAL_WORKER] =
+            std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
+                                                    tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
+    } else {
+        // local worker api
+    }
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(requestTimeoutMs_, connectTimeoutMs_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
     const size_t threadCount = 8;
@@ -269,27 +288,12 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
-    std::shared_ptr<ShmUnitInfo> decShmUnit;
-    if (workerApi_[LOCAL_WORKER]->GetShmQueueUnit(decShmUnit)) {
-        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", decShmUnit));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->InitDecreaseQueue(), "Failed to get shm ptr.");
-    };
-    clientEnableP2Ptransfer_ = workerApi_[LOCAL_WORKER]->IsWorkerEnableP2Ptransfer();
+    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->PrepairForDecreaseShmRef(std::bind(
+        &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
+    clientEnableP2Ptransfer_ = workerApi_[LOCAL_WORKER]->workerEnableP2Ptransfer_;
     // Start worker down listen.
-    heartbeatType = workerApi_[LOCAL_WORKER]->GetHeartbeatType();
-    listenWorker_.resize(STANDBY2_WORKER + 1);
-    listenWorker_[LOCAL_WORKER] = std::make_shared<client::ListenWorker>(workerApi_[LOCAL_WORKER], heartbeatType,
-                                                                         LOCAL_WORKER, asyncSwitchWorkerPool_.get());
-    listenWorker_[LOCAL_WORKER]->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
-    listenWorker_[LOCAL_WORKER]->SetReleaseFdCallBack(
-        [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
-    if (enableCrossNodeConnection_) {
-        listenWorker_[LOCAL_WORKER]->SetSwitchWorkerHandle(
-            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
-    }
-    listenWorker_[LOCAL_WORKER]->SetIsLocalWorker(true);
-    RETURN_IF_NOT_OK(listenWorker_[LOCAL_WORKER]->StartListenWorker());
-
+    heartbeatType = workerApi_[LOCAL_WORKER]->heartbeatType_;
+    RETURN_IF_NOT_OK(InitListenWorker(heartbeatType));
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     StartPerfThread();
@@ -346,7 +350,7 @@ void ObjectClientImpl::ProcessWorkerLost()
     if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
         return;
     }
-    (void)workerApi_[LOCAL_WORKER]->DisconnectWithShmQueue();
+    (void)workerApi_[LOCAL_WORKER]->CleanUpForDecreaseShmRefAfterWorkerLost();
     // to split
     mmapManager_->CleanInvalidMmapTable();
     {
@@ -370,19 +374,12 @@ void ObjectClientImpl::ProcessWorkerLost()
         LOG(ERROR) << "[Reconnect] Reconnect local worker failed, error message: " << s.ToString();
         return;
     }
-    std::shared_ptr<ShmUnitInfo> decShmUnit;
-    if (workerApi_[LOCAL_WORKER]->GetShmQueueUnit(decShmUnit)) {
-        auto rc = mmapManager_->LookupUnitsAndMmapFd("", decShmUnit);
-        if (rc.IsError()) {
-            LOG(ERROR) << "[Reconnect] Failed to get the mmap ptr:" << rc.ToString();
-            return;
-        }
-        rc = workerApi_[LOCAL_WORKER]->InitDecreaseQueue();
-        if (rc.IsError()) {
-            LOG(ERROR) << "[Reconnect] Failed to get shm ptr:" << rc.ToString();
-            return;
-        }
-    };
+    auto rc = workerApi_[LOCAL_WORKER]->PrepairForDecreaseShmRef(std::bind(
+        &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2));
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Reconnect] Failed to prepair for DecreaseShmRef:" << rc.ToString();
+        return;
+    }
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
     LOG(INFO) << "[Reconnect] Reconnect to local worker success.";
     INJECT_POINT("ObjectClientImpl.ProcessWorkerLost", []() {});
@@ -397,19 +394,19 @@ void ObjectClientImpl::ProcessStandbyWorkerLost(WorkerNode node)
         LOG(ERROR) << FormatString("[Reconnect] client %d is null", node);
         return;
     }
-    LOG(INFO) << FormatString("[Reconnect] Client[%d] %s try to reconnect to %s", node, workerApi_[node]->GetClientId(),
-                              workerApi_[node]->GetWorkHost());
+    LOG(INFO) << FormatString("[Reconnect] Client[%d] %s try to reconnect to %s", node, workerApi_[node]->clientId_,
+                              workerApi_[node]->hostPort_.ToString());
     Status s = workerApi_[node]->ReconnectWorker({});
     if (s.IsError()) {
         LOG(ERROR) << FormatString("[Reconnect] client[%d] %s reconnect to worker failed: %s", node,
-                                   workerApi_[node]->GetClientId(), s.ToString());
+                                   workerApi_[node]->clientId_, s.ToString());
         return;
     }
     if (listenWorker_[node] != nullptr) {
         listenWorker_[node]->SetWorkerAvailable(true);
     }
     LOG(INFO) << FormatString("[Reconnect] Client[%d] %s reconnect to worker %s success.", node,
-                              workerApi_[node]->GetClientId(), workerApi_[node]->GetWorkHost());
+                              workerApi_[node]->clientId_, workerApi_[node]->hostPort_.ToString());
 }
 
 ObjectClientImpl::WorkerNode ObjectClientImpl::GetNextWorkerNode(WorkerNode current)
@@ -463,7 +460,7 @@ bool ObjectClientImpl::SwitchWorkerNode(WorkerNode node)
     return SwitchToStandbyWorkerImpl(workerApi, next);
 }
 
-bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWorkerApi> &currentApi, WorkerNode next)
+bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode next)
 {
     auto standbyWorkers = currentApi->GetStandbyWorkers();
     INJECT_POINT("client.standby_worker", [&standbyWorkers](const std::string &addr) {
@@ -488,15 +485,13 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWor
             if (TrySwitchBackToLocalWorker()) {
                 result = true;
                 break;
-            } else {
-                continue;
             }
+            continue;
         }
-        HeartbeatType heartbeatType = currentApi->GetHeartbeatType();
-        workerApi_[next] =
-            std::make_shared<ClientWorkerApi>(standbyWorker, cred_, heartbeatType, token_, signature_.get(), tenantId_,
-                                               enableCrossNodeConnection_, enableExclusiveConnection_);
-        workerApi_[next]->SetIsUseStandbyWorker(true);
+        HeartbeatType heartbeatType = currentApi->heartbeatType_;
+        workerApi_[next] = currentApi->CloneWith(standbyWorker, cred_, heartbeatType, token_, signature_.get(),
+                                                 tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
+        workerApi_[next]->isUseStandbyWorker_ = true;
         Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_);
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("[Switch] Worker(%s) init failed, error msg: %s", standbyWorker.ToString(),
@@ -567,37 +562,37 @@ bool ObjectClientImpl::ReadyToExit(WorkerNode node)
     return true;
 }
 
-bool ObjectClientImpl::WaitStandbyWorkerReady(const std::shared_ptr<ClientWorkerApi> &clientWorkerApi)
+bool ObjectClientImpl::WaitStandbyWorkerReady(const std::shared_ptr<IClientWorkerApi> &clientWorkerApi)
 {
     if (clientWorkerApi == nullptr) {
         LOG(WARNING) << "[Switch] client worker api is nullptr";
         return false;
     }
-    LOG(INFO) << FormatString("[Switch] client %s wait for worker %s:%d ready", GetClientId(),
-                              clientWorkerApi->GetWorkHost(), clientWorkerApi->GetWorkPort());
+    LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready", GetClientId(),
+                              clientWorkerApi->hostPort_.ToString());
     constexpr uint64_t maxWaitMilliseconds = 10000;
     constexpr uint64_t waitIntervalMs = 500;
-    uint64_t waitMilliseconds = std::min<uint64_t>(clientWorkerApi->GetHeartBeatInterval() * 2, maxWaitMilliseconds);
+    uint64_t waitMilliseconds = std::min<uint64_t>(clientWorkerApi->heartBeatIntervalMs_ * 2, maxWaitMilliseconds);
     Timer timer;
     bool success = false;
     do {
-        success = clientWorkerApi->IsHealthy();
+        success = clientWorkerApi->healthy_;
         if (success || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
             break;
         }
         switchPost_.WaitFor(waitIntervalMs);
     } while (timer.ElapsedMilliSecond() <= waitMilliseconds && !success);
     if (success) {
-        LOG(INFO) << FormatString("[Switch] client %s wait for worker %s:%d ready success", GetClientId(),
-                                  clientWorkerApi->GetWorkHost(), clientWorkerApi->GetWorkPort());
+        LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
+                                  clientWorkerApi->hostPort_.ToString());
     } else {
-        LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s:%d ready failed", GetClientId(),
-                                   clientWorkerApi->GetWorkHost(), clientWorkerApi->GetWorkPort());
+        LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
+                                   clientWorkerApi->hostPort_.ToString());
     }
     return success;
 }
 
-Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> &workerApi)
+Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi)
 {
     WorkerNode id = currentNode_;
     workerApi = workerApi_[id];
@@ -608,7 +603,8 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> 
     return CheckConnection(id);
 }
 
-Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii)
+Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi,
+                                               std::unique_ptr<Raii> &raii)
 {
     WorkerNode id = currentNode_;
     workerApi = workerApi_[id];
@@ -776,7 +772,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
     if (!IsRemoteH2DEnabled()) {
         RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList,
                                                               aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
-                                                              workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
+                                                              workerApi_[LOCAL_WORKER]->enableHugeTlb_));
     } else {
         // Group buffers by data source in RH2D scenario
         std::vector<DeviceBlobList> localSourceDevBlobList;
@@ -808,7 +804,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
         if (!localSourceDevBlobList.empty()) {
             RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(localSourceDevBlobList, localSourceBufferList,
                                                                   aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
-                                                                  workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
+                                                                  workerApi_[LOCAL_WORKER]->enableHugeTlb_));
         }
         for (size_t i = 0; i < remoteSourceDevBlobList.size(); i++) {
             RETURN_IF_NOT_OK(ImportSegAndReadHostMemory(remoteSourceDevBlobList[i], remoteSourceBufferList[i]));
@@ -872,7 +868,7 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     }
     RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(filterDevBlobList, bufferRawPtrList,
                                                           aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST,
-                                                          workerApi_[LOCAL_WORKER]->IsEnableHugeTlb()));
+                                                          workerApi_[LOCAL_WORKER]->enableHugeTlb_));
 
     return Status::OK();
 }
@@ -1013,7 +1009,7 @@ bool ObjectClientImpl::IsHealthy(WorkerNode id)
     if (workerApi_.size() <= id || workerApi_[id] == nullptr) {
         return false;
     }
-    return workerApi_[id]->IsHealthy();
+    return workerApi_[id]->healthy_;
 }
 
 Status ObjectClientImpl::CheckConnectionWhileShmModify()
@@ -1106,7 +1102,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     // If failed with create, need to rollback.
     auto version = 0u;
     auto useShmTransfer = false;
-    if (workerApi_[LOCAL_WORKER]->GetShmEnabled() && dataSizeSum >= workerApi_[LOCAL_WORKER]->GetShmThreshold()) {
+    if (workerApi_[LOCAL_WORKER]->shmEnabled_ && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_) {
         RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
                                                                exists, useShmTransfer));
     } else {
@@ -1214,7 +1210,7 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, s
 
 void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version)
 {
-    VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->GetClientId(),
+    VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_,
                             shmId);
     auto DecreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
         std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
@@ -1250,7 +1246,7 @@ void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uin
 Status ObjectClientImpl::DecreaseRefCntByAccessor(TbbMemoryRefTable::accessor &accessor, bool isShm)
 {
     VLOG(1) << FormatString("[%s] [clientId: %s] [shmId %s] ref: %d", __FUNCTION__,
-                            workerApi_[LOCAL_WORKER]->GetClientId(), accessor->first, accessor->second);
+                            workerApi_[LOCAL_WORKER]->clientId_, accessor->first, accessor->second);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         !accessor.empty(), K_UNKNOWN_ERROR,
         FormatString("[ObjectKey %s] memoryRef table cannot find this obj key.", accessor->first));
@@ -1259,18 +1255,10 @@ Status ObjectClientImpl::DecreaseRefCntByAccessor(TbbMemoryRefTable::accessor &a
         return Status::OK();
     }
     RETURN_IF_NOT_OK(CheckConnection());
-    std::shared_ptr<ShmUnitInfo> decShmUnit;
-    if (workerApi_[LOCAL_WORKER]->GetShmQueueUnit(decShmUnit)) {
-        PerfPoint descPoint(PerfKey::CLIENT_DECREASE_MEM_REF);
-        auto checkFunc = std::bind(&ObjectClientImpl::CheckConnectionWhileShmModify, this);
-        std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseWorkerRefByShm(accessor->first, checkFunc),
-                                         "DecreaseReferenceCnt failed.");
-    } else {
-        // the old version of worker may not enable shm queue, call rpc directly.
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseWorkerRef({ accessor->first }),
-                                         "DecreaseReferenceCnt failed.");
-    }
+    PerfPoint descPoint(PerfKey::CLIENT_DECREASE_MEM_REF);
+    auto checkFunc = std::bind(&ObjectClientImpl::CheckConnectionWhileShmModify, this);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseShmRef(accessor->first, checkFunc, shutdownMux_),
+                                     "DecreaseShmRef failed.");
     (void)memoryRefCount_.erase(accessor);
     return Status::OK();
 }
@@ -1346,7 +1334,7 @@ Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
 
 Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
                                        const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
-                                       uint32_t ttlSecond, const std::shared_ptr<ClientWorkerApi> &workerApi,
+                                       uint32_t ttlSecond, const std::shared_ptr<IClientWorkerApi> &workerApi,
                                        int existence)
 {
     // Create a buffer first.
@@ -1454,7 +1442,7 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     CHECK_FAIL_RETURN_STATUS(size > 0, K_INVALID, "The dataSize value should be bigger than zero.");
     CHECK_FAIL_RETURN_STATUS(nestedObjectKeys.find(objectKey) == nestedObjectKeys.end(), K_UNKNOWN_ERROR,
                              "Nested object references cannot be nested in a loop.");
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
 
@@ -1500,7 +1488,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
@@ -1529,7 +1517,7 @@ Status ObjectClientImpl::Read(const std::vector<ReadParam> &readParams, std::vec
     RETURN_IF_NOT_OK(IsClientReady());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(readParams.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     std::vector<std::shared_ptr<Buffer>> objectBuffers(readParams.size());
@@ -1615,7 +1603,7 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     return bufferInfo;
 }
 
-Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<ClientWorkerApi> workerApi, GetParam &getParam,
+Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                               std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     const std::vector<std::string> &objectsNeedToGet = getParam.objectKeys;
@@ -2075,7 +2063,7 @@ Status ObjectClientImpl::Delete(const std::vector<std::string> &objectKeys, std:
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     Status rc = workerApi->Delete(objectKeys, failedObjectKeys);
@@ -2118,7 +2106,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(buffers.size()), K_INVALID,
                                          FormatString("The buffer size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     RETURN_IF_NOT_OK(IsClientReady());
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     const size_t bufferCnt = buffers.size();
@@ -2219,7 +2207,7 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidation(const std::vector<std
 }
 
 Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, StringView> &kv, const WriteMode &writeMode,
-                                               const std::shared_ptr<ClientWorkerApi> &workerApi,
+                                               const std::shared_ptr<IClientWorkerApi> &workerApi,
                                                std::vector<TbbMemoryRefTable::accessor> &accessor,
                                                std::vector<std::shared_ptr<Buffer>> &buffers,
                                                std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
@@ -2371,7 +2359,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     std::vector<std::string> deduplicateKeys;
     std::vector<StringView> deduplicateVals;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
@@ -2438,7 +2426,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     RETURN_IF_NOT_OK(IsClientReady());
     std::map<std::string, StringView> kv;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidation(keys, vals, setParam.existence, kv));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
 
@@ -2479,11 +2467,11 @@ Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefix
     RETURN_IF_NOT_OK(CheckValidObjectKey(prefixKey));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(IsClientReady(), "Generate key failed.");
 
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK_APPEND_MSG(GetAvailableWorkerApi(workerApi, raii), "Generate key failed.");
 
-    auto workerId = workerApi->GetWorkerUuid();
+    auto workerId = workerApi->workerId_;
     CHECK_FAIL_RETURN_STATUS(!workerId.empty(), K_RUNTIME_ERROR, "The worker id is empty!");
     std::string suffix = ";" + workerId;
     if (prefixKey.empty()) {
@@ -2510,12 +2498,12 @@ uint32_t ObjectClientImpl::GetWorkerVersion()
     if (CheckConnection().IsError()) {
         return 0;
     }
-    return workerApi_[LOCAL_WORKER]->GetWorkerVersion();
+    return workerApi_[LOCAL_WORKER]->workerVersion_;
 }
 
 uint32_t ObjectClientImpl::GetLockId() const
 {
-    return workerApi_[LOCAL_WORKER]->GetLockId();
+    return workerApi_[LOCAL_WORKER]->lockId_;
 }
 
 bool ObjectClientImpl::ShmCreateable(uint64_t size) const
@@ -2524,7 +2512,7 @@ bool ObjectClientImpl::ShmCreateable(uint64_t size) const
 }
 bool ObjectClientImpl::ShmEnable() const
 {
-    return workerApi_[LOCAL_WORKER]->GetShmEnabled();
+    return workerApi_[LOCAL_WORKER]->shmEnabled_;
 }
 
 std::shared_ptr<ThreadPool> ObjectClientImpl::GetMemoryCopyThreadPool()
@@ -2569,7 +2557,7 @@ Status ObjectClientImpl::GetBlobsInfo(const std::string &devObjKey, int32_t time
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsInNonNegativeInt32(timeoutMs), K_INVALID,
         FormatString("timeoutMs %d is out of range., which should be between [%d, %d]", timeoutMs, 0, INT32_MAX));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     return workerApi->GetBlobsInfo(devObjKey, timeoutMs, blobs);
@@ -2578,7 +2566,7 @@ Status ObjectClientImpl::GetBlobsInfo(const std::string &devObjKey, int32_t time
 Status ObjectClientImpl::RemoveP2PLocation(const std::string &objectKey, int32_t deviceId)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     return workerApi->RemoveP2PLocation(objectKey, deviceId);
@@ -2591,7 +2579,7 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() <= OBJ_META_MAX_SIZE_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJ_META_MAX_SIZE_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     return workerApi->GetObjMetaInfo(tenantId, objectKeys, objMetas);
@@ -2619,7 +2607,7 @@ Status ObjectClientImpl::DeleteDevObjects(const std::vector<std::string> &objKey
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     auto res = workerApi->Delete(objKeys, failList, true);
@@ -2686,7 +2674,7 @@ Status ObjectClientImpl::QuerySize(const std::vector<std::string> &objectKeys, s
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     QuerySizeRspPb rsp;
@@ -2914,7 +2902,7 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     RETURN_IF_NOT_OK(workerApi->Exist(keys, exists, queryEtcd, isLocal));
@@ -2929,7 +2917,7 @@ Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t t
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Expire(keys, ttlSeconds, failedKeys), "Set expire ttl failed");
@@ -2944,7 +2932,7 @@ Status ObjectClientImpl::GetMetaInfo(const std::vector<std::string> &keys, const
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     GetMetaInfoRspPb rsp;

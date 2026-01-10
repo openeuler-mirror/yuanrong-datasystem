@@ -81,46 +81,21 @@ struct GetParam {
     bool isRH2DSupported = false;
 };
 
-class ClientWorkerApi : public client::ClientWorkerCommonApi, public std::enable_shared_from_this<ClientWorkerApi> {
+class IClientWorkerApi : virtual public client::IClientWorkerCommonApi {
 public:
-    /**
-     * @brief Construct ClientWorkerApi.
-     * @param[in] hostPort The address of the worker node.
-     * @param[in] cred The authentication credentials.
-     * @param[in] heartbeatType The type of heartbeat.
-     * @param[in] token Token to be authenticated.
-     * @param[in] signature Used to do AK/SK authenticate.
-     * @param[in] tenantId The tenant id.
-     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
-     * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
-     */
-    explicit ClientWorkerApi(HostPort hostPort, RpcCredential cred,
-                             HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT, SensitiveValue token = "",
-                             Signature *signature = nullptr, std::string tenantId = "",
-                             bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
+    explicit IClientWorkerApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection)
+        : client::IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection)
+    {
+    }
 
-    /**
-     * @brief Initialize ClientWorkerApi.
-     * @param[in] requestTimeoutMs Request Timeout milliseconds.
-     * @param[in] connectTimeoutMs Connect Timeout milliseconds.
-     * @return K_OK on success; the error code otherwise.
-     *         K_INVALID: the input ip or port is invalid.
-     */
-    Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+    ~IClientWorkerApi() = default;
 
-    /**
-     * @brief Reconnect worker.
-     * @param[in] gRefIds Global reference object keys.
-     * @return K_OK on success; the error code otherwise.
-     *         K_INVALID: the input ip or port is invalid.
-     */
-    Status ReconnectWorker(const std::vector<std::string> &gRefIds);
-
-    /**
-     * @brief Create communication circular queue based on shared memory.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status InitDecreaseQueue();
+    virtual std::shared_ptr<IClientWorkerApi> CloneWith(HostPort hostPort, RpcCredential cred,
+                                                        HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+                                                        SensitiveValue token = "", Signature *signature = nullptr,
+                                                        std::string tenantId = "",
+                                                        bool enableCrossNodeConnection = false,
+                                                        bool enableExclusiveConnection = false) const = 0;
 
     /**
      * @brief Create an object in the store-server, will only be called in shm case.
@@ -134,23 +109,8 @@ public:
      *         K_RUNTIME_ERROR: client fd mmap failed.
      *         K_DUPLICATED: the object already exists, no need to create.
      */
-    Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
-                  std::shared_ptr<ShmUnitInfo> &shmBuf, const CacheType &cacheType = CacheType::MEMORY);
-
-    /**
-     * @brief Prepare the put request.
-     * @param[in] bufferInfo Buffer information.
-     * @param[in] isSeal Is seal or not.
-     * @param[in] nestedKeys Nested keys.
-     * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
-     * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already
-     * exist.
-     * @param[out] req The protobuf req.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
-                             const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
-                             PublishReqPb &req);
+    virtual Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
+                          std::shared_ptr<ShmUnitInfo> &shmBuf, const CacheType &cacheType = CacheType::MEMORY) = 0;
 
     /**
      * @brief Publish/Seal/Put an object in the store-server.
@@ -163,8 +123,9 @@ public:
      * exist.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
-                   const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0, int existence = 0);
+    virtual Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
+                           const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
+                           int existence = 0) = 0;
 
     /**
      * @brief Publish multiple objects in the store-server.
@@ -173,30 +134,16 @@ public:
      * @param[out] rsp MultiPublishRspPb rsp.
      * @return K_OK on success; the error code otherwise.
      */
-    Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
-                        MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {});
-
-    /**
-     * @brief Decrease the object worker reference count by one and release the object if no client holds it, and
-     * finally notifies the worker by shared memory.
-     * @param[in] shmId The ID of the object to decrease ref.
-     * @param[in] connectCheck the connect check with local server.
-     * @return Status of the call.
-     */
-    Status DecreaseWorkerRefByShm(const ShmKey &shmId, const std::function<Status()> &connectCheck);
-
-    /**
-     * @brief Wakes up all waiting processes in the shared memory queue and clears the pointers to the queue.
-     * @return Status of the call.
-     */
-    Status DisconnectWithShmQueue();
+    virtual Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
+                                const PublishParam &param, MultiPublishRspPb &rsp,
+                                const std::vector<std::vector<uint64_t>> &blobSizes = {}) = 0;
 
     /**
      * @brief Decrease the object worker reference count by one and if no client holds the object, release it.
      * @param[in] objectKey The ID of the object to decrease ref.
      * @return Status of the call.
      */
-    Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys);
+    virtual Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) = 0;
 
     /**
      * @brief Send getting object rpc request to worker.
@@ -206,14 +153,15 @@ public:
      * @param[out] payloads The payload getting from worker.
      * @return Status of the call.
      */
-    Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads);
+    virtual Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
+                       std::vector<RpcMessage> &payloads) = 0;
 
     /**
      * @brief Send invalidate buffer rpc request to worker.
      * @param[in] objectKey The object key which binds to the buffer.
      * @return Status of the call.
      */
-    Status InvalidateBuffer(const std::string &objectKey);
+    virtual Status InvalidateBuffer(const std::string &objectKey) = 0;
 
     /**
      * @brief Increase the global reference count to objects in worker.
@@ -222,15 +170,16 @@ public:
      * @param[in] remoteClientId The remote client id.
      * @return K_OK on success; the error code otherwise.
      */
-    Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys,
-                              const std::string &remoteClientId = "");
+    virtual Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds,
+                                      std::vector<std::string> &failedObjectKeys,
+                                      const std::string &remoteClientId = "") = 0;
 
     /**
      * @brief Release obj Ref of remote client id.
      * @param[in] remoteClientId The remote client id.
      * @return K_OK on success; the error code otherwise.
      */
-    Status ReleaseGRefs(const std::string &remoteClientId);
+    virtual Status ReleaseGRefs(const std::string &remoteClientId) = 0;
 
     /**
      * @brief Decrease the global reference count to objects in worker.
@@ -239,8 +188,10 @@ public:
      * @param[in] remoteClientId The remote client id.
      * @return K_OK on success; the error code otherwise.
      */
-    Status GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds, std::vector<std::string> &failedObjectKeys,
-                              const std::string &remoteClientId = "");
+    virtual Status GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds,
+                                      std::vector<std::string> &failedObjectKeys,
+                                      const std::string &remoteClientId = "") = 0;
+
     /**
      * @brief Delete the given objects.
      * @param[in] objectKeys The vector of the object key.
@@ -248,8 +199,8 @@ public:
      * @param[in] areDeviceObjects The objectKeys are device objects.
      * @return Status of the call.
      */
-    Status Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
-                  bool areDeviceObjects = false);
+    virtual Status Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
+                          bool areDeviceObjects = false) = 0;
 
     /**
      * @brief Query all objects global references in the cluster.
@@ -257,8 +208,10 @@ public:
      * @param[out] gRefMap The global references distribution.
      * @return Status K_OK on success; the error code otherwise.
      */
-    Status QueryGlobalRefNum(const std::vector<std::string> &objectKeys,
-                             std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap);
+    virtual Status QueryGlobalRefNum(
+        const std::vector<std::string> &objectKeys,
+        std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap) = 0;
+
     /**
      * @brief Publish an device object in the worker.
      * @param[in] bufferInfo Device Buffer information.
@@ -267,8 +220,8 @@ public:
      * @param[in] nonShmPointer The data pointer if is not shared memory.
      * @return K_OK on success; the error code otherwise.
      */
-    Status PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize, bool isShm,
-                               void *nonShmPointer);
+    virtual Status PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize, bool isShm,
+                                       void *nonShmPointer) = 0;
 
     /**
      * @brief Send device getting object rpc request to worker.
@@ -279,8 +232,8 @@ public:
      * @param[out] payloads The payload getting from worker.
      * @return Status of the call.
      */
-    Status GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize, int32_t timeoutMs,
-                           GetDeviceObjectRspPb &rsp, std::vector<RpcMessage> &payloads);
+    virtual Status GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize, int32_t timeoutMs,
+                                   GetDeviceObjectRspPb &rsp, std::vector<RpcMessage> &payloads) = 0;
 
     /**
      * @brief Subscribe receive event from worker.
@@ -288,7 +241,7 @@ public:
      * @param[out] resp The response getting from worker.
      * @return Status of the call
      */
-    Status SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp);
+    virtual Status SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp) = 0;
 
     /**
      * @brief Put the p2p metadata to worker.
@@ -296,7 +249,7 @@ public:
      * @param[in] blobs The list of device blob.
      * @return Status of the call
      */
-    Status PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs);
+    virtual Status PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs) = 0;
 
     /**
      * @brief Get the p2p metadata from worker.
@@ -306,8 +259,9 @@ public:
      * @param[in] subTimeoutMs The maximum time elapse of subscriptions.
      * @return Status of the call
      */
-    Status GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
-                      std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp, int64_t subTimeoutMs = 500);
+    virtual Status GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
+                              std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp,
+                              int64_t subTimeoutMs = 500) = 0;
 
     /**
      * @brief Send the root info to worker.
@@ -315,7 +269,7 @@ public:
      * @param[out] resp The response of the call.
      * @return Status of the call.
      */
-    Status SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp);
+    virtual Status SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp) = 0;
 
     /**
      * @brief Receive the root info from worker.
@@ -323,7 +277,7 @@ public:
      * @param[out] resp The response of the call.
      * @return Status of the call.
      */
-    Status RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp);
+    virtual Status RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp) = 0;
 
     /**
      * @brief Obtains the BlobInfos, including the number of DataInfo, and the count and DataType of each DataInfo.
@@ -333,14 +287,14 @@ public:
      * @param[out] blobs The list of blob info. (Include pointer、count and data type)
      * @return K_OK on any object success; the error code otherwise.
      */
-    Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs);
+    virtual Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs) = 0;
 
     /**
      * @brief Acknowledge the get operation is ok, and indicate whether worker as data providers
      * @param[in] req The AckRecvFinishReqPb request protobuf message.
      * @return Status of the call.
      */
-    Status AckRecvFinish(AckRecvFinishReqPb &req);
+    virtual Status AckRecvFinish(AckRecvFinishReqPb &req) = 0;
 
     /**
      * @brief Remove the location of device object
@@ -348,7 +302,7 @@ public:
      * @param[in] deviceId The device id of this location.
      * @return K_OK on any object success; the error code otherwise.
      */
-    Status RemoveP2PLocation(const std::string &objectKey, int32_t deviceId);
+    virtual Status RemoveP2PLocation(const std::string &objectKey, int32_t deviceId) = 0;
 
     /**
      * @brief Get meta info of the given objects
@@ -360,8 +314,8 @@ public:
      *         K_RPC_UNAVAILABLE: Disconnect from worker or master.
      *         K_NOT_AUTHORIZED: The client is not authorized for the tenantId.
      */
-    Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
-                          std::vector<ObjMetaInfo> &objMetas);
+    virtual Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
+                                  std::vector<ObjMetaInfo> &objMetas) = 0;
 
     /**
      * @brief Create multiple objects in the store-server.
@@ -372,8 +326,8 @@ public:
      * @param[out] useShmTransfer Transfer by shm.
      * @return K_OK on success; the error code otherwise.
      */
-    Status MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams, uint32_t &version,
-                       std::vector<bool> &exists, bool &useShmTransfer);
+    virtual Status MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams, uint32_t &version,
+                               std::vector<bool> &exists, bool &useShmTransfer) = 0;
 
     /**
      * @brief Invoke worker client to query the size of objectKeys (include the objectKeys of other AZ).
@@ -386,14 +340,14 @@ public:
      *         K_NOT_READY: Worker not ready.
      *         K_RUNTIME_ERROR: Can not get objectKey size from worker.
      */
-    Status QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp);
+    virtual Status QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp) = 0;
 
     /**
      * @brief Worker health check.
      * @param[out] state The state of ds service.
      * @return K_OK on any object success; the error code otherwise.
      */
-    Status HealthCheck(ServerState &state);
+    virtual Status HealthCheck(ServerState &state) = 0;
 
     /**
      * @brief Check whether the keys exist in the data system..
@@ -403,8 +357,8 @@ public:
      * @param[in] isLocal Is a local query or not.
      * @return K_OK if at least one key is successfully processed; the error code otherwise.
      */
-    Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
-                 const bool isLocal);
+    virtual Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
+                         const bool isLocal) = 0;
 
     /**
      * @brief Sets expiration time for key list (in seconds)
@@ -413,7 +367,8 @@ public:
      * @param[out] failedKeys Returns failed keys if setting failed.
      * @return K_OK if at least one key is successfully processed; the error code otherwise.
      */
-    Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys);
+    virtual Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
+                          std::vector<std::string> &failedKeys) = 0;
 
     /**
      * @brief Get device meta info of the keys.
@@ -424,7 +379,127 @@ public:
      * @param[out] failKeys The failed keys
      * @return K_OK if at least one key is successfully processed; the error code otherwise.
      */
-    Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos);
+    virtual Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
+                               GetMetaInfoRspPb &metaInfos) = 0;
+    
+    /**
+     * @brief Reconnect worker.
+     * @param[in] gRefIds Global reference object keys.
+     * @return K_OK on success; the error code otherwise.
+     *         K_INVALID: the input ip or port is invalid.
+     */
+    virtual Status ReconnectWorker(const std::vector<std::string> &gRefIds) = 0;
+
+    virtual Status PrepairForDecreaseShmRef(
+        std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) = 0;
+    virtual Status CleanUpForDecreaseShmRefAfterWorkerLost() = 0;
+
+    /**
+     * @brief Decrease the object worker reference count by one and release the object if no client holds it, and
+     * finally notifies the worker by shared memory.
+     * @param[in] shmId The ID of the object to decrease ref.
+     * @param[in] connectCheck the connect check with local server.
+     * @return Status of the call.
+     */
+    virtual Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
+                                  std::shared_timed_mutex &shutdownMtx) = 0;
+
+    bool EnableDecreaseShmRefByShmQueue()
+    {
+        return shmEnabled_ && decShmUnit_->fd > 0;
+    }
+};
+
+class ClientWorkerRemoteApi : public IClientWorkerApi, public client::ClientWorkerRemoteCommonApi {
+public:
+    /**
+     * @brief Construct ClientWorkerApi.
+     * @param[in] hostPort The address of the worker node.
+     * @param[in] cred The authentication credentials.
+     * @param[in] heartbeatType The type of heartbeat.
+     * @param[in] signature Used to do AK/SK authenticate.
+     * @param[in] tenantId The tenant id.
+     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
+     * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
+     */
+    explicit ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred,
+                                   HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+                                   SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
+                                   bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
+
+    ~ClientWorkerRemoteApi() = default;
+
+    /**
+     * @brief Initialize ClientWorkerApi.
+     * @param[in] requestTimeoutMs Request Timeout milliseconds.
+     * @param[in] connectTimeoutMs Connect Timeout milliseconds.
+     * @return K_OK on success; the error code otherwise.
+     *         K_INVALID: the input ip or port is invalid.
+     */
+    Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+
+    std::shared_ptr<IClientWorkerApi> CloneWith(HostPort hostPort, RpcCredential cred,
+                                                HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+                                                SensitiveValue token = "", Signature *signature = nullptr,
+                                                std::string tenantId = "", bool enableCrossNodeConnection = false,
+                                                bool enableExclusiveConnection = false) const override
+    {
+        return std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), cred, heartbeatType, std::move(token),
+                                                       signature, tenantId, enableCrossNodeConnection,
+                                                       enableExclusiveConnection);
+    };
+
+    Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
+                  std::shared_ptr<ShmUnitInfo> &shmBuf, const CacheType &cacheType = CacheType::MEMORY) override;
+    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
+                   const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
+                   int existence = 0) override;
+    Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
+                        MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {}) override;
+    Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
+    Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads) override;
+    Status InvalidateBuffer(const std::string &objectKey) override;
+    Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys,
+                              const std::string &remoteClientId = "") override;
+    Status ReleaseGRefs(const std::string &remoteClientId) override;
+    Status GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds, std::vector<std::string> &failedObjectKeys,
+                              const std::string &remoteClientId = "") override;
+    Status Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
+                  bool areDeviceObjects = false) override;
+    Status QueryGlobalRefNum(
+        const std::vector<std::string> &objectKeys,
+        std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap) override;
+    Status PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize, bool isShm,
+                               void *nonShmPointer) override;
+    Status GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize, int32_t timeoutMs,
+                           GetDeviceObjectRspPb &rsp, std::vector<RpcMessage> &payloads) override;
+    Status SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp) override;
+    Status PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs) override;
+    Status GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
+                      std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp,
+                      int64_t subTimeoutMs = 500) override;
+    Status SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp) override;
+    Status RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp) override;
+    Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs) override;
+    Status AckRecvFinish(AckRecvFinishReqPb &req) override;
+    Status RemoveP2PLocation(const std::string &objectKey, int32_t deviceId) override;
+    Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
+                          std::vector<ObjMetaInfo> &objMetas) override;
+    Status MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams, uint32_t &version,
+                       std::vector<bool> &exists, bool &useShmTransfer) override;
+    Status QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp) override;
+    Status HealthCheck(ServerState &state) override;
+    Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
+                 const bool isLocal) override;
+    Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
+                  std::vector<std::string> &failedKeys) override;
+    Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
+    Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
+    Status PrepairForDecreaseShmRef(
+        std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
+    Status CleanUpForDecreaseShmRefAfterWorkerLost() override;
+    Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
+                          std::shared_timed_mutex &mtx) override;
 
 private:
     void ParseGlbRefPb(QueryGlobalRefNumRspCollectionPb &rsp,
@@ -463,6 +538,32 @@ private:
      */
     void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs,
                         DeviceObjectMetaPb *metaPb);
+
+    /**
+     * @brief Prepare the put request.
+     * @param[in] bufferInfo Buffer information.
+     * @param[in] isSeal Is seal or not.
+     * @param[in] nestedKeys Nested keys.
+     * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
+     * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already
+     * exist.
+     * @param[out] req The protobuf req.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
+                             const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
+                             PublishReqPb &req);
+
+    /**
+     * @brief Create communication circular queue based on shared memory.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status InitDecreaseQueue();
+
+    void PostMultiCreate(bool skipCheckExistence, const MultiCreateRspPb &rsp,
+                         std::vector<MultiCreateParam> &createParams, bool &useShmTransfer, PerfPoint &point,
+                         uint32_t &version, std::vector<bool> &exists);
+    Status PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req, int64_t &rpcTimeout);
 
     // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.
     mutable std::mutex mtx_;

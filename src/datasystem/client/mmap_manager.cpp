@@ -21,23 +21,23 @@
 
 namespace datasystem {
 namespace client {
-MmapManager::MmapManager(std::shared_ptr<ClientWorkerCommonApi> clientWorker) : clientWorker_(std::move(clientWorker))
+MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker) : clientWorker_(std::move(clientWorker))
 {
-    mmapTable_ = std::make_unique<MmapTable>(clientWorker_->IsEnableHugeTlb());
+    mmapTable_ = std::make_unique<MmapTable>(clientWorker_->enableHugeTlb_);
 }
 
 MmapManager::~MmapManager()
 {
 }
 
-Status MmapManager::LookupUnitsAndMmapFd(const std::string &tenantId, std::shared_ptr<ShmUnitInfo> &unit)
+Status MmapManager::LookupUnitsAndMmapFd(const std::string &tenantId, const std::shared_ptr<ShmUnitInfo> &unit)
 {
     std::vector<std::shared_ptr<ShmUnitInfo>> units(1);
     units[0] = unit;
-    return LookupUnitsAndMmapFd(tenantId, units);
+    return LookupUnitsAndMmapFds(tenantId, units);
 }
 
-Status MmapManager::LookupUnitsAndMmapFd(const std::string &tenantId, std::vector<std::shared_ptr<ShmUnitInfo>> &units)
+Status MmapManager::LookupUnitsAndMmapFds(const std::string &tenantId, std::vector<std::shared_ptr<ShmUnitInfo>> &units)
 {
     std::vector<int> toRecvFds;
     std::vector<int> toRecvFdInUnitIdx;

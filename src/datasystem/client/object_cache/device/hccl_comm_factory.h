@@ -43,7 +43,7 @@ using TbbHcclCommTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<C
 
 class ClientDeviceCurd {
 public:
-    ClientDeviceCurd(std::shared_ptr<object_cache::ClientWorkerApi> workerApi)
+    ClientDeviceCurd(std::shared_ptr<object_cache::IClientWorkerApi> workerApi)
         : aclImpl_(acl::AclDeviceManager::Instance()), clientWorkerApi_(std::move(workerApi))
     {
     }
@@ -58,12 +58,12 @@ public:
 
 protected:
     acl::AclDeviceManager *aclImpl_;
-    std::shared_ptr<object_cache::ClientWorkerApi> clientWorkerApi_;
+    std::shared_ptr<object_cache::IClientWorkerApi> clientWorkerApi_;
 };
 
 class HcclCommFactory : public ClientDeviceCurd {
 public:
-    HcclCommFactory(std::shared_ptr<object_cache::ClientWorkerApi> workerApi, AclResourceManager *aclResourceMgr);
+    HcclCommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi, AclResourceManager *aclResourceMgr);
 
     void ShutDown();
 

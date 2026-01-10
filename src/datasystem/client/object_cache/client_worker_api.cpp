@@ -20,7 +20,10 @@
 #include "datasystem/client/object_cache/client_worker_api.h"
 
 #include <cstdint>
+#include <shared_mutex>
+#include <utility>
 
+#include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
@@ -31,6 +34,7 @@
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -43,7 +47,7 @@
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/utils/status.h"
 
-using datasystem::client::ClientWorkerCommonApi;
+using datasystem::client::ClientWorkerRemoteCommonApi;
 
 namespace datasystem {
 namespace object_cache {
@@ -55,11 +59,13 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
 
-ClientWorkerApi::ClientWorkerApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
-                                 SensitiveValue token, Signature *signature, std::string tenantId,
-                                 bool enableCrossNodeConnection, bool enableExclusiveConnection)
-    : ClientWorkerCommonApi(hostPort, cred, heartbeatType, std::move(token), signature, std::move(tenantId),
-                            enableCrossNodeConnection, enableExclusiveConnection)
+ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
+                                             SensitiveValue token, Signature *signature, std::string tenantId,
+                                             bool enableCrossNodeConnection, bool enableExclusiveConnection)
+    : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection),
+      IClientWorkerApi(hostPort, heartbeatType, enableCrossNodeConnection),
+      ClientWorkerRemoteCommonApi(hostPort, cred, heartbeatType, std::move(token), signature, std::move(tenantId),
+                                  enableCrossNodeConnection, enableExclusiveConnection)
 {
     if (enableExclusiveConnection) {
         // Assign a value and then bump the counter. This id is a client-side-only identifier, a bit like a
@@ -69,13 +75,13 @@ ClientWorkerApi::ClientWorkerApi(HostPort hostPort, RpcCredential cred, Heartbea
     }
 }
 
-Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 {
-    RETURN_IF_NOT_OK(ClientWorkerCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
+    RETURN_IF_NOT_OK(ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     // We will enable uds after handshaking with the worker.
-    if (GetShmEnabled()) {
+    if (shmEnabled_) {
         channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
                                       GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
     }
@@ -83,27 +89,27 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
         connectTimeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs));
     }
     stub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && GetShmEnabled()) {
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && shmEnabled_) {
         // Note: exclusiveConnSockPath_ will be initialized during client register call driven from base class Init()
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
     }
     return Status::OK();
 }
 
-Status ClientWorkerApi::InitDecreaseQueue()
+Status ClientWorkerRemoteApi::InitDecreaseQueue()
 {
     QueueInfo defaultMeta;
     // futexFlag + shmId(uuid) + clientId(uuid). The size of the queue must be the same as when the worker constructed
     // the queue.
     uint32_t elementSize = defaultMeta.elementFlagSize + defaultMeta.elementDataSize + defaultMeta.elementDataSize;
-    uint32_t lockId = GetLockId() % BIT_NUM_OF_INT;  // One queue can support 32 client writing into it.
+    uint32_t lockId = lockId_ % BIT_NUM_OF_INT;  // One queue can support 32 client writing into it.
     decreaseRPCQ_ = std::make_shared<ShmCircularQueue>(defaultMeta.capacity, elementSize, decShmUnit_, lockId, true);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(decreaseRPCQ_->Init(), "Init failed with shm circular queue.");
     decreaseRPCQ_->UpdateQueueMeta();
     return Status::OK();
 }
 
-Status ClientWorkerApi::ReconnectWorker(const std::vector<std::string> &gRefIds)
+Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gRefIds)
 {
     LOG(INFO) << "Start to reconnect worker.";
     GRefRecoveryPb extendPb;
@@ -112,25 +118,26 @@ Status ClientWorkerApi::ReconnectWorker(const std::vector<std::string> &gRefIds)
     }
     RegisterClientReqPb req;
     req.add_extend()->PackFrom(extendPb);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && GetShmEnabled()) {
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && shmEnabled_) {
         // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
     }
     return Status::OK();
 }
 
-Status ClientWorkerApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
-                               uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf, const CacheType &cacheType)
+Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
+                                     uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
+                                     const CacheType &cacheType)
 {
-    LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s",
-                              GetClientId(), GetWorkHost(), objectKey);
+    LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
+                              hostPort_.ToString(), objectKey);
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
                              FormatString("data size:%lld must be more than 0!", dataSize));
     CreateReqPb req;
     req.set_object_key(objectKey);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     req.set_cache_type(static_cast<uint32_t>(cacheType));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
@@ -161,12 +168,47 @@ Status ClientWorkerApi::Create(const std::string &objectKey, int64_t dataSize, u
     return Status::OK();
 }
 
-Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams,
-                                    uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
+void ClientWorkerRemoteApi::PostMultiCreate(bool skipCheckExistence, const MultiCreateRspPb &rsp,
+                                            std::vector<MultiCreateParam> &createParams, bool &useShmTransfer,
+                                            PerfPoint &point, uint32_t &version, std::vector<bool> &exists)
+{
+    auto checkUseShm = [this, &rsp, &skipCheckExistence]() {
+        if (skipCheckExistence) {
+            return shmEnabled_;
+        }
+        for (const auto &res : rsp.results()) {
+            if (!res.shm_id().empty()) {
+                return true;
+            }
+        }
+        return false;
+    };
+    useShmTransfer = checkUseShm();
+    if (!useShmTransfer) {
+        return;
+    }
+    point.RecordAndReset(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
+    for (auto i = 0ul; i < createParams.size(); i++) {
+        if (!skipCheckExistence && exists[i]) {
+            continue;
+        }
+        auto &shmBuf = createParams[i].shmBuf;
+        auto subRsp = rsp.results()[i];
+        shmBuf->fd = subRsp.store_fd();
+        shmBuf->mmapSize = subRsp.mmap_size();
+        shmBuf->offset = static_cast<ptrdiff_t>(subRsp.offset());
+        shmBuf->id = ShmKey::Intern(subRsp.shm_id());
+        createParams[i].metadataSize = subRsp.metadata_size();
+    }
+    version = workerVersion_.load(std::memory_order_relaxed);
+}
+
+Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams,
+                                          uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
 {
     MultiCreateReqPb req;
     req.set_skip_check_existence(skipCheckExistence);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     int sz = static_cast<int>(createParams.size());
     req.mutable_object_key()->Reserve(sz);
     req.mutable_data_size()->Reserve(sz);
@@ -201,43 +243,15 @@ Status ClientWorkerApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCr
             exists[i] = rsp.exists(i);
         }
     }
-    auto checkUseShm = [this, &rsp, &skipCheckExistence]() {
-        if (skipCheckExistence) {
-            return GetShmEnabled();
-        }
-        for (const auto &res : rsp.results()) {
-            if (!res.shm_id().empty()) {
-                return true;
-            }
-        }
-        return false;
-    };
-    useShmTransfer = checkUseShm();
-    if (!useShmTransfer) {
-        return Status::OK();
-    }
-    point.RecordAndReset(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
-    for (auto i = 0ul; i < createParams.size(); i++) {
-        if (!skipCheckExistence && exists[i]) {
-            continue;
-        }
-        auto &shmBuf = createParams[i].shmBuf;
-        auto subRsp = rsp.results()[i];
-        shmBuf->fd = subRsp.store_fd();
-        shmBuf->mmapSize = subRsp.mmap_size();
-        shmBuf->offset = static_cast<ptrdiff_t>(subRsp.offset());
-        shmBuf->id = ShmKey::Intern(subRsp.shm_id());
-        createParams[i].metadataSize = subRsp.metadata_size();
-    }
-    version = workerVersion_.load(std::memory_order_relaxed);
+    PostMultiCreate(skipCheckExistence, rsp, createParams, useShmTransfer, point, version, exists);
     return Status::OK();
 }
 
-Status ClientWorkerApi::HealthCheck(ServerState &state)
+Status ClientWorkerRemoteApi::HealthCheck(ServerState &state)
 {
     HealthCheckRequestPb req;
     HealthCheckReplyPb rsp;
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RpcOptions opts;
@@ -251,7 +265,7 @@ Status ClientWorkerApi::HealthCheck(ServerState &state)
     return stub_->HealthCheck(opts, req, rsp);
 }
 
-bool ClientWorkerApi::IsAllGetFailed(GetRspPb &rsp)
+bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
 {
     for (const auto &obj : rsp.objects()) {
         if (obj.data_size() != -1) {
@@ -261,21 +275,18 @@ bool ClientWorkerApi::IsAllGetFailed(GetRspPb &rsp)
     return true;
 }
 
-Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
-                            std::vector<RpcMessage> &payloads)
+Status ClientWorkerRemoteApi::PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req, int64_t &rpcTimeout)
 {
     const std::vector<std::string> &objectKeys = getParam.objectKeys;
-    const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     const std::vector<ReadParam> &readParams = getParam.readParams;
-    LOG(INFO) << FormatString("Begin to get object, client id: %s, worker address: %s, object key: %s", GetClientId(),
-                              GetWorkHost(), VectorToString(objectKeys));
+    LOG(INFO) << FormatString("Begin to get object, client id: %s, worker address: %s, object key: %s", clientId_,
+                              hostPort_.ToString(), VectorToString(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsInNonNegativeInt32(subTimeoutMs), K_INVALID,
         FormatString("subTimeoutMs %lld is out of range, which should be between[%d, %d]", subTimeoutMs, 0, INT32_MAX));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() == readParams.size() || readParams.empty(), K_INVALID,
                                          FormatString("Invalid offset read param, object count %zu, params count %zu",
                                                       objectKeys.size(), readParams.size()));
-    GetReqPb req;
     // the max count of objectKeys is 10000.
     auto size = static_cast<int>(objectKeys.size());
     if (size > 0) {
@@ -294,22 +305,32 @@ Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspP
     }
     req.set_no_query_l2cache(!getParam.queryL2Cache);
     req.set_sub_timeout(ClientGetRequestTimeout(subTimeoutMs));
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_return_object_index(true);
     // Add and fill the request with client communicator root info, if RH2D is both supported and enabled.
     if (getParam.isRH2DSupported) {
         RETURN_IF_NOT_OK(GetClientCommUuid(*req.mutable_comm_id()));
     }
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
 
-    int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
+    rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
     INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
         rpcTimeout = timeout;
         requestTimeoutMs_ = timeout;
         return Status::OK();
     });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when get data.");
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
+                                  std::vector<RpcMessage> &payloads)
+{
+    const int64_t &subTimeoutMs = getParam.subTimeoutMs;
+    GetReqPb req;
+    int64_t rpcTimeout;
+    RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req, rpcTimeout));
     Status getStatus;
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
     Status status = RetryOnError(
         std::max<int32_t>(requestTimeoutMs_, subTimeoutMs),
         [this, &req, &rsp, &payloads, &getStatus](int32_t realRpcTimeout) {
@@ -336,11 +357,11 @@ Status ClientWorkerApi::Get(const GetParam &getParam, uint32_t &version, GetRspP
     return Status::OK();
 }
 
-Status ClientWorkerApi::InvalidateBuffer(const std::string &objectKey)
+Status ClientWorkerRemoteApi::InvalidateBuffer(const std::string &objectKey)
 {
     InvalidateBufferReqPb req;
     req.set_object_key(objectKey);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
@@ -351,15 +372,14 @@ Status ClientWorkerApi::InvalidateBuffer(const std::string &objectKey)
     return stub_->InvalidateBuffer(opts, req, rsp);
 }
 
-Status ClientWorkerApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
-                                          const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
-                                          int existence, PublishReqPb &req)
+Status ClientWorkerRemoteApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
+                                                const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
+                                                int existence, PublishReqPb &req)
 {
-    std::string clientId = GetClientId();
-    LOG(INFO) << FormatString("Begin to publish object, client id: %s, worker address: %s, object key: %s", clientId,
-                              GetWorkHost(), bufferInfo->objectKey);
+    LOG(INFO) << FormatString("Begin to publish object, client id: %s, worker address: %s, object key: %s", clientId_,
+                              hostPort_.ToString(), bufferInfo->objectKey);
     *req.mutable_nested_keys() = { nestedKeys.begin(), nestedKeys.end() };
-    req.set_client_id(clientId);
+    req.set_client_id(clientId_);
     req.set_object_key(bufferInfo->objectKey);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when publish date.");
     req.set_ttl_second(ttlSecond);
@@ -383,8 +403,9 @@ Status ClientWorkerApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo
     return Status::OK();
 }
 
-Status ClientWorkerApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
-                                const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence)
+Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
+                                      const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
+                                      int existence)
 {
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
@@ -422,13 +443,13 @@ Status ClientWorkerApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferI
     return Status::OK();
 }
 
-Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
-                                     const PublishParam &param, MultiPublishRspPb &rsp,
-                                     const std::vector<std::vector<uint64_t>> &blobSizes)
+Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
+                                           const PublishParam &param, MultiPublishRspPb &rsp,
+                                           const std::vector<std::vector<uint64_t>> &blobSizes)
 {
     PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_CONSTRUCT);
     MultiPublishReqPb req;
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_ttl_second(param.ttlSecond);
     req.set_write_mode(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetWriteMode()));
     req.set_consistency_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetConsistencyType()));
@@ -473,7 +494,7 @@ Status ClientWorkerApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBuf
     return Status::OK();
 }
 
-Status ClientWorkerApi::DisconnectWithShmQueue()
+Status ClientWorkerRemoteApi::CleanUpForDecreaseShmRefAfterWorkerLost()
 {
     if (decreaseRPCQ_ == nullptr) {
         return Status::OK();
@@ -491,7 +512,7 @@ Status ClientWorkerApi::DisconnectWithShmQueue()
     return Status::OK();
 }
 
-Status ClientWorkerApi::AddShmLockForClient(const struct timespec &timeoutStruct, int64_t &retryCount)
+Status ClientWorkerRemoteApi::AddShmLockForClient(const struct timespec &timeoutStruct, int64_t &retryCount)
 {
     auto futexRc = decreaseRPCQ_->WaitForQueueFull(timeoutStruct);
     CHECK_FAIL_RETURN_STATUS(!decreaseRPCQ_->CheckQueueDestroyed(), K_RUNTIME_ERROR, "The shm rpc is in destroy.");
@@ -512,23 +533,28 @@ Status ClientWorkerApi::AddShmLockForClient(const struct timespec &timeoutStruct
     return Status::OK();
 }
 
-Status ClientWorkerApi::CheckShmFutexResult(uint32_t *waitFlag, uint32_t waitNum, struct timespec &timeoutStruct)
+Status ClientWorkerRemoteApi::CheckShmFutexResult(uint32_t *waitFlag, uint32_t waitNum, struct timespec &timeoutStruct)
 {
     long result;
     FUTEX_RETRY_ON_EINTR(result, Lock::FutexWait((uint32_t *)waitFlag, waitNum, &timeoutStruct));
     return ShmCircularQueue::CheckFutexErrno(result);
 }
 
-Status ClientWorkerApi::DecreaseWorkerRefByShm(const ShmKey &shmId, const std::function<Status()> &connectCheck)
+Status ClientWorkerRemoteApi::DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
+                                             std::shared_timed_mutex &shutdownMtx)
 {
+    if (!EnableDecreaseShmRefByShmQueue()) {
+        return DecreaseWorkerRef({ shmId });
+    }
+    std::shared_lock<std::shared_timed_mutex> shutdownLock(shutdownMtx);
     RETURN_RUNTIME_ERROR_IF_NULL(decreaseRPCQ_);
     std::string decElement;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StringUuidToBytes(shmId, decElement), "Serialization shmId failed");
-    std::string clientId = GetClientId();
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StringUuidToBytes(clientId, clientId), "Serialization clientId failed");
+    std::string clientIdBytes;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StringUuidToBytes(clientId_, clientIdBytes), "Serialization clientId failed");
     uint32_t waitNum = 1;
     std::string futexFlag(reinterpret_cast<const char *>(&waitNum), sizeof(waitNum));
-    decElement = futexFlag + decElement + clientId;
+    decElement = futexFlag + decElement + clientIdBytes;
     uint8_t *waitFlag = nullptr;
 
     // Interval for futex wait is 3 second.
@@ -575,10 +601,10 @@ Status ClientWorkerApi::DecreaseWorkerRefByShm(const ShmKey &shmId, const std::f
     return Status::OK();
 }
 
-Status ClientWorkerApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
+Status ClientWorkerRemoteApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
 {
     DecreaseReferenceRequest req;
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     for (const auto &objectKey : objectKeys) {
         req.add_object_keys(objectKey);
     }
@@ -592,15 +618,15 @@ Status ClientWorkerApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
     RETURN_STATUS(static_cast<StatusCode>(resp.error().error_code()), resp.error().error_msg());
 }
 
-Status ClientWorkerApi::GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds,
-                                           std::vector<std::string> &failedObjectKeys,
-                                           const std::string &remoteClientId)
+Status ClientWorkerRemoteApi::GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds,
+                                                 std::vector<std::string> &failedObjectKeys,
+                                                 const std::string &remoteClientId)
 {
     GIncreaseReqPb req;
     GIncreaseRspPb rsp;
-    req.set_address(GetClientId());
+    req.set_address(clientId_);
     *req.mutable_object_keys() = { firstIncIds.begin(), firstIncIds.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when gincreaseWorkerRef data.");
 
@@ -631,15 +657,15 @@ Status ClientWorkerApi::GIncreaseWorkerRef(const std::vector<std::string> &first
     return Status::OK();
 }
 
-Status ClientWorkerApi::GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds,
-                                           std::vector<std::string> &failedObjectKeys,
-                                           const std::string &remoteClientId)
+Status ClientWorkerRemoteApi::GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds,
+                                                 std::vector<std::string> &failedObjectKeys,
+                                                 const std::string &remoteClientId)
 {
     GDecreaseReqPb req;
     GDecreaseRspPb rsp;
-    req.set_address(GetClientId());
+    req.set_address(clientId_);
     *req.mutable_object_keys() = { finishDecIds.begin(), finishDecIds.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GDecreaseWorkerRef data.");
     return RetryOnError(
@@ -669,11 +695,11 @@ Status ClientWorkerApi::GDecreaseWorkerRef(const std::vector<std::string> &finis
         rpcTimeoutMs_);
 }
 
-Status ClientWorkerApi::ReleaseGRefs(const std::string &remoteClientId)
+Status ClientWorkerRemoteApi::ReleaseGRefs(const std::string &remoteClientId)
 {
     ReleaseGRefsReqPb req;
     ReleaseGRefsRspPb rsp;
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when ReleaseGRefs data.");
@@ -702,14 +728,14 @@ Status ClientWorkerApi::ReleaseGRefs(const std::string &remoteClientId)
     return Status::OK();
 }
 
-Status ClientWorkerApi::Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
-                               bool areDeviceObjects)
+Status ClientWorkerRemoteApi::Delete(const std::vector<std::string> &objectKeys,
+                                     std::vector<std::string> &failedObjectKeys, bool areDeviceObjects)
 {
-    LOG(INFO) << FormatString("Begin to delete object, client id: %s, worker address: %s, object key: %s",
-                              GetClientId(), GetWorkHost(), VectorToString(objectKeys));
+    LOG(INFO) << FormatString("Begin to delete object, client id: %s, worker address: %s, object key: %s", clientId_,
+                              hostPort_.ToString(), VectorToString(objectKeys));
     DeleteAllCopyReqPb req;
     DeleteAllCopyRspPb rsp;
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     for (const auto &id : objectKeys) {
         req.add_object_keys(id);
     }
@@ -746,14 +772,14 @@ Status ClientWorkerApi::Delete(const std::vector<std::string> &objectKeys, std::
     return rc;
 }
 
-Status ClientWorkerApi::QueryGlobalRefNum(
+Status ClientWorkerRemoteApi::QueryGlobalRefNum(
     const std::vector<std::string> &objectKeys,
     std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap)
 {
     QueryGlobalRefNumReqPb req;
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     QueryGlobalRefNumRspCollectionPb rsp;
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
@@ -767,7 +793,7 @@ Status ClientWorkerApi::QueryGlobalRefNum(
     return Status::OK();
 }
 
-void ClientWorkerApi::ParseGlbRefPb(
+void ClientWorkerRemoteApi::ParseGlbRefPb(
     QueryGlobalRefNumRspCollectionPb &rsp,
     std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap)
 {
@@ -787,12 +813,12 @@ void ClientWorkerApi::ParseGlbRefPb(
     }
 }
 
-Status ClientWorkerApi::PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize,
-                                            bool isShm, void *nonShmPointer)
+Status ClientWorkerRemoteApi::PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize,
+                                                  bool isShm, void *nonShmPointer)
 {
     PublishDeviceObjectReqPb req;
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_dev_object_key(bufferInfo->devObjKey);
     req.set_data_size(dataSize);
     req.set_shm_id(bufferInfo->shmId);
@@ -809,15 +835,16 @@ Status ClientWorkerApi::PublishDeviceObject(const std::shared_ptr<DeviceBufferIn
     return stub_->PublishDeviceObject(opts, req, rsp, payloads);
 }
 
-Status ClientWorkerApi::GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize,
-                                        int32_t timeoutMs, GetDeviceObjectRspPb &rsp, std::vector<RpcMessage> &payloads)
+Status ClientWorkerRemoteApi::GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize,
+                                              int32_t timeoutMs, GetDeviceObjectRspPb &rsp,
+                                              std::vector<RpcMessage> &payloads)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsInNonNegativeInt32(timeoutMs), K_INVALID,
         FormatString("timeoutMs %d is out of range., which should be between [%d, %d]", timeoutMs, 0, INT32_MAX));
     GetDeviceObjectReqPb req;
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     *req.mutable_device_object_keys() = { devObjKeys.begin(), devObjKeys.end() };
 
@@ -834,14 +861,14 @@ Status ClientWorkerApi::GetDeviceObject(const std::vector<std::string> &devObjKe
     return stub_->GetDeviceObject(opts, req, rsp, payloads);
 }
 
-Status ClientWorkerApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp)
+Status ClientWorkerRemoteApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp)
 {
     int32_t timeoutMs = P2P_SUBSCRIBE_TIMEOUT_MS;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsInNonNegativeInt32(timeoutMs), K_INVALID,
         FormatString("timeoutMs %d is out of range., which should be between [%d, %d]", timeoutMs, 0, INT32_MAX));
     SubscribeReceiveEventReqPb req;
-    req.set_src_client_id(GetClientId());
+    req.set_src_client_id(clientId_);
     req.set_src_device_id(deviceId);
     RpcOptions opts;
     auto rpcTimeout = std::max<int32_t>(timeoutMs, rpcTimeoutMs_);
@@ -861,13 +888,13 @@ Status ClientWorkerApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeReceive
     return stub_->SubscribeReceiveEvent(opts, req, resp);
 }
 
-void ClientWorkerApi::FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
-                                     const std::vector<Blob> &blobs, DeviceObjectMetaPb *metaPb)
+void ClientWorkerRemoteApi::FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
+                                           const std::vector<Blob> &blobs, DeviceObjectMetaPb *metaPb)
 {
     metaPb->set_object_key(bufferInfo->devObjKey);
     metaPb->set_lifetime(LifetimeParamPb(static_cast<int>(bufferInfo->lifetimeType)));
     auto loc = metaPb->add_locations();
-    loc->set_client_id(GetClientId());
+    loc->set_client_id(clientId_);
     loc->set_device_id(bufferInfo->deviceIdx);
     for (const auto &blob : blobs) {
         const auto &blobInfos = metaPb->add_data_infos();
@@ -877,7 +904,8 @@ void ClientWorkerApi::FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bu
     metaPb->set_src_offset(bufferInfo->srcOffset);
 }
 
-Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs)
+Status ClientWorkerRemoteApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
+                                         const std::vector<Blob> &blobs)
 {
     PutP2PMetaReqPb req;
     PutP2PMetaRspPb resp;
@@ -897,9 +925,9 @@ Status ClientWorkerApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &buff
     return stub_->PutP2PMeta(opts, req, resp);
 }
 
-Status ClientWorkerApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
-                                   std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp,
-                                   int64_t subTimeoutMs)
+Status ClientWorkerRemoteApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
+                                         std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp,
+                                         int64_t subTimeoutMs)
 {
     INJECT_POINT("GETP2PMeta.subTimeoutMs", [&subTimeoutMs](int64_t t) {
         subTimeoutMs = t;
@@ -930,7 +958,7 @@ Status ClientWorkerApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>
     return stub_->GetP2PMeta(opts, req, resp);
 }
 
-Status ClientWorkerApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
+Status ClientWorkerRemoteApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
@@ -942,7 +970,7 @@ Status ClientWorkerApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &
     return stub_->SendRootInfo(opts, req, resp);
 }
 
-Status ClientWorkerApi::RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp)
+Status ClientWorkerRemoteApi::RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp)
 {
     int64_t timeoutMs = P2P_TIMEOUT_MS;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -959,7 +987,7 @@ Status ClientWorkerApi::RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &
     return stub_->RecvRootInfo(opts, req, resp);
 }
 
-Status ClientWorkerApi::AckRecvFinish(AckRecvFinishReqPb &req)
+Status ClientWorkerRemoteApi::AckRecvFinish(AckRecvFinishReqPb &req)
 {
     AckRecvFinishRspPb resp;
     RpcOptions opts;
@@ -972,7 +1000,7 @@ Status ClientWorkerApi::AckRecvFinish(AckRecvFinishReqPb &req)
     return stub_->AckRecvFinish(opts, req, resp);
 }
 
-Status ClientWorkerApi::GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs)
+Status ClientWorkerRemoteApi::GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs)
 {
     RpcOptions opts;
     auto rpcTimeout = std::max<int64_t>(timeoutMs, rpcTimeoutMs_);
@@ -983,7 +1011,7 @@ Status ClientWorkerApi::GetBlobsInfo(const std::string &devObjKey, int32_t timeo
     int64_t subTimeout = ClientGetRequestTimeout(timeoutMs);
     req.set_object_key(devObjKey);
     req.set_sub_timeout(subTimeout);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GetDataInfo.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
@@ -999,11 +1027,11 @@ Status ClientWorkerApi::GetBlobsInfo(const std::string &devObjKey, int32_t timeo
     return Status::OK();
 }
 
-Status ClientWorkerApi::RemoveP2PLocation(const std::string &objectKey, int32_t deviceId)
+Status ClientWorkerRemoteApi::RemoveP2PLocation(const std::string &objectKey, int32_t deviceId)
 {
     RemoveP2PLocationReqPb req;
     req.set_object_key(objectKey);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_device_id(deviceId);
     RemoveP2PLocationRspPb resp;
     RpcOptions opts;
@@ -1016,8 +1044,8 @@ Status ClientWorkerApi::RemoveP2PLocation(const std::string &objectKey, int32_t 
     return stub_->RemoveP2PLocation(opts, req, resp);
 }
 
-Status ClientWorkerApi::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
-                                       std::vector<ObjMetaInfo> &objMetas)
+Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
+                                             std::vector<ObjMetaInfo> &objMetas)
 {
     GetObjMetaInfoReqPb req;
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
@@ -1046,11 +1074,11 @@ Status ClientWorkerApi::GetObjMetaInfo(const std::string &tenantId, const std::v
     return Status::OK();
 }
 
-Status ClientWorkerApi::QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp)
+Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp)
 {
     QuerySizeReqPb req;
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when QuerySize.");
     auto status = RetryOnError(
         requestTimeoutMs_,
@@ -1073,12 +1101,12 @@ Status ClientWorkerApi::QuerySize(const std::vector<std::string> &objectKeys, Qu
     return Status::OK();
 }
 
-Status ClientWorkerApi::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
-                              const bool isLocal)
+Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists,
+                                    const bool queryL2Cache, const bool isLocal)
 {
     ExistReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_query_l2cache(queryL2Cache);
     req.set_is_local(isLocal);
     INJECT_POINT("Exist.QueryLocalMem", [&req]() {
@@ -1114,12 +1142,12 @@ Status ClientWorkerApi::Exist(const std::vector<std::string> &keys, std::vector<
     return Status::OK();
 }
 
-Status ClientWorkerApi::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
-                               std::vector<std::string> &failedKeys)
+Status ClientWorkerRemoteApi::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
+                                     std::vector<std::string> &failedKeys)
 {
     ExpireReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_ttl_second(ttlSeconds);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExpireReqPb.");
     ExpireRspPb rsp;
@@ -1146,10 +1174,11 @@ Status ClientWorkerApi::Expire(const std::vector<std::string> &keys, uint32_t tt
     return Status::OK();
 }
 
-Status ClientWorkerApi::GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &rsp)
+Status ClientWorkerRemoteApi::GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
+                                          GetMetaInfoRspPb &rsp)
 {
     GetMetaInfoReqPb req;
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_is_dev_key(isDevKey);
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to GetMetaInfoReqPb.");
@@ -1168,6 +1197,16 @@ Status ClientWorkerApi::GetMetaInfo(const std::vector<std::string> &keys, const 
         return status;
     }
     return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::PrepairForDecreaseShmRef(
+    std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc)
+{
+    if (!EnableDecreaseShmRefByShmQueue()) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(mmapFunc("", decShmUnit_));
+    return InitDecreaseQueue();
 }
 }  // namespace object_cache
 }  // namespace datasystem

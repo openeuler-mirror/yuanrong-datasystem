@@ -38,7 +38,7 @@ namespace client {
  */
 class MmapManager {
 public:
-    explicit MmapManager(std::shared_ptr<ClientWorkerCommonApi> clientWorker);
+    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker);
 
     ~MmapManager();
 
@@ -48,7 +48,7 @@ public:
      * @param[in] unit The input share memory unit.
      * @return Status of the call.
      */
-    Status LookupUnitsAndMmapFd(const std::string &tenantId, std::shared_ptr<ShmUnitInfo> &unit);
+    Status LookupUnitsAndMmapFd(const std::string &tenantId, const std::shared_ptr<ShmUnitInfo> &unit);
 
     /**
      * @brief Loop the input share memory unit and mmap the fd if it was not mmapped in the client.
@@ -56,7 +56,7 @@ public:
      * @param[in] units The input share memory unit.
      * @return Status of the call.
      */
-    Status LookupUnitsAndMmapFd(const std::string &tenantId, std::vector<std::shared_ptr<ShmUnitInfo>> &units);
+    Status LookupUnitsAndMmapFds(const std::string &tenantId, std::vector<std::shared_ptr<ShmUnitInfo>> &units);
 
     /**
      * @brief Get memory mapped data by stored file descriptor.
@@ -90,7 +90,7 @@ public:
 
 private:
     // The instance for client communication with the worker.
-    std::shared_ptr<ClientWorkerCommonApi> clientWorker_;
+    std::shared_ptr<IClientWorkerCommonApi> clientWorker_;
     std::unique_ptr<MmapTable> mmapTable_;
     mutable std::shared_timed_mutex mutex_;  // protect mmapTable_.
 };
