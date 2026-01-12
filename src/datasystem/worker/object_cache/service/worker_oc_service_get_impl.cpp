@@ -2094,7 +2094,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
         }
     }
     point.Record();
-    cacheHitInfo_->IncL2Hit(1);
+    cacheHitInfo_->IncRemoteHit(1);
     return UpdateRequestForSuccess(objectKV, request);
 }
 
