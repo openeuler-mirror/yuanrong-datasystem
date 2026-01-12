@@ -7,6 +7,7 @@ set(MASTER_SRCS
         node_descriptor.cpp
         worker_manager.cpp
         replica_manager.cpp
+        resource_manager.cpp
         metadata_redirect_helper.cpp
         replica_rpc_channel_impl.cpp
         replication_service_impl.cpp)

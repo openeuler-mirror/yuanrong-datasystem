@@ -24,6 +24,7 @@ set(WORKER_OC_SRCS
         data_migrator/basic/migrate_progress.cpp
         data_migrator/handler/async_resource_releaser.cpp
         data_migrator/handler/migrate_data_handler.cpp
+        data_migrator/strategy/node_selector.cpp
         data_migrator/strategy/scale_down_node_selector.cpp
         data_migrator/strategy/spill_node_selector.cpp
         data_migrator/transport/fast_migrate_transport.cpp

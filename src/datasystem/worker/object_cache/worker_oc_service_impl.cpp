@@ -96,6 +96,7 @@
 #include "datasystem/worker/object_cache/async_rollback_manager.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -167,6 +168,7 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
     EraseFailedNodeApiEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     StartNodeCheckEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     AsyncResourceReleaser::Instance().Shutdown();
+    NodeSelector::Instance().Shutdown();
     exitFlag_->store(true);
     {
         // Avoid read data while modifying the vector.
@@ -284,6 +286,7 @@ Status WorkerOCServiceImpl::Init()
     asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
     AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
+    NodeSelector::Instance().Init(localAddress_.ToString(), etcdCM_, workerMasterApiManager_);
     getProc_->Init();
     HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
