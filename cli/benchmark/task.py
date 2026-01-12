@@ -14,10 +14,13 @@
 
 import shlex
 import subprocess
+import logging
 from abc import ABC, abstractmethod
 from argparse import Namespace
 from dataclasses import dataclass
 from typing import Any, Optional, Union
+
+logger = logging.getLogger("dsbench")
 
 
 @dataclass
@@ -94,6 +97,10 @@ class BenchCommandTask(BenchTask):
     def execute_command_locally(self):
         """Executes a command on the local machine and captures its output."""
         env = self.env or {}
+        
+        logger.debug("Executing local command: %s", self.command)
+        logger.debug("Local command environment: %s", env)
+        
         process = subprocess.Popen(
             self.command,
             shell=True,
@@ -107,11 +114,24 @@ class BenchCommandTask(BenchTask):
         except subprocess.TimeoutExpired:
             process.kill()
             error_msg = f"Local command execution timed out: '{self.command}'"
+            logger.error(error_msg)
             raise RuntimeError(error_msg) from None
-        return stdout.decode("utf-8"), stderr.decode("utf-8")
+        
+        stdout_str = stdout.decode("utf-8")
+        stderr_str = stderr.decode("utf-8")
+
+        logger.debug("Local command stdout: %s", stdout_str)
+        logger.debug("Local command stderr: %s", stderr_str)
+
+        return stdout_str, stderr_str
 
     def execute_command_remotely(self, remote: BenchRemoteInfo):
         """Executes a command on a remote machine via SSH and captures its output."""
+
+        logger.debug("Executing remote command on %s:%s", remote.host, remote.ssh_port)
+        logger.debug("Original remote command: %s", self.command)
+        logger.debug("Remote command environment: %s", self.env)
+
         new_command = self.command
         if self.env is not None:
             new_command = f"{BenchCommandTask.concat_args('', self.env)} {new_command}"
@@ -120,6 +140,8 @@ class BenchCommandTask(BenchTask):
             f"ssh -q {remote.username}@{remote.host} -p {remote.ssh_port} "
             f"-i {shlex.quote(remote.ssh_config_path)} {shlex.quote(new_command)}"
         )
+        logger.debug("SSH command: %s", ssh_command)
+        
         process = subprocess.Popen(
             ssh_command,
             shell=True,
@@ -135,16 +157,29 @@ class BenchCommandTask(BenchTask):
                 f"Remote command execution timed out after 600 seconds. "
                 f"Process has been killed. SSH command: '{ssh_command}'"
             )
+            logger.error(error_msg)
             raise RuntimeError(error_msg) from None
-        return stdout.decode("utf-8"), stderr.decode("utf-8")
+        
+        stdout_str = stdout.decode("utf-8")
+        stderr_str = stderr.decode("utf-8")
+        
+        logger.debug("Remote command stdout: %s", stdout_str)
+        logger.debug("Remote command stderr: %s", stderr_str)
+        
+        return stdout_str, stderr_str
 
     def get_output(self) -> Union[BenchCommandOutput, None]:
         """Retrieves the output of the executed command."""
         return self.output
 
     def run(self):
+        """Executes the command either locally or remotely."""
+        logger.debug("Running command task for address: %s", self.worker_address)
+        
         if self.remote is None:
             stdout, stderr = self.execute_command_locally()
         else:
             stdout, stderr = self.execute_command_remotely(self.remote)
+        
         self.output = BenchCommandOutput(stdout, stderr)
+        logger.debug("Command task completed for address: %s", self.worker_address)

@@ -216,7 +216,7 @@ class Executor:
         # Successfully set permissions, cache the result
         self.dsbench_cpp_permissions_cache[worker_address] = True
         logger.debug(
-            f"    [DEBUG] Successfully set execute permissions for dsbench_cpp on {worker_address}."
+            "    [DEBUG] Successfully set execute permissions for dsbench_cpp on %s.", worker_address
         )
 
         return dsbench_cpp_executable
