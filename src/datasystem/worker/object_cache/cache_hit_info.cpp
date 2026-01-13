@@ -19,6 +19,11 @@
 #include "datasystem/common/inject/inject_point.h"
 namespace datasystem {
 namespace object_cache {
+CacheHitInfo &CacheHitInfo::Instance()
+{
+    static CacheHitInfo hitInfo;
+    return hitInfo;
+}
 void CacheHitInfo::IncMemHit(size_t n)
 {
     memHitNum_.fetch_add(n);

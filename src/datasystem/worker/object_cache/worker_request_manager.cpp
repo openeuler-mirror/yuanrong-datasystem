@@ -36,6 +36,7 @@
 #include "datasystem/object/buffer.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
+#include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
@@ -350,6 +351,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         auto iter = objects_.find(objectKeyUri);
         if (iter == objects_.cend() || iter->second.params == nullptr) {
             LOG(ERROR) << FormatString("Can't find object %s, clientId %s", objectKeyUri, clientId_);
+            CacheHitInfo::Instance().IncMissHit(1);
             SetDefaultObjectInfoPb(objectKeyUri, objectIndex, *resp.add_objects());
             continue;
         }
