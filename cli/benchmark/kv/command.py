@@ -16,7 +16,7 @@ import re
 from typing import Any, Union
 
 from yr.datasystem.cli.benchmark.common import (
-    BaseCommand,
+    BenchmarkBaseCommand,
     BenchOutputHandler,
     BenchSuite,
 )
@@ -29,7 +29,7 @@ from yr.datasystem.cli.benchmark.task import BenchArgs, BenchCommandOutput
 from yr.datasystem.cli.benchmark.system_info import SystemInfoCollector
 
 
-class KVCommand(BaseCommand):
+class KVCommand(BenchmarkBaseCommand):
     name = "kv"
     description = "KV Performance Benchmarking"
     handler: Union[BenchOutputHandler, None]
@@ -172,16 +172,10 @@ class KVCommand(BaseCommand):
     def _add_test_config_arguments(self, parser: argparse.ArgumentParser):
         """Adds arguments related to test suite and testcase file configuration."""
         parser.add_argument(
-            "--testsuite-name",
-            default="kv_run",
-            help="Name for the test suite (default: kv_run).",
-        )
-
-        parser.add_argument(
             "-a",
             "--all",
             action="store_true",
-            help="Run all test cases defined in kv.json.",
+            help="Run all test cases using built-in configuration. Requires at least 25GB shared memory per worker.",
         )
         parser.add_argument(
             "-f",
@@ -222,7 +216,7 @@ class KVCommand(BaseCommand):
             "--size",
             type=str,
             default="1MB",
-            help="Data size of key (e.g. 2B/4KB/8MB/1GB or just 2 for 2B)",
+            help="Data size of key (e.g. 2B/4KB/8MB/1GB or just 2 for 2B) (default: 1MB)",
         )
 
         parser.add_argument(
@@ -236,13 +230,15 @@ class KVCommand(BaseCommand):
             "--owner_worker",
             type=str,
             default="",
-            help="Owner worker of the object metadata (ip:port)",
+            metavar="",
+            help="Owner worker of the object metadata (ip:port) (default: empty)",
         )
         parser.add_argument(
             "--numa",
             type=str,
             default="",
-            help="Bind to specific numa (e.g. 0-3,10-20,1,2,3)",
+            metavar="",
+            help="Bind to specific numa (e.g. 0-3,10-20,1,2,3) (default: empty)",
         )
 
     def _add_cluster_config_arguments(self, parser: argparse.ArgumentParser):
@@ -251,44 +247,19 @@ class KVCommand(BaseCommand):
             "-S",
             "--set_worker_addresses",
             required=True,
-            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2).",
+            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2). (required)",
         )
         parser.add_argument(
             "-G",
             "--get_worker_addresses",
             required=True,
-            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2).",
+            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2). (required)",
         )
-        parser.add_argument("--access_key", type=str, default="", help="Access key")
-        parser.add_argument("--secret_key", type=str, default="", help="Secret key")
+        parser.add_argument("--access_key", type=str, default="", metavar="", help="Access key (default: empty)")
+        parser.add_argument("--secret_key", type=str, default="", metavar="", help="Secret key (default: empty)")
 
-        parser.add_argument(
-            "--ssh_config",
-            type=str,
-            default=None,
-            help="""
-            Path to an optional SSH config JSON file for defining custom usernames
-            and private key paths for specific hosts.
 
-            Default behavior: Username 'root', IdentityFile '~/.ssh/id_rsa'.
 
-            The config file should only contain a 'hosts' map. If a host is not
-            found in the map, the built-in defaults will be used.
-
-            Example file format:
-            {
-                "hosts": {
-                    "127.0.0.1:31501": { "username": "deploy", "identity_file": "~/.ssh/deploy_key", ssh_port: "8822" }
-                }
-            }
-            """,
-        )
-        parser.add_argument(
-            "--dsbench_path",
-            type=str,
-            default="dsbench",
-            help="Absolute path to the dsbench tool (e.g., /opt/bin/dsbench).",
-        )
 
     def _log_worker_version(self, result: Any):
         if isinstance(result, BenchCommandOutput):

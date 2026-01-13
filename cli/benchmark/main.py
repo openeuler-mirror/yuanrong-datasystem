@@ -43,16 +43,7 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    ssh_config_path = getattr(args, "ssh_config", None)
-    if ssh_config_path:
-        try:
-            executor.load_ssh_config(ssh_config_path)
-        except Exception as e:
-            print(
-                f"CRITICAL ERROR: Failed to load SSH configuration: {e}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+
 
     try:
         full_class_path = COMMAND_REGISTRY[command_name]
@@ -85,6 +76,7 @@ def create_main_parser() -> argparse.ArgumentParser:
         "--min_log_level",
         type=int,
         default=2,
+        metavar="",
         help="Set the min log level, INFO: 0, WARNING: 1, ERROR: 2 (default: 2).",
     )
 
@@ -92,6 +84,7 @@ def create_main_parser() -> argparse.ArgumentParser:
         "--log_monitor_enable",
         type=bool,
         default=False,
+        metavar="",
         help="Enable log monitor (default: false).",
     )
 

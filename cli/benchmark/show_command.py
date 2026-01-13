@@ -3,17 +3,16 @@ import socket
 from typing import Any, List
 
 from yr.datasystem.cli.benchmark.common import (
-    BaseCommand,
+    BenchmarkBaseCommand,
     BenchSuite,
 )
 
-from yr.datasystem.cli.benchmark.common import BaseCommand
 from yr.datasystem.cli.benchmark.system_info import SystemInfoCollector
 
 from yr.datasystem.cli.benchmark.task import BenchArgs
 
 
-class ShowCommand(BaseCommand):
+class ShowCommand(BenchmarkBaseCommand):
     """Command to show node information."""
     name = "show"
     description = "Show node system information."
