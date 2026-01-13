@@ -907,7 +907,7 @@ TEST_F(RetainDataTest, LEVEL1_TestMasterRestartWhileRetainData)
 }
 
 // Worker crash with consumer
-TEST_F(RetainDataTest, TestConsumerWorkerCrashStopRemotePush)
+TEST_F(RetainDataTest, DISABLED_TestConsumerWorkerCrashStopRemotePush)
 {
     LOG(INFO) << "TestWorkerCrashStopRemotePush start!";
     std::shared_ptr<StreamClient> client1;

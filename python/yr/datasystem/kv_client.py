@@ -295,6 +295,95 @@ class KVClient:
         key = self._client.SetValue(val, write_mode.value, ttl_second)
         return key
 
+    def mcreate(self, keys, sizes, write_mode=WriteMode.NONE_L2_CACHE, ttl_second=0):
+        """Batch create shared-memory Buffers in datasystem.
+
+           The returned Buffers can be filled directly with data; subsequently call mset_buffer()
+           to cache it. This interface avoids the need for temporary memory and reduces
+           one extra memory copy. The max keys size < 2000. 
+
+        Args:
+            keys(str): The keys of objects.
+            sizes(uint32): The sizes to create.
+            write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
+                The options are as follows:
+                WriteMode.NONE_L2_CACHE: indicates that data reliability is not required,
+                WriteMode.WRITE_THROUGH_L2_CACHE: indicates that data is synchronously written to the L2 cache
+                WriteMode.WRITE_BACK_L2_CACHE: indicates that data is asynchronously written to the L2 cache
+                to improve data reliability.
+                WriteMode.NONE_L2_CACHE_EVICT: indicates that data reliability is not required and evictable.
+            ttl_second(uint32): controls the expire time of the data:
+                If the value is greater than 0, the data will be deleted automatically after expired.
+                If set to 0, the data need to be manually deleted.
+
+        Returns:
+            buffer_array: Return the buffer for the object to set.
+
+        Raises:
+            RuntimeError: Raise a runtime error if all the keys set fail.
+            TypeError: Raise a type error if the input parameter is invalid.
+        """
+        args = [
+            ["keys", keys, list],
+            ["sizes", sizes, list],
+            ["write_mode", write_mode, type(WriteMode.NONE_L2_CACHE), type(WriteMode.WRITE_THROUGH_L2_CACHE),
+             type(WriteMode.WRITE_BACK_L2_CACHE)],
+            ["ttl_second", ttl_second, int]
+        ]
+        validator.check_args_types(args)
+
+        status, buffer_array = self._client.MCreate(keys, sizes, write_mode.value, ttl_second)
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+        return buffer_array
+    
+    def mset_buffer(self, buffers):
+        """Batch setter for multiple buffers.
+
+           This interface is used together with mcreate to cache a batch of shared-memory Buffers into the
+           datasystem. The max keys size < 2000.
+
+        Args:
+            buffers(StateValueBuffer):  A list of buffer objects previously returned by `mcreate`,
+            each containing data ready to be stored.
+            
+        Raises:
+            RuntimeError: Raise a runtime error if one of the keys set fail.
+            TypeError: Raise a type error if the input parameter is invalid.
+        """
+        args = [["buffers", buffers, list]]
+        validator.check_args_types(args)
+
+        status = self._client.MSetBuffer(buffers)
+        
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+
+    def get_buffers(self, keys: list, timeout_ms=0):
+        """ Retrieve multiple objects as read-only buffers.
+
+        Args:
+            keys(str): The key list of string type.
+            ttl_second(uint32): controls the expire time of the data:
+                If the value is greater than 0, the data will be deleted automatically after expired.
+                If set to 0, the data need to be manually deleted.
+        
+        Raises:
+            RuntimeError: Raise a runtime error if fails to get the value of all keys.
+            TypeError: Raise a type error if the input parameter is invalid.
+        """
+        args = [
+            ["keys", keys, list],
+            ["timeout_ms", timeout_ms, int]
+        ]
+        validator.check_args_types(args)
+
+        status, buffer_array = self._client.MGetBuffer(keys, timeout_ms)
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+            
+        return buffer_array
+
     def mset(self, keys, vals, write_mode=WriteMode.NONE_L2_CACHE, ttl_second=0, existence_opt=ExistenceOpt.NONE):
         """Multi-key set interface, it can batch set keys and return failed keys. The max keys size < 2000 and
            the max value for key to set < 500 * 1024.

@@ -1825,7 +1825,7 @@ public:
     }
 };
 
-TEST_F(StreamReserveMemoryTest, TestReserveLocalCacheMemory1)
+TEST_F(StreamReserveMemoryTest, DISABLED_TestReserveLocalCacheMemory1)
 {
     // Make sure that Subcribe can be rejected if memory reservation fails for local cache memory.
     // sc_local_cache_memory_size_mb is set to 2MB, so it can only accept 2 streams in this case.

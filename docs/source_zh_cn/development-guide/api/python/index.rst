@@ -148,6 +148,12 @@ KV接口
      - 设置键的值，键由系统生成并返回。
    * - :doc:`yr.datasystem.kv_client.KVClient.mset <yr.datasystem.kv_client.KVClient.mset>`
      - 批量设置键值对。
+   * - :doc:`yr.datasystem.kv_client.KVClient.mcreate <yr.datasystem.kv_client.KVClient.mcreate>`
+     - 创建数据系统共享内存 Buffer ，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。
+   * - :doc:`yr.datasystem.kv_client.KVClient.mset_buffer <yr.datasystem.kv_client.KVClient.mset_buffer>`
+     - 批量将共享内存 Buffer 缓存到数据系统中。     
+   * - :doc:`yr.datasystem.kv_client.KVClient.get_buffers <yr.datasystem.kv_client.KVClient.get_buffers>`
+     - 获取键对应的只读共享内存 Buffer 。
    * - :doc:`yr.datasystem.kv_client.KVClient.msettx <yr.datasystem.kv_client.KVClient.msettx>`
      - 批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。
    * - :doc:`yr.datasystem.kv_client.KVClient.get_read_only_buffers <yr.datasystem.kv_client.KVClient.get_read_only_buffers>`

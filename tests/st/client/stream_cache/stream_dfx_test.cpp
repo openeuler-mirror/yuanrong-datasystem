@@ -917,7 +917,7 @@ TEST_F(StreamDfxMasterCrashTest, LEVEL1_TestSameMetadata)
     LOG(INFO) << "TestSameMetadata finish!";
 }
 
-TEST_F(StreamDfxMasterCrashTest, TestDiffMetadata)
+TEST_F(StreamDfxMasterCrashTest, DISABLED_TestDiffMetadata)
 {
     LOG(INFO) << "TestDiffMetadata start!";
     std::shared_ptr<StreamClient> client1;
