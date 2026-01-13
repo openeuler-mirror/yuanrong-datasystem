@@ -21,6 +21,7 @@ from argparse import Namespace
 from typing import Any
 
 from yr.datasystem.cli.benchmark.task import BenchArgs, BenchTask
+from yr.datasystem.cli.command import BaseCommand as CliBaseCommand
 
 
 class BenchOutputHandler(ABC):
@@ -87,36 +88,41 @@ class BenchSuite:
             testcase.run()
 
 
-class BaseCommand(ABC):
+class BenchmarkBaseCommand(CliBaseCommand, ABC):
     SUCCESS = 0
     FAILURE = 1
     logger = None
 
     def __init__(self):
         """Initialize of command"""
-        if BaseCommand.logger is None:
-            BaseCommand._configure_logging()
+        super().__init__()
+        BenchmarkBaseCommand._configure_logging()
 
     @staticmethod
     def _configure_logging():
         """Configure logging format and handlers."""
-        if BaseCommand.logger is not None:
+        if BenchmarkBaseCommand.logger is not None and BenchmarkBaseCommand.logger.name == "dsbench":
             return
+        
+        if BenchmarkBaseCommand.logger is not None:
+            for handler in BenchmarkBaseCommand.logger.handlers[:]:
+                BenchmarkBaseCommand.logger.removeHandler(handler)
+                handler.close()
 
-        BaseCommand.logger = logging.getLogger("dsbench")
+        BenchmarkBaseCommand.logger = logging.getLogger("dsbench")
         formatter = logging.Formatter("%(message)s")
 
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)
 
-        BaseCommand.logger.setLevel(logging.DEBUG)
-        BaseCommand.logger.addHandler(console_handler)
+        BenchmarkBaseCommand.logger.setLevel(logging.DEBUG)
+        BenchmarkBaseCommand.logger.addHandler(console_handler)
 
     @staticmethod
     def _configure_logging_with_file(log_path):
-        if BaseCommand.logger is None:
-            BaseCommand._configure_logging()
+        if BenchmarkBaseCommand.logger is None:
+            BenchmarkBaseCommand._configure_logging()
 
         file_formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s")
 
@@ -124,7 +130,7 @@ class BaseCommand(ABC):
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(file_formatter)
 
-        BaseCommand.logger.addHandler(file_handler)
+        BenchmarkBaseCommand.logger.addHandler(file_handler)
 
     @abstractmethod
     def add_arguments(self, parser: argparse.ArgumentParser):
@@ -171,7 +177,7 @@ class BaseCommand(ABC):
             os.makedirs(bench_args.log_dir, exist_ok=True)
             log_file_name = "run.log"
             full_log_file_path = os.path.join(bench_args.log_dir, log_file_name)
-            BaseCommand._configure_logging_with_file(full_log_file_path)
+            BenchmarkBaseCommand._configure_logging_with_file(full_log_file_path)
 
             if not self.validate(args):
                 return self.FAILURE

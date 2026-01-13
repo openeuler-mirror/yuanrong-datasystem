@@ -27,36 +27,7 @@ from yr.datasystem.cli.benchmark.task import (
 logger = logging.getLogger("dsbench")
 
 
-def _load_ssh_config_from_json(ssh_config_path: str) -> dict[str, dict[str, Any]]:
-    """
-    Load and parse the SSH configuration JSON file.
-    """
-    if not ssh_config_path:
-        logger.warning("warning: SSH config path is not provided.")
-        return {}
 
-    try:
-        expanded_path = os.path.expanduser(ssh_config_path)
-        with open(expanded_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-
-        if "hosts" in config and isinstance(config["hosts"], dict):
-            return config["hosts"]
-        logger.error(
-            f"error: Invalid SSH config format in {expanded_path}. Missing or non-dictionary 'hosts' section."
-        )
-        return {}
-    except FileNotFoundError:
-        logger.error(f"error: SSH config file not found at {ssh_config_path}.")
-        return {}
-    except json.JSONDecodeError:
-        logger.error(
-            f"error: Invalid JSON format in SSH config file {ssh_config_path}."
-        )
-        return {}
-    except Exception as e:
-        logger.error(f"error: Failed to load SSH config file {ssh_config_path}: {e}")
-        return {}
 
 
 def _get_local_ips() -> list[str]:
@@ -113,10 +84,6 @@ class Executor:
             return
         self.initialized = True
 
-        # Core attributes
-        self.ssh_config_map: dict[str, dict[str, Any]] = {}
-        self.ssh_config_path: Optional[str] = None
-
         self.pkg_location_cache: dict[str, Optional[str]] = {}
         self.dsbench_cpp_permissions_cache: dict[str, bool] = {}
 
@@ -130,60 +97,26 @@ class Executor:
             cls._class_instance = Executor()
         return cls._class_instance
 
-    def load_ssh_config(self, config_path: str):
-        """
-        Loads SSH configurations from a specified JSON file and caches them.
-        This is the public method to configure the Executor.
-        """
-        self.ssh_config_path = config_path
-        self.ssh_config_map = _load_ssh_config_from_json(config_path)
+
 
     def get_remote_info(self, target_address: str) -> Optional[BenchRemoteInfo]:
         """
         **INTERNAL** helper method to retrieve SSH information.
-        It looks up in the cached `ssh_config_map`.
+        Uses default SSH parameters: current user, default identity file (~/.ssh/id_rsa), and port 22.
         """
         import getpass
 
         # Extract hostname/IP from target_address (handle port if present)
         target_host = target_address.split(":")[0]
 
-        # Check 1: If SSH config map is empty, return None for local targets
-        if not self.ssh_config_map:
-            # If target is local and no SSH config, return None (local execution)
-            if target_host in self.local_ips_cache:
-                return None
-            logger.warning(
-                f"warning: SSH configuration map is empty. Ensure load_ssh_config() was called."
-            )
+        # If target is local, return None (local execution)
+        if target_host in self.local_ips_cache:
             return None
 
-        # Check 2: If there's any mapping for current node IP and current user, return None
+        # Use default SSH parameters
         current_user = getpass.getuser()
-        for host, config in self.ssh_config_map.items():
-            host_ip = host.split(":")[0]
-            if host_ip in self.local_ips_cache and config.get("username") == current_user:
-                return None
-
-        # Normal SSH config lookup
-        config = self.ssh_config_map.get(target_address)
-        if not config:
-            return None
-
-        username = config.get("username")
-        identity_file_path = config.get("identity_file")
-        port_str = config.get("port", "22")
-
-        if not username:
-            logger.warning(
-                f"warning: 'username' not found for target '{target_address}'."
-            )
-            return None
-        if not identity_file_path:
-            logger.warning(
-                f"warning: 'identity_file' not found for target '{target_address}'."
-            )
-            return None
+        identity_file_path = "~/.ssh/id_rsa"
+        ssh_port = 22
 
         expanded_identity_file = os.path.expanduser(identity_file_path)
         if not os.path.isfile(expanded_identity_file):
@@ -192,17 +125,9 @@ class Executor:
             )
             return None
 
-        try:
-            ssh_port = int(port_str)
-        except ValueError:
-            logger.warning(
-                f"warning: Invalid 'port' value '{port_str}' for target '{target_address}'."
-            )
-            return None
-
         return BenchRemoteInfo(
-            host=target_address.split(":")[0],
-            username=username,
+            host=target_host,
+            username=current_user,
             ssh_config_path=expanded_identity_file,
             ssh_port=ssh_port,
         )
