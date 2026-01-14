@@ -267,6 +267,8 @@ global:
 | global.observability.logMonitorExporter | string | `"harddisk"` | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
 | global.observability.logMonitorIntervalMs | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | global.log.minLogLevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
+| global.log.enableUcxLog | bool | `false` | 是否开启UCX RDMA日志，保存在`${logDir}/worker/ucx.log`当中 |
+| global.log.ucxLogLevel | string | `INFO` | 设置UCX RDMA日志级别 |
 
 **样例**：
 ```yaml
@@ -415,6 +417,7 @@ global:
 | global.performance.sharedDiskArenaPerTenant  | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
 | global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
 | global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
+| global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX RDMA运行时的底层传输协议 |
 | global.performance.ocWorkerAggregateMergeSize | int | `2097152` | worker响应的目标批量大小，默认值为2MB |
 | global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
 | global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |

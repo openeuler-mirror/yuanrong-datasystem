@@ -243,10 +243,15 @@ spec:
         command:
         - /home/yuanrong/worker_entry.sh
         securityContext:
+          {{- if $.Values.global.performance.enableRdma }}
+          privileged: true
+          runAsUser: 0
+          {{- else }}
           allowPrivilegeEscalation: false
           capabilities:
             drop:
             - ALL
+          {{- end }}
         startupProbe:
           exec:
             command:
@@ -339,6 +344,18 @@ spec:
             value: "{{ $.Values.global.gracefulShutdown.scaleInTaint }}"
           - name: NAMESPACE
             value: "{{ $.Values.global.namespace }}"
+          - name: ENABLE_RDMA
+            value: "{{ $.Values.global.performance.enableRdma }}"
+          {{- if $.Values.global.performance.enableRdma }}
+          - name: UCX_TLS
+            value: "{{ $.Values.global.performance.ucxTransportLayerSelection }}"
+          {{- end }}
+          {{- if $.Values.global.log.enableUcxLog }}
+          - name: UCX_LOG_LEVEL
+            value: "{{ $.Values.global.log.ucxLogLevel }}"
+          - name: UCX_LOG_FILE
+            value: "{{ $.Values.global.log.logDir }}/worker/ucx.log"
+          {{- end }}
           {{- if $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
           - name: TOKEN_ROTATION_CONFIG
             value: |-
@@ -390,6 +407,12 @@ spec:
         - mountPath: {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}
           name: secret-yuanrong-iam
         {{- end }}
+        {{- end }}
+        {{- if $.Values.global.performance.enableRdma }}
+        - mountPath: /dev/infiniband
+          name: dev-ib
+        - mountPath: /sys/class/infiniband
+          name: sys-class-ib
         {{- end }}
         - mountPath: /dev/shm
           name: sharememory
@@ -626,4 +649,14 @@ spec:
         - name: pvc-sfsturbo
           persistentVolumeClaim:
             claimName: pvc-sfsturbo
+        {{- end }}
+        {{- if $.Values.global.performance.enableRdma }}
+        - name: dev-ib
+          hostPath:
+            path: /dev/infiniband
+            type: Directory
+        - name: sys-class-ib
+          hostPath:
+            path: /sys/class/infiniband
+            type: Directory
         {{- end }}

@@ -62,9 +62,7 @@ RUN chmod 500 ${HOME}/worker_entry.sh && \
 # install operator binary
 ADD --chown=yuanrong:yuanrong bin ${DATASYSTEM_ROOT}/bin
 ADD --chown=yuanrong:yuanrong lib ${DATASYSTEM_ROOT}/lib
-RUN chmod -R 500 ${DATASYSTEM_ROOT}/bin && \
-    chmod 500 ${DATASYSTEM_ROOT}/lib && \
-    chmod 400 ${DATASYSTEM_ROOT}/lib/*
+RUN chmod -R 500 ${DATASYSTEM_ROOT}/bin ${DATASYSTEM_ROOT}/lib
 
 RUN if [ -f /etc/sudoers ]; then \
     sed -i "s|%wheel|#%wheel|g" "/etc/sudoers"; \
