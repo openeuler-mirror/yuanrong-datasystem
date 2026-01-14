@@ -21,6 +21,7 @@
 #ifndef DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H
 #define DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H
 
+#include "datasystem/common/rdma/rdma_util.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -154,6 +155,18 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
 Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                 const uint64_t &localObjectAddress, const uint64_t &dataSize, const uint64_t &metaSize,
                 std::vector<uint64_t> &keys);
+
+/**
+ * @brief Trigger UrmaManager logic to import segment and write payload, without memcopy.
+ * @param[in] RemoteSegInfo  The remote destination address info of data.
+ * @param[in] LocalSgeInfo   The local source address info of data.
+ * @param[in] readOffset Offset in the object to read.
+ * @param[in] blocking Whether to blocking wait for the urma_write to finish.
+ * @param[out] eventKeys The new request id to wait for if not blocking.
+ * @return Status of the call.
+ */
+Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
+                       std::vector<uint64_t> &eventKeys);
 
 /**
  * @brief Fill in ucp_info pb for UCP RDMA.

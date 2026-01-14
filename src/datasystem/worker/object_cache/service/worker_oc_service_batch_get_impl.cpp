@@ -358,6 +358,11 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
             hostInfo->dataInfo = std::move(subResp.data_info());
             objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
         }
+        if (subResp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
+            PerfPoint pMemSet(PerfKey::URMA_GATHER_MEMSET);
+            auto metaSize = objectKV.GetObjEntry()->GetMetadataSize();
+            memset_s(objectKV.GetObjEntry()->GetShmUnit()->pointer, metaSize, 0, metaSize);
+        }
     }
     return subRc;
 }

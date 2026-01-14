@@ -26,6 +26,22 @@ DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
+
+struct LocalSgeInfo {
+    uint64_t segAddr;       // local seg address
+    uint64_t segSize;       // local seg total size
+    uint64_t sgeAddr;       // object address
+    uint64_t readOffset;    // read offset
+    uint64_t writeSize;     // data size
+    uint64_t metaDataSize;  // meta data size
+};
+
+struct RemoteSegInfo {
+    uint64_t segAddr;    // remote destination seg address
+    uint64_t segOffset;  // the seg offset of segAdress
+    std::string host;    // the host of remote urma endpoint
+    int32_t port;        // the host of remote urma endpoint
+};
 /**
  * @brief Get the Ethernet device name from the destination ip.
  * @param[in] ipAddr The destination ip address.
