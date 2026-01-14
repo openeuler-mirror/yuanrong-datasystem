@@ -34,7 +34,7 @@
 
 namespace datasystem {
 namespace client {
-ListenWorker::ListenWorker(std::shared_ptr<ClientWorkerCommonApi> clientCommonWorker, HeartbeatType type,
+ListenWorker::ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type,
                            uint32_t index, ThreadPool *pool)
     : clientCommonWorker_(std::move(clientCommonWorker)),
       heartbeatType_(type),
@@ -44,7 +44,7 @@ ListenWorker::ListenWorker(std::shared_ptr<ClientWorkerCommonApi> clientCommonWo
     waitPost_ = std::make_unique<WaitPost>();
     firstHeartbeatWaitPost_ = std::make_unique<WaitPost>();
     udsEventLoop_ = std::make_shared<SockEventLoop>();
-    clientId_ = clientCommonWorker_->GetClientId();
+    clientId_ = clientCommonWorker_->clientId_;
 }
 
 ListenWorker::~ListenWorker()
@@ -108,7 +108,7 @@ Status ListenWorker::StartListenWorker(int socketFd)
     } else {
         workerListenedThread_ = Thread(&ListenWorker::CheckHeartbeat, this);
         workerListenedThread_.set_name("ListenWorker");
-        firstHeartbeatWaitPost_->WaitFor(clientCommonWorker_->GetConnectTimeoutMs());
+        firstHeartbeatWaitPost_->WaitFor(clientCommonWorker_->connectTimeoutMs_);
         INJECT_POINT("listen_worker.StartListenWorker");
         if (!firstHeartbeatReceived_.load()) {
             return Status(K_CLIENT_WORKER_DISCONNECT, "Cannot receive heartbeat from worker.");
@@ -172,12 +172,12 @@ Status ListenWorker::CheckHeartbeat()
     LOG(INFO) << "client start to check heartbeat: " << clientId_;
     int32_t lostHeartbeatTimes = 0;
     std::vector<uint32_t> heartbeatIntervalMs{ 0, 500, 1000, 5000, 5000 };
-    int intervalMs = clientCommonWorker_->GetHeartBeatInterval();
+    int intervalMs = clientCommonWorker_->heartBeatIntervalMs_;
     INJECT_POINT("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", [&intervalMs](int time) {
         intervalMs = time;
         return Status::OK();
     });
-    auto clientDeadTimeoutMs = clientCommonWorker_->GetClientDeadTimeoutMs();
+    auto clientDeadTimeoutMs = clientCommonWorker_->clientDeadTimeoutMs_;
     auto remainTime = clientDeadTimeoutMs;
     Timer timer;
     while (!stop_) {
@@ -204,7 +204,7 @@ Status ListenWorker::CheckHeartbeat()
             LOG_EVERY_T(INFO, logInterval)
                 << "[Switch] Connected worker will scale down, switch worker, client id: " << clientId_;
             SwitchToRemoteWorker();
-        } else if (clientCommonWorker_->SetRemovable(false)) {
+        } else if (clientCommonWorker_->removable_.exchange(false, std::memory_order_relaxed)) {
             LOG(INFO) << "[Switch] Client " << clientId_ << " recover to normal state now";
             continue;
         }
@@ -214,7 +214,7 @@ Status ListenWorker::CheckHeartbeat()
             // If we are standby connection and idle, try shutdown ourselves.
             TryShutdownStandbyConnection();
             // If we are local connection and idle, we can tell local worker that we can be removed safely.
-            if (IsVoluntarySwitchable() && !clientCommonWorker_->SetRemovable(true)) {
+            if (IsVoluntarySwitchable() && !clientCommonWorker_->removable_.exchange(true, std::memory_order_relaxed)) {
                 LOG(INFO) << "[Switch] Client " << clientId_ << " is removable now";
                 continue;
             }
@@ -251,7 +251,7 @@ void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTim
             LOG(WARNING) << FormatString(
                 "Lost heartbeat, set worker available to false with clientID:%s, "
                 "worker address:%s, Detail:%s.",
-                clientCommonWorker_->GetClientId(), clientCommonWorker_->GetWorkHost(), status.ToString());
+                clientCommonWorker_->clientId_, clientCommonWorker_->hostPort_.ToString(), status.ToString());
             workerAvailable_ = false;
             NotifyFirstHeartbeat(false);
         }
@@ -339,7 +339,7 @@ void ListenWorker::SwitchToRemoteWorker()
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
             LOG(INFO) << FormatString("[Switch] Worker(%s) will be switched, client id: %s.",
-                                      clientCommonWorker_->GetWorkerUuid(), clientId_);
+                                      clientCommonWorker_->workerId_, clientId_);
             isSwitched_ = switchWorkerHandle_(index_);
             isInAsyncSwitchWorkerPool_.exchange(false, std::memory_order_relaxed);
         });
@@ -369,7 +369,7 @@ void ListenWorker::TrySwitchBackToLocalWorker()
         asyncSwitchWorkerPool_->Execute([this, traceId]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
-            LOG(INFO) << FormatString("Local worker(%s) is recover.", clientCommonWorker_->GetWorkerUuid());
+            LOG(INFO) << FormatString("Local worker(%s) is recover.", clientCommonWorker_->workerId_);
             isSwitched_ = !switchWorkerHandle_(index_);
             isInAsyncSwitchWorkerPool_.exchange(false, std::memory_order_relaxed);
         });

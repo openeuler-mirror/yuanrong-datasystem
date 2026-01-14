@@ -38,20 +38,21 @@ namespace client {
 namespace stream_cache {
 ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, RpcCredential cred, SensitiveValue token,
                                  Signature *signature, std::string tenantId)
-    : ClientWorkerCommonApi(hostPort, cred, HeartbeatType::RPC_HEARTBEAT, std::move(token), signature,
-                            std::move(tenantId))
+    : IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false),
+      ClientWorkerRemoteCommonApi(hostPort, cred, HeartbeatType::RPC_HEARTBEAT, std::move(token), signature,
+                                  std::move(tenantId))
 {
 }
 
 Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 {
-    RETURN_IF_NOT_OK(ClientWorkerCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
+    RETURN_IF_NOT_OK(ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Setting client-worker communication via Unix socket : %s",
-                                              (GetShmEnabled() ? "true" : "false"));
+                                              (shmEnabled_ ? "true" : "false"));
     // We will enable uds after handshaking with the worker.
-    if (GetShmEnabled()) {
+    if (shmEnabled_) {
         channel->SetServiceUdsEnabled(ClientWorkerSCService_Stub::FullServiceName(),
                                       GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
     }
@@ -68,7 +69,7 @@ Status ClientWorkerApi::CreateProducer(const std::string &streamName, const std:
     CreateProducerReqPb req;
     req.set_stream_name(streamName);
     req.set_page_size(producerConf.pageSize);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_producer_id(producerId);
     req.set_max_stream_size(producerConf.maxStreamSize);
     req.set_auto_cleanup(producerConf.autoCleanup);
@@ -119,7 +120,7 @@ Status ClientWorkerApi::Subscribe(const std::string &streamName, const std::stri
     SubscribeReqPb req;
     req.set_stream_name(streamName);
     req.set_allocated_subscription_config(configReqPtr.release());
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     req.set_consumer_id(consumerId);
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
@@ -160,7 +161,7 @@ Status ClientWorkerApi::DeleteStream(const std::string &streamName)
     DeleteStreamReqPb req;
     DeleteStreamRspPb rsp;
     req.set_stream_name(streamName);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
@@ -178,7 +179,7 @@ Status ClientWorkerApi::QueryGlobalProducersNum(const std::string &streamName, u
     QueryGlobalNumReqPb req;
     QueryGlobalNumRsqPb rsp;
     req.set_stream_name(streamName);
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
 
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
@@ -196,7 +197,7 @@ Status ClientWorkerApi::QueryGlobalConsumersNum(const std::string &streamName, u
     req.set_stream_name(streamName);
 
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(rpcSession_->QueryGlobalConsumersNum(req, rsp));
@@ -214,7 +215,7 @@ Status ClientWorkerApi::ResetStreams(const std::vector<std::string> &streamNames
     for (auto &streamName : streamNames) {
         req.add_stream_names(streamName);
     }
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
 
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
@@ -243,7 +244,7 @@ Status ClientWorkerApi::ResumeStreams(const std::vector<std::string> &streamName
     for (auto &streamName : streamNames) {
         req.add_stream_names(streamName);
     }
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_RESUME_STREAM);
@@ -264,11 +265,6 @@ Status ClientWorkerApi::ResumeStreams(const std::vector<std::string> &streamName
 std::string ClientWorkerApi::LogPrefix() const
 {
     return FormatString("ClientWorkerApi, EndPoint:%s", hostPort_.ToString());
-}
-
-std::string ClientWorkerApi::GetClientId()
-{
-    return ClientWorkerCommonApi::GetClientId();
 }
 }  // namespace stream_cache
 }  // namespace client

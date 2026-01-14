@@ -42,7 +42,7 @@
 namespace datasystem {
 namespace client {
 namespace stream_cache {
-class ClientWorkerApi : public ClientWorkerCommonApi {
+class ClientWorkerApi : public ClientWorkerRemoteCommonApi {
 public:
     /**
      * @brief Construct ClientWorkerApi.
@@ -134,12 +134,6 @@ public:
      * @return Return the log prefix.
      */
     std::string LogPrefix() const;
-
-    /**
-     * @brief Ensure that the latest client ID is obtained.
-     * @return Return the client id.
-     */
-    std::string GetClientId();
 
 private:
     friend class ProducerConsumerWorkerApi;

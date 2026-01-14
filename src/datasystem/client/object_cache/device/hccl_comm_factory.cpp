@@ -43,7 +43,7 @@ inline static void PrintRootInfo(const T &rootInfo)
     VLOG(1) << "[RootInfo]:" << forPrint.str();
 }
 
-HcclCommFactory::HcclCommFactory(std::shared_ptr<object_cache::ClientWorkerApi> workerApi,
+HcclCommFactory::HcclCommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
                                  AclResourceManager *aclResourceMgr)
     : ClientDeviceCurd(std::move(workerApi)), aclResourceMgr_(aclResourceMgr)
 {
@@ -137,7 +137,7 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
         TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
         INJECT_POINT("CreateHcclCommInSend.sleep");
         PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_SEND);
-        auto localClientId = clientWorkerApi_->GetClientId();
+        auto localClientId = clientWorkerApi_->clientId_;
         auto peerId = GetHcclPeerId(localClientId, localDeviceId, remoteClientId, remoteDeviceId);
         VLOG(1) << FormatString("Sender try to acquire write lock, peerId: %s", peerId);
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
@@ -265,7 +265,7 @@ void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::str
         TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
         INJECT_POINT("CreateHcclCommInRecv.sleep");
         PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_RECV);
-        auto localClientId = clientWorkerApi_->GetClientId();
+        auto localClientId = clientWorkerApi_->clientId_;
         auto peerId = GetHcclPeerId(remoteClientId, remoteDeviceId, localClientId, localDeviceId);
         VLOG(1) << FormatString("Try to acquire write lock, peerId: %s", peerId);
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);

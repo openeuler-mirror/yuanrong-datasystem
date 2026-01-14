@@ -38,7 +38,7 @@ Status ProducerConsumerWorkerApi::GetDataPage(GetDataPageReqPb &req, ShmView &ou
 {
     int64_t timeoutMs = req.timeout_ms();
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    req.set_client_id(workerApi_->GetClientId());
+    req.set_client_id(workerApi_->clientId_);
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
     GetDataPageRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -71,7 +71,7 @@ Status ProducerConsumerWorkerApi::AllocBigElementMemory(const std::string &strea
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
     req.set_page_size(sizeNeeded);
-    req.set_client_id(workerApi_->GetClientId());
+    req.set_client_id(workerApi_->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     CreateLobPageRspPb rsp;
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_WRITE_PAGE);
@@ -109,7 +109,7 @@ Status ProducerConsumerWorkerApi::ReleaseBigElementMemory(const std::string &str
     ReleaseLobPageReqPb req;
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
-    req.set_client_id(workerApi_->GetClientId());
+    req.set_client_id(workerApi_->clientId_);
 
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     ShmViewPb pb;
@@ -137,7 +137,7 @@ Status ProducerConsumerWorkerApi::CreateWritePage(const std::string &streamName,
     CreateShmPageRspPb rsp;
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
-    req.set_client_id(workerApi_->GetClientId());
+    req.set_client_id(workerApi_->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     ShmViewPb pb;
     pb.set_fd(curView.fd);
@@ -182,7 +182,7 @@ Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, c
     CloseProducerReqPb req;
     req.set_stream_name(streamName);
     req.set_producer_id(producerId);
-    req.set_client_id(workerApi_->GetClientId());
+    req.set_client_id(workerApi_->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
     CloseProducerRspPb rsp;
@@ -206,7 +206,7 @@ Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, c
     req.set_stream_name(streamName);
     req.set_subscription_name(subscriptionName);
     req.set_consumer_id(consumerId);
-    req.set_client_id(workerApi_->GetClientId());
+    req.set_client_id(workerApi_->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(workerApi_->signature_->GenerateSignature(req));
     CloseConsumerRspPb rsp;

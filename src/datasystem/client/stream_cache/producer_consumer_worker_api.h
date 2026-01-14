@@ -37,7 +37,7 @@ public:
      */
     uint32_t GetLockId()
     {
-        return workerApi_->GetLockId();
+        return workerApi_->lockId_;
     }
 
     /**

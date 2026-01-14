@@ -264,7 +264,7 @@ struct P2PGroupKey {
 
 class P2PSubscribe : public ClientDeviceCurd {
 public:
-    P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::ClientWorkerApi> workerApi,
+    P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
                  std::shared_ptr<HcclCommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs = 5000);
 
     ~P2PSubscribe();

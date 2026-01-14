@@ -176,8 +176,8 @@ public:
     {
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             !workerWasLost_, StatusCode::K_SC_WORKER_WAS_LOST,
-            FormatString("Client %s detected worker %s was lost", clientWorkerApi_->GetClientId(),
-                         clientWorkerApi_->GetWorkHost()));
+            FormatString("Client %s detected worker %s was lost", clientWorkerApi_->clientId_,
+                         clientWorkerApi_->hostPort_.ToString()));
         return Status::OK();
     }
 

@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -52,189 +53,21 @@ static constexpr int MAX_HEARTBEAT_INTERVAL_MS = 30 * 1000;  // 30s, Maintain co
 constexpr int INVALID_SOCKET_FD = -1;
 enum class HeartbeatType { NO_HEARTBEAT = 0, RPC_HEARTBEAT = 1, UDS_HEARTBEAT = 2 };
 namespace client {
-class ClientWorkerCommonApi {
-public:
-    /**
-     * @brief Construct ClientWorkerApi.
-     * @param[in] hostPort The address of worker node.
-     * @param[in] cred The authentication credentials.
-     * @param[in] heartbeatType The type of heartbeat.
-     * @param[in] token Token to be authenticated.
-     * @param[in] signature Used to do AK/SK authenticate.
-     * @param[in] tenantId TenantId of client user.
-     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
-     */
-    explicit ClientWorkerCommonApi(HostPort hostPort, RpcCredential cred = {},
-                                   HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                   SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-                                   bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
 
-    virtual ~ClientWorkerCommonApi();
-
-    /**
-     * @brief Initialize the ClientWorkerApi Object.
-     * @param[in] requestTimeoutMs The request timeout.
-     * @param[in] connectTimeoutMs The connec  timeout.
-     * @return K_OK on success; the error code otherwise.
-     *         K_INVALID: the input ip or port is invalid.
-     */
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs);
-
-    /**
-     * @brief Send heartbeat messages periodically.
-     * @param[out] workerReboot Check whether the worker is restarted.
-     * @param[out] clientRemoved Check whether the worker deletes the current client.
-     * @param[in] remainTime Check remain time to set client rpc timeout.
-     * @param[out] isWorkerVoluntaryScaleDown Check whether the worker is valutary scale down.
-     * @param[in] releasedFds The worker fds that has been released on client.
-     * @param[out] expiredWorkerFds The expired worker fds that need to be released by client.
-     * @return Status of the call.
-     */
-    Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
-                         const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds);
-
-    /**
-     * @brief Registering the client with the worker
-     * @param[in] req The register client request pb.
-     * @param[in] timeoutMs Register request timeout interval.
-     * @return Status of the call.
-     */
-    Status RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs);
-
-    /**
-     * @brief Create a function of handshake.
-     * @param[in] fd Unix sock fd.
-     * @param[in] sockPath Sock path.
-     * @param[in] serverFd The FD of the worker server.
-     * @return Status of the call.
-     */
-    Status CreateHandShakeFunc(UnixSockFd &fd, std::string &sockPath, int32_t &serverFd);
-
-    /**
-     * @brief Create a unix domain socket.
-     * @param[in] timeoutMs Register request timeout interval.
-     * @param[out] isConnectUdsSuccess Check whether the UDS is successfully connected..
-     * @param[out] serverFd Returns the FD of the worker server..
-     * @param[out] socketFd FD of the UNIX socket.
-     * @return Status of the call.
-     */
-    Status CreateUnixDomainSocket(int32_t timeoutMs, bool &isConnectUdsSuccess, int32_t &serverFd, int32_t &socketFd);
-
-    /**
-     * @brief Get the domain socket fd with worker.
-     * @return The domain socket fd with worker.
-     */
-    int GetSocketFd() const;
-
-    /**
-     * @brief Get the client id.
-     * @return Return the client id.
-     */
-    std::string GetClientId() const;
-
-    /**
-     * @brief Get the ShmEnabled parameter.
-     * @return Return true if the worker allows using shared memory; false otherwise.
-     */
-    bool GetShmEnabled() const;
-
-    /**
-     * @brief Instructs the worker to send the mmap FD to the client.
-     * @param[in] workerFds Specifies the worker Fds to be sent.
-     * @param[out] clientFds Indicates the received client Fds.
-     * @param tenantId if tenant id is empty use threadlocal tenantid.
-     * @return Status of the call.
-     */
-    Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds, const std::string &tenantId);
-
-    /**
-     * @brief Client Send disconnect notification to worker before exit.
-     * @return Status of the call.
-     */
-    Status Disconnect(bool isDestruct);
-
-    /**
-     * @brief Obtains the actual heartbeat type..
-     * @return heartbeat type.
-     */
-    HeartbeatType GetHeartbeatType() const;
-
-    /**
-     * @brief Reconnect to worker.
-     * @return Status of the call.
-     */
-    virtual Status Reconnect();
-
-    /**
-     * @brief Update token for yr iam
-     * @param[in] Token message for auth certification
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status UpdateToken(SensitiveValue &token);
-
-    /**
-     * @brief Update aksk for yr iam
-     * @param[in] acessKey message for auth certification
-     * @param[in] secretKey message for auth certification
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey);
-
-    /**
-     * @brief Get worker version.
-     * @return Worker version.
-     */
-    uint32_t GetWorkerVersion() const
+struct ClientWorkerCommonApiAttribute {
+    ClientWorkerCommonApiAttribute(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection)
+        : socketFd_(-1),
+          heartbeatType_(heartbeatType),
+          hostPort_(std::move(hostPort)),
+          enableCrossNodeConnection_(enableCrossNodeConnection)
     {
-        return workerVersion_.load(std::memory_order_relaxed);
     }
 
-    uint32_t GetLockId() const
-    {
-        return lockId_;
-    }
+    virtual ~ClientWorkerCommonApiAttribute();
 
     bool ShmCreateable(uint64_t size) const
     {
         return shmEnabled_ && size >= shmThreshold_;
-    }
-
-    uint64_t GetShmThreshold() const
-    {
-        return shmThreshold_;
-    }
-
-    std::string GetWorkerUuid() const
-    {
-        return workerUuid_;
-    }
-
-    /**
-     * @brief Save standby worker.
-     * @param[in] standbyWorker The standby worker.
-     * @param[in] availableWorkers The available workers.
-     */
-    void SaveStandbyWorker(const std::string standbyWorker,
-                           const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
-
-    /**
-     * @brief Get the standby worker.
-     * @return HostPort The standby worker.
-     */
-    std::vector<HostPort> GetStandbyWorkers();
-
-    /**
-     * @brief Get the worker host.
-     * @return The host address.
-     */
-    std::string GetWorkHost() const
-    {
-        return hostPort_.Host();
-    }
-
-    int GetWorkPort() const
-    {
-        return hostPort_.Port();
     }
 
     int GetWorkHostPortINETFamily() const
@@ -243,65 +76,6 @@ public:
             return AF_INET6;
         }
         return AF_INET;
-    }
-
-    /**
-     * @brief Set the isUseStandbyWorker
-     * @param[in] isUseStandbyWorker
-     */
-    void SetIsUseStandbyWorker(bool isUseStandbyWorker)
-    {
-        isUseStandbyWorker_ = isUseStandbyWorker;
-    }
-
-    /**
-     * @brief Get the HeartBeatInterval.
-     * @return int64_t The HeartBeatInterval.
-     */
-    int64_t GetHeartBeatInterval();
-
-    /**
-     * @brief Get client dead timeout.
-     * @return int64_t The client dead timeout.
-     */
-    int64_t GetClientDeadTimeoutMs();
-
-    /**
-     * @brief Get connect timeout ms.
-     * @return int32_t timeoutMs.
-     */
-    int32_t GetConnectTimeoutMs();
-
-    /**
-     * @brief Get the shmUnit of communication queue.
-     * @return Return true if the worker allows using shared memory; false otherwise.
-     */
-    bool GetShmQueueUnit(std::shared_ptr<ShmUnitInfo> &decShmUnit)
-    {
-        if (!shmEnabled_ || decShmUnit_->fd <= 0) {
-            return false;
-        }
-        decShmUnit = decShmUnit_;
-        return true;
-    }
-
-    /**
-     * @brief Get the huge tlb switch.
-     * @return Return true if the worker allows optimize; false otherwise.
-     */
-    bool IsEnableHugeTlb()
-    {
-        return enableHugeTlb_;
-    }
-
-    /**
-     * @brief Set client is removable or not.
-     * @param[in] removable Removable client.
-     * @return Previous value.
-     */
-    bool SetRemovable(bool removable)
-    {
-        return removable_.exchange(removable, std::memory_order_relaxed);
     }
 
     /**
@@ -317,6 +91,7 @@ public:
      */
     void DecreaseInvokeCount()
     {
+        // Fixme: not atomic.
         if (invokeCount_.fetch_sub(1, std::memory_order_relaxed) == 0) {
             LOG(WARNING) << "invoke count error happen!";
             invokeCount_.store(0, std::memory_order_relaxed);
@@ -337,24 +112,136 @@ public:
         return invokeCount_.load(std::memory_order_relaxed);
     }
 
-    bool IsHealthy() const
+    std::atomic<int32_t> socketFd_{ -1 };
+    std::string clientId_;
+    bool shmEnabled_{ false };
+    uint64_t shmThreshold_{ 0 };
+    HeartbeatType heartbeatType_;
+    // Worker version, increases 1 each time the worker recovers from a disconnection.
+    std::atomic<uint32_t> workerVersion_{ 0 };
+    uint32_t lockId_{ 0 };
+    std::string workerId_;  // The ID of worker.
+    HostPort hostPort_;
+    bool isUseStandbyWorker_ = false;
+    int64_t heartBeatIntervalMs_{ MIN_HEARTBEAT_INTERVAL_MS };
+    uint64_t clientDeadTimeoutMs_{ 0 };
+    int32_t connectTimeoutMs_{ 0 };
+    bool enableHugeTlb_ = { false };
+    std::atomic_bool removable_{ false };
+    std::atomic_bool healthy_{ false };
+    bool enableCrossNodeConnection_{ false };
+    bool workerEnableP2Ptransfer_ = false;
+    std::shared_ptr<ShmUnitInfo> decShmUnit_;
+
+private:
+    std::atomic<uint64_t> invokeCount_{ 0 };
+};
+
+class IClientWorkerCommonApi : public ClientWorkerCommonApiAttribute {
+public:
+    IClientWorkerCommonApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection)
+        : ClientWorkerCommonApiAttribute(std::move(hostPort), heartbeatType, enableCrossNodeConnection)
     {
-        return healthy_.load(std::memory_order_relaxed);
     }
+
+    virtual ~IClientWorkerCommonApi();
 
     /**
-     * @brief Return true if enable cross node is enable.
-     * @return True if enable cross node is enable.
+     * @brief Initialize the ClientWorkerApi Object.
+     * @param[in] requestTimeoutMs The request timeout.
+     * @param[in] connectTimeoutMs The connec  timeout.
+     * @return K_OK on success; the error code otherwise.
+     *         K_INVALID: the input ip or port is invalid.
      */
-    bool EnableCrossNodeConnection() const
-    {
-        return enableCrossNodeConnection_;
-    }
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) = 0;
 
-    bool IsWorkerEnableP2Ptransfer()
-    {
-        return workerEnableP2Ptransfer_;
-    }
+    /**
+     * @brief Send heartbeat messages periodically.
+     * @param[out] workerReboot Check whether the worker is restarted.
+     * @param[out] clientRemoved Check whether the worker deletes the current client.
+     * @param[in] remainTime Check remain time to set client rpc timeout.
+     * @param[out] isWorkerVoluntaryScaleDown Check whether the worker is valutary scale down.
+     * @param[in] releasedFds The worker fds that has been released on client.
+     * @param[out] expiredWorkerFds The expired worker fds that need to be released by client.
+     * @return Status of the call.
+     */
+    virtual Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime,
+                                 bool &isWorkerVoluntaryScaleDown, const std::vector<int64_t> &releasedFds,
+                                 std::vector<int64_t> &expiredWorkerFds) = 0;
+
+    /**
+     * @brief Instructs the worker to send the mmap FD to the client.
+     * @param[in] workerFds Specifies the worker Fds to be sent.
+     * @param[out] clientFds Indicates the received client Fds.
+     * @param tenantId if tenant id is empty use threadlocal tenantid.
+     * @return Status of the call.
+     */
+    virtual Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                               const std::string &tenantId) = 0;
+
+    /**
+     * @brief Client Send disconnect notification to worker before exit.
+     * @return Status of the call.
+     */
+    virtual Status Disconnect(bool isDestruct) = 0;
+
+    /**
+     * @brief Reconnect to worker.
+     * @return Status of the call.
+     */
+    virtual Status Reconnect() = 0;
+
+    /**
+     * @brief Get the standby worker.
+     * @return HostPort The standby worker.
+     */
+    virtual std::vector<HostPort> GetStandbyWorkers() = 0;
+
+    /**
+     * @brief Update token for yr iam
+     * @param[in] Token message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    virtual Status UpdateToken(SensitiveValue &token) = 0;
+
+    /**
+     * @brief Update aksk for yr iam
+     * @param[in] acessKey message for auth certification
+     * @param[in] secretKey message for auth certification
+     * @return K_OK on success; the error code otherwise.
+     */
+    virtual Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) = 0;
+};
+
+class ClientWorkerRemoteCommonApi : virtual public IClientWorkerCommonApi {
+public:
+    /**
+     * @brief Construct ClientWorkerApi.
+     * @param[in] hostPort The address of worker node.
+     * @param[in] cred The authentication credentials.
+     * @param[in] heartbeatType The type of heartbeat.
+     * @param[in] signature Used to do AK/SK authenticate.
+     * @param[in] tenantId TenantId of client user.
+     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
+     */
+    explicit ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred = {},
+                                         HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+                                         SensitiveValue token = "", Signature *signature = nullptr,
+                                         std::string tenantId = "", bool enableCrossNodeConnection = false,
+                                         bool enableExclusiveConnection = false);
+
+    virtual ~ClientWorkerRemoteCommonApi();
+
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+    Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
+                         const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
+    Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                       const std::string &tenantId) override;
+    Status Disconnect(bool isDestruct) override;
+    Status Reconnect() override;
+    std::vector<HostPort> GetStandbyWorkers() override;
+    Status UpdateToken(SensitiveValue &token) override;
+    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
 
 protected:
     /**
@@ -420,12 +307,6 @@ protected:
     }
 
     /**
-     * @brief Construct decShmUnit_ after register.
-     * @param[in] rsp Register respond.
-     */
-    void ConstructDecShmUnit(const RegisterClientRspPb &rsp);
-
-    /**
      * @brief close socket fd.
      */
     void CloseSocketFd();
@@ -460,49 +341,26 @@ protected:
     void CloseExpiredFd();
 
     static constexpr int32_t retryTimes_ = 3;
-    HostPort hostPort_;
     RpcCredential cred_;
     // Protect 'standbyWorkerAddrs_'
     std::shared_timed_mutex standbyWorkerMutex_;
     std::unordered_set<HostPort> standbyWorkerAddrs_;
-    bool isUseStandbyWorker_ = false;
     uint32_t pageSize_{ 0 };  // The page size used when reading files.
     HostPort masterAddress_;
-    std::string clientId_;
     std::string workerStartId_;  // To judge whether the worker is restarted.
-    std::string workerUuid_;     // The uuid for worker.
 
-    std::atomic<int32_t> socketFd_{ -1 };
-
-    bool shmEnabled_{ false };
-    uint32_t lockId_{ 0 };
     std::unique_ptr<WorkerService_Stub> commonWorkerSession_{ nullptr };
     double workerTimeoutMult_{ 0.0 };  // Used for changing the default timeout in some cases.
-    HeartbeatType heartbeatType_;
-
-    // Worker version, increases 1 each time the worker recovers from a disconnection.
-    std::atomic<uint32_t> workerVersion_{ 0 };
 
     std::atomic_bool storeNotifyReboot_{ false };
     Thread recvPageThread_;
-    uint64_t shmThreshold_{ 0 };
     Signature *signature_;
     std::string tenantId_;
     std::unique_ptr<ClientAccessToken> clientAccessToken_;
     int32_t requestTimeoutMs_{ 0 };
-    int32_t connectTimeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };
-    bool enableCrossNodeConnection_{ false };
     bool enableExclusiveConnection_{ false };
     int64_t heartBeatTimeoutMs_{ 0 };
-    int64_t heartBeatIntervalMs_{ MIN_HEARTBEAT_INTERVAL_MS };
-    uint64_t clientDeadTimeoutMs_{ 0 };
-    std::shared_ptr<ShmUnitInfo> decShmUnit_;
-    bool enableHugeTlb_ = { false };
-    std::atomic<uint64_t> invokeCount_{ 0 };
-    std::atomic_bool removable_{ false };
-    std::atomic_bool healthy_{ false };
-    bool workerEnableP2Ptransfer_ = false;
     struct RecvClientFdState {
         std::unique_ptr<WaitPost> recvPageWaitPost{ nullptr };
         std::unique_ptr<WaitPost> recvPageNotify{ nullptr };
@@ -522,6 +380,51 @@ protected:
     static std::atomic<int32_t> exclusiveIdGen_;
     std::optional<int32_t> exclusiveId_;
     std::string exclusiveConnSockPath_;
+
+private:
+    /**
+     * @brief Registering the client with the worker
+     * @param[in] req The register client request pb.
+     * @param[in] timeoutMs Register request timeout interval.
+     * @return Status of the call.
+     */
+    Status RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs);
+
+    /**
+     * @brief Create a function of handshake.
+     * @param[in] fd Unix sock fd.
+     * @param[in] sockPath Sock path.
+     * @param[in] serverFd The FD of the worker server.
+     * @return Status of the call.
+     */
+    Status CreateHandShakeFunc(UnixSockFd &fd, std::string &sockPath, int32_t &serverFd);
+
+    /**
+     * @brief Create a unix domain socket.
+     * @param[in] timeoutMs Register request timeout interval.
+     * @param[out] isConnectUdsSuccess Check whether the UDS is successfully connected..
+     * @param[out] serverFd Returns the FD of the worker server..
+     * @param[out] socketFd FD of the UNIX socket.
+     * @return Status of the call.
+     */
+    Status CreateUnixDomainSocket(int32_t timeoutMs, bool &isConnectUdsSuccess, int32_t &serverFd, int32_t &socketFd);
+
+    /**
+     * @brief Construct decShmUnit_ after register.
+     * @param[in] rsp Register respond.
+     */
+    void ConstructDecShmUnit(const RegisterClientRspPb &rsp);
+
+    /**
+     * @brief Save standby worker.
+     * @param[in] standbyWorker The standby worker.
+     * @param[in] availableWorkers The available workers.
+     */
+    void SaveStandbyWorker(const std::string standbyWorker,
+                           const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
+
+    void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
+    void SetHeatbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
 };
 }  // namespace client
 }  // namespace datasystem

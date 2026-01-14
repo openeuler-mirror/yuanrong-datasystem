@@ -57,26 +57,27 @@ namespace datasystem {
 namespace client {
 
 // Static/global id generator init
-std::atomic<int32_t> ClientWorkerCommonApi::exclusiveIdGen_ = 0;
+std::atomic<int32_t> ClientWorkerRemoteCommonApi::exclusiveIdGen_ = 0;
 
-ClientWorkerCommonApi::ClientWorkerCommonApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
-                                             SensitiveValue token, Signature *signature, std::string tenantId,
-                                             bool enableCrossNodeConnection, bool enableExclusiveConnection)
-    : hostPort_(std::move(hostPort)),
-      cred_(std::move(cred)),
+IClientWorkerCommonApi::~IClientWorkerCommonApi() = default;
+ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
+
+ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred,
+                                                         HeartbeatType heartbeatType, SensitiveValue token,
+                                                         Signature *signature, std::string tenantId,
+                                                         bool enableCrossNodeConnection, bool enableExclusiveConnection)
+    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection),
+      cred_(cred),
       pageSize_(0),
-      socketFd_(-1),
-      heartbeatType_(heartbeatType),
       signature_(signature),
       tenantId_(std::move(tenantId)),
-      enableCrossNodeConnection_(enableCrossNodeConnection),
       enableExclusiveConnection_(enableExclusiveConnection)
 {
-    recvPageThread_ = Thread(&ClientWorkerCommonApi::RecvPageFd, this);
+    recvPageThread_ = Thread(&ClientWorkerRemoteCommonApi::RecvPageFd, this);
     clientAccessToken_ = std::make_unique<ClientAccessToken>(std::move(token));
 }
 
-ClientWorkerCommonApi::~ClientWorkerCommonApi()
+ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
 {
     recvClientFdState_.stopRecvPageFd = true;
     recvClientFdState_.recvPageWaitPost->Set();
@@ -87,7 +88,7 @@ ClientWorkerCommonApi::~ClientWorkerCommonApi()
     }
 }
 
-void ClientWorkerCommonApi::SetRpcTimeout(int32_t timeout)
+void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
 {
     constexpr int32_t rpcMaxTimeout = 600000;  // 10min
     int32_t rpcTimeout = timeout / retryTimes_;
@@ -104,7 +105,7 @@ void ClientWorkerCommonApi::SetRpcTimeout(int32_t timeout)
     LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
 }
 
-Status ClientWorkerCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
@@ -123,7 +124,7 @@ Status ClientWorkerCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTime
     return Status::OK();
 }
 
-Status ClientWorkerCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection)
+Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection)
 {
     auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
@@ -156,7 +157,7 @@ Status ClientWorkerCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutM
     return Status::OK();
 }
 
-Status ClientWorkerCommonApi::CreateHandShakeFunc(UnixSockFd &fd, std::string &sockPath, int32_t &serverFd)
+Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, std::string &sockPath, int32_t &serverFd)
 {
     LOG(INFO) << FormatString("Unix socket path %s", sockPath);
     RETURN_IF_NOT_OK(fd.Connect(FormatString("ipc://%s", sockPath)));
@@ -173,8 +174,8 @@ Status ClientWorkerCommonApi::CreateHandShakeFunc(UnixSockFd &fd, std::string &s
     return fd.SetTimeout(0);
 }
 
-Status ClientWorkerCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bool &isConnectUdsSuccess, int32_t &serverFd,
-                                                     int32_t &socketFd)
+Status ClientWorkerRemoteCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bool &isConnectUdsSuccess,
+                                                           int32_t &serverFd, int32_t &socketFd)
 {
     Timer timer(timeoutMs);
     GetSocketPathReqPb req;
@@ -223,8 +224,8 @@ Status ClientWorkerCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bool &is
     return Status::OK();
 }
 
-void ClientWorkerCommonApi::SaveStandbyWorker(const std::string standbyWorker,
-                                              const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers)
+void ClientWorkerRemoteCommonApi::SaveStandbyWorker(
+    const std::string standbyWorker, const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers)
 {
     if (!enableCrossNodeConnection_) {
         return;
@@ -249,7 +250,7 @@ void ClientWorkerCommonApi::SaveStandbyWorker(const std::string standbyWorker,
     }
 }
 
-std::vector<HostPort> ClientWorkerCommonApi::GetStandbyWorkers()
+std::vector<HostPort> ClientWorkerRemoteCommonApi::GetStandbyWorkers()
 {
     std::vector<HostPort> workers;
     {
@@ -263,9 +264,10 @@ std::vector<HostPort> ClientWorkerCommonApi::GetStandbyWorkers()
     return workers;
 }
 
-Status ClientWorkerCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTimeMs,
-                                            bool &isWorkerVoluntaryScaleDown, const std::vector<int64_t> &releasedFds,
-                                            std::vector<int64_t> &expiredWorkerFds)
+Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTimeMs,
+                                                  bool &isWorkerVoluntaryScaleDown,
+                                                  const std::vector<int64_t> &releasedFds,
+                                                  std::vector<int64_t> &expiredWorkerFds)
 {
     HeartbeatReqPb req;
     HeartbeatRspPb rsp;
@@ -304,7 +306,7 @@ Status ClientWorkerCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemo
     return status;
 }
 
-void ClientWorkerCommonApi::ConstructDecShmUnit(const RegisterClientRspPb &rsp)
+void ClientWorkerRemoteCommonApi::ConstructDecShmUnit(const RegisterClientRspPb &rsp)
 {
     if (shmEnabled_) {
         decShmUnit_ = std::make_shared<ShmUnitInfo>();
@@ -315,7 +317,7 @@ void ClientWorkerCommonApi::ConstructDecShmUnit(const RegisterClientRspPb &rsp)
     }
 }
 
-void ClientWorkerCommonApi::CloseSocketFd()
+void ClientWorkerRemoteCommonApi::CloseSocketFd()
 {
     if (socketFd_ == INVALID_SOCKET_FD) {
         return;
@@ -332,7 +334,7 @@ void ClientWorkerCommonApi::CloseSocketFd()
     socketFd_ = INVALID_SOCKET_FD;
 }
 
-void ClientWorkerCommonApi::SetHealthy(bool healthy)
+void ClientWorkerRemoteCommonApi::SetHealthy(bool healthy)
 {
     bool prev = healthy_.exchange(healthy, std::memory_order_relaxed);
     if (prev != healthy) {
@@ -340,7 +342,7 @@ void ClientWorkerCommonApi::SetHealthy(bool healthy)
     }
 }
 
-Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs)
+Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs)
 {
     RETURN_IF_NOT_OK(SetToken(req));
     req.set_version(DATASYSTEM_VERSION);
@@ -374,49 +376,11 @@ Status ClientWorkerCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t t
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Register client failed");
     VLOG(1) << "Register response: " << rsp.DebugString();
-    enableHugeTlb_ = rsp.enable_huge_tlb();
-    workerTimeoutMult_ = rsp.quorum_timeout_mult();
-    clientId_ = rsp.client_id();
-    workerStartId_ = rsp.worker_start_id();
-    pageSize_ = static_cast<uint32_t>(rsp.page_size());
-    lockId_ = rsp.lock_id();
-    (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
-    shmThreshold_ = rsp.shm_threshold();
-    workerUuid_ = rsp.worker_uuid();
-    workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
-    SetHealthy(!rsp.unhealthy());
-    exclusiveConnSockPath_ = rsp.exclusive_conn_sockpath();
-    if (enableExclusiveConnection_ && exclusiveConnSockPath_.empty()) {
-        LOG(WARNING) << "Client requested exclusive connection, but the older worker did not support the feature.";
-        enableExclusiveConnection_ = false;
-    }
-
-    std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
-    uint64_t clientDeadTimeoutMs = rsp.client_dead_timeout_s() * TO_MILLISECOND;
-    // Compatible with old versions of worker
-    clientDeadTimeoutMs_ = clientDeadTimeoutMs == 0ul ? MIN_HEARTBEAT_TIMEOUT_MS : clientDeadTimeoutMs;
-    if (clientDeadTimeoutMs > 0) {
-        const int32_t retryNum = 3;  // Make sure the heartbeat is retried twice before worker timeout.
-        heartBeatTimeoutMsOptions.emplace_back(clientDeadTimeoutMs / retryNum);
-    }
-    heartBeatTimeoutMs_ = *std::min_element(heartBeatTimeoutMsOptions.begin(), heartBeatTimeoutMsOptions.end());
-    uint64_t clientReconnectWaitMs = rsp.client_reconnect_wait_s() * TO_MILLISECOND;
-    const int32_t reduceRatio = 5;
-    heartBeatIntervalMs_ =
-        std::min({ std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
-                   static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS),
-                   clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
-    SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
-    ConstructDecShmUnit(rsp);
+    PostRegisterClient(timeoutMs, rsp);
     return Status::OK();
 }
 
-int64_t ClientWorkerCommonApi::GetClientDeadTimeoutMs()
-{
-    return clientDeadTimeoutMs_;
-}
-
-Status ClientWorkerCommonApi::UpdateToken(SensitiveValue &token)
+Status ClientWorkerRemoteCommonApi::UpdateToken(SensitiveValue &token)
 {
     LOG(INFO) << "update token for client, clientId: " << clientId_;
     CHECK_FAIL_RETURN_STATUS(!token.Empty(), K_INVALID, "token is empty");
@@ -424,7 +388,7 @@ Status ClientWorkerCommonApi::UpdateToken(SensitiveValue &token)
     return Status::OK();
 }
 
-Status ClientWorkerCommonApi::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+Status ClientWorkerRemoteCommonApi::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
 {
     std::hash<std::string> hasher;
     LOG(INFO) << FormatString("[%s] update ak/sk (ak hash: %s, sk hash: %s)", tenantId_, hasher(accessKey),
@@ -434,7 +398,7 @@ Status ClientWorkerCommonApi::UpdateAkSk(const std::string &accessKey, Sensitive
     return signature_->SetClientAkSk(accessKey, secretKey);
 }
 
-Status ClientWorkerCommonApi::Disconnect(bool isDestruct)
+Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
 {
     CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr, StatusCode::K_OK,
                              "No active connection. Do not send disconnect notice.");
@@ -461,28 +425,8 @@ Status ClientWorkerCommonApi::Disconnect(bool isDestruct)
     return Status::OK();
 }
 
-HeartbeatType ClientWorkerCommonApi::GetHeartbeatType() const
-{
-    return heartbeatType_;
-}
-
-int ClientWorkerCommonApi::GetSocketFd() const
-{
-    return socketFd_;
-}
-
-std::string ClientWorkerCommonApi::GetClientId() const
-{
-    return clientId_;
-}
-
-bool ClientWorkerCommonApi::GetShmEnabled() const
-{
-    return shmEnabled_;
-}
-
-void ClientWorkerCommonApi::RecvFdAfterNotify(const std::vector<int> &workerFds, uint64_t requestId, const Timer &timer,
-                                              std::vector<int> &clientFds)
+void ClientWorkerRemoteCommonApi::RecvFdAfterNotify(const std::vector<int> &workerFds, uint64_t requestId,
+                                                    const Timer &timer, std::vector<int> &clientFds)
 {
     bool isRetry = false;
     do {
@@ -508,8 +452,8 @@ void ClientWorkerCommonApi::RecvFdAfterNotify(const std::vector<int> &workerFds,
     } while (clientFds.empty() && timer.GetRemainingTimeMs() > 0);
 }
 
-Status ClientWorkerCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
-                                          const std::string &tenantId)
+Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                                                const std::string &tenantId)
 {
     if (!shmEnabled_ || socketFd_ == INVALID_SOCKET_FD) {
         return { K_RUNTIME_ERROR, "Current client can not support uds, so query client fd failed." };
@@ -554,7 +498,8 @@ Status ClientWorkerCommonApi::GetClientFd(const std::vector<int> &workerFds, std
     return Status::OK();
 }
 
-void ClientWorkerCommonApi::PostRecvPageFd(const Status &status, uint64_t requestId, const std::vector<int> &pageFds)
+void ClientWorkerRemoteCommonApi::PostRecvPageFd(const Status &status, uint64_t requestId,
+                                                 const std::vector<int> &pageFds)
 {
     if (status.IsOk()) {
         {
@@ -572,7 +517,7 @@ void ClientWorkerCommonApi::PostRecvPageFd(const Status &status, uint64_t reques
     VLOG(1) << "Finish to receive page fds: " << VectorToString(pageFds);
 }
 
-void ClientWorkerCommonApi::CloseExpiredFd()
+void ClientWorkerRemoteCommonApi::CloseExpiredFd()
 {
     std::lock_guard<std::mutex> lck(recvClientFdState_.mutex);
     for (auto itr = recvClientFdState_.requestId2UnmmapedClientFds.begin();
@@ -590,7 +535,7 @@ void ClientWorkerCommonApi::CloseExpiredFd()
     }
 }
 
-void ClientWorkerCommonApi::RecvPageFd()
+void ClientWorkerRemoteCommonApi::RecvPageFd()
 {
     while (!recvClientFdState_.stopRecvPageFd) {
         VLOG(1) << "Start to wait to receive page fd";
@@ -616,7 +561,7 @@ void ClientWorkerCommonApi::RecvPageFd()
     }
 }
 
-Status ClientWorkerCommonApi::Reconnect()
+Status ClientWorkerRemoteCommonApi::Reconnect()
 {
     LOG(INFO) << "Reconnect starting...";
     // Avoid waiting too long to reconnect.
@@ -627,14 +572,47 @@ Status ClientWorkerCommonApi::Reconnect()
     return Status::OK();
 }
 
-int64_t ClientWorkerCommonApi::GetHeartBeatInterval()
+void ClientWorkerRemoteCommonApi::SetHeatbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
-    return heartBeatIntervalMs_;
+    std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
+    uint64_t clientDeadTimeoutMs = rsp.client_dead_timeout_s() * TO_MILLISECOND;
+    // Compatible with old versions of worker
+    clientDeadTimeoutMs_ = clientDeadTimeoutMs == 0ul ? MIN_HEARTBEAT_TIMEOUT_MS : clientDeadTimeoutMs;
+    if (clientDeadTimeoutMs > 0) {
+        const int32_t retryNum = 3;  // Make sure the heartbeat is retried twice before worker timeout.
+        heartBeatTimeoutMsOptions.emplace_back(clientDeadTimeoutMs / retryNum);
+    }
+    heartBeatTimeoutMs_ = *std::min_element(heartBeatTimeoutMsOptions.begin(), heartBeatTimeoutMsOptions.end());
+    uint64_t clientReconnectWaitMs = rsp.client_reconnect_wait_s() * TO_MILLISECOND;
+    const int32_t reduceRatio = 5;
+    heartBeatIntervalMs_ =
+        std::min({ std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
+                   static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS),
+                   clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
 }
 
-int32_t ClientWorkerCommonApi::GetConnectTimeoutMs()
+void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
-    return connectTimeoutMs_;
+    enableHugeTlb_ = rsp.enable_huge_tlb();
+    workerTimeoutMult_ = rsp.quorum_timeout_mult();
+    clientId_ = rsp.client_id();
+    workerStartId_ = rsp.worker_start_id();
+    pageSize_ = static_cast<uint32_t>(rsp.page_size());
+    lockId_ = rsp.lock_id();
+    (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
+    shmThreshold_ = rsp.shm_threshold();
+    workerId_ = rsp.worker_uuid();
+    workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
+    SetHealthy(!rsp.unhealthy());
+    exclusiveConnSockPath_ = rsp.exclusive_conn_sockpath();
+    if (enableExclusiveConnection_ && exclusiveConnSockPath_.empty()) {
+        LOG(WARNING) << "Client requested exclusive connection, but the older worker did not support the feature.";
+        enableExclusiveConnection_ = false;
+    }
+
+    SetHeatbeatProperties(timeoutMs, rsp);
+    SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
+    ConstructDecShmUnit(rsp);
 }
 }  // namespace client
 }  // namespace datasystem

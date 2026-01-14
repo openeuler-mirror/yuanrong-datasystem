@@ -35,7 +35,7 @@ TEST_F(MmapManagerTest, TestCleanRef)
     // todo: The mmapManager and mmapTable should be combined.
     // This testcase is just for increased coverage.
     HostPort hostPort("127.0.0.1", 8080);
-    auto clientApi = std::make_shared<ClientWorkerCommonApi>(hostPort);
+    auto clientApi = std::make_shared<ClientWorkerRemoteCommonApi>(hostPort);
     MmapManager mmapManager(clientApi);
 
     mmapManager.CleanInvalidMmapTable();

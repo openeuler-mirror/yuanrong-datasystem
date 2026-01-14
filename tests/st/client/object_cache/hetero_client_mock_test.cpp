@@ -51,12 +51,12 @@ public:
         FLAGS_v = 0;
     }
 
-    std::shared_ptr<ClientWorkerApi> CreateClientWorkerApi(int workerNum)
+    std::shared_ptr<ClientWorkerRemoteApi> CreateClientWorkerApi(int workerNum)
     {
         HostPort workerAddress;
         cluster_->GetWorkerAddr(workerNum, workerAddress);
-        auto workerApi = std::make_shared<ClientWorkerApi>(workerAddress, RpcCredential(), HeartbeatType::RPC_HEARTBEAT,
-                                                           "", signature_.get());
+        auto workerApi = std::make_shared<ClientWorkerRemoteApi>(workerAddress, RpcCredential(),
+                                                                 HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
         workerApi->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT);
         return workerApi;
     }
@@ -134,8 +134,8 @@ TEST_F(HeteroClientMockTest, TestRecvRootInfo)
     auto workerClient1 = CreateClientWorkerApi(index1);
     auto workerClient2 = CreateClientWorkerApi(index1);
     auto deviceId = 1;
-    auto localClientId1 = workerClient1->GetClientId();
-    auto localClientId2 = workerClient2->GetClientId();
+    auto localClientId1 = workerClient1->clientId_;
+    auto localClientId2 = workerClient2->clientId_;
     char rootInfoInternal[11] = { 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', '\0' };
 
     SendRootInfoReqPb req;

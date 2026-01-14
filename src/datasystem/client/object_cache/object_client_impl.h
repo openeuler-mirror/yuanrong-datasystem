@@ -105,7 +105,7 @@ public:
      * the status needs to be rolled back based on the completion status when the request is completed.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Init(bool &needRollbackState, bool enableHeartbeat = true);
+    Status Init(bool &needRollbackState, bool enableHeartbeat = true, bool initWithWorker = false);
 
     /**
      * @brief  Invoke worker client to seal the object.
@@ -757,7 +757,7 @@ private:
      * @param[out] buffers The address of the objects.
      * @return Status of the result.
      */
-    Status GetBuffersFromWorker(std::shared_ptr<ClientWorkerApi> workerApi, GetParam &getParam,
+    Status GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                 std::vector<std::shared_ptr<Buffer>> &buffers);
 
     /**
@@ -966,7 +966,7 @@ private:
      * @param[in] next Next standby worker index.
      * @return True if switch success.
      */
-    bool SwitchToStandbyWorkerImpl(const std::shared_ptr<ClientWorkerApi> &currentApi, WorkerNode next);
+    bool SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode next);
 
     /**
      * @brief Try switch back to local worker.
@@ -984,7 +984,7 @@ private:
      * @param[in] clientWorkerApi Standby worker stub handler.
      * @return True if worker is ready.
      */
-    bool WaitStandbyWorkerReady(const std::shared_ptr<ClientWorkerApi> &clientWorkerApi);
+    bool WaitStandbyWorkerReady(const std::shared_ptr<IClientWorkerApi> &clientWorkerApi);
 
     /**
      * @brief Get the next worker node.
@@ -998,7 +998,7 @@ private:
      * @param[out] workerApi The available workerApi.
      * @return Status of the call.
      */
-    Status GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> &workerApi);
+    Status GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi);
 
     /**
      * @brief Get the available workerApi.
@@ -1006,7 +1006,7 @@ private:
      * @param[out] raii Raii for record the invoke count.
      * @return Status of the call.
      */
-    Status GetAvailableWorkerApi(std::shared_ptr<ClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii);
+    Status GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii);
 
     /**
      * @brief Mmap a ShmUnit to client.
@@ -1044,7 +1044,7 @@ private:
      */
     Status ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
-                         const std::shared_ptr<ClientWorkerApi> &workerApi, int existence);
+                         const std::shared_ptr<IClientWorkerApi> &workerApi, int existence);
 
     /**
      * @brief Check the validation of the input parameter of the multiple set.
@@ -1091,7 +1091,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status AllocateMemoryForMSet(const std::map<std::string, StringView> &kv, const WriteMode &writeMode,
-                                 const std::shared_ptr<ClientWorkerApi> &workerApi,
+                                 const std::shared_ptr<IClientWorkerApi> &workerApi,
                                  std::vector<TbbMemoryRefTable::accessor> &accessor,
                                  std::vector<std::shared_ptr<Buffer>> &buffers,
                                  std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
@@ -1116,7 +1116,7 @@ private:
      */
     std::string GetClientId()
     {
-        return workerApi_[currentNode_]->GetClientId();
+        return workerApi_[currentNode_]->clientId_;
     }
 
     /**
@@ -1172,6 +1172,8 @@ private:
                               std::vector<std::shared_ptr<Buffer>> &bufferList,
                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
 
+    Status InitListenWorker(HeartbeatType heartbeatType);
+
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
@@ -1182,7 +1184,7 @@ private:
     bool enableCrossNodeConnection_ = false;
     bool enableExclusiveConnection_ = false;
     std::unique_ptr<Signature> signature_{ nullptr };
-    std::vector<std::shared_ptr<ClientWorkerApi>> workerApi_;
+    std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
     std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
     std::unique_ptr<client::MmapManager> mmapManager_{ nullptr };

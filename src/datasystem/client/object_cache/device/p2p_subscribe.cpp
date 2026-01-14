@@ -42,9 +42,9 @@
 namespace datasystem {
 const uint32_t ONE_SECOND_MS = 1000;
 
-P2PSubscribe::P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::ClientWorkerApi> workerApi,
+P2PSubscribe::P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
                            std::shared_ptr<HcclCommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs)
-    : ClientDeviceCurd(workerApi),
+    : ClientDeviceCurd(std::move(workerApi)),
       interruptFlag_(false),
       deviceId_(deviceId),
       commFactory_(std::move(commFactory)),
@@ -273,7 +273,7 @@ void P2PSubscribe::P2PAckGet(std::shared_ptr<P2PGetRequest> &p2pGetRequest)
     req.set_src_client_id(srcClientId);
     req.set_src_device_id(srcDeviceId);
     req.set_cache_location(bufferInfo->cacheLocation);
-    req.set_dst_client_id(clientWorkerApi_->GetClientId());
+    req.set_dst_client_id(clientWorkerApi_->clientId_);
     req.set_dst_device_id(deviceId_);
     auto rc = clientWorkerApi_->AckRecvFinish(req);
     LOG_IF_ERROR(rc, FormatString("ObjectKey : %s AckRecvFinish failed.", objectKey));

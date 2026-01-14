@@ -72,7 +72,7 @@ private:
 
 class ListenWorker : public std::enable_shared_from_this<ListenWorker> {
 public:
-    ListenWorker(std::shared_ptr<ClientWorkerCommonApi> clientCommonWorker, HeartbeatType type, uint32_t index = 0,
+    ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type, uint32_t index = 0,
                  ThreadPool *pool = nullptr);
     virtual ~ListenWorker();
     ListenWorker(const ListenWorker &, HeartbeatType type) = delete;
@@ -207,7 +207,7 @@ private:
      */
     bool IsVoluntarySwitchable()
     {
-        return clientCommonWorker_->EnableCrossNodeConnection() && isWorkerVoluntaryScaleDown_;
+        return clientCommonWorker_->enableCrossNodeConnection_ && isWorkerVoluntaryScaleDown_;
     }
 
     /**
@@ -241,7 +241,7 @@ private:
      */
     void TryShutdownStandbyConnection();
 
-    std::shared_ptr<ClientWorkerCommonApi> clientCommonWorker_;
+    std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker_;
 
     std::atomic<bool> workerAvailable_{ true };
     // This parameter is used to determine whether the worker needs to be actively notified

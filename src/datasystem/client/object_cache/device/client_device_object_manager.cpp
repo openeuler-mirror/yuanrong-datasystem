@@ -51,7 +51,7 @@ ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
 Status ClientDeviceObjectManager::Init()
 {
     devInterImpl_ = acl::AclDeviceManager::Instance();
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
     commFactory_ = std::make_shared<HcclCommFactory>(workerApi, &aclResourceMgr_);
     swapOutPool_ = std::make_unique<AsyncAclMemCopyPool>(&aclResourceMgr_);
@@ -126,7 +126,7 @@ Status ClientDeviceObjectManager::PublishDeviceObjectWithHost(const std::shared_
     bufferInfo->shmId = hostBufferInfo->shmId;
     bufferInfo->version = hostBufferInfo->version;
     RETURN_IF_NOT_OK(devInterImpl_->MemCopyD2H(hostBuffer->MutableData(), dataSize, blob.pointer, dataSize));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
     return workerApi->PublishDeviceObject(bufferInfo, dataSize, !bufferInfo->shmId.empty(), hostBuffer->MutableData());
 }
@@ -153,7 +153,7 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
 
     std::vector<RpcMessage> payloads;
     GetDeviceObjectRspPb rsp;
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         workerApi->GetDeviceObject(devObjKeys, dstDevBuffer.Size(), timeoutMs, rsp, payloads), "GetDeviceObject error");
@@ -199,7 +199,7 @@ Status ClientDeviceObjectManager::GetOrCreateP2PSubscribe(int32_t deviceId, std:
     RETURN_IF_NOT_OK(aclResourceMgr_.Init());
     tbb::concurrent_hash_map<int, std::shared_ptr<P2PSubscribe>>::accessor acc;
     if (!subscribeTable_.find(acc, deviceId)) {
-        std::shared_ptr<ClientWorkerApi> workerApi;
+        std::shared_ptr<IClientWorkerApi> workerApi;
         RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
         auto p2pSub = std::make_shared<P2PSubscribe>(deviceId, workerApi, commFactory_,
                                                      objClientImpl_->clientEnableP2Ptransfer_, clientDevOJTimeoutMs_);

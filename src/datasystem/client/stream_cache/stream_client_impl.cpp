@@ -126,7 +126,7 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     RETURN_IF_NOT_OK(clientWorkerApi_->Init(requestTimeoutMs_, connectTimeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(
-        std::dynamic_pointer_cast<ClientWorkerCommonApi>(clientWorkerApi_));
+        std::dynamic_pointer_cast<IClientWorkerCommonApi>(clientWorkerApi_));
     listenWorker_ = std::make_shared<ListenWorker>(clientWorkerApi_, HeartbeatType::RPC_HEARTBEAT);
     callBack_ = [this]() {
         LOG(INFO) << "Disconnected from worker, clear mmap and try to reconnect...";
@@ -175,7 +175,7 @@ Status StreamClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue
 
 uint32_t StreamClientImpl::GetLockId() const
 {
-    return clientWorkerApi_->GetLockId();
+    return clientWorkerApi_->lockId_;
 }
 
 Status StreamClientImpl::VerifyProducerConfig(const ProducerConf &producerConf)
@@ -232,8 +232,8 @@ Status StreamClientImpl::CreateProducer(const std::string &streamName, std::shar
     ShmView pageView, streamMetaView;
     DataVerificationHeader::SenderProducerNo senderProducerNo;
     DataVerificationHeader::Address address;
-    inet_pton(clientWorkerApi_->GetWorkHostPortINETFamily(), clientWorkerApi_->GetWorkHost().c_str(), &address);
-    DataVerificationHeader::Port port = static_cast<uint16_t>(clientWorkerApi_->GetWorkPort());
+    inet_pton(clientWorkerApi_->GetWorkHostPortINETFamily(), clientWorkerApi_->hostPort_.Host().c_str(), &address);
+    DataVerificationHeader::Port port = static_cast<uint16_t>(clientWorkerApi_->hostPort_.Port());
     bool enableStreamDataVerification;
     uint64_t streamNo;
     bool enableSharedPage;
@@ -424,7 +424,7 @@ inline Status StreamClientImpl::IsClientReady()
 
 Status StreamClientImpl::CheckConnectByUds()
 {
-    RETURN_OK_IF_TRUE(clientWorkerApi_->GetShmEnabled());
+    RETURN_OK_IF_TRUE(clientWorkerApi_->shmEnabled_);
     RETURN_STATUS(
         StatusCode::K_RUNTIME_ERROR,
         "Connection to worker not using unix domain socket, please check if the connection is to a local worker.");
