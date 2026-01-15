@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>安装 &#8212; openYuanrong datasystem  documentation</title>
+    <title>RDMA最佳实践 &#8212; openYuanrong datasystem  documentation</title>
   
   
   
@@ -53,12 +53,12 @@
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'installation/installation_linux';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'best_practices/best_practices_for_rdma';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="部署" href="../deployment/index.html" />
-    <link rel="prev" title="入门" href="../getting-started/getting_started.html" />
+    <link rel="next" title="编程接口" href="../development-guide/index.html" />
+    <link rel="prev" title="UB最佳实践" href="best_pracitces_for_ub.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   </head>
@@ -171,15 +171,16 @@
         <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../getting-started/getting_started.html">入门</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">安装</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation/installation_linux.html">安装</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">最佳实践</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -483,7 +484,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>安装</h1>
+    <h1>RDMA最佳实践</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -493,26 +494,18 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pypi">安装 PyPI 正式发布版本（推荐）</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">环境准备</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">基础依赖</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#python">安装 Python</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#cann">安装 CANN</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rdma-core">安装 rdma-core</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">安装</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">源码编译额外依赖</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#wheelsetuptools">安装wheel和setuptools</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">安装依赖库</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nightly">安装 nightly 版本</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">源码编译安装</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">下载源码</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">编译</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">安装</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">部署指南</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">快速验证</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">推荐配置</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lpi">关闭LPI</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">开启大页内存</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numa">绑定NUMA节点</a></li>
 </ul>
 </li>
 </ul>
@@ -526,72 +519,13 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="overview-installation">
-<span id="id1"></span><h1>安装<a class="headerlink" href="#overview-installation" title="Link to this heading">#</a></h1>
-<!-- TOC -->
-<ul class="simple">
-<li><p><a class="reference internal" href="#pypi">安装 PyPI 正式发布版本（推荐）</a></p></li>
-<li><p><a class="reference internal" href="#id2">环境准备</a></p>
-<ul>
-<li><p><a class="reference internal" href="#id3">基础依赖</a></p></li>
-<li><p><a class="reference internal" href="#id4">源码编译额外依赖</a></p></li>
-</ul>
-</li>
-<li><p><a class="reference internal" href="#nightly">安装 nightly 版本</a></p></li>
-<li><p><a class="reference internal" href="#id6">源码编译安装</a></p>
-<ul>
-<li><p><a class="reference internal" href="#id7">下载源码</a></p></li>
-<li><p><a class="reference internal" href="#id8">编译</a></p></li>
-<li><p><a class="reference internal" href="#id1">安装</a></p></li>
-</ul>
-</li>
-</ul>
-<!-- /TOC -->
-<section id="pypi">
-<h2>安装 PyPI 正式发布版本（推荐）<a class="headerlink" href="#pypi" title="Link to this heading">#</a></h2>
-<p>openYuanrong datasystem 已发布至 <a class="reference external" href="https://pypi.org/project/openyuanrong-datasystem/">PyPI</a>，您可以通过 pip 直接安装。</p>
-<p><strong>前置要求</strong></p>
-<p>通过pip安装 openYuanrong datasystem 之前，请确保满足以下要求：</p>
-<ul class="simple">
-<li><p><strong>Python 版本</strong>：Python 3.9、3.10 或 3.11</p></li>
-<li><p><strong>操作系统</strong>：Linux（推荐 glibc 2.34+）</p></li>
-<li><p><strong>架构</strong>：x86-64</p></li>
-</ul>
-<p>您可以通过以下命令检查：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># python版本</span>
-python<span class="w"> </span>--version
-<span class="c1"># 操作系统</span>
-uname<span class="w"> </span>-s
-<span class="c1"># 架构</span>
-uname<span class="w"> </span>-m
-<span class="c1"># glibc版本</span>
-ldd<span class="w"> </span>--version
-</pre></div>
-</div>
-<p><strong>安装完整发行版</strong>（包含 Python SDK、C++ SDK 以及命令行工具）：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
-</pre></div>
-</div>
-<p><strong>验证安装</strong>：</p>
-<p>安装完成后，您可以通过以下命令验证安装是否成功：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import yr.datasystem; print(&#39;openYuanrong datasystem installed successfully&#39;)&quot;</span>
-
-dscli<span class="w"> </span>--version
-</pre></div>
-</div>
-<blockquote>
-<div><p>如果在安装过程中遇到如 <code class="docutils literal notranslate"><span class="pre">pip:</span> <span class="pre">command</span> <span class="pre">not</span> <span class="pre">found</span></code> 等报错，请参照<a class="reference internal" href="#id2">环境准备</a>章节安装相关依赖</p>
-</div></blockquote>
-</section>
-<section id="id2">
-<h2>环境准备<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p>本节列出两类依赖：</p>
-<ul class="simple">
-<li><p><strong>基础依赖</strong>：运行和编译<strong>都必须</strong>满足</p></li>
-<li><p><strong>编译依赖</strong>：仅源码编译时需要，在基础依赖之上<strong>追加</strong></p></li>
-</ul>
-<section id="id3">
-<h3>基础依赖<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+  <section class="tex2jax_ignore mathjax_ignore" id="rdma">
+<h1>RDMA最佳实践<a class="headerlink" href="#rdma" title="Link to this heading">#</a></h1>
+<p>远程直接内存访问（Remote Direct Memory Access，RDMA）是一种面向大规模数据中心与并行计算的互联技术，将网络传输与内存访问深度融合，通过旁路内核与硬件卸载，实现跨节点间高带宽、极低时延的数据直接搬移。RDMA统一了分布式系统中的通信与存储访问路径，大幅降低了处理器的协议栈开销，支持异构计算单元间的高效协同，是构建高性能计算、AI 训练及分布式数据库的关键底层基础设施。</p>
+<p>openYuanrong datasystem 现已集成对 RDMA 的支持，实现了分布式缓存在物理节点之间的硬件级加速。基于 RDMA 构建的全局缓存抽象，透明化了下层拓扑，使得应用能够以极简的编程方式，在跨节点通信场景中实现数据直通，充分释放底层硬件性能。</p>
+<section id="id1">
+<h2>源码编译安装<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<p>源码编译安装前请确保编译环境中具备如下软件依赖：</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>软件名称</p></th>
@@ -602,253 +536,268 @@ dscli<span class="w"> </span>--version
 <tbody>
 <tr class="row-even"><td><p>openEuler</p></td>
 <td><p>22.03</p></td>
-<td><p>运行/编译openYuanrong datasystem的操作系统</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#python">Python</a></p></td>
-<td><p>3.9-3.11</p></td>
-<td><p>openYuanrong datasystem的运行/编译依赖Python环境</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#cann">CANN</a></p></td>
-<td><p>8.2.RC1</p></td>
-<td><p>运行/编译异构相关特性的依赖库</p></td>
+<td><p>运行openYuanrong datasystem的操作系统</p></td>
 </tr>
 <tr class="row-odd"><td><p>rdma-core</p></td>
-<td><p>35.1</p></td>
-<td><p>运行/编译RDMA特性的依赖库</p></td>
+<td><p>41.0+</p></td>
+<td><p>RDMA软件依赖</p></td>
 </tr>
-</tbody>
-</table>
-</div>
-<section id="python">
-<h4>安装 Python<a class="headerlink" href="#python" title="Link to this heading">#</a></h4>
-<details>
-<summary>Python安装步骤（点我展开）</summary>
-<p><a class="reference external" href="https://www.python.org/">Python</a>可通过Conda进行安装。</p>
-<p>安装Miniconda：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/tmp
-curl<span class="w"> </span>-O<span class="w"> </span>https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-py311_23.10.0-1-Linux-<span class="k">$(</span>arch<span class="k">)</span>.sh
-bash<span class="w"> </span>Miniconda3-py311_23.10.0-1-Linux-<span class="k">$(</span>arch<span class="k">)</span>.sh<span class="w"> </span>-b
-<span class="nb">cd</span><span class="w"> </span>-
-.<span class="w"> </span>~/miniconda3/etc/profile.d/conda.sh
-conda<span class="w"> </span>init<span class="w"> </span>bash
-</pre></div>
-</div>
-<p>执行完上述命令后，重启shell，conda会在shell初始化完成后准备就绪。</p>
-<p>安装完成后，可以为Conda设置清华源加速下载，参考<a class="reference external" href="https://mirrors.tuna.tsinghua.edu.cn/help/anaconda/">此处</a>。</p>
-<p>创建虚拟环境，以Python 3.11.4为例：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>py311<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11.4<span class="w"> </span>-y
-conda<span class="w"> </span>activate<span class="w"> </span>py311
-</pre></div>
-</div>
-<p>可以通过以下命令查看Python版本。</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>--version
-</pre></div>
-</div>
-</details>
-</section>
-<section id="cann">
-<h4>安装 CANN<a class="headerlink" href="#cann" title="Link to this heading">#</a></h4>
-<blockquote>
-<div><p>如无需运行/编译异构对象特性，可跳过 CANN 安装步骤</p>
-</div></blockquote>
-<details>
-<summary>CANN安装步骤（点我展开）</summary>
-<p>CANN的安装依赖Python环境，请确保您在开始安装CANN之前环境中的Python已经就绪。</p>
-<p>在<a class="reference external" href="https://www.hiascend.com/developer/download/community/result?module=cann&amp;amp;cann=8.2.RC1">Ascend官网</a>下载CANN run包，安装 run 包：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>chmod<span class="w"> </span>+x<span class="w"> </span>./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run
-./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run<span class="w"> </span>--install<span class="w"> </span>--quiet
-</pre></div>
-</div>
-<p>安装完成后，若显示如下信息，则说明软件安装成功：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>Toolkit:<span class="w">  </span>Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;<span class="w"> </span>install<span class="w"> </span>success
-</pre></div>
-</div>
-<p>如果用户未指定安装路径，则软件会安装到默认路径下，默认安装路径如下：</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>用户身份</p></th>
-<th class="head"><p>默认路径</p></th>
+<tr class="row-even"><td><p>Python</p></td>
+<td><p>3.9-3.11</p></td>
+<td><p>openYuanrong datasystem的编译依赖Python环境</p></td>
 </tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>root</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">/usr/local/Ascend</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>非 root</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">$HOME/Ascend</span></code></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>加载环境变量（非 root 示例）：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/Ascend/ascend-toolkit/set_env.sh
-</pre></div>
-</div>
-</details>
-</section>
-<section id="rdma-core">
-<h4>安装 rdma-core<a class="headerlink" href="#rdma-core" title="Link to this heading">#</a></h4>
-<blockquote>
-<div><p>如无需运行/编译RDMA特性，可跳过 rdma-core 安装步骤</p>
-</div></blockquote>
-<details>
-<summary>rdma-core安装步骤（点我展开）</summary>
-<p><a class="reference external" href="https://github.com/linux-rdma/rdma-core">rdma-core</a>可通过yum进行安装。</p>
-<p>安装rdma-core:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>yum<span class="w"> </span>install<span class="w"> </span>rdma-core-devel
-</pre></div>
-</div>
-<p>安装完成后，可通过以下命令查看软件是否安装成功：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ls<span class="w"> </span>-l<span class="w"> </span>/usr/lib64/libibverbs.so
-ls<span class="w"> </span>-l<span class="w"> </span>/usr/lib64/librdmacm.so
-</pre></div>
-</div>
-<p>若输出类似以下内容则说明安装成功：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>lrwxrwxrwx.<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">15</span><span class="w"> </span>Mar<span class="w"> </span><span class="m">23</span><span class="w">  </span><span class="m">2022</span><span class="w"> </span>/usr/lib64/libibverbs.so<span class="w"> </span>-&gt;<span class="w"> </span>libibverbs.so.1
-lrwxrwxrwx.<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">14</span><span class="w"> </span>Mar<span class="w"> </span><span class="m">23</span><span class="w">  </span><span class="m">2022</span><span class="w"> </span>/usr/lib64/librdmacm.so<span class="w"> </span>-&gt;<span class="w"> </span>librdmacm.so.1
-</pre></div>
-</div>
-</details>
-</section>
-</section>
-<section id="id4">
-<h3>源码编译额外依赖<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
-<blockquote>
-<div><p>如无需源码编译 openYuanrong datasystem，请跳过本章节。</p>
-</div></blockquote>
-<p>下表列出了源码编译openYuanrong datasystem所需额外第三方依赖：</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>软件名称</p></th>
-<th class="head"><p>版本</p></th>
-<th class="head"><p>作用</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><a class="reference internal" href="#wheelsetuptools">wheel</a></p></td>
-<td><p>0.32.0+</p></td>
-<td><p>openYuanrong datasystem使用的Python打包工具</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#wheelsetuptools">setuptools</a></p></td>
-<td><p>44.0+</p></td>
-<td><p>openYuanrong datasystem使用的Python包管理工具</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#id5">GCC</a></p></td>
+<tr class="row-odd"><td><p>GCC</p></td>
 <td><p>7.5.0+</p></td>
 <td><p>用于编译openYuanrong datasystem的C编译器</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#id5">G++</a></p></td>
+<tr class="row-even"><td><p>G++</p></td>
 <td><p>7.5.0+</p></td>
 <td><p>用于编译openYuanrong datasystem的C++编译器</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#id5">libtool</a></p></td>
+<tr class="row-odd"><td><p>libtool</p></td>
 <td><p>-</p></td>
 <td><p>编译构建openYuanrong datasystem的工具</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#id5">git</a></p></td>
+<tr class="row-even"><td><p>git</p></td>
 <td><p>-</p></td>
 <td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#id5">Make</a></p></td>
+<tr class="row-odd"><td><p>Make</p></td>
 <td><p>-</p></td>
 <td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#id5">CMake</a></p></td>
+<tr class="row-even"><td><p>CMake</p></td>
 <td><p>3.18.3+</p></td>
 <td><p>编译构建openYuanrong datasystem的工具</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#id5">patch</a></p></td>
+<tr class="row-odd"><td><p>patch</p></td>
 <td><p>2.5+</p></td>
 <td><p>openYuanrong datasystem使用的源代码补丁工具</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<section id="wheelsetuptools">
-<h4>安装wheel和setuptools<a class="headerlink" href="#wheelsetuptools" title="Link to this heading">#</a></h4>
-<p>在安装完成Python后，使用以下命令安装。</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>wheel
-pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>setuptools
+<section id="id2">
+<h3>下载源码<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
 </pre></div>
 </div>
+</section>
+<section id="id3">
+<h3>编译<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p>默认配置下数据系统会启用异构能力的编译，需要编译环境中具备CANN依赖，如无需异构能力支持，可禁用异构能力。</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-0">
+启用 RDMA 支持</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>build.sh<span class="w"> </span>-A<span class="w"> </span>on
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-1">
+启用 RDMA，禁用异构能力</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>build.sh<span class="w"> </span>-A<span class="w"> </span>on<span class="w"> </span>-X<span class="w"> </span>off
+</pre></div>
+</div>
+</div>
+</div>
+<p>编译成功后，会在output目录下产生如下编译产物：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
+├── openyuanrong_datasystem-x.x.x-cp311-cp311-manylinux_2_34_x86_64.whl
+└── yr-datasystem-vx.x.x.tar.gz
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h3>安装<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>output/openyuanrong_datasystem-*.whl
+</pre></div>
+</div>
+</section>
 </section>
 <section id="id5">
-<h4>安装依赖库<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
-<p>使用以下命令安装。</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>yum<span class="w"> </span>install<span class="w"> </span>gcc<span class="w"> </span>gcc-c++<span class="w"> </span>git<span class="w"> </span>patch<span class="w"> </span>make<span class="w"> </span>libtool<span class="w"> </span>cmake<span class="w"> </span>-y
+<h2>部署指南<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<p>部署前，请确保满足以下必要条件：</p>
+<ol class="arabic simple">
+<li><p>节点准备：须至少在 2 个 已配备 RDMA 硬件并安装相应软件的节点上部署服务端组件。</p></li>
+<li><p>集群依赖：openYuanrong datasystem 的集群管理功能依赖于 ETCD，因此需预先搭建并确保一个稳定可用的 ETCD 集群。</p></li>
+</ol>
+<p>ETCD部署命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>etcd<span class="w"> </span>--listen-client-urls<span class="w"> </span>http://0.0.0.0:2379<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span>--advertise-client-urls<span class="w"> </span>http://0.0.0.0:2379<span class="w"> </span><span class="p">&amp;</span>
 </pre></div>
 </div>
-</section>
-</section>
-</section>
-<section id="nightly">
-<h2>安装 nightly 版本<a class="headerlink" href="#nightly" title="Link to this heading">#</a></h2>
-<p>如需安装指定版本（或未正式发布 wheel），可用官方 nightly 地址。wheel文件命名遵循：</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># 完整版wheel包（包含Python SDK、C++ SDK以及命令行工具）</span>
-openYuanrong_datasystem-<span class="o">{</span>version<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-manylinux_<span class="o">{</span>glibc_major<span class="o">}</span>_<span class="o">{</span>glibc_minor<span class="o">}</span>_<span class="o">{</span>arch<span class="o">}</span>.whl
-
-<span class="c1"># Python SDK wheel包（不包含C++ SDK以及命令行工具）</span>
-openYuanrong_datasystem_sdk-<span class="o">{</span>version<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-cp<span class="o">{</span>major<span class="o">}{</span>minor<span class="o">}</span>-manylinux_<span class="o">{</span>glibc_major<span class="o">}</span>_<span class="o">{</span>glibc_minor<span class="o">}</span>_<span class="o">{</span>arch<span class="o">}</span>.whl
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-2">
+进程部署</label><div class="sd-tab-content docutils">
+<p>openYuanrong datasystem 进程部署主要通过dscli工具，在使用前请确保在两个节点中已安装 openYuanrong datasystem wheel 包。</p>
+<p>分别在两个节点执行如下命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">etcd_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>--enable_rdma<span class="w"> </span><span class="nb">true</span>
 </pre></div>
 </div>
-<p>占位符说明：</p>
+<p>参数说明：</p>
 <ul class="simple">
-<li><p>version：openYuanrong datasystem的版本号，例如 <code class="docutils literal notranslate"><span class="pre">0.5.0</span></code></p></li>
-<li><p>major / minor：Python 解释器版本，例如 Python 3.9 → <code class="docutils literal notranslate"><span class="pre">39</span></code></p></li>
-<li><p>glibc_major / glibc_minor：GLIBC 版本，例如 GLIBC 2.34 → <code class="docutils literal notranslate"><span class="pre">2_34</span></code></p></li>
-<li><p>arch：CPU 架构，<code class="docutils literal notranslate"><span class="pre">x86_64</span></code> 或 <code class="docutils literal notranslate"><span class="pre">aarch64</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">node_address</span></code>：当前节点的通信地址与端口。格式为 <code class="docutils literal notranslate"><span class="pre">IP:Port</span></code>，例如：<code class="docutils literal notranslate"><span class="pre">192.168.0.1:31501</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>：ETCD集群的访问地址列表。格式为多个 <code class="docutils literal notranslate"><span class="pre">IP:Port</span></code> 的逗号分隔字符串，例如：<code class="docutils literal notranslate"><span class="pre">192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379</span></code>。</p></li>
 </ul>
-<p>各版本 wheel 包的文件名与下载链接可在 openYuanrong 官方「版本发布」页面中查询（包含最新稳定版本与历史版本）：<a class="reference external" href="https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/reference/releases.html">版本发布与下载</a>。</p>
-<p>下面示例安装 0.5.0，Python3.9，GLIBC2.34，aarch64 的完整版wheel包：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanrong_datasystem-0.5.0-cp39-cp39-manylinux_2_34_aarch64.whl
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-3">
+K8S部署</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 通过dscli获取helm chart包</span>
+dscli<span class="w"> </span>generate_helm_chart<span class="w"> </span>-o<span class="w"> </span>/tmp
+
+<span class="c1"># 通过源码获取helm chart包</span>
+git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
+cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/chart/datasystem<span class="w"> </span>/tmp
 </pre></div>
+</div>
+<p>命令运行成功后会在”/tmp”目录下生成helm chart目录。</p>
+<p>编辑 <code class="docutils literal notranslate"><span class="pre">/tmp/datasystem/values.yaml</span></code> 对集群启动项进行配置：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 其他配置项...</span>
+<span class="w">  </span><span class="c1"># 请注意分配的arena数量及sharedMemory大小与允许的资源匹配</span>
+
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.6.0&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="c1"># （可选）开启RDMA日志</span>
+<span class="w">  </span><span class="c1"># 默认在/home/yuanrong/datasystem/logs/worker下</span>
+<span class="w">  </span><span class="nt">log</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enableUcxLog</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">ucxLogLevel</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;INFO&quot;</span>
+
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># ETCD集群地址</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">performance</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># 开启RDMA能力</span>
+<span class="w">    </span><span class="nt">enableRdma</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="c1"># 挂载IB设备相关目录，默认已挂载/dev/infiniband与/sys/class/infiniband，无需重复挂载</span>
+<span class="w">  </span><span class="c1"># 例外情况请参考以下格式自行挂载</span>
+<span class="w">  </span><span class="nt">mount</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+</pre></div>
+</div>
+<p>部署集群：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>helm<span class="w"> </span>install<span class="w"> </span>datasystem<span class="w"> </span>/tmp/datasystem
+</pre></div>
+</div>
+<p>部署后可以通过 kubectl 命令查看集群状态：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="c1"># NAME                   READY   STATUS       RESTARTS      AGE    IP           NODE </span>
+<span class="c1"># ...</span>
+<span class="c1"># ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   Running</span>
+<span class="c1"># ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   Running</span>
+</pre></div>
+</div>
+</div>
 </div>
 </section>
 <section id="id6">
-<h2>源码编译安装<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<h2>快速验证<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<p>通过跨节点拉取数据的样例可快速验证RDMA的能力。</p>
+<p>在节点1执行以下Python脚本：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">KVClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">KVClient</span><span class="p">(</span><span class="s2">&quot;192.168.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+<span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+<span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;key&quot;</span>
+<span class="n">expected_val</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;value&quot;</span>
+<span class="n">client</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">expected_val</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;[OK] Set value&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>在节点2执行以下Python脚本：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">KVClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">KVClient</span><span class="p">(</span><span class="s2">&quot;192.168.0.2&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+<span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+<span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;key&quot;</span>
+<span class="n">expected_val</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;value&quot;</span>
+<span class="n">val</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">([</span><span class="n">key</span><span class="p">])</span>
+<span class="k">assert</span> <span class="n">val</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">expected_val</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;[OK] Get value&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>注意：</p>
+<p>脚本中初始化KVClient的入参需要替换为节点1/节点2服务端组件的IP和端口号。</p>
+</div></blockquote>
+<p>当脚本执行完均打印OK时说明验证成功。</p>
+</section>
 <section id="id7">
-<h3>下载源码<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://gitee.com/openeuler/yuanrong-datasystem.git
+<h2>推荐配置<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<p>为确保RDMA组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。</p>
+<section id="lpi">
+<h3>关闭LPI<a class="headerlink" href="#lpi" title="Link to this heading">#</a></h3>
+<p>LPI 用于优化功耗管理与资源分配，建议在 BIOS 启动时禁用掉改功能以提升 CPU 性能，配置步骤如下：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>BIOS -&gt; Advanced -&gt; Power And Performance Configuration -&gt; CPU PM Control
 </pre></div>
 </div>
 </section>
 <section id="id8">
-<h3>编译<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
-<p>如果构建环境中没有CANN或者无需使用异构对象的功能，可以通过 <code class="docutils literal notranslate"><span class="pre">-X</span></code> 参数禁用异构对象的编译：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem
-bash<span class="w"> </span>build.sh<span class="w"> </span>-X<span class="w"> </span>off
+<h3>开启大页内存<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<p>开启大页内存可有效提升内存的分配与拷贝性能，开启大页内存可参考附录文档：<a class="reference internal" href="../appendix/hugepage_guide.html"><span class="std std-doc">大页内存配置指南</span></a>。</p>
+<p>运行环境开启大页内存之后，启动数据系统服务端组件时需要启用大页内存配置项：</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-4">
+进程部署</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--etcd_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">etcd_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_rdma<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_huge_tlb<span class="w"> </span><span class="nb">true</span>
 </pre></div>
 </div>
-<p>如需编译全量特性，需要在开始编译前需要初始化Ascend相关的环境变量，非 root 用户执行：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/Ascend/ascend-toolkit/set_env.sh
+</div>
+<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-5">
+K8s部署</label><div class="sd-tab-content docutils">
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 其他配置项...</span>
+
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.6.0&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># ETCD集群地址</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">performance</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># 开启RDMA能力</span>
+<span class="w">    </span><span class="nt">enableRdma</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="c1"># 开启大页内存</span>
+<span class="w">    </span><span class="nt">enableHugeTlb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </pre></div>
 </div>
-<p>root 用户执行：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>/usr/local/Ascend/ascend-toolkit/set_env.sh
-</pre></div>
 </div>
-<p>执行编译脚本:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem
-bash<span class="w"> </span>build.sh
-</pre></div>
-</div>
-<p>其中：</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">build.sh</span></code>中默认的编译线程数为8，如果编译机性能较差可能会出现编译错误，可在执行中增加-j{线程数}来减少线程数量。如<code class="docutils literal notranslate"><span class="pre">bash</span> <span class="pre">build.sh</span> <span class="pre">-j4</span></code>。</p></li>
-<li><p>关于<code class="docutils literal notranslate"><span class="pre">build.sh</span></code>更多用法请执行<code class="docutils literal notranslate"><span class="pre">bash</span> <span class="pre">build.sh</span> <span class="pre">-h</span></code>获取帮助或者参看脚本头部的说明。</p></li>
-</ul>
-<p>编译成功后，会在output产生如下编译产物：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
-|-- openyuanrong_datasystem-0.5.0-cp311-cp311-manylinux_2_34_x86_64.whl
-|-- yr-datasystem-v0.5.0.tar.gz
-</pre></div>
 </div>
 </section>
-<section id="id9">
-<h3>安装<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>output/openyuanrong_datasystem-*.whl
+<section id="numa">
+<h3>绑定NUMA节点<a class="headerlink" href="#numa" title="Link to this heading">#</a></h3>
+<p>绑定NUMA节点可减少远程内存访问，提升缓存访问性能，进程部署时绑定NUMA节点命令如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--localalloc<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--etcd_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">etcd_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_rdma<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_huge_tlb<span class="w"> </span><span class="nb">true</span>
+<span class="w">    </span>
 </pre></div>
 </div>
+<p>表示绑定到 NUMA 节点 0 的 CPU，并在节点 NUMA 0 分配内存。
+更多 dscli绑定numa节点 部署详细信息请参考：<a class="reference internal" href="../deployment/dscli.html#id13"><span class="std std-ref">dscli命令参数说明</span></a>。</p>
 </section>
 </section>
 </section>
@@ -865,20 +814,20 @@ bash<span class="w"> </span>build.sh
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../getting-started/getting_started.html"
+       href="best_pracitces_for_ub.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">入门</p>
+        <p class="prev-next-title">UB最佳实践</p>
       </div>
     </a>
     <a class="right-next"
-       href="../deployment/index.html"
+       href="../development-guide/index.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">部署</p>
+        <p class="prev-next-title">编程接口</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -898,26 +847,18 @@ bash<span class="w"> </span>build.sh
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pypi">安装 PyPI 正式发布版本（推荐）</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">环境准备</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">基础依赖</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#python">安装 Python</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#cann">安装 CANN</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rdma-core">安装 rdma-core</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">安装</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">源码编译额外依赖</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#wheelsetuptools">安装wheel和setuptools</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">安装依赖库</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nightly">安装 nightly 版本</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">源码编译安装</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">下载源码</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">编译</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">安装</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">部署指南</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">快速验证</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">推荐配置</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lpi">关闭LPI</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">开启大页内存</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numa">绑定NUMA节点</a></li>
 </ul>
 </li>
 </ul>

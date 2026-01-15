@@ -52,6 +52,7 @@
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/k8s_configuration';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
@@ -179,6 +180,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -1133,6 +1135,16 @@ document.write(`
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>设置记录冗余日志的最低级别，低于这个级别的日志不会被记录</p></td>
 </tr>
+<tr class="row-even"><td><p>global.log.enableUcxLog</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否开启UCX RDMA日志，保存在<code class="docutils literal notranslate"><span class="pre">${logDir}/worker/ucx.log</span></code>当中</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.log.ucxLogLevel</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
+<td><p>设置UCX RDMA日志级别</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -1626,22 +1638,27 @@ SFS</label><div class="sd-tab-content docutils">
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
+<tr class="row-odd"><td><p>global.performance.ucxTransportLayerSelection</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">rc_x</span></code></p></td>
+<td><p>UCX RDMA运行时的底层传输协议</p></td>
+</tr>
+<tr class="row-even"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2097152</span></code></p></td>
 <td><p>worker响应的目标批量大小，默认值为2MB</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.ocWorkerAggregateSingleMax</p></td>
+<tr class="row-odd"><td><p>global.performance.ocWorkerAggregateSingleMax</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
 <td><p>批量处理worker最大单个项目大小，默认为64KB</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocWorkerWorkerParallelMin</p></td>
+<tr class="row-even"><td><p>global.performance.ocWorkerWorkerParallelMin</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">100</span></code></p></td>
 <td><p>并行工作线程批处理响应的最小数据计数，默认值为100</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.ocWorkerWorkerParallelNums</p></td>
+<tr class="row-odd"><td><p>global.performance.ocWorkerWorkerParallelNums</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
 <td><p>worker并行数量，0表示无限制</p></td>
