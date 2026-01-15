@@ -38,6 +38,7 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -46,6 +47,8 @@ DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DEFINE_uint32(eviction_thread_num, 1, "Thread number of eviction for object cache.");
 DS_DEFINE_validator(eviction_thread_num, &Validator::ValidateThreadNum);
 DS_DECLARE_uint32(spill_thread_num);
+DS_DECLARE_bool(spill_to_remote_worker);
+
 #ifdef WITH_TESTS
 constexpr uint32_t MASTER_TASK_THREAD_NUM = 4;
 #else
@@ -57,6 +60,8 @@ constexpr uint32_t SPILL_EVICT_THREAD_NUM = 1;
 namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 1;
+static constexpr int BATCH_SPILL_THRESHOLD = 512;
+thread_local std::string evictSpillTaskId;
 
 WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress,
                                                  HostPort masterAddress, master::MasterOCServiceImpl *masterOc)
@@ -99,6 +104,11 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
         }
     });
     return Status::OK();
+}
+
+std::string WorkerOcEvictionManager::GetSpillTaskId()
+{
+    return evictSpillTaskId;
 }
 
 void WorkerOcEvictionManager::Add(const std::string &objectKey)
@@ -170,6 +180,9 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     } else if (entry->IsSpilled()) {
         info = "already spilled";
         nextAction = Action::FREE_MEMORY;
+    } else if (FLAGS_spill_to_remote_worker) {
+        info = "object could be migrated";
+        nextAction = Action::MIGRATE;
     } else if (WorkerOcSpill::Instance()->IsEnabled()) {
         size_t needSpillSize = pendingSpillSize + entry->GetDataSize();
         const double ratio = 0.95;
@@ -196,9 +209,8 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     trace->action = nextAction;
 }
 
-Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, bool &spilling)
+Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction)
 {
-    spilling = false;
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
     (void)memEvictionList_.Erase(objectKey);
@@ -219,9 +231,10 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
         RETURN_IF_NOT_OK(entry->FreeResources());
         point.Record();
         VLOG(1) << FormatString("[ObjectKey %s] Object free success", objectKey);
+    } else if (nextAction == Action::MIGRATE) {
+        VLOG(1) << FormatString("[ObjectKey %s] Object will be migrated", objectKey);
     } else if (nextAction == Action::SPILL) {
         VLOG(1) << FormatString("[ObjectKey %s] Object will be spill", objectKey);
-        spilling = true;
     } else if (nextAction == Action::END_LIFE) {
         VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life", objectKey);
         RETURN_IF_NOT_OK(DeleteNoneL2CacheEvictableObject(objectKV));
@@ -233,8 +246,7 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
 
 Status WorkerOcEvictionManager::EvictClearObject(ObjectKV &objectKV)
 {
-    bool spilling;
-    return EvictObject(objectKV, Action::DELETE, spilling);
+    return EvictObject(objectKV, Action::DELETE);
 }
 
 uint64_t WorkerOcEvictionManager::GetLowWaterMark(CacheType cacheType)
@@ -290,7 +302,7 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
                 entry->WUnlock();
             }
         });
-        trace->objectSize = (*entry)->GetDataSize();
+        trace->AddObjectKeySize(candidateId, (*entry)->GetDataSize());
         // This moment object key may not in EvictionList.
         // It may be erased in other place after we got candidateId.
         // So we need to check it before do evict.
@@ -307,6 +319,11 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
         INJECT_POINT("worker.Evict", [&pendingSpillSize](size_t size) { pendingSpillSize = size; });
     }
+    auto it = spillTasks.find(GetSpillTaskId());
+    if (it != spillTasks.end() && !it->second.future.valid() &&
+        !it->second.trace->objectKeySizeMap.empty()) {
+        it->second.future = SubmitBatchSpillTask(GetSpillTaskId(), it->second.trace->objectKeySizeMap);
+    }
     (void)ReleaseSpillFutures(spillTasks, evictFailedIds, true);
 
     for (const auto &objKeyCounter : evictFailedIds) {
@@ -317,15 +334,33 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
               << ", failed size:" << evictFailedIds.size();
 }
 
+Status WorkerOcEvictionManager::MigrateData(const std::string &taskId,
+                                            const std::unordered_map<std::string, size_t> &migrateObjects,
+                                            std::vector<std::string> &failedMigrateObjectKeys)
+{
+    RETURN_OK_IF_TRUE(migrateObjects.empty());
+    std::vector<std::string> objectKeys;
+    objectKeys.reserve(migrateObjects.size());
+    std::transform(migrateObjects.begin(), migrateObjects.end(),
+                   std::back_inserter(objectKeys),
+                   [](const auto &pair) { return pair.first; });
+    int maxRetryCount = 5;
+    DataMigrator migrator(MigrateType::SPILL, etcdCM_, localAddress_, akSkManager_, objectTable_,
+                          taskId, maxRetryCount);
+    migrator.Init();
+    Status rc = migrator.Migrate(objectKeys, migrateObjects);
+    migrator.GetFailedKeys(failedMigrateObjectKeys);
+    return rc;
+}
+
 Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &entry,
                                                std::unique_ptr<EvictionTrace> trace, size_t &pendingSpillSize,
                                                std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked)
 {
-    const auto &objectKey = trace->objectKey;
+    const auto &objectKey = trace->taskId;
     ObjectKV objectKV(objectKey, *entry);
     PerfPoint point(PerfKey::WORKER_EVICT_ONE_OBJECT);
-    bool spilling;
-    Status rc = EvictObject(objectKV, trace->action, spilling);
+    Status rc = EvictObject(objectKV, trace->action);
     if (rc.IsError()) {
         trace->rc = rc;
         if (rc.GetCode() != K_NOT_READY) {
@@ -335,8 +370,23 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
         }
         return rc;
     }
-
-    if (spilling) {
+    if (trace->action == Action::MIGRATE) {
+        if (GetSpillTaskId().empty()) {
+            evictSpillTaskId = GetBytesUuid();
+        }
+        auto it = spillTasks.find(GetSpillTaskId());
+        if (it == spillTasks.end()) {
+            spillTasks.emplace(GetSpillTaskId(),
+                               SpillTask{ TaskType::BATCH, std::future<SpillResult>{}, std::move(trace) });
+        } else {
+            it->second.trace->AddObjectKeySize(objectKey, (*entry)->GetDataSize());
+            if (it->second.trace->objectKeySizeMap.size() >= BATCH_SPILL_THRESHOLD) {
+                it->second.future = SubmitBatchSpillTask(GetSpillTaskId(), it->second.trace->objectKeySizeMap);
+                evictSpillTaskId.clear();
+            }
+        }
+        pendingSpillSize += (*entry)->GetDataSize();
+    } else if (trace->action == Action::SPILL) {
         auto objectSize = (*entry)->GetDataSize();
         auto version = (*entry)->GetCreateTime();
         // Ensure the spill task for the same object are not concurrent
@@ -346,7 +396,8 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
         entry->WUnlock();
         locked = false;
         pendingSpillSize += objectSize;
-        spillTasks.emplace(objectKey, SpillTask{ SubmitSpillTask(objectKey, version), std::move(trace) });
+        spillTasks.emplace(objectKey,
+                           SpillTask{ TaskType::SINGLE, SubmitSpillTask(objectKey, version), std::move(trace) });
     }
     return Status::OK();
 }
@@ -462,6 +513,28 @@ std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::Submi
     });
 }
 
+Status WorkerOcEvictionManager::BatchSpillImpl(const std::string &taskId,
+    const std::unordered_map<std::string, uint64_t> &objectKeySizeMap, std::vector<std::string> failedKeys)
+{
+    if (FLAGS_spill_to_remote_worker) {
+        return MigrateData(taskId, objectKeySizeMap, failedKeys);
+    }
+    RETURN_STATUS(K_RUNTIME_ERROR, "Current only support migrate data when spill to remote worker is set true");
+}
+
+std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::SubmitBatchSpillTask(
+    const std::string &taskId, const std::unordered_map<std::string, uint64_t> &objectKeySizeMap)
+{
+    auto traceId = Trace::Instance().GetTraceID();
+    return spillTaskThreadPool_->Submit([this, taskId, objectKeySizeMap, traceId] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        Timer timer;
+        std::vector<std::string> failedKeys;
+        auto rc = BatchSpillImpl(taskId, objectKeySizeMap, failedKeys);
+        return SpillResult{ .rc = rc, .elapsed = timer.ElapsedMilliSecond(), .failedKeys = std::move(failedKeys) };
+    });
+}
+
 size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::string, SpillTask> &spillTasks,
                                                     std::vector<std::pair<std::string, uint8_t>> &evictFailedIds,
                                                     bool last)
@@ -469,7 +542,12 @@ size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::stri
     size_t spilledSize = 0;
     for (auto iter = spillTasks.begin(); iter != spillTasks.end();) {
         const auto &objectKey = iter->first;
+        auto &task = iter->second;
         auto &future = iter->second.future;
+        if (!future.valid()) {
+            ++iter;
+            continue;
+        }
         auto &trace = iter->second.trace;
         if (!last) {
             std::future_status taskStatus = future.wait_for(std::chrono::microseconds(0));
@@ -483,12 +561,18 @@ size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::stri
         auto result = future.get();
         Status spillRc = result.rc;
         spilledSize += trace->objectSize;
-
-        if (spillRc.IsError()) {
-            auto counter = spillRc.GetCode() == StatusCode::K_TRY_AGAIN ? Q1 : READD_COUNTER;
-            evictFailedIds.emplace_back(objectKey, counter);
+        if (task.taskType == TaskType::SINGLE) {
+            if (spillRc.IsError()) {
+                auto counter = spillRc.GetCode() == StatusCode::K_TRY_AGAIN ? Q1 : READD_COUNTER;
+                evictFailedIds.emplace_back(objectKey, counter);
+            }
         }
-
+        if (task.taskType == TaskType::BATCH) {
+            evictFailedIds.reserve(evictFailedIds.size() + result.failedKeys.size());
+            for (const auto &key : result.failedKeys) {
+                evictFailedIds.emplace_back(key, READD_COUNTER);
+            }
+        }
         trace->rc = spillRc;
         trace->spillCost = result.elapsed;
         spillTasks.erase(iter++);

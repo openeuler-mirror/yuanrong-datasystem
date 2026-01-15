@@ -101,6 +101,9 @@ global:
     evictionThreadNum: 1
     # The reserved memory (MB) is determined by min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400.
     evictionReserveMemThresholdMB: 10240
+    # It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes.
+    # When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers' shared memory. If no worker has available memory, objects spill to disk.
+    spillToRemoteWorker: false
 
   log:
     # Log config.

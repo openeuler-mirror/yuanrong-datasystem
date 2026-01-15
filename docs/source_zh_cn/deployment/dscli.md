@@ -749,6 +749,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_file_open_limit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | spill_enable_readahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
 | eviction_thread_num | int | `1` | 后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘 |
+| spill_to_remote_worker | bool | `false` | 表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。 |
 
 #### 日志与可观测相关配置
 

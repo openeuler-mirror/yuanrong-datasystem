@@ -56,6 +56,17 @@ public:
     Status Migrate(const std::vector<std::string> &objectKeys,
                    const std::unordered_map<std::string, uint64_t> &objectSizes);
 
+    /**
+     * @brief Get not migrated object keys.
+     * @param[out] failedMigrateObjectKeys The list of object keys that are failed.
+     */
+    void GetFailedKeys(std::vector<std::string> &failedMigrateObjectKeys)
+    {
+        failedMigrateObjectKeys.clear();
+        failedMigrateObjectKeys.reserve(failedKeys_.size());
+        std::copy(failedKeys_.begin(), failedKeys_.end(), std::back_inserter(failedMigrateObjectKeys));
+    }
+
 private:
     /**
      * @brief Get migration strategy by type.

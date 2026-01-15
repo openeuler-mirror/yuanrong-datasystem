@@ -209,6 +209,7 @@ global:
 | global.spill.spillFileOpenLimit | int | `512` | The maximum number of open file descriptors about spill. If opened file exceed this value, some files will be temporarily closed to prevent exceeding the maximum system limit. You need reduce this value if your system resources are limited. The valid range is greater than or equal to 8. |
 | global.spill.spillEnableReadahead | bool | `true` | Disable readahead can mitigate the read amplification problem for offset read, default is true |
 | global.spill.evictionThreadNum | int | `1` | Thread number of eviction for object cache |
+| global.spill.spillToRemoteWorker | bool | `false` | It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes. When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers' shared memory. If no worker has available memory, objects spill to disk. |
 
 - **Example1**:
 
@@ -247,7 +248,22 @@ global:
       # The mounted directory inside the container must match the `spillDirectory`.
       mountPath: "/opt/spill/yr_datasystem_spill"
     ```
+- **Example3**:
 
+    Spill directory is "/opt/spill/yr_datasystem_spill"，the maximum size is 10GB. When spillToRemoteWorker is true, and the local node memory reaches the high watermark, it attempts to migrate objects to the shared memory of other workers. If no worker has available memory, objects spill to disk.
+
+    ```yaml
+    global:
+      spill:
+        spillDirectory: "/opt/spill/yr_datasystem_spill"
+        spillSizeLimit: "10737418240"
+        spillThreadNum: 8
+        spillToRemoteWorker: true
+        spillFileMaxSizeMb: 200
+        spillFileOpenLimit: 512
+        spillEnableReadahead: true
+        evictionThreadNum: 1
+    ```
 ### Log Configurations
 
 | Configuration | Type | Default | Description |
