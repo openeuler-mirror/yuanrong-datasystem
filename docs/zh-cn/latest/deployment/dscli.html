@@ -52,6 +52,7 @@
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/dscli';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
@@ -1153,6 +1154,10 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <td><p>-l</p></td>
 <td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
+<tr class="row-even"><td><p>–enable_ums</p></td>
+<td><p>无</p></td>
+<td><p>启用ums后，datasystem worker之间的rpc消息将通过 ub 传输</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -1165,6 +1170,21 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存</span>
 dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+</pre></div>
+</div>
+<p><strong>启用ums注意事项</strong>：</p>
+<ul class="simple">
+<li><p>启用ums功能请确保机器已安装ums相关rpm包</p></li>
+<li><p>配置项 enable_ums 需要位于-w worker参数之前。
+ums安装参考</p></li>
+</ul>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>yum<span class="w"> </span>install<span class="w"> </span>umdk-ums.aarch64
+yum<span class="w"> </span>install<span class="w"> </span>umdk-ums-tools.aarch64
+modprobe<span class="w"> </span>ums
+</pre></div>
+</div>
+<p>例子：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--enable_ums<span class="w"> </span>-w<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
 </pre></div>
 </div>
 </div></blockquote>
@@ -1237,6 +1257,10 @@ dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span cla
 <td><p>-l</p></td>
 <td><p>将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点</p></td>
 </tr>
+<tr class="row-odd"><td><p>–enable_ums</p></td>
+<td><p>无</p></td>
+<td><p>启用ums后，datasystem worker之间的rpc消息将通过 ub 传输</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -1248,6 +1272,14 @@ dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span cla
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 启动集群并绑核</span>
 dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span>--preferred<span class="w"> </span><span class="m">1</span><span class="w"> </span>-f<span class="w"> </span>./cluster_config.json<span class="w"> </span>
+</pre></div>
+</div>
+<p><strong>启用ums注意事项</strong>：</p>
+<ul class="simple">
+<li><p>启用ums功能请确保机器已安装ums相关rpm包</p></li>
+</ul>
+<p>例子：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>up<span class="w"> </span>--enable_ums<span class="w"> </span>-f<span class="w"> </span>./cluster_config.json<span class="w"> </span>
 </pre></div>
 </div>
 </div></blockquote>
@@ -1816,12 +1848,12 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>指定其他可用区的名称，如果需要指定多个可用区通过’,’进行分隔</p></td>
 </tr>
-<tr class="row-odd"><td><p>cross_az_get_data_from_worker</p></td>
+<tr class="row-odd"><td><p>cross_cluster_get_data_from_worker</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则将直接从二级缓存中检索数据</p></td>
 </tr>
-<tr class="row-even"><td><p>cross_az_get_meta_from_worker</p></td>
+<tr class="row-even"><td><p>cross_cluster_get_meta_from_worker</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否从其他可用区的datasystem-worker获取元数据，如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则从本地可用区获取元数据</p></td>
