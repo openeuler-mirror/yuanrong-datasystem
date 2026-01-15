@@ -538,6 +538,11 @@ Status WorkerWorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, Migra
     return ocClientWorkerSvc_->MigrateData(req, rsp, std::move(payloads));
 }
 
+Status WorkerWorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
+{
+    return ocClientWorkerSvc_->MigrateDataDirect(req, rsp);
+}
+
 Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReqPb &req)
 {
     bool isFastTransportEnabled = (IsUrmaEnabled() && req.has_urma_info()) || (IsUcpEnabled() && req.has_ucp_info());

@@ -222,6 +222,24 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     return Status::OK();
 }
 
+Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
+                const uint64_t &localObjectAddress, const uint64_t &dataSize, const uint64_t &metaSize,
+                std::vector<uint64_t> &keys)
+{
+    (void)urmaInfo;
+    (void)localSegAddress;
+    (void)localSegSize;
+    (void)localObjectAddress;
+    (void)dataSize;
+    (void)metaSize;
+    (void)keys;
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaRead(urmaInfo, localSegAddress, localSegSize, localObjectAddress,
+                                                      dataSize, metaSize, keys));
+#endif
+    return Status::OK();
+}
+
 Status FillUcpInfo(uint64_t segAddress, uint64_t dataOffset, const std::string &srcIpAddr, UcpRemoteInfoPb &ucpInfo)
 {
     (void)segAddress;

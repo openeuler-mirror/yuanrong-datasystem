@@ -207,6 +207,14 @@ public:
     Status MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp, std::vector<RpcMessage> payloads);
 
     /**
+     * @brief Migrate data directly.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @return Status of the call.
+     */
+    Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
+    /**
      * @brief Migrate data when voluntary scale down happen.
      * @param[in] objectKeys Need migrate data object key list.
      * @param[in] taskId task id of voluntary scale down task, if task id is empty, it means we

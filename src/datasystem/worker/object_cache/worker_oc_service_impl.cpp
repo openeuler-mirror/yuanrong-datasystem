@@ -95,6 +95,7 @@
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/async_rollback_manager.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
+#include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -165,6 +166,7 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
     AddLocalFailedNodeEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     EraseFailedNodeApiEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     StartNodeCheckEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
+    AsyncResourceReleaser::Instance().Shutdown();
     exitFlag_->store(true);
     {
         // Avoid read data while modifying the vector.
@@ -280,6 +282,7 @@ Status WorkerOCServiceImpl::Init()
     RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
 
     asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
     getProc_->Init();
     HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
@@ -566,6 +569,12 @@ Status WorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, MigrateData
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     return gMigrateProc_->MigrateData(req, rsp, std::move(payloads));
+}
+
+Status WorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    return gMigrateProc_->MigrateDataDirect(req, rsp);
 }
 
 Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId)

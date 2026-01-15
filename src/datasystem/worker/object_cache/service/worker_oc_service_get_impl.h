@@ -375,30 +375,6 @@ private:
 
     /**
      * @brief Pull object data from remote worker.
-     * @note The request protobuf needs to contain urma_info fields.
-     * @param[in] shmUnit The shared memory unit.
-     * @param[in] metaSz The metadata size of shared memory.
-     * @param[out] reqPb The remote GetObject rpc req protobuf.
-     * @return Status of the call.
-     */
-    template <typename Req>
-    Status FillGetRequestUrmaInfo(std::shared_ptr<ShmUnit> &shmUnit, uint64_t &metaSz, Req &reqPb);
-
-    /**
-     * @brief Pull object data from remote worker.
-     * @note The request protobuf needs to contain ucp_info fields.
-     * @param[in] srcIpAddr The ip address of object data owner.
-     * @param[in] shmUnit The shared memory unit.
-     * @param[in] metaSz The metadata size of shared memory.cd
-     * @param[out] reqPb The remote GetObject rpc req protobuf.
-     * @return Status of the call.
-     */
-    template <typename Req>
-    Status FillGetRequestUcpInfo(const std::string &srcIpAddr, std::shared_ptr<ShmUnit> &shmUnit, uint64_t &metaSz,
-                                 Req &reqPb);
-
-    /**
-     * @brief Pull object data from remote worker.
      * @note The request protobuf needs to contain data_size and urma_info fields.
      * @param[in] srcIpAddr The ip address of object data owner.
      * @param[in] dataSize The object data size.

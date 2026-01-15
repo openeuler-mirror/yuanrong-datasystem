@@ -871,6 +871,56 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     return Status::OK();
 }
 
+Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                             const uint64_t &localSegSize, const uint64_t &localObjectAddress, const uint64_t &dataSize,
+                             const uint64_t &metaDataSize, std::vector<uint64_t> &keys)
+{
+    keys.clear();
+    auto segVa = urmaInfo.seg_va();
+    const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
+    const std::string remoteDeviceId = requestAddress.ToString();
+    std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
+    RemoteDeviceMap::ConstAccessor constAccessor;
+    // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
+    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
+                                         FormatString("Failed to find jfr from %s", remoteDeviceId));
+    SegmentMap::ConstAccessor remoteSegAccessor;
+    RETURN_IF_NOT_OK(constAccessor.entry->data.GetRemoteSeg(segVa, remoteSegAccessor));
+
+    SegmentMap::ConstAccessor localSegAccessor;
+    RETURN_IF_NOT_OK(GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor));
+
+    urma_jfs_wr_flag_t flag;
+    flag.value = 0;
+    flag.bs.complete_enable = 1;
+
+    uint64_t readOffset = 0;
+    uint64_t remainSize = dataSize;
+    while (remainSize > 0) {
+        const uint64_t readSize = std::min(remainSize, (uint64_t)urmaDeviceAttribute_.dev_cap.max_read_size);
+        const uint64_t key = requestId_.fetch_add(1);
+        const uint64_t index = key % FLAGS_urma_connection_size;
+        urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
+        urma_target_jetty_t *importJfr = constAccessor.entry->data.importJfrs_[index].get();
+        urma_status_t ret =
+            urma_read(urmaJfs, importJfr, localSegAccessor.entry->data.segment_.get(),
+                      remoteSegAccessor.entry->data.segment_.get(), localObjectAddress + metaDataSize + readOffset,
+                      segVa + urmaInfo.seg_data_offset() + readOffset, readSize, flag, key);
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            ret == URMA_SUCCESS, K_RUNTIME_ERROR,
+            FormatString("Failed to urma read object with key = %zu, ret = %d", key, ret));
+        keys.emplace_back(key);
+
+        remainSize -= readSize;
+        readOffset += readSize;
+
+        std::shared_ptr<Event> event;
+        RETURN_IF_NOT_OK(CreateEvent(key, event));
+    }
+    return Status::OK();
+}
+
 urma_target_seg_t *UrmaManager::ImportSegment(urma_seg_t &remoteSegment)
 {
     return urma_import_seg(urmaContext_, &remoteSegment, &urmaToken_, 0, importSegmentFlag_);
@@ -995,7 +1045,7 @@ Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &con
     if ((*remoteSegments_).Find(constAccessor, segVa)) {
         return Status::OK();
     }
-    RETURN_STATUS(K_NOT_FOUND, "Remote segment is not found");
+    RETURN_STATUS(K_NOT_FOUND, FormatString("Remote segment is not found, segment VA: %lu", segVa));
 }
 
 Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &importSegmentInfo)

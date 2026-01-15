@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,12 +36,18 @@ public:
      * @param[out] rsp The Response of migration.
      * @return Status of the call.
      */
-    Status MigrateDataToRemote(const Request &req, Response &rsp) override
-    {
-        (void)req;
-        (void)rsp;
-        RETURN_STATUS(K_RUNTIME_ERROR, "Not implemented yet.");
-    }
+    Status MigrateDataToRemote(const Request &req, Response &rsp) override;
+
+private:
+    /**
+     * @brief Process the response from MigrateDataDirect RPC.
+     * @param[in] reqPb The protobuf request that was sent.
+     * @param[in] rspPb The protobuf response received.
+     * @param[in] req The original Request for progress callback and logging.
+     * @param[out] rsp The Response to populate with results.
+     */
+    void ProcessMigrateResponse(const MigrateDataDirectReqPb &reqPb, const MigrateDataDirectRspPb &rspPb,
+                                const Request &req, Response &rsp);
 };
 
 }  // namespace object_cache

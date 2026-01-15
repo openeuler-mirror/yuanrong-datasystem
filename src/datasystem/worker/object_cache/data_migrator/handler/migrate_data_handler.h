@@ -153,6 +153,12 @@ private:
      */
     bool ShouldUseFastTransport() const;
 
+    /**
+     * @brief Release resources for successfully migrated objects.
+     * @param[in] successIds Successfully migrated object ids.
+     */
+    void ReleaseResources(const std::unordered_set<ImmutableString> &successIds);
+
     MigrateType type_;
     std::string localAddr_;
     std::unordered_set<ImmutableString> needMigrateDataIds_;

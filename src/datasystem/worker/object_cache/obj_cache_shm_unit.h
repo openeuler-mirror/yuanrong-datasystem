@@ -188,11 +188,13 @@ Status CopyAndSplitBuffer(const std::string &tenantId, const void *data, size_t 
  * @param[in] evictionManager Eviction manager.
  * @param[out] shmUnit The share memory info of object.
  * @param[in] cacheType The type of cache.
+ * @param[in] retryOnOOM Indicate need retry on OOM or not.
  * @return Status of the call.
  */
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                               ShmUnit &shmUnit, CacheType cacheType = CacheType::MEMORY);
+                               ShmUnit &shmUnit, CacheType cacheType = CacheType::MEMORY,
+                               bool retryOnOOM = true);
 
 /**
  * @brief Distribute memory from already allocated ShmOwner for object.
@@ -214,13 +216,14 @@ Status DistributeMemoryForObject(const std::string &objectKey, const uint64_t da
  * @param[in] evictionManager Eviction manager.
  * @param[out] shmOwners The allocated shared memory chunks.
  * @param[out] shmIndexMapping The object id to shmOwners index mapping.
+ * @param[in] retryOnOOM Indicate need retry on OOM or not.
  * @return Status of the call.
  */
 Status AggregateAllocate(
     const std::string &firstObjectKey,
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> &traversalHelper,
     std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-    std::vector<uint32_t> &shmIndexMapping);
+    std::vector<uint32_t> &shmIndexMapping, bool retryOnOOM = true);
 
 /**
  * @brief Allocate Shm unit and init its id.

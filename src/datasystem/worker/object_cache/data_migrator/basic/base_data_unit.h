@@ -59,6 +59,33 @@ public:
     virtual uint64_t Size() const = 0;
 
     /**
+     * @brief Get data.
+     * @return Data pointer.
+     */
+    virtual const void *Data() const
+    {
+        return nullptr;
+    }
+
+    /**
+     * @brief Get offset of data.
+     * @return Offset.
+     */
+    virtual uint64_t Offset() const
+    {
+        return 0;
+    }
+
+    /**
+     * @brief Get meta size.
+     * @return Meta size.
+     */
+    virtual size_t MetaSize() const
+    {
+        return 0;
+    }
+
+    /**
      * @brief Get object data version.
      * @return Version.
      */
@@ -87,8 +114,10 @@ public:
     ShmData(const ImmutableString &objectKey, uint64_t version, std::shared_ptr<ShmUnit> unit, size_t dataSize,
             size_t metaSize)
         : BaseDataUnit(objectKey, version),
-          data_(static_cast<uint8_t *>(unit->GetPointer()) + metaSize),
+          data_(static_cast<uint8_t *>(unit->GetPointer())),
+          offset_(unit->GetOffset()),
           size_(dataSize),
+          metasize_(metaSize),
           shmGuard_(std::move(unit), dataSize, metaSize),
           needLock_(metaSize != 0)
     {
@@ -112,7 +141,7 @@ public:
     std::vector<MemView> GetMemViews() const override
     {
         std::vector<MemView> result;
-        result.emplace_back(data_, size_);
+        result.emplace_back(static_cast<uint8_t *>(data_) + metasize_, size_);
         return result;
     }
 
@@ -125,9 +154,38 @@ public:
         return size_;
     }
 
+    /**
+     * @brief Get data.
+     * @return Data pointer.
+     */
+    const void *Data() const override
+    {
+        return data_;
+    }
+
+    /**
+     * @brief Get offset of data.
+     * @return Offset.
+     */
+    uint64_t Offset() const override
+    {
+        return offset_;
+    }
+
+    /**
+     * @brief Get meta size.
+     * @return Meta size.
+     */
+    size_t MetaSize() const override
+    {
+        return metasize_;
+    }
+
 private:
     void *data_;
+    uint64_t offset_;
     uint64_t size_;
+    size_t metasize_;
     ShmGuard shmGuard_;
     bool needLock_;
 };

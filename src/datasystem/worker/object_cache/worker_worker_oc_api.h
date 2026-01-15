@@ -173,6 +173,8 @@ public:
 
     Status MigrateData(MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
 
+    Status MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
 private:
     // The HostPort of the remote worker node.
     HostPort hostPort_;

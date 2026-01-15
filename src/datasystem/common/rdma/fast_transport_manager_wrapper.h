@@ -141,6 +141,21 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
                         const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys);
 
 /**
+ * @brief Trigger UrmaManager logic to import segment and read payload.
+ * @param[in] UrmaRemoteAddrPb  Protobuf contians remote host address, remote urma segment address and data offset
+ * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address).
+ * @param[in] localSegSize Total size of the segment (e.g. Arena size).
+ * @param[in] localObjectAddress Object address.
+ * @param[in] dataSize Size of the object.
+ * @param[in] metaSize Size of metadata (SHM metadata stored as part of object).
+ * @param[out] keys The new request id to wait for.
+ * @return Status of the call.
+ */
+Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
+                const uint64_t &localObjectAddress, const uint64_t &dataSize, const uint64_t &metaSize,
+                std::vector<uint64_t> &keys);
+
+/**
  * @brief Fill in ucp_info pb for UCP RDMA.
  * @param[in] segAddress The virtual address of the segment.
  * @param[in] dataOffset The data offset of the segment.

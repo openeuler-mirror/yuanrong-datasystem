@@ -50,9 +50,10 @@ namespace datasystem {
 namespace object_cache {
 
 using ObjInfoPbList = google::protobuf::RepeatedPtrField<MigrateDataReqPb::ObjectInfoPb>;
+using ObjInfoPbListDirect = google::protobuf::RepeatedPtrField<MigrateDataDirectReqPb::ObjectInfoPb>;
 using ObjectInfoMap = std::unordered_map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>>;
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
-using LockedEntryMap = std::map<std::string, std::shared_ptr<SafeObjType>>;
+using LockedEntryMap = std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, uint64_t>>;
 using RedirectMap =
     std::unordered_map<std::string, google::protobuf::RepeatedPtrField<master::ReplacePrimaryReqPb::ObjectInfoPb>>;
 
@@ -80,6 +81,14 @@ public:
      */
     Status MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp, std::vector<RpcMessage> payloads);
 
+    /**
+     * @brief Migrate data directly.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @return Status of the call.
+     */
+    Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
 #ifdef WITH_TESTS
 public:
 #else
@@ -92,9 +101,39 @@ private:
      * @param[out] successIds Success object key list.
      * @param[out] failedIds Failed object key list.
      */
-    void BatchLockForMigrateData(const ObjInfoPbList &infoList, LockedEntryMap &lockedEntries,
+    template <typename T>
+    void BatchLockForMigrateData(const T &infoList, LockedEntryMap &lockedEntries,
                                  std::unordered_set<std::string> &successIds,
-                                 std::unordered_set<std::string> &failedIds);
+                                 std::unordered_set<std::string> &failedIds)
+    {
+        lockedEntries.clear();
+        std::map<std::string, uint64_t> toLockIds;
+        std::transform(infoList.begin(), infoList.end(), std::inserter(toLockIds, toLockIds.end()),
+                       [](const auto &info) { return std::make_pair(info.object_key(), info.version()); });
+
+        BatchLock(toLockIds, lockedEntries, successIds, failedIds);
+    }
+
+    /**
+     * @brief Batch lock objects.
+     * @param[in] toLockIds Object key and version map.
+     * @param[out] lockedEntries Locked object list.
+     * @param[out] successIds Success object key list.
+     * @param[out] failedIds Failed object key list.
+     */
+    void BatchLock(const std::map<std::string, uint64_t> &toLockIds, LockedEntryMap &lockedEntries,
+                   std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds);
+
+    /**
+     * @brief Batch unlock objects.
+     * @param[in] lockedEntries Locked object list.
+     */
+    void BatchUnlock(const LockedEntryMap &lockedEntries)
+    {
+        for (auto &entry : lockedEntries) {
+            entry.second.first->WUnlock();
+        }
+    }
 
     /**
      * @brief Query metadat from master.
@@ -134,6 +173,100 @@ private:
     Status FillOneObjectLocked(std::shared_ptr<SafeObjType> &entry, const MigrateDataReqPb::ObjectInfoPb &info,
                                const master::QueryMetaInfoPb &meta, std::vector<RpcMessage> &payloads,
                                const MigrateType &type, ObjectInfoMap &needSendMasterIds);
+
+    /**
+     * @brief Fill metadata to object entries.
+     * @param[in] lockedEntries Locked object list.
+     * @param[in] metas Query meta list.
+     * @param[out] successIds Success object key list.
+     * @param[out] failedIds Failed object key list.
+     * @param[out] needReadDataIds Need read data object keys.
+     */
+    void FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
+                                 std::unordered_set<std::string> &successIds,
+                                 std::unordered_set<std::string> &failedIds, ObjectInfoMap &needReadDataIds);
+
+    /**
+     * @brief Fill data to object entries.
+     * @param[in] req Migrate data direct request.
+     * @param[in] needReadDataIds Need read data object keys.
+     * @param[out] needSendMasterIds Need send master object keys.
+     * @param[out] failedIds Failed object key list.
+     * @return K_OK on success, the error otherwise.
+     */
+    Status FillDataToObjectEntries(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
+                                   ObjectInfoMap &needSendMasterIds, std::unordered_set<std::string> &failedIds);
+
+    struct ReadTask {
+        std::string objectKey;
+        std::vector<uint64_t> eventKeys;
+        std::shared_ptr<ShmUnit> shmUnit;
+        std::shared_ptr<SafeObjType> entry;
+        bool isNewCreate{ false };
+    };
+
+    /**
+     * @brief Start remote read tasks.
+     * @param[in] req Migrate data direct request.
+     * @param[in] needReadDataIds Need read data object keys.
+     * @param[in] shmIndexMapping The object id to shmOwners index mapping.
+     * @param[in] shmOwners The allocated shared memory chunks.
+     * @param[out] tasks Remote read tasks.
+     * @param[out] failedIds Failed object key list.
+     * @return K_OK on success, the error otherwise.
+     */
+    Status StartRemoteReadTasks(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
+                                const std::vector<uint32_t> &shmIndexMapping,
+                                const std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                std::vector<ReadTask> &tasks, std::unordered_set<std::string> &failedIds);
+
+    /**
+     * @brief Get shared memory owner by index.
+     * @param[in] idx Object index.
+     * @param[in] shmIndexMapping The object id to shmOwners index mapping.
+     * @param[in] shmOwners The allocated shared memory chunks.
+     * @return Shared memory owner or nullptr.
+     */
+    std::shared_ptr<ShmOwner> GetShmOwnerByIndex(int idx, const std::vector<uint32_t> &shmIndexMapping,
+                                                  const std::vector<std::shared_ptr<ShmOwner>> &shmOwners) const;
+
+    /**
+     * @brief Process remote read for a single object.
+     * @param[in] object Object info.
+     * @param[in] needReadIt Iterator to need read data entry.
+     * @param[in] shmUnit Shared memory unit.
+     * @param[in] metaSize Metadata size.
+     * @param[out] tasks Remote read tasks.
+     * @param[out] failedIds Failed object key list.
+     * @return K_OK on success, the error otherwise.
+     */
+    Status ProcessRemoteReadForObject(const MigrateDataDirectReqPb::ObjectInfoPb &object,
+                                      ObjectInfoMap::const_iterator needReadIt,
+                                      std::shared_ptr<ShmUnit> shmUnit, size_t metaSize,
+                                      std::vector<ReadTask> &tasks,
+                                      std::unordered_set<std::string> &failedIds);
+
+    /**
+     * @brief Wait remote read tasks.
+     * @param[in,out] tasks Remote read tasks.
+     * @param[out] needSendMasterIds Need send master object keys.
+     * @param[out] failedIds Failed object key list.
+     * @return K_OK on success, the error otherwise.
+     */
+    Status WaitRemoteReadTasks(std::vector<ReadTask> &tasks, ObjectInfoMap &needSendMasterIds,
+                               std::unordered_set<std::string> &failedIds);
+
+    /**
+     * @brief Helper function for aggregate allocation.
+     * @param[in] req Migrate data direct request.
+     * @param[in] needReadDataIds Need read data object keys.
+     * @param[out] shmOwners The allocated shared memory chunks.
+     * @param[out] shmIndexMapping The object id to shmOwners index mapping.
+     */
+    Status AggregateAllocateHelper(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
+                                   std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                   std::vector<uint32_t> &shmIndexMapping);
+
     /**
      * @brief Notify master to replace object primary copy.
      * @param[in] originAddr Original primary worker address.
@@ -164,6 +297,15 @@ private:
      */
     void FillMigrateDataResponse(const MigrateDataReqPb &req, const std::unordered_set<std::string> &successIds,
                                  const std::unordered_set<std::string> &failedIds, bool oom, MigrateDataRspPb &rsp);
+
+    /**
+     * @brief Fill migrate data direct response.
+     * @param[in] failedIds Failed object key list.
+     * @param[in] oom Indicate is OOM or not.
+     * @param[out] rsp Migrate data direct response.
+     */
+    void FillMigrateDataDirectResponse(const std::unordered_set<std::string> &failedIds, bool oom,
+                                       MigrateDataDirectRspPb &rsp);
 
     /**
      * @brief For test mock purpose.
@@ -269,8 +411,8 @@ private:
      * @param[in] objectKeys Need rollback object keys.
      * @param[in] objectInfos Object infos.
      */
-    void RollbackObjects(const google::protobuf::RepeatedPtrField<std::string> &objectKeys,
-                         const ObjectInfoMap &objectInfos);
+    template <typename Container>
+    void RollbackObjects(const Container &objectKeys, const ObjectInfoMap &objectInfos);
 
     /**
      * @brief Get worker master api.
@@ -313,10 +455,10 @@ private:
     bool IsMemoryAvailable(uint64_t size = 0, MigrateType type = MigrateType::SCALE_DOWN) const;
 
     /**
-    * @brief Indicate if disk space is available.
-    * @param[in] size The amount of disk space needed.
-    * @return True if the required disk space is available.
-    */
+     * @brief Indicate if disk space is available.
+     * @param[in] size The amount of disk space needed.
+     * @return True if the required disk space is available.
+     */
     bool IsDiskAvailable(uint64_t size = 0) const;
 
     /**
@@ -361,7 +503,17 @@ private:
      * @param[in] req Migrate data request.
      * @return Object list.
      */
-    std::vector<std::string> GetObjects(const MigrateDataReqPb &req) const;
+    template <typename Req>
+    std::vector<std::string> GetObjects(const Req &req) const
+    {
+        std::vector<std::string> objectKeys;
+        objectKeys.reserve(req.objects_size());
+        const auto &infos = req.objects();
+        for (const auto &info : infos) {
+            objectKeys.emplace_back(info.object_key());
+        }
+        return objectKeys;
+    }
 
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
@@ -369,11 +521,11 @@ private:
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
-    std::shared_timed_mutex mutex_; // protect rateMap_ and rateTimeStampMap_
+    std::shared_timed_mutex mutex_;  // protect rateMap_ and rateTimeStampMap_
 
-    std::unordered_map<std::string, uint64_t> rateMap_; // key is worker ip, value is last rate
+    std::unordered_map<std::string, uint64_t> rateMap_;  // key is worker ip, value is last rate
 
-    std::unordered_map<std::string, uint64_t> rateTimeStampMap_; // key is worker ip, value is timestamp
+    std::unordered_map<std::string, uint64_t> rateTimeStampMap_;  // key is worker ip, value is timestamp
 
     std::string localAddr_;
 
