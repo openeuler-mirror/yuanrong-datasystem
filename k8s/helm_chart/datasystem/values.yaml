@@ -131,6 +131,12 @@ global:
     logFilename: ""
     # Interval between logging stream metrics
     scMetricsLogIntervalS: 60
+    # Enable or disable UCX logging for RDMA transports.
+    # Note: This parameter is only active if 'enableRdma' is set to true.
+    enableUcxLog: false
+    # UCX RDMA logging level.
+    # Available levels: FATAL, ERROR, WARN, INFO, DEBUG, TRACE.
+    ucxLogLevel: "INFO"
 
   observability:
     # Record performance and resource logs
@@ -391,6 +397,8 @@ global:
     enableRdma: false
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     rdmaRegisterWholeArena: true
+    # Specify the UCX transport layer for RDMA IB communication, default "rc_x".
+    ucxTransportLayerSelection: "rc_x"
     # Target batch size for worker worker responses, default is 2MB.
     ocWorkerAggregateMergeSize: 2097152
     # Max single item size for batching worker worker batch rsp, default is 64KB.
