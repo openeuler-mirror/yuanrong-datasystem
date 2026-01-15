@@ -177,5 +177,33 @@ TEST_F(KVClientHitTest, MultiRemoteHit)
     DS_ASSERT_OK(StrInResLog(0, "hit_info:0/0/0/0/0"));
     DS_ASSERT_OK(StrInResLog(1, "hit_info:0/0/0/10/0"));
 }
+
+TEST_F(KVClientHitTest, PartMiss)
+{
+    std::shared_ptr<KVClient> client0, client1;
+    InitTestKVClient(0, client0, [&](ConnectOptions &opts) { (void)opts; });
+    InitTestKVClient(1, client1, [&](ConnectOptions &opts) { (void)opts; });
+    cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "hitinfo.prefix", "call()");
+    cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "hitinfo.prefix", "call()");
+    std::vector<std::string> keys;
+    std::vector<std::string> vals;
+    const auto keyNum = 10;
+    for (auto i = 0; i < keyNum; i++) {
+        auto key = FormatString("key_%d", i);
+        auto missKey = key + "_miss";
+        auto remoteKey = key + "_remote";
+        DS_ASSERT_OK(client0->Set(key, "xxx"));
+        DS_ASSERT_OK(client1->Set(remoteKey, "xxx"));
+        keys.emplace_back(key);
+        keys.emplace_back(remoteKey);
+        keys.emplace_back(missKey);
+    }
+    DS_ASSERT_OK(client1->Get(keys, vals));
+    // make sure the print of resource log finish
+    sleep(logInterval);
+    DS_ASSERT_OK(StrInResLog(0, "hit_info:0/0/0/0/0"));
+    DS_ASSERT_OK(StrInResLog(1, "hit_info:10/0/0/10/10"));
+}
+
 };  // namespace st
 }  // namespace datasystem

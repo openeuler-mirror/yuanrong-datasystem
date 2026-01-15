@@ -961,7 +961,6 @@ private:
     HostPort localAddress_;
 
     std::vector<std::string> otherAZNames_;
-    std::shared_ptr<CacheHitInfo> cacheHitInfo_;  // the cache hit info
 
     std::unique_ptr<AsyncUpdateLocationManager> asyncUpdateLocationManager_{ nullptr };
 

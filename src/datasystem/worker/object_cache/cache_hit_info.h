@@ -23,6 +23,7 @@ class CacheHitInfo {
 public:
     CacheHitInfo() = default;
     ~CacheHitInfo() = default;
+    static CacheHitInfo &Instance();
     /**
      * @brief Increase the mem hit num.
      * @param[in] n  The increase num, default is 1.

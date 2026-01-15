@@ -483,7 +483,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         BatchGetObjectHandleIndividualStatus(subRc, *readKey, successIds, needRetryIds, failedIds);
         lastRc = subRc;
         if (subRc.IsOk()) {
-            isFromL2 ? cacheHitInfo_->IncL2Hit(1) : cacheHitInfo_->IncRemoteHit(1);
+            isFromL2 ? CacheHitInfo::Instance().IncL2Hit(1) : CacheHitInfo::Instance().IncRemoteHit(1);
         }
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_OTHER);
     }

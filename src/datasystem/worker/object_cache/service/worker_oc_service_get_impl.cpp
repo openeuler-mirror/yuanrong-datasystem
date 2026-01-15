@@ -89,7 +89,6 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
       localAddress_(std::move(localAddress))
 {
     remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "RemoteGetThreadPool");
-    cacheHitInfo_ = std::make_shared<CacheHitInfo>();
     if (HaveOtherAZ()) {
         for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
             if (azName != FLAGS_cluster_name) {
@@ -445,7 +444,6 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
         subTimeout = remainTimeMs >= subTimeout ? subTimeout : remainTimeMs > 0 ? subTimeout - remainTimeMs : 0;
     } while (!needRemoteGetIds.empty());
     if (!failedIds.empty()) {
-        cacheHitInfo_->IncMissHit(failedIds.size());
         std::unordered_map<std::string, uint64_t> failedKeyVersions;
         failedKeyVersions.reserve(failedIds.size());
         // it's in sync flow, so we can use current time as the delete version.
@@ -545,7 +543,7 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetOb
     if (objIsValidInMem) {
         // if not add readkey to remoteObjectKeys, mem hit
         if (remoteObjectKeys.size() == preSize) {
-            cacheHitInfo_->IncMemHit(1);
+            CacheHitInfo::Instance().IncMemHit(1);
         }
         return memGetRes;
     }
@@ -796,7 +794,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectsFromPrimaryWorker(const std::string 
             objectsNeedGetRemote.emplace(objectKV.ConstructReadKey());
             return status;
         }
-        cacheHitInfo_->IncRemoteHit(1);
+        CacheHitInfo::Instance().IncRemoteHit(1);
         RETURN_OK_IF_TRUE(status.IsOk());
     }
     objectsNeedGetRemote.emplace(objectKV.ConstructReadKey());
@@ -1963,7 +1961,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                               entry->GetDataSize(), endToEndTimer.ElapsedMilliSecond());
     point.Record();
 
-    isFromL2 ? cacheHitInfo_->IncL2Hit(1) : cacheHitInfo_->IncRemoteHit(1);
+    isFromL2 ? CacheHitInfo::Instance().IncL2Hit(1) : CacheHitInfo::Instance().IncRemoteHit(1);
     return UpdateRequestForSuccess(objectKV, request);
 }
 
@@ -2094,7 +2092,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
         }
     }
     point.Record();
-    cacheHitInfo_->IncRemoteHit(1);
+    CacheHitInfo::Instance().IncRemoteHit(1);
     return UpdateRequestForSuccess(objectKV, request);
 }
 
@@ -2635,13 +2633,13 @@ Status WorkerOcServiceGetImpl::KeepObjectDataInMemory(ReadObjectKV &objectKV)
     auto &entry = objectKV.GetObjEntry();
     if (entry->IsShmUnitExistsAndComplete()) {
         evictionManager_->Add(objectKey);
-        cacheHitInfo_->IncMemHit(1);
+        CacheHitInfo::Instance().IncMemHit(1);
     } else if (entry->IsSpilled()) {
         RETURN_IF_NOT_OK(LoadSpilledObjectToMemory(objectKV, evictionManager_));
-        cacheHitInfo_->IncDiskHit(1);
+        CacheHitInfo::Instance().IncDiskHit(1);
     } else if (entry->HasL2Cache()) {
         RETURN_IF_NOT_OK(GetObjectFromPersistenceAndDumpWithoutCopyMeta(objectKV, false, false));
-        cacheHitInfo_->IncL2Hit(1);
+        CacheHitInfo::Instance().IncL2Hit(1);
     } else {
         return Status(K_RUNTIME_ERROR, "object not found in local");
     }
@@ -2657,7 +2655,7 @@ bool WorkerOcServiceGetImpl::ToleranceNotExistNode(bool singleCopy, uint32_t wri
 
 std::string WorkerOcServiceGetImpl::GetHitInfo()
 {
-    return cacheHitInfo_->GetHitInfo();
+    return CacheHitInfo::Instance().GetHitInfo();
 }
 }  // namespace object_cache
 }  // namespace datasystem
