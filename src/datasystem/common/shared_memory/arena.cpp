@@ -340,7 +340,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         static_cast<uint64_t>(static_cast<long double>(std::numeric_limits<uint64_t>::max()) * rate) > maxSize,
         K_RUNTIME_ERROR, "mmapSize overflow.");
     auto fakeAllocateSize = maxSize;
-    if (IsFastTransportEnabled() || IsRemoteH2DEnabled()) {
+    if (populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled()) {
         // Here we ensure total allocated memory
         // does not exceed max requested by user
         rate = 1;
