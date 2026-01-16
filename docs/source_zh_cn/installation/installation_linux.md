@@ -180,7 +180,7 @@ lrwxrwxrwx. 1 root root 14 Mar 23  2022 /usr/lib64/librdmacm.so -> librdmacm.so.
 
 |软件名称|版本|作用|
 |-|-|-|
-|[wheel](#安装wheel和setuptools)|0.32.0+|openYuanrong datasystem使用的Python打包工具|
+|[wheel](#安装wheel和setuptools)|0.35.1+|openYuanrong datasystem使用的Python打包工具|
 |[setuptools](#安装wheel和setuptools)|44.0+|openYuanrong datasystem使用的Python包管理工具|
 |[GCC](#安装依赖库)|7.5.0+|用于编译openYuanrong datasystem的C编译器|
 |[G++](#安装依赖库)|7.5.0+|用于编译openYuanrong datasystem的C++编译器|
