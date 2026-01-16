@@ -136,7 +136,7 @@ global:
     enableUcxLog: false
     # UCX RDMA logging level.
     # Available levels: FATAL, ERROR, WARN, INFO, DEBUG, TRACE.
-    ucxLogLevel: "INFO"
+    ucxLogLevel: "ERROR"
 
   observability:
     # Record performance and resource logs
@@ -397,7 +397,14 @@ global:
     enableRdma: false
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     rdmaRegisterWholeArena: true
-    # Specify the UCX transport layer for RDMA IB communication, default "rc_x".
+    # Specify the UCX transport layer for RDMA communication.
+    # Default: "rc_x" — accelerated Reliable Connection, offering best performance.
+    # If "rc_x" is unsupported by your NIC or driver, consider these alternatives:
+    #   - "rc"   : Reliable Connection; better compatibility across hardware.
+    #   - "ud"   : Unreliable Datagram; ideal for low-latency, small-message workloads.
+    #   - "dc"   : Dynamic Connection; optimized for large-scale deployments (requires Mellanox NICs).
+    # For detailed descriptions of all transport modes, see:
+    # https://github.com/openucx/ucx/wiki/UCX-environment-parameters
     ucxTransportLayerSelection: "rc_x"
     # Target batch size for worker worker responses, default is 2MB.
     ocWorkerAggregateMergeSize: 2097152
