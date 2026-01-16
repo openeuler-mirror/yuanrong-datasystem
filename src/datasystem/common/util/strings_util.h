@@ -29,7 +29,6 @@
 #include <string>
 #include <vector>
 
-#include <google/protobuf/util/json_util.h>
 #include <securec.h>
 
 #include "datasystem/common/util/format.h"
@@ -92,20 +91,6 @@ std::string VectorToString(const Vec &vec, bool allowCut = true)
     return out.str();
 }
 
-template <typename T>
-inline std::string ToStringHelper(const T &value)
-{
-    if constexpr (std::is_base_of_v<::google::protobuf::Message, T>) {
-        return value.DebugString();
-    } else {
-        if constexpr (std::is_same_v<T, std::string>) {
-            return value;
-        } else {
-            return std::to_string(value);
-        }
-    }
-}
-
 /**
  * @brief Print map.
  * @param[in] map Map to print.
@@ -116,7 +101,7 @@ std::string MapToString(const Map &map)
 {
     std::stringstream out;
     for (auto &item : map) {
-        out << "{" << item.first << ": " << ToStringHelper(item.second) << "} ";
+        out << "{" << item.first << ": " << item.second << "} ";
     }
     return out.str();
 }
