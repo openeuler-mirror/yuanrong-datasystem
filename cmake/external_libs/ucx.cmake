@@ -21,6 +21,8 @@ set(UCX_CONF_OPTIONS
         --with-verbs
         --with-rdmacm
         --enable-mt
+        --without-go
+        --without-java
         )
 
 set(UCX_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
