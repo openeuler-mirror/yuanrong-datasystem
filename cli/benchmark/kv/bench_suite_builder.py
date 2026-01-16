@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import csv
 import json
 import logging
 import os
@@ -18,12 +19,12 @@ import re
 from typing import Any
 
 from yr.datasystem.cli.benchmark.common import (
-    BenchOutputHandler,
     BenchSuite,
     BenchTestCase,
 )
 from yr.datasystem.cli.benchmark.kv.bench_test_case import (
     KVArgs,
+    KVBenchOutputHandler,
     KVBenchTestCase,
     KVMode,
 )
@@ -134,6 +135,13 @@ class KVBenchSuite(BenchSuite):
     def run(self):
         logger.info(f"Running test cases...")
         logger.info("=" * 175)
+
+        # Print header only if there are test cases
+        if self.testcases:
+            # Use the first test case's handler to print the header
+            first_handler = self.testcases[0].handler
+            first_handler.print_table_header()
+
         for testcase in self.testcases:
             testcase.run()
         logger.info("=" * 175)
@@ -142,11 +150,11 @@ class KVBenchSuite(BenchSuite):
 class KVBenchSuiteBuilder:
     bench_args: BenchArgs
     testcases: list[KVArgs]
-    handler: BenchOutputHandler
+    final_csv_filepath: str
 
-    def __init__(self, bench_args: BenchArgs, handler: BenchOutputHandler) -> None:
+    def __init__(self, bench_args: BenchArgs) -> None:
         self.bench_args = bench_args
-        self.handler = handler
+        self.final_csv_filepath = None
         args = bench_args.args
         mode = get_kv_mode(args)
         self.testcases = []
@@ -193,7 +201,8 @@ class KVBenchSuiteBuilder:
     def build(self) -> BenchSuite:
         suite = KVBenchSuite()
 
-        self.handler.set_test_suite_info()
+        # Initialize CSV file directly in the builder
+        self._initialize_csv_file()
 
         for i, kv_args in enumerate(self.testcases, start=1):
             testcase = self.create_testcase_from_args(kv_args, testcase_index=i)
@@ -201,12 +210,54 @@ class KVBenchSuiteBuilder:
 
         return suite
 
+    def _initialize_csv_file(self):
+        """Initialize the CSV file for storing benchmark results."""
+        try:
+            log_dir = self.bench_args.log_dir
+            if not log_dir:
+                raise ValueError("bench_args.log_dir is not set or is empty.")
+
+            file_name = self.bench_args.result_csv_file
+            self.final_csv_filepath = os.path.join(log_dir, file_name)
+
+            # Get the CSV headers directly from the class attribute
+            headers = KVBenchOutputHandler.screen_headers
+
+            with open(
+                self.final_csv_filepath, "w", newline="", encoding="utf-8"
+            ) as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(headers)
+
+        except IOError as e:
+            logger.error(f"Failed to create or write to CSV file: {e}")
+            logger.error(
+                f"Details - Filename: {self.bench_args.result_csv_file}, "
+                f"Target Path: {self.final_csv_filepath}, "
+                f"Directory: {self.bench_args.log_dir}"
+            )
+            self.final_csv_filepath = None
+        except ValueError as e:
+            logger.error(f"Configuration Error: {e}")
+            self.final_csv_filepath = None
+        except Exception as e:
+            logger.error(f"An unknown error occurred while creating the CSV file: {e}")
+            self.final_csv_filepath = None
+
     def create_testcase_from_args(
         self, kv_args: KVArgs, testcase_index: int
     ) -> BenchTestCase:
         args = self.bench_args.args
         name = f"{args.prefix}_n{kv_args.num}_{kv_args.size}_b{kv_args.batch_num}_t{kv_args.thread_num}"
-        testcase = KVBenchTestCase(name, self.bench_args, self.handler, testcase_index)
+
+        # Create a separate handler for each test case
+        testcase_handler = KVBenchOutputHandler(self.bench_args, testcase_index)
+
+        # Share the CSV file path from the builder to avoid overwriting
+        if self.final_csv_filepath:
+            testcase_handler.final_csv_filepath = self.final_csv_filepath
+
+        testcase = KVBenchTestCase(name, self.bench_args, testcase_handler, testcase_index)
         testcase.add_set_task(kv_args)
         testcase.add_get_task(kv_args)
         testcase.add_del_task(kv_args)

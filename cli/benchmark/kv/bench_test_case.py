@@ -23,6 +23,7 @@ from yr.datasystem.cli.benchmark.executor import executor
 from yr.datasystem.cli.benchmark.task import (
     BenchArgs,
     BenchCommandTask,
+    BenchParallelCommandTask,
     BenchRemoteInfo,
     BenchTask,
 )
@@ -61,10 +62,10 @@ class KVBenchTestCase(BenchTestCase):
 
     def _get_relative_path(self, subpath: str = "") -> str:
         """Generates a relative path based on whether current directory is under user's home directory.
-        
+
         Args:
             subpath: Optional subpath to append to the generated path
-            
+
         Returns:
             A relative path that can be used for remote commands
         """
@@ -132,13 +133,20 @@ class KVBenchTestCase(BenchTestCase):
         return executor.get_remote_info(target_address=worker_address)
 
     def add_task_from_command_args(self, command_args: dict[str, Any]):
-        """Creates and adds a benchmark task based on the provided command arguments."""
+        """Creates and returns a benchmark task based on the provided command arguments.
+
+        Args:
+            command_args: Dictionary of command arguments.
+
+        Returns:
+            The created BenchCommandTask, or None if creation failed.
+        """
         worker_address = command_args.get("worker_address")
         if not worker_address:
             logger.error(
                 "Error: 'worker_address' is missing in command_args, cannot determine target node location."
             )
-            return
+            return None
 
         # Generate remote info first to know if it's a remote command
         remote = self.generate_remote_info(worker_address)
@@ -178,113 +186,102 @@ class KVBenchTestCase(BenchTestCase):
 
         command_str = self.generate_commands(command_args, bin_path=executable_bin_path)
 
-        task = BenchCommandTask(command_str, env, remote, worker_address)
-        self.add_task(task)
+        remote = self.generate_remote_info(worker_address)
+
+        return BenchCommandTask(command_str, env, remote, worker_address)
 
     def add_set_task(self, kv_args: KVArgs):
-        """Adds 'set' tasks for all configured 'set' worker nodes."""
-        for index, worker_address in enumerate(
-            self.bench_args.args.set_worker_addresses.split(",")
-        ):
+        """Adds 'set' tasks for all configured 'set' worker nodes, sorted by worker_address."""
+        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
+        set_tasks = []
+        for index, worker_address in enumerate(set_workers):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "set"
             command_args["worker_address"] = worker_address
             command_args["worker_num"] = index
-            self.add_task_from_command_args(command_args)
+
+            task = self.add_task_from_command_args(command_args)
+            if task:
+                set_tasks.append(task)
+
+        # Create and add parallel command task for all set tasks
+        if set_tasks:
+            parallel_task = BenchParallelCommandTask(set_tasks)
+            self.add_task(parallel_task)
 
     def add_get_task(self, kv_args: KVArgs):
-        """Adds 'get' tasks for all configured 'get' worker nodes."""
-        for worker_address in self.bench_args.args.get_worker_addresses.split(","):
+        """Adds 'get' tasks for all configured 'get' worker nodes, sorted by worker_address."""
+        get_workers = sorted(self.bench_args.args.get_worker_addresses.split(","))
+        get_tasks = []
+        for worker_address in get_workers:
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "get"
             command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))
             command_args["worker_address"] = worker_address
-            self.add_task_from_command_args(command_args)
+            task = self.add_task_from_command_args(command_args)
+            if task:
+                get_tasks.append(task)
+
+        # Create and add parallel command task for all get tasks
+        if get_tasks:
+            parallel_task = BenchParallelCommandTask(get_tasks)
+            self.add_task(parallel_task)
 
     def add_del_task(self, kv_args: KVArgs):
-        """Adds 'del' tasks for all configured 'del' worker nodes."""
-        for worker_address in self.bench_args.args.get_worker_addresses.split(","):
+        """Adds 'del' tasks for the first configured 'del' worker node."""
+        del_workers = self.bench_args.args.get_worker_addresses.split(",")
+        for worker_address in del_workers:
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "del"
             command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))
             command_args["worker_address"] = worker_address
-            self.add_task_from_command_args(command_args)
+            task = self.add_task_from_command_args(command_args)
+            if task:
+                self.add_task(task)
             # only run on the first worker from get_worker_addresses
             break
 
     def run(self):
         """Iterate through all tasks, execute each one, and then handle its output."""
         for task in self.tasks:
-            task.run()
-            self.handler.handle(task, self.index)
+            task.run(self.handler)
+
+
+
 
 
 class KVBenchOutputHandler(BenchOutputHandler):
     bench_args: BenchArgs
+    index: int
 
-    def __init__(self, bench_args: BenchArgs) -> None:
+    # Class attributes for column definitions and headers
+    column_definitions = {
+        "index": {"width": 5, "align": " >"},
+        "action": {"width": 6, "align": " >"},
+        "size": {"width": 8, "align": " >"},
+        "count": {"width": 8, "align": " >"},
+        "batch": {"width": 6, "align": " >"},
+        "thread": {"width": 6, "align": " >"},
+        "worker": {"width": 21, "align": " >"},
+        "avg[ms]": {"width": 14, "align": " >"},
+        "min[ms]": {"width": 13, "align": " >"},
+        "p90[ms]": {"width": 14, "align": " >"},
+        "p99[ms]": {"width": 14, "align": " >"},
+        "max[ms]": {"width": 14, "align": " >"},
+        "tps[count/sec]": {"width": 14, "align": " >"},
+        "throughput[MB/sec]": {
+            "width": 17,
+            "align": " >",
+        },
+    }
+    screen_headers = [col_key for col_key in column_definitions.keys()]
+
+    def __init__(self, bench_args: BenchArgs, index: int) -> None:
         super().__init__(bench_args)
-        self.printed_header = False
-
-        self.column_definitions = {
-            "index": {"width": 5, "align": ">"},
-            "action": {"width": 6, "align": ">"},
-            "size": {"width": 8, "align": ">"},
-            "count": {"width": 8, "align": ">"},
-            "batch": {"width": 6, "align": ">"},
-            "thread": {"width": 6, "align": ">"},
-            "worker": {"width": 21, "align": ">"},
-            "avg[ms]": {"width": 14, "align": ">"},
-            "min[ms]": {"width": 13, "align": ">"},
-            "p90[ms]": {"width": 14, "align": ">"},
-            "p99[ms]": {"width": 14, "align": ">"},
-            "max[ms]": {"width": 14, "align": ">"},
-            "tps[count/sec]": {"width": 14, "align": ">"},
-            "throughput[MB/sec]": {
-                "width": 17,
-                "align": ">",
-            },
-        }
-        self.screen_headers = [
-            col_key
-            for col_key, _ in self.column_definitions.items()
-        ]
-
+        self.index = index
         self.final_csv_filepath = None
 
-    def set_test_suite_info(self):
-        """Configures the handler with necessary information before the run begins."""
-        self.printed_header = False
-        try:
-            log_dir = self.bench_args.log_dir
-            if not log_dir:
-                raise ValueError("bench_args.log_dir is not set or is empty.")
-
-            file_name = self.bench_args.result_csv_file
-            self.final_csv_filepath = os.path.join(log_dir, file_name)
-
-            with open(
-                self.final_csv_filepath, "w", newline="", encoding="utf-8"
-            ) as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(self.screen_headers)
-
-        except IOError as e:
-            logger.error(f"Failed to create or write to CSV file: {e}")
-            logger.error(
-                f"Details - Filename: {self.bench_args.result_csv_file}, "
-                f"Target Path: {self.final_csv_filepath}, "
-                f"Directory: {self.bench_args.log_dir}"
-            )
-            self.final_csv_filepath = None
-        except ValueError as e:
-            logger.error(f"Configuration Error: {e}")
-            self.final_csv_filepath = None
-        except Exception as e:
-            logger.error(f"An unknown error occurred while creating the CSV file: {e}")
-            self.final_csv_filepath = None
-
-    def handle(self, task: BenchTask, testcase_index: int):
+    def after_execute(self, task: BenchTask):
         """Processes a single benchmark task and formats its results for output."""
         if not isinstance(task, BenchCommandTask):
             raise TypeError(
@@ -293,11 +290,6 @@ class KVBenchOutputHandler(BenchOutputHandler):
                 f"This indicates a logic error in task creation or handling."
             )
         command_task: BenchCommandTask = task
-
-        if not self.printed_header:
-            self._format_table_line(line_type="header")
-            self._format_table_line(line_type="separator")
-            self.printed_header = True
 
         output_str = command_task.get_output().stdout.strip()
         if not output_str:
@@ -309,7 +301,7 @@ class KVBenchOutputHandler(BenchOutputHandler):
         if not parsed_result:
             return
 
-        screen_data = [str(testcase_index)]
+        screen_data = [str(self.index)]
         for col_key, _ in self.column_definitions.items():
             if col_key != "index":
                 screen_data.append(parsed_result.get(col_key, ""))
@@ -318,6 +310,11 @@ class KVBenchOutputHandler(BenchOutputHandler):
 
         if self.final_csv_filepath:
             self._append_to_csv(screen_data)
+
+    def print_table_header(self):
+        """Print the table header and separator lines."""
+        self._format_table_line(line_type="header")
+        self._format_table_line(line_type="separator")
 
     def _append_to_csv(self, csv_data: list):
         """Helper method to append data to the CSV file with error handling."""

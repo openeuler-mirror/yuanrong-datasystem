@@ -49,7 +49,7 @@ class BenchCommandOutput:
 
 class BenchTask(ABC):
     @abstractmethod
-    def run(self):
+    def run(self, handler=None):
         """Executes the main logic associated with this task."""
         pass
 
@@ -176,7 +176,7 @@ class BenchCommandTask(BenchTask):
         """Retrieves the output of the executed command."""
         return self.output
 
-    def run(self):
+    def execute(self):
         """Executes the command either locally or remotely."""
         logger.debug("Running command task for address: %s", self.worker_address)
 
@@ -187,3 +187,36 @@ class BenchCommandTask(BenchTask):
 
         self.output = BenchCommandOutput(stdout, stderr)
         logger.debug("Command task completed for address: %s", self.worker_address)
+
+    def run(self, handler=None):
+        if handler:
+            handler.before_execute(self)
+        self.execute()
+        if handler:
+            handler.after_execute(self)
+
+
+class BenchParallelCommandTask(BenchTask):
+    def __init__(self, tasks: list[BenchCommandTask]):
+        self.tasks = tasks
+
+    def run(self, handler=None):
+        import concurrent.futures
+
+        if not self.tasks:
+            return
+
+        # Create a new thread pool each time run is called
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(self.tasks)) as executor:
+            # Submit all tasks for execution with handler before_execute calls
+            futures = []
+            for task in self.tasks:
+                if handler:
+                    handler.before_execute(task)
+                futures.append(executor.submit(task.run))
+
+            # Wait for all futures to complete and call handler after_execute
+            for future, task in zip(futures, self.tasks):
+                future.result()  # This will propagate any exceptions
+                if handler:
+                    handler.after_execute(task)
