@@ -382,7 +382,7 @@ global:
 |-----|------|---------|-------------|
 | global.gracefulShutdown.scaleInTaint | string | `"datasystem/offline=true:NoExecute"` | Scale in taint, format is `key=value:effect` |
 | global.gracefulShutdown.enableLosslessDataExitMode | bool | `false` | Decide whether to migrate data to other nodes or not when current node exits. If this is the only node in the cluster, exits directly and the data will be lost |
-| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `15` | The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and L2 cache remain empty before it can exit properly |
+| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `1` | The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and L2 cache remain empty before it can exit properly |
 | global.gracefulShutdown.dataMigrateRateLimitMb | int | `40` | Data migration rate limit for every node when scaling down |
 | global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | Overwrite the global default terminationGracePeriodSeconds when liveness probe failed, enable when greater than 0 |
 

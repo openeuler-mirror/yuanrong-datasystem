@@ -519,6 +519,14 @@ Status WorkerOCServiceImpl::BeforeMigrateData(const std::string &taskId, std::ve
 
 Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
 {
+    {
+        std::shared_lock<std::shared_timed_mutex> l(clearIdsMutex_);
+        if (voluntaryScaleDownClearIds_.empty()) {
+            LOG(INFO) << "RemoveWriteBackIdsLocation: voluntaryScaleDownClearIds_ is empty, skip";
+            return Status::OK();
+        }
+    }
+    
     LOG(INFO) << "RemoveWriteBackIdsLocation begin, WriteBackIds size: " << voluntaryScaleDownClearIds_.size();
     std::vector<std::string> clearIds;
     {

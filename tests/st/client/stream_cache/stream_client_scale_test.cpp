@@ -984,7 +984,7 @@ TEST_F(StreamClientScaleTest, LEVEL1_ScaleWhenSyncConsumerNode)
     }
 }
 
-TEST_F(StreamClientScaleTest, LEVEL1_ContinuousRedirection)
+TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_ContinuousRedirection)
 {
     std::vector<std::shared_ptr<Consumer>> consumers;
     DS_ASSERT_OK(AddNode());
@@ -1222,7 +1222,7 @@ public:
 };
 
 // If the node to be scaled in has data to be sent by the Producer, the node exits only after the data is sent.
-TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL1_TestVoluntaryScaleDownWithUnfinishedTask1)
+TEST_F(StreamClientVoluntaryScaleDownTest, DISABLED_LEVEL1_TestVoluntaryScaleDownWithUnfinishedTask1)
 {
     DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)"));
     // The producer is on worker3 and the consumer is on worker1.

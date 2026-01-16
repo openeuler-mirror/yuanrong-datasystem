@@ -20,6 +20,7 @@
 #include "datasystem/worker/worker_oc_server.h"
 
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -146,7 +147,7 @@ DS_DEFINE_string(liveness_check_path, "",
                  "The path length must less than 4095 characters.");
 DS_DEFINE_validator(liveness_check_path, &Validator::ValidatePathString);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
-DS_DEFINE_uint32(check_async_queue_empty_time_s, 15,
+DS_DEFINE_uint32(check_async_queue_empty_time_s, 1,
                  "The async queue needs to be empty for a certain period of time before worker can exist.");
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DEFINE_string(sc_encrypt_secret_key, "",
@@ -1162,7 +1163,11 @@ Status WorkerOCServer::PreShutDown()
                                    }));
         checkAsyncTasksThread_->set_name("CheckAsyncTask");
     } else {
-        checkAsyncTasksDone_ = true;
+        {
+            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
+            checkAsyncTasksDone_ = true;
+        }
+        checkAsyncTasksDoneCv_.notify_all();
     }
 
     if (scaleIn) {
@@ -1180,29 +1185,36 @@ Status WorkerOCServer::PreShutDown()
         }));
     }
 
-    while (!waitFlag) {
-        if (scaleIn) {
-            const int logEveryN = 5;
-            auto isVoluntaryScaleDown = etcdCM_->CheckVoluntaryScaleDown();
-            waitFlag = checkAsyncTasksDone_ && allClientsExited_ && isVoluntaryScaleDown;
-            LOG_EVERY_N(INFO, logEveryN) << "[Graceful exit] The progress of voluntary scaling down is as follows: "
-                                         << "checkAsyncTasksDone_: " << checkAsyncTasksDone_
-                                         << ", allClientsExited_: " << allClientsExited_
-                                         << ", isVoluntaryScaleDown: " << isVoluntaryScaleDown;
-        } else {
-            waitFlag = checkAsyncTasksDone_;
+    {
+        std::unique_lock<std::mutex> lock(checkAsyncTasksDoneMutex_);
+        while (!waitFlag) {
+            if (scaleIn) {
+                const int logEveryN = 5;
+                auto isVoluntaryScaleDown = etcdCM_->CheckVoluntaryScaleDown();
+                waitFlag = checkAsyncTasksDone_ && allClientsExited_ && isVoluntaryScaleDown;
+                LOG_EVERY_N(INFO, logEveryN) << "[Graceful exit] The progress of voluntary scaling down is as follows: "
+                                             << "checkAsyncTasksDone_: " << checkAsyncTasksDone_
+                                             << ", allClientsExited_: " << allClientsExited_
+                                             << ", isVoluntaryScaleDown: " << isVoluntaryScaleDown;
+            } else {
+                waitFlag = checkAsyncTasksDone_;
+            }
+            auto traceId = Trace::Instance().GetTraceID();
+            if (scaleIn && !checkAsyncTasksDone_ && !objCacheClientWorkerSvc_->AsyncTaskHealth()) {
+                auto traceGuard = Trace::Instance().SetTraceNewID(GetStringUuid() + "-migrate-data");
+                LOG(INFO) << "[Graceful exit] Async L2 queue need to migrate data to another node";
+                auto objKeys = objCacheClientWorkerSvc_->StopAndGetAllUnfinishedObjects();
+                objCacheClientWorkerSvc_->MigrateData(objKeys, "");
+                objCacheClientWorkerSvc_->RemoveAsyncTasks(objKeys);
+                LOG(INFO) << "[Graceful exit] Async L2 queue migrate data to another node finish";
+            }
+            (void)Trace::Instance().SetTraceNewID(traceId, true);
+            if (!waitFlag) {
+                (void)checkAsyncTasksDoneCv_.wait_for(lock, std::chrono::seconds(1), [this] {
+                    return checkAsyncTasksDone_.load();
+                });
+            }
         }
-        auto traceId = Trace::Instance().GetTraceID();
-        if (scaleIn && !checkAsyncTasksDone_ && !objCacheClientWorkerSvc_->AsyncTaskHealth()) {
-            auto traceGuard = Trace::Instance().SetTraceNewID(GetStringUuid() + "-migrate-data");
-            LOG(INFO) << "[Graceful exit] Async L2 queue need to migrate data to another node";
-            auto objKeys = objCacheClientWorkerSvc_->StopAndGetAllUnfinishedObjects();
-            objCacheClientWorkerSvc_->MigrateData(objKeys, "");
-            objCacheClientWorkerSvc_->RemoveAsyncTasks(objKeys);
-            LOG(INFO) << "[Graceful exit] Async L2 queue migrate data to another node finish";
-        }
-        (void)Trace::Instance().SetTraceNewID(traceId, true);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     LOG_IF_ERROR(objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation(), "RemoveWriteBackIdsLocation failed");
     return Status::OK();
@@ -1323,7 +1335,11 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
     // Has async tasks running.
     if (isAsyncTasksRunning) {
         checkNum = updateCheckNum;
-        checkAsyncTasksDone_ = false;
+        {
+            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
+            checkAsyncTasksDone_ = false;
+        }
+        checkAsyncTasksDoneCv_.notify_all();
         return;
     }
 
@@ -1334,7 +1350,11 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
                      << ", thisRequestArrivalTime: " << lastRequestArrivalTime << "], retry...";
         lastRequestArrivalTime_ = lastRequestArrivalTime;
         checkNum = updateCheckNum;
-        checkAsyncTasksDone_ = false;
+        {
+            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
+            checkAsyncTasksDone_ = false;
+        }
+        checkAsyncTasksDoneCv_.notify_all();
         return;
     }
 
@@ -1344,8 +1364,12 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
         return;
     } else {
         LOG(INFO) << "AsyncTasks all finished.";
-        checkAsyncTasksDone_ = true;
+        {
+            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
+            checkAsyncTasksDone_ = true;
+        }
         checkNum = updateCheckNum;
+        checkAsyncTasksDoneCv_.notify_all();
     }
 }
 

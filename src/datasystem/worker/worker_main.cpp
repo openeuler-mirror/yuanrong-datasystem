@@ -279,17 +279,24 @@ static Status WorkerMain(int argc, char **argv)
     static constexpr int MAX_TOLERATED_ATTEMPTS = 10;
     static constexpr int REPORTING_THRESHOLD_MS = CHECK_EVERY_MS * MAX_TOLERATED_ATTEMPTS;
     Timer timer;
-    while (!IsTermSignalReceived()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_EVERY_MS));
-        auto elapsedMs = timer.ElapsedMilliSecondAndReset();
-        if (elapsedMs > REPORTING_THRESHOLD_MS) {
-            LOG(ERROR) << FormatString("Worker was hanged about %.2f ms", elapsedMs);
+    {
+        std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
+        while (!IsTermSignalReceived()) {
+            bool signalReceived = g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
+                [] { return IsTermSignalReceived(); });
+            if (signalReceived) {
+                break;
+            }
+            auto elapsedMs = timer.ElapsedMilliSecondAndReset();
+            if (elapsedMs > REPORTING_THRESHOLD_MS) {
+                LOG(ERROR) << FormatString("Worker was hanged about %.2f ms", elapsedMs);
+            }
+            if (perfManager != nullptr) {
+                perfManager->Tick();
+            }
+            // Check whether the configuration file is updated every 10 seconds.
+            flags.MonitorConfigFile(FLAGS_monitor_config_file);
         }
-        if (perfManager != nullptr) {
-            perfManager->Tick();
-        }
-        // Check whether the configuration file is updated every 10 seconds.
-        flags.MonitorConfigFile(FLAGS_monitor_config_file);
     }
 
     if (perfManager != nullptr) {

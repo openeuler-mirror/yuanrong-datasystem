@@ -33,7 +33,7 @@ class Command(BaseCommand):
     description = "stop yuanrong datasystem worker service"
 
     _timeout = 180
-    _check_interval = 0.5
+    _check_interval = 0.2
 
     def add_arguments(self, parser):
         """
