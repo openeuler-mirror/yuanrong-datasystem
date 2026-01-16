@@ -26,7 +26,6 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/zmq_context.h"
@@ -208,13 +207,6 @@ Status ZmqServerImpl::ClientToService(ZmqMsgFrames &&frames)
         RETURN_IF_NOT_OK(PushBackProtobufToFrames(meta, reply));
         return ServiceToClient(meta, std::move(reply));
     }
-#ifdef USE_URMA
-    // Exchange jfr for urma.
-    if (meta.method_index() == ZMQ_EXCHANGE_JFR_METHOD && UrmaManager::IsUrmaEnabled()) {
-        VLOG(RPC_LOG_LEVEL) << "Exchange jfr";
-        return ProcessExchangeJfrRq(meta, frames);
-    }
-#endif
     ZmqService *svc = nullptr;
     auto it = svcMap_.find(meta.svc_name());
     if (it == svcMap_.end()) {
@@ -433,22 +425,6 @@ ZmqServerImpl::~ZmqServerImpl()
 {
     Shutdown();
 }
-
-#ifdef USE_URMA
-Status ZmqServerImpl::ProcessExchangeJfrRq(MetaPb &meta, ZmqMsgFrames &inMsg)
-{
-    UrmaHandshakeReqPb rq;
-    ZmqMessage zMsg = std::move(inMsg.front());
-    inMsg.pop_front();
-    RETURN_IF_NOT_OK(ParseFromZmqMessage(zMsg, rq));
-    UrmaHandshakeRspPb rsp;
-    RETURN_IF_NOT_OK(UrmaManager::Instance().ExchangeJfr(rq, rsp));
-    ZmqMsgFrames reply;
-    RETURN_IF_NOT_OK(PushFrontProtobufToFrames(rsp, reply));
-    reply.push_front(StatusToZmqMessage(Status::OK()));
-    return ServiceToClient(meta, std::move(reply));
-}
-#endif
 
 IOService::IOService(int id, ZmqEpoll *in, ZmqEpoll *out) : id_(id), inPoller_(in), outPoller_(out)
 {

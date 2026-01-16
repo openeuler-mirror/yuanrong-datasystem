@@ -33,8 +33,7 @@
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/meta_zmq.pb.h"
-#include "datasystem/protos/utils.pb.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/rdma/ucp_segment.h"

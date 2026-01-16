@@ -282,9 +282,6 @@ private:
     Status HandleEvent(int timeout);
     Status BackendToFrontend();
     Status RouteToUnixSocket(const std::shared_ptr<SockConnEntry> &connInfo, const MetaPb &meta, ZmqMsgFrames &&p);
-#ifdef USE_URMA
-    Status ExchangeJfr();
-#endif
 };
 
 struct StubInfo;

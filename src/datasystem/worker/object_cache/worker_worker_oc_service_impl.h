@@ -217,6 +217,13 @@ private:
                                    const uint64_t &localSegSize, std::shared_ptr<ShmUnit> shmUnit,
                                    uint64_t metadataSize, GetObjectRemoteRspPb &rsp);
 
+    /**
+     * @brief Check if the fast transport connection is stable.
+     * @param[in] req Remote get request with one key.
+     * @return Status of the call.
+     */
+    Status CheckConnectionStable(const GetObjectRemoteReqPb &req);
+
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;  // pointer to EtcdStore

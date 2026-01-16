@@ -52,6 +52,7 @@ enum class StubType : int {
     WORKER_MASTER_SC_SVC = 4,
     MASTER_WORKER_SC_SVC = 5,
     MASTER_MASTER_OC_SVC = 6,
+    WORKER_WORKER_TRANS_SVC = 7,
 #ifdef WITH_TESTS
     TEST_TYPE_1 = 1000,
     TEST_TYPE_2 = 1001,

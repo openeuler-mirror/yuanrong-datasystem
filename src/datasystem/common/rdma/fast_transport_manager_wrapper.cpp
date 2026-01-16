@@ -116,10 +116,6 @@ Status InitializeFastTransportManager(const HostPort &hostport)
 Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress)
 {
     (void)remoteAddress;
-    if (!remoteAddress.Empty()) {
-        // Disconnections will not be cleared immediately; connection solutions will be considered later.
-        return Status::OK();
-    }
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(remoteAddress));
@@ -252,6 +248,51 @@ Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObject
     LOG(INFO) << FormatString("[FastTransportWrapper] Doing Ucp Put Payload (Size = %d)", readSize);
     RETURN_IF_NOT_OK(UcpManager::Instance().UcpPutPayload(ucpInfo, localObjectAddress, readOffset, readSize,
                                                           metaDataSize, blocking, keys));
+#endif
+    return Status::OK();
+}
+
+Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
+{
+    (void)req;
+    (void)rsp;
+#ifdef USE_URMA
+    LOG(INFO) << "[FastTransportWrapper] Doing URMA connect info exchange";
+    RETURN_IF_NOT_OK(UrmaManager::Instance().ExchangeJfr(req, rsp));
+#endif
+    return Status::OK();
+}
+
+Status CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId)
+{
+    (void)hostAddress;
+    (void)instanceId;
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().CheckUrmaConnectionStable(hostAddress, instanceId));
+#endif
+    return Status::OK();
+}
+
+Status GetLocalTransportInstanceId(std::string &instanceId)
+{
+    (void)instanceId;
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        UrmaManager::Instance().GetLocalInstanceId(instanceId);
+        return Status::OK();
+    }
+#endif
+    RETURN_STATUS(K_URMA_ERROR, "Disabled fast transport, cannot get local instance id");
+}
+
+Status ConstructHandshakePb(UrmaHandshakeReqPb &req)
+{
+    (void)req;
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(req);
+        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(req));
+    }
 #endif
     return Status::OK();
 }

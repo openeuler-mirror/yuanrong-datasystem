@@ -539,11 +539,12 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
             RETURN_IF_NOT_OK(RetryOnErrorRepent(
                 timeoutMs,
-                [&workerStub, &reqPb, &rspPb, &clientApi, &payloads](int32_t) {
+                [&workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, this](int32_t) {
                     PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemote(&clientApi));
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb));
-                    RETURN_IF_NOT_OK(clientApi->Read(rspPb));
+                    auto rc = clientApi->Read(rspPb);
+                    RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                     // Fallback to downlevel client as multiple objects can be contained in the payload.
                     // Only spill case would actually send payload via RPC, so performance-wise it would be acceptable.
                     RETURN_IF_NOT_OK(clientApi->ReceivePayload(payloads));

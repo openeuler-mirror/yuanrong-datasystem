@@ -30,7 +30,7 @@ std::string UrmaJfrInfo::EidToFmtStr(const urma_eid_t &eid)
 std::string UrmaJfrInfo::ToString() const
 {
     std::stringstream oss;
-    oss << "address " << localAddress.ToString() << ", eid ";
+    oss << "Instance id " << uniqueInstanceId << ", address " << localAddress.ToString() << ", eid ";
     // eid is not really printable as a string. So we will dump its context in hex
     urma_eid_t e;
     if (UrmaManager::StrToEid(eid, e).IsOk()) {

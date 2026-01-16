@@ -69,3 +69,4 @@ STATUS_CODE_DEF(K_SC_STREAM_NOTIFICATION_PENDING, "Notifications are pending")
 // rdma
 STATUS_CODE_DEF(K_OC_REMOTE_GET_NOT_ENOUGH, "Size on the remote node has changed")
 STATUS_CODE_DEF(K_URMA_ERROR, "Urma operation failed")
+STATUS_CODE_DEF(K_URMA_NEED_CONNECT, "Urma need to reconnet")

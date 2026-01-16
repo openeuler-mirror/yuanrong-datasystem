@@ -35,6 +35,7 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
+#include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -176,6 +177,7 @@ public:
 
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
+    using TbbTransportStubTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerRemoteWorkerTransApi>>;
 
     struct QueryMetadataFromMasterResult {
         std::vector<master::QueryMetaInfoPb> queryMetas;
@@ -940,6 +942,14 @@ private:
      */
     bool ToleranceNotExistNode(bool singleCopy, uint32_t writeMode);
 
+    /**
+     * @brief Try reconnect with remote worker by fast transport.
+     * @param[in] endPoint Transport endpoint.
+     * @param[in] lastResult Determine whether it is necessary to perform reconnection by checking this status.
+     * @return True if can tolerance does not exist node.
+     */
+    Status TryReconnectRemoteWorker(const std::string &endPoint, Status &lastResult);
+
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
@@ -966,6 +976,8 @@ private:
 
     static constexpr size_t OBJECTS_NOT_EXIST_IDX = 0;
     static constexpr size_t OBJECTS_PUZZLED_IDX = 1;
+
+    TbbTransportStubTable tarnsportApiTable_;
 };
 
 }  // namespace object_cache

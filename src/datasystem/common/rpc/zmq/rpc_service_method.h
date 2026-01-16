@@ -30,9 +30,6 @@ static constexpr int ZMQ_TCP_DIRECT_METHOD = -5;         // Get the direct tcp/i
 static constexpr int ZMQ_PAYLOAD_GET_METHOD = -6;        // Direct payload get
 static constexpr int ZMQ_PAYLOAD_HANDSHAKE_METHOD = -7;  // Payload handshake method.
 static constexpr int ZMQ_PAYLOAD_PUT_METHOD = -8;        // Parallel payload put method.
-#ifdef USE_URMA
-static constexpr int ZMQ_EXCHANGE_JFR_METHOD = -9;       // Exchange jfr (urma only).
-#endif
 
 /**
  * @brief An abstract class to describe a method.

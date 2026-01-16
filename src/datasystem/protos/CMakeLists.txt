@@ -90,6 +90,20 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES})
 
+GENERATE_PROTO_CPP(TRANSPORT_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
+        PROTO_FILES ${PROTO_SRC_DIR}/meta_transport.proto
+        PROTO_DEPEND proto_lib_depend)
+GEN_GLOBAL_PROTO_LIB_DEPEND(
+        NAME meta_transport_protos
+        SOURCE ${TRANSPORT_PROTO_SRCS}
+        DEPEND proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+        NAME meta_transport_protos_client
+        SOURCE ${TRANSPORT_PROTO_SRCS}
+        DEPEND proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+
 GENERATE_PROTO_CPP(p2p_subscribe_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
         PROTO_FILES ${CMAKE_SOURCE_DIR}/src/datasystem/protos/p2p_subscribe.proto
         PROTO_DEPEND proto_lib_depend)
@@ -127,12 +141,12 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_object_protos
         SOURCE ${WORKER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos hash_ring_protos)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos hash_ring_protos meta_transport_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME worker_object_protos_client
         SOURCE ${WORKER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client hash_ring_protos_client)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client hash_ring_protos_client meta_transport_protos_client)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_stream_protos
