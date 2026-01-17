@@ -326,6 +326,7 @@ Status ObjectMetaStore::PutToEtcdStore(const std::string &tablePrefix, const std
     GetHashAndTable(objKey, tablePrefix, hash, table);
     std::string etcdKey = Hash2Str(hash) + "/" + key;
     if (type == WriteType::ROCKS_SYNC_ETCD) {
+        INJECT_POINT("PutToEtcdStore.failed");
         RETURN_IF_NOT_OK(etcdStore_->Put(table, etcdKey, value, timeoutDuration.CalcRemainingTime()));
     } else if (isAsync(type)) {
         INJECT_POINT("master.before_sub_async_send_etcd_req");
@@ -594,7 +595,6 @@ Status ObjectMetaStore::CreateOrUpdateMeta(const std::string &objectKey, const s
     Status rc = PutToEtcdStore(ETCD_META_TABLE_PREFIX, key, key, serializedStr, type);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("Failed to add object meta to etcd store: %s", key);
-        (void)rocksStore_->Delete(META_TABLE, key);
     }
     return rc;
 }

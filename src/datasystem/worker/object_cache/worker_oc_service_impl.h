@@ -153,8 +153,8 @@ public:
                 std::string key = std::string(ETCD_RING_PREFIX) + "/";
                 RangeSearchResult res;
                 HashRingPb newRing;
-                if (etcdStore_->RawGet(key, res).IsOk() && newRing.ParseFromString(res.value) &&
-                    !newRing.add_node_info().empty()) {
+                if (etcdStore_->RawGet(key, res).IsOk() && newRing.ParseFromString(res.value)
+                    && !newRing.add_node_info().empty()) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
@@ -162,7 +162,8 @@ public:
             return;
         });
         getProc_->GroupAndRemoveMeta(objKeys, removeCase, localAddress_.ToString(),
-            std::unordered_map<std::string, uint64_t> {}, failedIds, needMigrateIds, needWaitIds);
+                                     std::unordered_map<std::string, uint64_t>{}, failedIds, needMigrateIds,
+                                     needWaitIds);
     }
 
     /**
@@ -702,6 +703,13 @@ public:
     {
         return etcdCM_->IsDataMigrationStarted();
     }
+
+    /**
+     * @brief Create multiple objects
+     * @param[in] clientId The client id.
+     * @param[in] supportMultiShmRefCount Whether the client support multiple shared memory references.
+     */
+    void InitShmRefForClient(const ClientKey &clientId, bool supportMultiShmRefCount);
 
 private:
     friend class MasterWorkerOCServiceImpl;

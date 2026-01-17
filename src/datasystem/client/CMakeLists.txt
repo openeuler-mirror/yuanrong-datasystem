@@ -9,6 +9,7 @@ list(APPEND CLIENT_SRCS
         object_cache/client_worker_api.cpp
         object_cache/object_client.cpp
         object_cache/object_client_impl.cpp
+        object_cache/client_memory_ref_table.cpp
         object_cache/device/client_device_object_manager.cpp
         object_cache/device/p2p_subscribe.cpp
         object_cache/device/hccl_comm_factory.cpp
@@ -93,7 +94,7 @@ list(APPEND ROUTER_CLIENT_DEPEND_LIBS
 # static library for ut.
 add_library(ds_router_client_static STATIC ${ROUTER_CLIENT_SRCS})
 target_link_libraries(ds_router_client_static PRIVATE "${ROUTER_CLIENT_DEPEND_LIBS}")
- 
+
 # shared library for user.
 add_library(ds_router_client SHARED ${ROUTER_CLIENT_SRCS})
 target_compile_options(ds_router_client PRIVATE "-fvisibility=hidden")

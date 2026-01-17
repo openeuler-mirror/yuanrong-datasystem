@@ -130,10 +130,8 @@ DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
 DS_DEFINE_bool(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
-DS_DEFINE_bool(
-    cross_cluster_get_data_from_worker,
-    true,
-    "Control whether try to get data from other cluster's worker firstly.");
+DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
+               "Control whether try to get data from other cluster's worker firstly.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
@@ -525,8 +523,8 @@ void WorkerOCServer::CreateWorkerServices()
         objCacheWorkerMsSvc_ = std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(
             objCacheClientWorkerSvc_, akSkManager_);
         // create WorkerWorkerTransportService
-        objCacheWorkerTransSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(
-            objCacheClientWorkerSvc_);
+        objCacheWorkerTransSvc_ =
+            std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(objCacheClientWorkerSvc_);
     }
     if (EnableSCService()) {
         auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
@@ -1209,10 +1207,10 @@ Status WorkerOCServer::PreShutDown()
                 const int logEveryN = 5;
                 auto isVoluntaryScaleDown = etcdCM_->CheckVoluntaryScaleDown();
                 waitFlag = checkAsyncTasksDone_ && allClientsExited_ && isVoluntaryScaleDown;
-                LOG_EVERY_N(INFO, logEveryN) << "[Graceful exit] The progress of voluntary scaling down is as follows: "
-                                             << "checkAsyncTasksDone_: " << checkAsyncTasksDone_
-                                             << ", allClientsExited_: " << allClientsExited_
-                                             << ", isVoluntaryScaleDown: " << isVoluntaryScaleDown;
+                LOG_EVERY_N(INFO, logEveryN)
+                    << "[Graceful exit] The progress of voluntary scaling down is as follows: "
+                    << "checkAsyncTasksDone_: " << checkAsyncTasksDone_ << ", allClientsExited_: " << allClientsExited_
+                    << ", isVoluntaryScaleDown: " << isVoluntaryScaleDown;
             } else {
                 waitFlag = checkAsyncTasksDone_;
             }
@@ -1227,9 +1225,8 @@ Status WorkerOCServer::PreShutDown()
             }
             (void)Trace::Instance().SetTraceNewID(traceId, true);
             if (!waitFlag) {
-                (void)checkAsyncTasksDoneCv_.wait_for(lock, std::chrono::seconds(1), [this] {
-                    return checkAsyncTasksDone_.load();
-                });
+                (void)checkAsyncTasksDoneCv_.wait_for(lock, std::chrono::seconds(1),
+                                                      [this] { return checkAsyncTasksDone_.load(); });
             }
         }
     }
@@ -1333,10 +1330,13 @@ void WorkerOCServer::AfterClientLostHandler(const ClientKey &clientId)
 
 Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
                                  const std::string &tenantId, bool enableCrossNode, const std::string &podName,
-                                 uint32_t &lockId)
+                                 bool supportMultiShmRefCount, uint32_t &lockId)
 {
     RETURN_IF_NOT_OK(ClientManager::Instance().AddClient(clientId, shmEnabled, socketFd, tenantId, enableCrossNode,
                                                          podName, lockId));
+    if (objCacheClientWorkerSvc_ != nullptr) {
+        objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
+    }
     return ClientManager::Instance().RegisterLostHandler(
         clientId, std::bind(&WorkerOCServer::AfterClientLostHandler, this, clientId), HeartbeatType::RPC_HEARTBEAT);
 }

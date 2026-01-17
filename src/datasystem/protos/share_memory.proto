@@ -48,6 +48,7 @@ message RegisterClientReqPb {
     bool enable_cross_node = 9;
     string pod_name = 10;
     bool enable_exclusive_connection = 11;
+    bool support_multi_shm_ref_count = 12;
 
 
     // DFX required, need to send something to worker when reconnect.
@@ -81,6 +82,7 @@ message RegisterClientRspPb {
     bool enable_p2p_transfer = 19;
     uint64 client_reconnect_wait_s = 20;
     string exclusive_conn_sockpath = 21;
+    bool support_multi_shm_ref_count = 22;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

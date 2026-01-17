@@ -482,11 +482,20 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
     accessor->second = metaCache;
     // multi create meta save meta to rocksdb and etcd when commit meta.
     std::string serializedStr;
-    RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr));
+    auto status = objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr);
     // Create meta info in rocksDB.
-    RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, type));
+    if (status.IsOk()) {
+        status = objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, type);
+        if (status.IsError()) {
+            LOG_IF_ERROR(objectStore_->RemoveMeta(objectKey), "objectstore remove meta failed");
+        }
+    }
+    if (status.IsError()) {
+        LOG(ERROR) << status.ToString();
+        (void)metaTable_.erase(accessor);
+        return status;
+    }
     accessor.release();
-
     if (!HasWorkerId(objectKey)) {
         RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
     }
@@ -510,8 +519,7 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
             MetaAddrInfo masterAddrInfo;
             etcdCM_->GetMetaAddress(nestedObjectKey, masterAddrInfo);
             INJECT_POINT("IncreaseNestedRefCnt.local.addr", [this, &nestedObjectKey]() {
-                RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey));
-                return Status::OK();
+                return nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey);
             });
             // Check if object to add belongs to this master and then add locally.
             // if scale up and obj is hash to find master, need redirect will be true, if obj spilt with workerid,
@@ -3782,7 +3790,8 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
             objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
             "serialize meta to rocksdb failed");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, WriteMode2MetaType(meta.config().write_mode())),
+            objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
+                                             WriteMode2MetaType(meta.config().write_mode())),
             "Create meta to rocksdb failed");
     }
     return Status::OK();

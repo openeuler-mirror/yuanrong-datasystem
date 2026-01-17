@@ -2046,5 +2046,11 @@ Status WorkerOCServiceImpl::DeleteDevObjects(const DeleteAllCopyReqPb &req, Dele
     resp.mutable_last_rc()->set_error_msg(respFromMaster.last_rc().error_msg());
     return rc;
 }
+
+void WorkerOCServiceImpl::InitShmRefForClient(const ClientKey &clientId, bool supportMultiShmRefCount)
+{
+    memoryRefTable_->InitShmRefForClient(clientId, supportMultiShmRefCount);
+}
+
 }  // namespace object_cache
 }  // namespace datasystem

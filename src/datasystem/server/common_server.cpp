@@ -75,20 +75,6 @@ Status CommonServer::Shutdown()
     return Status::OK();
 }
 
-Status CommonServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
-                               const std::string &tenantId, bool enableCrossNode, const std::string &podName,
-                               uint32_t &lockId)
-{
-    (void)clientId;
-    (void)shmEnabled;
-    (void)socketFd;
-    (void)tenantId;
-    (void)lockId;
-    (void)enableCrossNode;
-    (void)podName;
-    return Status::OK();
-}
-
 ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesUsage(const std::string &serviceName)
 {
     return rpcServer_->GetRpcServicesUsage(serviceName);
