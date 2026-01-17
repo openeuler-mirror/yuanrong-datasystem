@@ -1174,6 +1174,23 @@ private:
 
     Status InitListenWorker(HeartbeatType heartbeatType);
 
+    /**
+     * @brief Decrease the object reference count by one and if no one holds its ref, release it.
+     * @param[in] shmId The ID of the object to decrease ref
+     * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
+     * @param[in] version Worker version.
+     */
+    void DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version);
+
+    /**
+     * @brief Handle the shared memory reference count after multi-publish.
+     * @param[in] bufferList The buffer list of the objects.
+     * @param[in] rsp The response of the multi-publish operation.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status HandleShmRefCountAfterMultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                              const MultiPublishRspPb &rsp);
+
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;

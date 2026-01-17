@@ -134,8 +134,7 @@ inline void ReadOptFromEnv(ConnectOptions &connectOptions)
 }
 
 void AccessRecord(const std::shared_ptr<AccessRecorder> &accessPoint, const Status &rc,
-                  const std::vector<DeviceBlobList> &BlobLists,
-                  const std::vector<std::string> &keys)
+                  const std::vector<DeviceBlobList> &BlobLists, const std::vector<std::string> &keys)
 {
     uint64_t totalSize = 0;
     const uint64_t max_val = std::numeric_limits<uint64_t>::max();
@@ -149,9 +148,10 @@ void AccessRecord(const std::shared_ptr<AccessRecorder> &accessPoint, const Stat
             }
         }
     }
-    RequestParam reqParam = RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) };
+    RequestParam reqParam =
+        RequestParam{ .objectKey =
+                          FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
+                                       keys.size()) };
     accessPoint->Record(rc.GetCode(), std::to_string(totalSize), reqParam, rc.GetMsg());
 };
 
@@ -199,7 +199,14 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
-    asyncReleasePool_.reset();
+    // Protect concurrent read and write access to asyncReleasePool_ variable and don't hold the lock when release the
+    // thread pool.
+    auto asyncReleasePool = asyncReleasePool_;
+    {
+        std::lock_guard<std::shared_timed_mutex> lck(shutdownMux_);
+        asyncReleasePool_ = nullptr;
+    }
+    asyncReleasePool = nullptr;
 
     if (devOcImpl_ != nullptr) {
         devOcImpl_->SetThreadInterruptFlag2True();
@@ -262,9 +269,10 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, boo
 
     // Validate the port number individually first, then validate entire host port.
     CHECK_FAIL_RETURN_STATUS(Validator::ValidatePort("Port", ipAddress_.Port()), K_INVALID,
-        FormatString("Invalid port number: %d", ipAddress_.Port()));
+                             FormatString("Invalid port number: %d", ipAddress_.Port()));
     std::string hostPortStr = ipAddress_.ToString();
-    CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(
+        Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
         FormatString("Invalid IP address/port. Host %s, port: %d", ipAddress_.Host(), ipAddress_.Port()));
 
     LOG(INFO) << "Start to init worker client at address: " << hostPortStr;
@@ -288,6 +296,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, boo
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
+    asyncReleasePool_->SetWarnLevel(ThreadPool::WarnLevel::NO_WARN);
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
     clientEnableP2Ptransfer_ = workerApi_[LOCAL_WORKER]->workerEnableP2Ptransfer_;
@@ -665,7 +674,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MGetH2D(const std::vector<std:
                 RETURN_IF_NOT_OK(Get(objectKeys, timeoutMs, bufferList, false, isRH2DSupported));
 
                 CHECK_FAIL_RETURN_STATUS(objectKeys.size() == bufferList.size(), K_INVALID,
-                                        "The size of objectKeys and bufferList does not match");
+                                         "The size of objectKeys and bufferList does not match");
 
                 std::vector<Buffer *> &existBufferList = asyncResource->existBufferList;
                 existBufferList.reserve(bufferList.size());
@@ -833,7 +842,7 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     dataSizeList.reserve(objectKeys.size());
     for (size_t i = 0; i < devBlobList.size(); i++) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid({ static_cast<uint32_t>(devBlobList[i].deviceIdx) }),
-                                        "Check device failed.");
+                                         "Check device failed.");
     }
     BlobListInfo blobInfo;
     RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo));
@@ -1210,8 +1219,15 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, s
 
 void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version)
 {
-    VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_,
-                            shmId);
+    std::shared_lock<std::shared_timed_mutex> lck(shutdownMux_);
+    if (asyncReleasePool_ != nullptr) {
+        asyncReleasePool_->Execute([this, shmId, isShm, version] { DecreaseReferenceCntImpl(shmId, isShm, version); });
+    }
+}
+
+void ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version)
+{
+    VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_, shmId);
     auto DecreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
         std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
         TbbMemoryRefTable::accessor accessor;
@@ -1245,8 +1261,8 @@ void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uin
 
 Status ObjectClientImpl::DecreaseRefCntByAccessor(TbbMemoryRefTable::accessor &accessor, bool isShm)
 {
-    VLOG(1) << FormatString("[%s] [clientId: %s] [shmId %s] ref: %d", __FUNCTION__,
-                            workerApi_[LOCAL_WORKER]->clientId_, accessor->first, accessor->second);
+    VLOG(1) << FormatString("[%s] [clientId: %s] [shmId %s] ref: %d", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_,
+                            accessor->first, accessor->second);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         !accessor.empty(), K_UNKNOWN_ERROR,
         FormatString("[ObjectKey %s] memoryRef table cannot find this obj key.", accessor->first));
@@ -2121,7 +2137,8 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     const uint32_t ttl = buffers.front()->bufferInfo_->ttlSecond;
     PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
-    return workerApi->MultiPublish(bufferInfoList, publishParam, rsp);
+    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
+    return HandleShmRefCountAfterMultiPublish(buffers, rsp);
 }
 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
@@ -2396,27 +2413,14 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
-    asyncReleasePool_->Execute([this, buffers = std::move(bufferList)]() {
-        for (auto &buffer : buffers) {
-            // If buffer holds the client's shared_ptr during destruction, it might cause this thread to join itself.
-            // Therefore, passing the `this` here is to allow the buffer to complete the release operation
-            // without holding the client's shared_ptr.
-            buffer->Release(this);
-            buffer->isReleased_ = true;
-        }
-    });
+    auto status = HandleShmRefCountAfterMultiPublish(bufferList, rsp);
     for (const auto &objKey : rsp.failed_object_keys()) {
         outFailedKeys.emplace_back(objKey);
-    }
-    Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-    if (!outFailedKeys.empty() || recvRc.IsError()) {
-        LOG(WARNING) << "Cannot set all the objects from worker, status:" << recvRc.ToString()
-                     << " failed id:" << VectorToString(outFailedKeys);
     }
     if (filteredKeys.size() > outFailedKeys.size()) {
         return Status::OK();
     }
-    return recvRc.IsOk() ? Status(K_RUNTIME_ERROR, "Cannot get objects from worker") : recvRc;
+    return status;
 }
 
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
@@ -2436,28 +2440,16 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfo(keys.size(), nullptr);
     std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     std::vector<TbbMemoryRefTable::accessor> accessor(keys.size());
-    Status status =
-        AllocateMemoryForMSet(kv, setParam.writeMode, workerApi, accessor, buffers, bufferInfo, setParam.cacheType);
-    LOG_IF_ERROR(status, "Fail to allocate memory for multiple set.");
-    if (status.IsOk()) {
-        PublishParam publishParam{
-            .isTx = true, .isReplica = false, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
-        };
-        MultiPublishRspPb rsp;
-        status = workerApi->MultiPublish(bufferInfo, publishParam, rsp);
-    }
-
-    // Destruct buffer
-    for (size_t i = 0; i < keys.size(); ++i) {
-        if (buffers[i] == nullptr) {
-            continue;
-        }
-        buffers[i]->SetVisibility(true);
-        LOG_IF_ERROR(DecreaseRefCntByAccessor(accessor[i], true), "");
-        buffers[i]->isReleased_ = true;
-        accessor[i].release();
-    }
-
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AllocateMemoryForMSet(kv, setParam.writeMode, workerApi, accessor, buffers, bufferInfo, setParam.cacheType),
+        "AllocateMemoryForMSet failed");
+    PublishParam publishParam{
+        .isTx = true, .isReplica = false, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
+    };
+    MultiPublishRspPb rsp;
+    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfo, publishParam, rsp));
+    accessor.clear();
+    auto status = HandleShmRefCountAfterMultiPublish(buffers, rsp);
     LOG(INFO) << "Finish to multiset.";
     return status;
 }
@@ -2623,6 +2615,31 @@ Status ObjectClientImpl::DeleteDevObjects(const std::vector<std::string> &objKey
     return Status::OK();
 }
 
+Status ObjectClientImpl::HandleShmRefCountAfterMultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                                            const MultiPublishRspPb &rsp)
+{
+    Status lastRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    auto failedSet = std::set<std::string>{ rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
+    for (auto &buffer : bufferList) {
+        if (buffer != nullptr && buffer->isShm_) {
+            // If the objectKey is not in the failed set, it means the worker has successfully decreased the reference
+            // count. The buffer should not notify the worker again when it is being destructed.
+            if (failedSet.find(buffer->bufferInfo_->objectKey) == failedSet.end()) {
+                memoryRefCount_.erase(buffer->bufferInfo_->shmId);
+                buffer->isReleased_ = true;
+                buffer->SetVisibility(true);
+            }
+        }
+    }
+    // return ok only all objects success
+    if (!failedSet.empty() || lastRc.IsError()) {
+        LOG(WARNING) << "Cannot set all the objects from worker, status:" << lastRc.ToString()
+                     << " failed id:" << VectorToString(failedSet);
+        return lastRc.IsOk() ? Status(K_RUNTIME_ERROR, "Some objects set failed in worker") : lastRc;
+    }
+    return Status::OK();
+}
+
 Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList, const SetParam &setParam,
                                       const std::vector<std::vector<uint64_t>> &blobSizes)
 {
@@ -2642,30 +2659,7 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
     };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiPublish(bufferInfoList, param, rsp, blobSizes));
-    std::vector<std::string> failedObjs;
-    for (const auto &objKey : rsp.failed_object_keys()) {
-        failedObjs.emplace_back(objKey);
-    }
-
-    Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-    auto failedSet = std::set<std::string>{ rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
-    for (auto &buffer : bufferList) {
-        if (buffer->isShm_) {
-            if (failedSet.find(buffer->bufferInfo_->objectKey) == failedSet.end()) {
-                memoryRefCount_.erase(buffer->bufferInfo_->shmId);
-                buffer->isReleased_ = true;
-            }
-            buffer->SetVisibility(recvRc.IsOk());
-        }
-    }
-    // return ok only all objects success
-    if (!failedObjs.empty() || recvRc.IsError()) {
-        LOG(WARNING) << "Cannot set all the objects from worker, status:" << recvRc.ToString()
-                     << " failed id:" << VectorToString(failedObjs);
-        return recvRc.IsOk() ? Status(K_RUNTIME_ERROR, "Some objects set failed in worker") : recvRc;
-    }
-
-    return Status::OK();
+    return HandleShmRefCountAfterMultiPublish(bufferList, rsp);
 }
 
 Status ObjectClientImpl::QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)

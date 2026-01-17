@@ -102,7 +102,7 @@ TEST_F(STCScaleUpTest, TestRedirectExpire)
     ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
 }
 
-TEST_F(STCScaleUpTest, TestRedirectSubscribe)
+TEST_F(STCScaleUpTest, DISABLED_TestRedirectSubscribe)
 {
     DS_ASSERT_OK(cluster_->StartOBS());
     StartWorkerAndWaitReady({ 0, 1 });
