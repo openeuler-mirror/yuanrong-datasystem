@@ -59,6 +59,20 @@ void SharedMemoryRefTable::ClientTableGetOrInsert(const ClientKey &clientId,
     }
 }
 
+void SharedMemoryRefTable::InitShmRefForClient(const ClientKey &clientId, bool supportMultiShmRefCount)
+{
+    LOG(INFO) << "Initializing shared memory reference for client " << clientId
+              << ", supportMultiShmRefCount: " << supportMultiShmRefCount;
+    TbbMemoryClientRefTable::accessor accessor;
+    if (clientRefTable_.insert(accessor, clientId)) {
+        // Set isUniqueCnt to false if the client supports multiple shared memory reference counts,
+        auto clientInfo = std::make_shared<ObjectRefInfo<ShmKey>>(!supportMultiShmRefCount);
+        accessor->second = std::move(clientInfo);
+    } else {
+        LOG(WARNING) << "Client " << clientId << " already exists";
+    }
+}
+
 void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit)
 {
     const auto &shmId = shmUnit->GetId();
@@ -130,19 +144,20 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
     }
     auto shmUnit = shmAccessor->second.first;
     INJECT_POINT("RemoveShmUnit");
-    RemoveShmUnitDetail(clientId, shmAccessor, clientAccessor);
+    RemoveShmUnitDetail(clientId, false, shmAccessor, clientAccessor);
     VLOG(1) << "RemoveShmUnit for shmid: " << shmId << " client id: " << clientId;
     return Status::OK();
 }
 
-void SharedMemoryRefTable::RemoveShmUnitDetail(const ClientKey &clientId,
+void SharedMemoryRefTable::RemoveShmUnitDetail(const ClientKey &clientId, bool forceRemoveClient,
                                                TbbMemoryObjectRefTable::accessor &shmAccessor,
                                                TbbMemoryClientRefTable::accessor &clientAccessor)
 {
     const auto &shmUnit = shmAccessor->second.first;
     const auto shmId = shmUnit->GetId();
     // Step 1: Update Client Table.
-    if (clientAccessor->second->RemoveRef(shmId)) {
+    uint32_t refCount = 0;
+    if (clientAccessor->second->RemoveAndGetRefCnt(shmId, refCount)) {
         if (shmUnit->GetRefCount() > 0) {
             shmUnit->DecrementRefCount();
         } else {
@@ -150,15 +165,16 @@ void SharedMemoryRefTable::RemoveShmUnitDetail(const ClientKey &clientId,
                          << BytesUuidToString(shmId.ToString());
         }
     }
-    if (clientAccessor->second->CheckIsRefIdsEmpty()) {
-        if (!clientRefTable_.erase(clientAccessor)) {
-            LOG(ERROR) << FormatString("Fail to erase clientId: %s", clientAccessor->first);
-        }
-    }
+
     // Step 2: Update Object Table.
     if (shmUnit->GetRefCount() == 0) {
         datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(1);
         datasystem::memory::Allocator::Instance()->ChangeRefPageCount(-1);
+    }
+
+    // skip if the ref count for shmId is not zero.
+    if (!forceRemoveClient && refCount > 0) {
+        return;
     }
     auto &clientIds = shmAccessor->second.second;
     (void)clientIds.erase(clientId);
@@ -202,8 +218,9 @@ Status SharedMemoryRefTable::RemoveClient(const ClientKey &clientId)
         if (!shmRefTable_.find(shmAccessor, shmId)) {
             continue;
         }
-        RemoveShmUnitDetail(clientId, shmAccessor, clientAccessor);
+        RemoveShmUnitDetail(clientId, true, shmAccessor, clientAccessor);
     }
+    clientRefTable_.erase(clientAccessor);
     return Status::OK();
 }
 }  // namespace object_cache

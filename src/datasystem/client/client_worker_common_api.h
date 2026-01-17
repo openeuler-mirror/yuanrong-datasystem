@@ -59,7 +59,8 @@ struct ClientWorkerCommonApiAttribute {
         : socketFd_(-1),
           heartbeatType_(heartbeatType),
           hostPort_(std::move(hostPort)),
-          enableCrossNodeConnection_(enableCrossNodeConnection)
+          enableCrossNodeConnection_(enableCrossNodeConnection),
+          workerSupportMultiShmRefCount_(true)
     {
     }
 
@@ -132,6 +133,7 @@ struct ClientWorkerCommonApiAttribute {
     bool enableCrossNodeConnection_{ false };
     bool workerEnableP2Ptransfer_ = false;
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
+    bool workerSupportMultiShmRefCount_;
 
 private:
     std::atomic<uint64_t> invokeCount_{ 0 };
@@ -242,6 +244,11 @@ public:
     std::vector<HostPort> GetStandbyWorkers() override;
     Status UpdateToken(SensitiveValue &token) override;
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
+
+    bool IsWorkerSupportMultiShmRefCount() const
+    {
+        return workerSupportMultiShmRefCount_;
+    }
 
 protected:
     /**

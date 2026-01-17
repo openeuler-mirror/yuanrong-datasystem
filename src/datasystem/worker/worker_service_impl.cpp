@@ -236,15 +236,21 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     uint32_t lockId = 0;
     auto shmEnabled = req.shm_enabled();
     int32_t socketFd = shmEnabled ? req.server_fd() : INVALID_SOCKET_FD;
+    bool supportMultiShmRefCount = req.support_multi_shm_ref_count();
     LOG(INFO) << "Register client: " << clientId << ", pod: " << req.pod_name() << ", version: " << version
               << ", socket fd: " << socketFd << ", shmEnabled: " << shmEnabled << ", tenantId: " << tenantId
               << ", enable cross node: " << req.enable_cross_node() << ", reconnect client: " << remainClient
-              << ", heartbeat: " << req.heartbeat_enabled();
+              << ", heartbeat: " << req.heartbeat_enabled() << ", supportMultiShmRefCount: " << supportMultiShmRefCount;
     INJECT_POINT("WorkerServiceImpl.RegisterClient.AboveAddClient");
+    INJECT_POINT("worker.RegisterClient.multi_shm_ref_count", [&supportMultiShmRefCount](bool multiShmRefCount) {
+        supportMultiShmRefCount &= multiShmRefCount;
+        return Status::OK();
+    });
     if (req.heartbeat_enabled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->AddClient(clientId, shmEnabled, socketFd, tenantId,
-                                                            req.enable_cross_node(), req.pod_name(), lockId),
-                                         "worker add client failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
+                               supportMultiShmRefCount, lockId),
+            "worker add client failed");
     }
     // After executing "AddClient", the server fd will be bound to the client and released when the client loses
     // connection, so there is no need to roll back.
@@ -287,12 +293,14 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_enable_p2p_transfer(FLAGS_enable_p2p_transfer);
     rsp.set_client_reconnect_wait_s(FLAGS_client_reconnect_wait_s);
     rsp.set_exclusive_conn_sockpath(exclusiveConnSockPath);
+    rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
 
     INJECT_POINT("worker.RegisterClient.end", [&rsp](int fd) {
         rsp.set_store_fd(fd);
         return Status::OK();
     });
-    LOG(INFO) << "Register client " << clientId << " done, healthy: " << !rsp.unhealthy();
+    LOG(INFO) << "Register client " << clientId << " done, healthy: " << !rsp.unhealthy()
+              << ", worker support multi shm ref count:" << rsp.support_multi_shm_ref_count();
     return Status::OK();
 }
 
@@ -387,9 +395,7 @@ Status WorkerServiceImpl::operator()()
             CloseExpiredUnixSockFd();
             checkCacheFdTimer.Reset();
         }
-        struct pollfd pfd {
-            .fd = listenFd_, .events = POLLIN, .revents = 0
-        };
+        struct pollfd pfd{ .fd = listenFd_, .events = POLLIN, .revents = 0 };
         int n = poll(&pfd, 1, RPC_POLL_TIME);
         if (n <= 0) {
             continue;
