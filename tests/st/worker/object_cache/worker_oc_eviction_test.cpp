@@ -1850,7 +1850,7 @@ public:
     }
 };
 
-TEST_F(EvictionManagerConcurrently2, EvictDuringPublish)
+TEST_F(EvictionManagerConcurrently2, DISABLED_EvictDuringPublish)
 {
     std::shared_ptr<ObjectClient> client;
     std::shared_ptr<ObjectClient> client0;

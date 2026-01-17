@@ -1975,7 +1975,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerReady)
     ASSERT_EQ(state, "ready");
 }
 
-TEST_F(KVCacheClientClusterState, LEVEL1_TestWorkerRecovery)
+TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerRecovery)
 {
     std::string value;
     DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));

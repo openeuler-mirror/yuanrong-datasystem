@@ -83,7 +83,6 @@ void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr
     VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
 }
 
-
 void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
                                        std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
 {
@@ -121,11 +120,12 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
     // first lock clientAccessor, then lock shmAccessor.
     auto found = clientRefTable_.find(clientAccessor, clientId);
     if (!found) {
-        LOG(WARNING) << FormatString("RemoveShmUnit: The key shmId : %s not exit in shmRefTable_.", shmId);
+        LOG(WARNING) << FormatString("The clientId not exists in clientRefTable_, clientId: %s, shmId: %s", clientId,
+                                     shmId);
         return Status::OK();
     }
     if (!shmRefTable_.find(shmAccessor, shmId)) {
-        LOG(WARNING) << FormatString("RemoveShmUnit: The key objectKey : %s not exit in shmRefTable_.", shmId);
+        LOG(WARNING) << FormatString("The shmId not exists in shmRefTable_, clientId: %s, shmId: %s", clientId, shmId);
         return Status::OK();
     }
     auto shmUnit = shmAccessor->second.first;
@@ -180,7 +180,7 @@ bool SharedMemoryRefTable::Contains(const ClientKey &clientId, const ShmKey &shm
     return false;
 }
 #endif
- 
+
 void SharedMemoryRefTable::GetClientRefIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds) const
 {
     TbbMemoryClientRefTable::accessor accessor;

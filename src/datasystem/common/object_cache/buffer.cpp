@@ -157,6 +157,7 @@ void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
     clientImpl_.reset();
     latch_.reset();
     clientId_ = "";
+    isReleased_ = true;
 }
 
 Buffer::~Buffer()
