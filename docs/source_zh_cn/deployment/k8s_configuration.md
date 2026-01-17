@@ -389,7 +389,7 @@ global:
 |-----|------|---------|-------------|
 | global.gracefulShutdown.scaleInTaint | string | `"datasystem/offline=true:NoExecute"` | 识别优雅退出的污点，格式为 `key=value:effect`。当节点打上与 `scaleInTaint` 相匹配的污点时，该节点上的 datasystem-worker 会触发主动缩容优雅退出 |
 | global.gracefulShutdown.enableLosslessDataExitMode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
-| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `15` | datasystem-worker检测异步队列为空的时间，单位为秒 |
+| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | global.gracefulShutdown.dataMigrateRateLimitMb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
 | global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间，0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod |
 

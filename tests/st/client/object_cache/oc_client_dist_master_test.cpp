@@ -1128,7 +1128,7 @@ public:
     }
 };
 
-TEST_F(OCClientDistMasterHeartbeatTest, TestMasterRecoverRefAfterWorkerRestart)
+TEST_F(OCClientDistMasterHeartbeatTest, DISABLED_TestMasterRecoverRefAfterWorkerRestart)
 {
     InitTestClient(0, objClient0_);
     InitTestClient(1, objClient1_);

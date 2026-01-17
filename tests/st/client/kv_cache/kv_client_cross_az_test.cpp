@@ -702,7 +702,7 @@ protected:
     std::shared_ptr<KVClient> client0_, client1_, client2_, client3_;
 };
 
-TEST_F(KVClientCrossAzReadTest, LEVEL1_DISABLED_VoluntaryScaleDownEvent)
+TEST_F(KVClientCrossAzReadTest, DISABLED_LEVEL1_VoluntaryScaleDownEvent)
 {
     std::string value;
     HostPort workerAddress;

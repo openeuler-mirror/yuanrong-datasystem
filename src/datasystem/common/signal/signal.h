@@ -18,7 +18,17 @@
  * Description: Define signal handler function.
  */
 
+#include <condition_variable>
+#include <mutex>
+#include <csignal>
+#include <chrono>
+
 namespace datasystem {
+
+extern volatile sig_atomic_t g_exitFlag;
+extern std::condition_variable g_termSignalCv;
+extern std::mutex g_termSignalMutex;
+
 /**
  * @brief The signal handler
  * @param[in] signum The signal number.

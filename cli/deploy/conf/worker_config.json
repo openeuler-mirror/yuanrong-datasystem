@@ -300,7 +300,7 @@
         "description": "Data migrate rate limit for every node when scale down happen."
     },
     "check_async_queue_empty_time_s": {
-        "value": "15",
+        "value": "1",
         "description": "The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and L2 cache remain empty before it can exit properly."
     },
     "obs_access_key": {

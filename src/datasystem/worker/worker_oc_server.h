@@ -473,6 +473,8 @@ private:
     std::atomic<bool> allClientsExited_{ false };
     int64_t lastRequestArrivalTime_{ 0 };
     std::string checkFilePath_;
+    std::condition_variable checkAsyncTasksDoneCv_;
+    std::mutex checkAsyncTasksDoneMutex_;
 
     std::unique_ptr<WorkerLivenessCheck> livenessCheck_;
     std::shared_ptr<RocksStore> clusterStore_;

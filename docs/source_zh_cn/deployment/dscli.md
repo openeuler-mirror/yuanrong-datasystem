@@ -824,7 +824,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | enable_lossless_data_exit_mode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
-| check_async_queue_empty_time_s | int | `15` | datasystem-worker检测异步队列为空的时间，单位为秒 |
+| check_async_queue_empty_time_s | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | data_migrate_rate_limit_mb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
 
 #### 性能相关配置

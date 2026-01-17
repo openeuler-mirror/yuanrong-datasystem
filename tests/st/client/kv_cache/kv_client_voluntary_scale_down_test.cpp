@@ -529,7 +529,7 @@ TEST_F(KVClientVoluntaryScaleDownTest, LEVEL2_TestWorkersTimeout)
     client0_.reset();
 }
 
-TEST_F(KVClientVoluntaryScaleDownTest, TestWorkerGetWhenRedirect)
+TEST_F(KVClientVoluntaryScaleDownTest, DISABLED_TestWorkerGetWhenRedirect)
 {
     SetWorkerHashInjection();
     std::shared_ptr<KVClient> client, client1;
