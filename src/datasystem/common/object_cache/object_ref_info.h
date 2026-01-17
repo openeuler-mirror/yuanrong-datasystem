@@ -36,7 +36,7 @@
 
 namespace datasystem {
 namespace object_cache {
-template  <typename T>
+template <typename T>
 class ObjectRefInfo {
     using TbbObjKeyTable = tbb::concurrent_hash_map<T, uint32_t>;
 
@@ -61,6 +61,14 @@ public:
      * @return True on success, false otherwise.
      */
     bool RemoveRef(const T &objectKey);
+
+    /**
+     * @brief Remove the reference to the object.
+     * @param[in] objectKey The object key to remove, it cannot be empty.
+     * @param[out] refCount The ref count after remove.
+     * @return True on success, false otherwise.
+     */
+    bool RemoveAndGetRefCnt(const T &objectKey, uint32_t &refCount);
 
     /**
      * @brief Check if the id is contains.
@@ -466,6 +474,8 @@ public:
 
     void ClientTableGetOrInsert(const ClientKey &clientId, TbbMemoryClientRefTable::const_accessor &accessor);
 
+    void InitShmRefForClient(const ClientKey &clientId, bool supportMultiShmRefCount);
+
 #ifdef WITH_TESTS
     /**
      * @brief Check one object whether be referred by client.
@@ -487,10 +497,12 @@ private:
     /**
      * @brief Remove shared memory unit reference from the client table and shm table.
      * @param[in] clientId uuid of client.
+     * @param[in] forceRemoveClient whether to remove client from client table.
      * @param[in/out] shmAccessor the tbb accessor of object reference table.
      * @param[in/out] clientAccessor the tbb accessor of client table.
      */
-    void RemoveShmUnitDetail(const ClientKey &clientId, TbbMemoryObjectRefTable::accessor &shmAccessor,
+    void RemoveShmUnitDetail(const ClientKey &clientId, bool forceRemoveClient,
+                             TbbMemoryObjectRefTable::accessor &shmAccessor,
                              TbbMemoryClientRefTable::accessor &clientAccessor);
 
     // The map is client id and the shared memory ids referenced by this client.
@@ -515,6 +527,7 @@ bool ObjectRefInfo<T>::AddRef(const T &objectKey, uint32_t ref)
         return false;
     }
     objAccessor->second += ref;
+    VLOG(1) << "add object key " << objectKey << " after ref:" << objAccessor->second;
     return true;
 }
 
@@ -554,17 +567,27 @@ Status ObjectRefInfo<T>::UpdateRefCount(const T &objectKey, int count)
 template <typename T>
 bool ObjectRefInfo<T>::RemoveRef(const T &objectKey)
 {
+    uint32_t refCount = 0;
+    return RemoveAndGetRefCnt(objectKey, refCount);
+}
+
+template <typename T>
+bool ObjectRefInfo<T>::RemoveAndGetRefCnt(const T &objectKey, uint32_t &refCount)
+{
     std::shared_lock<std::shared_timed_mutex> lock(objectKeyMapMutex_);
     typename TbbObjKeyTable::accessor objAccessor;
     if (!objectKeys_.find(objAccessor, objectKey)) {
+        refCount = 0;
         return false;
     }
     if (isUniqueCnt_) {
+        refCount = 0;
         auto result = objectKeys_.erase(objAccessor);
         return result > 0;
     }
     objAccessor->second -= 1;
-    if (objAccessor->second == 0) {
+    refCount = objAccessor->second;
+    if (refCount == 0) {
         (void)objectKeys_.erase(objAccessor);
     }
     return true;

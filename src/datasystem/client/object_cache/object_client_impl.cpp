@@ -280,15 +280,16 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, boo
     CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
+    auto &workerApi = workerApi_[LOCAL_WORKER];
     if (!initWithWorker) {
-        workerApi_[LOCAL_WORKER] =
+        workerApi =
             std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
                                                     tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
     } else {
         // local worker api
     }
-    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Init(requestTimeoutMs_, connectTimeoutMs_));
-    mmapManager_ = std::make_unique<client::MmapManager>(workerApi_[LOCAL_WORKER]);
+    RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_));
+    mmapManager_ = std::make_unique<client::MmapManager>(workerApi);
     const size_t threadCount = 8;
     asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
     asyncGetCopyPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_copy");
@@ -297,14 +298,15 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, boo
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
     asyncReleasePool_->SetWarnLevel(ThreadPool::WarnLevel::NO_WARN);
-    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->PrepairForDecreaseShmRef(std::bind(
+    RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
-    clientEnableP2Ptransfer_ = workerApi_[LOCAL_WORKER]->workerEnableP2Ptransfer_;
+    clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     // Start worker down listen.
-    heartbeatType = workerApi_[LOCAL_WORKER]->heartbeatType_;
+    heartbeatType = workerApi->heartbeatType_;
     RETURN_IF_NOT_OK(InitListenWorker(heartbeatType));
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
+    memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
     StartPerfThread();
     InitParallelFor();
     return Status::OK();
@@ -359,14 +361,14 @@ void ObjectClientImpl::ProcessWorkerLost()
     if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
         return;
     }
-    (void)workerApi_[LOCAL_WORKER]->CleanUpForDecreaseShmRefAfterWorkerLost();
+    auto &workerApi = workerApi_[LOCAL_WORKER];
+    (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
     // to split
     mmapManager_->CleanInvalidMmapTable();
     {
-        std::lock_guard<std::shared_timed_mutex> l(memoryRefMutex_);
         // Only shm object would record reference count, and they are
         // unrecoverable, so clear their reference count directly.
-        memoryRefCount_.clear();
+        memoryRefCount_.Clear();
     }
 
     LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_.ToString();
@@ -378,12 +380,13 @@ void ObjectClientImpl::ProcessWorkerLost()
             ids.emplace_back(entry.first);
         }
     }
-    Status s = workerApi_[LOCAL_WORKER]->ReconnectWorker(ids);
+    Status s = workerApi->ReconnectWorker(ids);
     if (s.IsError()) {
         LOG(ERROR) << "[Reconnect] Reconnect local worker failed, error message: " << s.ToString();
         return;
     }
-    auto rc = workerApi_[LOCAL_WORKER]->PrepairForDecreaseShmRef(std::bind(
+    memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
+    auto rc = workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2));
     if (rc.IsError()) {
         LOG(ERROR) << "[Reconnect] Failed to prepair for DecreaseShmRef:" << rc.ToString();
@@ -1038,7 +1041,6 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     RETURN_IF_NOT_OK(CheckConnection());
     PerfPoint createPoint(PerfKey::CLIENT_CREATE_OBJECT);
     VLOG(1) << "Begin to create object, object_key: " << objectKey;
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     buffer.reset();  // Decrease should precede increase to avoid worker lost (ref cnt will be clear) and then restart.
     std::shared_ptr<Buffer> newBuffer;
     uint32_t version = 0;
@@ -1056,8 +1058,7 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         auto bufferInfo =
             MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize,
                                  param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
-        CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
-                                 FormatString("shmId not uuid, shmId is %s", shmBuf->id));
+        RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
     } else {
         auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
@@ -1101,7 +1102,6 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     RETURN_IF_NOT_OK(CheckConnection());
     LOG(INFO) << "Start to MultiCreate " << objectKeyList.size();
 
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     std::vector<MultiCreateParam> multiCreateParamList;
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_CONSTRUCT_PARAM);
     uint64_t dataSizeSum = 0;
@@ -1145,7 +1145,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
             if (buffer == nullptr) {
                 continue;
             }
-            memoryRefCount_.erase(buffer->bufferInfo_->shmId);
+            memoryRefCount_.DeleteRef(buffer->bufferInfo_->shmId);
         }
         bufferList.clear();
     });
@@ -1171,29 +1171,23 @@ void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffer
 
 void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos)
 {
-    auto DecreaseRefCnt = [this](const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos) {
-        std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
-        std::vector<std::shared_ptr<TbbMemoryRefTable::accessor>> batchLock;
+    auto decreaseRefCnt = [this](const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos) {
+        std::vector<std::unique_ptr<TbbMemoryRefTable::accessor>> batchLock;
         std::vector<ShmKey> descreaseShms;
         for (auto &info : shmInfos) {
             if (!IsBufferAlive(info.second)) {
                 continue;
             }
             const auto &shmId = info.first;
-            auto accessorPtr = std::make_shared<TbbMemoryRefTable::accessor>();
+            auto accessorPtr = std::make_unique<TbbMemoryRefTable::accessor>();
             auto &accessor = *accessorPtr;
-            auto found = memoryRefCount_.find(accessor, shmId);
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(found, K_NOT_FOUND,
-                                                 FormatString("[shmId %s] Cannot find shm in memoryRef table.", shmId));
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                accessor->second > 0, K_UNKNOWN_ERROR,
-                FormatString("[shmId %s] Ref count must be positive integer, cur is : %d", shmId, accessor->second));
-
-            accessor->second--;
-            if (accessor->second != 0) {
+            RETURN_IF_NOT_OK(memoryRefCount_.Find(shmId, accessor));
+            bool needDecreaseWorkerRef = false;
+            RETURN_IF_NOT_OK(memoryRefCount_.DecreaseRef(accessor, needDecreaseWorkerRef));
+            if (!needDecreaseWorkerRef) {
                 continue;
             }
-            descreaseShms.emplace_back(accessor->first);
+            descreaseShms.emplace_back(shmId);
             batchLock.emplace_back(std::move(accessorPtr));
         }
 
@@ -1202,16 +1196,12 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, s
                                          "DecreaseReferenceCnt failed.");
         Status eraseStatus = Status::OK();
         for (auto &accessorPtr : batchLock) {
-            if (accessorPtr) {
-                (void)memoryRefCount_.erase(*accessorPtr);
-            } else {
-                eraseStatus = Status(K_RUNTIME_ERROR, "Decrease Failed, Got empty ptr!");
-            }
+            memoryRefCount_.DeleteRef(*accessorPtr);
         }
         return eraseStatus;
     };
 
-    Status rc = DecreaseRefCnt(shmInfos);
+    Status rc = decreaseRefCnt(shmInfos);
     if (rc.IsError()) {
         LOG(WARNING) << "Decrease reference failed: " << rc.ToString();
     }
@@ -1220,31 +1210,29 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, s
 void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version)
 {
     std::shared_lock<std::shared_timed_mutex> lck(shutdownMux_);
-    if (asyncReleasePool_ != nullptr) {
+    if (asyncReleasePool_ == nullptr) {
+        return;
+    }
+    bool async = true;
+    INJECT_POINT("client.DecreaseReferenceCnt", [&async](bool value) { async = value; });
+    if (async) {
         asyncReleasePool_->Execute([this, shmId, isShm, version] { DecreaseReferenceCntImpl(shmId, isShm, version); });
+    } else {
+        DecreaseReferenceCntImpl(shmId, isShm, version);
     }
 }
 
 void ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version)
 {
-    VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_, shmId);
-    auto DecreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
-        std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
+    auto decreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
         TbbMemoryRefTable::accessor accessor;
-        auto found = memoryRefCount_.find(accessor, shmId);
-
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(found, K_NOT_FOUND,
-                                             FormatString("[shmId %s] Cannot find shm in memoryRef table.", shmId));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            accessor->second > 0, K_UNKNOWN_ERROR,
-            FormatString("[shmId %s] Ref count must be positive integer, cur is : %d", shmId, accessor->second));
-
-        RETURN_IF_NOT_OK(DecreaseRefCntByAccessor(accessor, isShm));
+        RETURN_IF_NOT_OK(memoryRefCount_.Find(shmId, accessor));
+        RETURN_IF_NOT_OK(DecreaseRefCntByAccessor(shmId, accessor, isShm));
         return Status::OK();
     };
 
     if (!isShm) {
-        Status rc = DecreaseRefCnt(shmId, isShm);
+        Status rc = decreaseRefCnt(shmId, isShm);
         if (rc.IsError()) {
             LOG(WARNING) << "Decrease reference failed: " << rc.ToString();
         }
@@ -1252,30 +1240,29 @@ void ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm,
     }
     // Shm buffer handle.
     if (IsBufferAlive(version)) {
-        Status rc = DecreaseRefCnt(shmId, isShm);
+        Status rc = decreaseRefCnt(shmId, isShm);
         if (rc.IsError()) {
             LOG(WARNING) << "Decrease reference failed: " << rc.ToString();
         }
     }
 }
 
-Status ObjectClientImpl::DecreaseRefCntByAccessor(TbbMemoryRefTable::accessor &accessor, bool isShm)
+Status ObjectClientImpl::DecreaseRefCntByAccessor(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor,
+                                                  bool isShm)
 {
-    VLOG(1) << FormatString("[%s] [clientId: %s] [shmId %s] ref: %d", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_,
-                            accessor->first, accessor->second);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        !accessor.empty(), K_UNKNOWN_ERROR,
-        FormatString("[ObjectKey %s] memoryRef table cannot find this obj key.", accessor->first));
-    accessor->second--;
-    if (accessor->second != 0 || !isShm) {
+    bool needDecreaseWorkerRef = false;
+    RETURN_IF_NOT_OK(memoryRefCount_.DecreaseRef(accessor, needDecreaseWorkerRef));
+    VLOG(1) << FormatString("Try decrease ref count for shmId %s on clientId %s, needDecreaseWorkerRef %d", shmId,
+                            workerApi_[LOCAL_WORKER]->clientId_, needDecreaseWorkerRef);
+    if (!needDecreaseWorkerRef || !isShm) {
         return Status::OK();
     }
     RETURN_IF_NOT_OK(CheckConnection());
     PerfPoint descPoint(PerfKey::CLIENT_DECREASE_MEM_REF);
     auto checkFunc = std::bind(&ObjectClientImpl::CheckConnectionWhileShmModify, this);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseShmRef(accessor->first, checkFunc, shutdownMux_),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseShmRef(shmId, checkFunc, shutdownMux_),
                                      "DecreaseShmRef failed.");
-    (void)memoryRefCount_.erase(accessor);
+    memoryRefCount_.DeleteRef(accessor);
     return Status::OK();
 }
 
@@ -1304,7 +1291,6 @@ Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInf
     if (nestedObjectKeys.find(objectKey) != nestedObjectKeys.end()) {
         RETURN_STATUS(K_UNKNOWN_ERROR, "Nested object references cannot be nested in a loop.");
     }
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     VLOG(1) << "Begin to seal object, object_key: " << objectKey;
     PerfPoint rpcPoint(PerfKey::RPC_CLIENT_SEAL_OBJECT);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, true, nestedObjectKeys),
@@ -1364,11 +1350,9 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     auto objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
                                         param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
     std::shared_ptr<Buffer> buffer;
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Acquire accessor to protect later publish.
     TbbMemoryRefTable::accessor accessor;
-    CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(accessor, shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
-                             FormatString("shmId not uuid, shmId is %s", shmBuf->id));
+    RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id, accessor));
 
     RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffer));
 
@@ -1382,7 +1366,7 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
                                      FormatString("Put object %s", objectKey));
     buffer->SetVisibility(true);
     // Destruct Buffer With Lock.
-    auto status = DecreaseRefCntByAccessor(accessor, true);
+    auto status = DecreaseRefCntByAccessor(shmBuf->id, accessor, true);
     if (status.IsError()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Failed to handler memory release.");
     }
@@ -1572,11 +1556,8 @@ Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const 
         MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
                              ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Update shared memory reference count.
-    TbbMemoryRefTable::accessor accessor;
-    auto found = memoryRefCount_.insert(accessor, ShmKey::Intern(info.shm_id()));
-    accessor->second = (found ? 1 : accessor->second + 1);
+    memoryRefCount_.IncreaseRef(ShmKey::Intern(info.shm_id()));
     return Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), buffer);
 }
 
@@ -1807,13 +1788,10 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
         MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
                              ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     // Update shared memory reference count.
     std::shared_ptr<Buffer> tmpbuffer;
     {
-        TbbMemoryRefTable::accessor accessor;
-        auto found = memoryRefCount_.insert(accessor, ShmKey::Intern(info.shm_id()));
-        accessor->second = (found ? 1 : accessor->second + 1);
+        memoryRefCount_.IncreaseRef(ShmKey::Intern(info.shm_id()));
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), tmpbuffer));
     }
 
@@ -2258,8 +2236,7 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
             MakeObjectBufferInfo(keyValue.first, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, keyValue.second.size(),
                                  metadataSize, param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffers[i]));
-        CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(accessor[i], shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
-                                 FormatString("shmId not uuid, shmId is %s", shmBuf->id));
+        RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id, accessor[i]));
         RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(keyValue.second.data(), keyValue.second.size()));
         bufferInfo[i] = std::move(objInfo);
         i++;
@@ -2291,8 +2268,7 @@ Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence, const
                                                    createParam.dataSize, createParam.metadataSize, param, false,
                                                    version, shmBuf->id, nullptr, std::move(mmapEntry));
             PerfPoint refPoint(PerfKey::CLIENT_MEMORY_REF_ADD);
-            CHECK_FAIL_RETURN_STATUS(memoryRefCount_.emplace(shmBuf->id, 1), StatusCode::K_RUNTIME_ERROR,
-                                     FormatString("shmId not uuid, shmId is %s", shmBuf->id));
+            RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
             refPoint.Record();
             INJECT_POINT("ObjectClientImpl.MultiCreate.mmapFailed", [&bufferList, &injectRC](int failedIndex) {
                 if (bufferList[failedIndex] != nullptr) {
@@ -2438,7 +2414,6 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
     std::vector<std::shared_ptr<Buffer>> buffers(keys.size(), nullptr);
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfo(keys.size(), nullptr);
-    std::shared_lock<std::shared_timed_mutex> lck(memoryRefMutex_);
     std::vector<TbbMemoryRefTable::accessor> accessor(keys.size());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         AllocateMemoryForMSet(kv, setParam.writeMode, workerApi, accessor, buffers, bufferInfo, setParam.cacheType),
@@ -2625,7 +2600,7 @@ Status ObjectClientImpl::HandleShmRefCountAfterMultiPublish(const std::vector<st
             // If the objectKey is not in the failed set, it means the worker has successfully decreased the reference
             // count. The buffer should not notify the worker again when it is being destructed.
             if (failedSet.find(buffer->bufferInfo_->objectKey) == failedSet.end()) {
-                memoryRefCount_.erase(buffer->bufferInfo_->shmId);
+                memoryRefCount_.DeleteRef(buffer->bufferInfo_->shmId);
                 buffer->isReleased_ = true;
                 buffer->SetVisibility(true);
             }

@@ -183,19 +183,19 @@ Status ClientWorkerRemoteCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bo
     req.set_tenant_id(tenantId_);
     GetSocketPathRspPb reply;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RetryOnError(timer.GetRemainingTimeMs(),
-                     [this, &req, &reply](int32_t realRpcTimeout) {
-                         INJECT_POINT("client.get_sock.fail");
-                         RpcOptions opts;
-                         opts.SetTimeout(realRpcTimeout);
-                         return commonWorkerSession_->GetSocketPath(opts, req, reply);
-                     },
-                     []() { return Status::OK(); },
-                     { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                       StatusCode::K_RPC_UNAVAILABLE },
-                     rpcTimeoutMs_),
-        "Get socket path failed.");
+    auto rc = RetryOnError(
+        timer.GetRemainingTimeMs(),
+        [this, &req, &reply](int32_t realRpcTimeout) {
+            INJECT_POINT("client.get_sock.fail");
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            return commonWorkerSession_->GetSocketPath(opts, req, reply);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE },
+        rpcTimeoutMs_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
     std::string sockPath = reply.path();
     isConnectUdsSuccess = false;
     if (sockPath.empty()) {
@@ -216,7 +216,7 @@ Status ClientWorkerRemoteCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bo
         }
         return status;
     };
-    auto rc = RetryOnError(timer.GetRemainingTimeMs(), func, [] { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+    rc = RetryOnError(timer.GetRemainingTimeMs(), func, [] { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
     if (rc.IsOk()) {
         isConnectUdsSuccess = true;
         socketFd = sock.GetFd();
@@ -353,23 +353,30 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_enable_cross_node(enableCrossNodeConnection_);
     req.set_enable_exclusive_connection(enableExclusiveConnection_);
     req.set_pod_name(Logging::PodName());
+    req.set_support_multi_shm_ref_count(true);
+    INJECT_POINT("client.RegisterClient.multi_shm_ref_count", [&req](bool multiShmRefCount) {
+        req.set_support_multi_shm_ref_count(multiShmRefCount);
+        return Status::OK();
+    });
 
     RegisterClientRspPb rsp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << shmEnabled_
               << ", enable cross node: " << enableCrossNodeConnection_ << ", tenant id: " << tenantId_
-              << ", auth: " << signature_->ToString();
-    auto rc = RetryOnError(timeoutMs,
-                           [this, &req, &rsp](int32_t realRpcTimeout) {
-                               INJECT_POINT("client.register.fail");
-                               RpcOptions opts;
-                               opts.SetTimeout(realRpcTimeout);
-                               return commonWorkerSession_->RegisterClient(opts, req, rsp);
-                           },
-                           []() { return Status::OK(); },
-                           { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                             StatusCode::K_RPC_UNAVAILABLE },
-                           rpcTimeoutMs_);
+              << ", auth: " << signature_->ToString()
+              << ", client support multi shm ref count:" << req.support_multi_shm_ref_count();
+    auto rc = RetryOnError(
+        timeoutMs,
+        [this, &req, &rsp](int32_t realRpcTimeout) {
+            INJECT_POINT("client.register.fail");
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            return commonWorkerSession_->RegisterClient(opts, req, rsp);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE },
+        rpcTimeoutMs_);
     if (rc.GetCode() == K_SERVER_FD_CLOSED) {
         auto msg = rc.GetMsg();
         rc = Status(K_TRY_AGAIN, std::move(msg));
@@ -609,7 +616,7 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
         LOG(WARNING) << "Client requested exclusive connection, but the older worker did not support the feature.";
         enableExclusiveConnection_ = false;
     }
-
+    workerSupportMultiShmRefCount_ = rsp.support_multi_shm_ref_count();
     SetHeatbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);

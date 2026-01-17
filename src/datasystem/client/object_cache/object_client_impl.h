@@ -35,6 +35,7 @@
 #include "datasystem/client/client_state_manager.h"
 #include "datasystem/client/listen_worker.h"
 #include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/object_cache/client_memory_ref_table.h"
 #include "datasystem/client/object_cache/client_worker_api.h"
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
@@ -63,7 +64,6 @@
 
 namespace datasystem {
 namespace object_cache {
-using TbbMemoryRefTable = tbb::concurrent_hash_map<ShmKey, int>;
 using TbbGlobalRefTable = tbb::concurrent_hash_map<std::string, int>;
 using GlobalRefInfo = std::pair<int, std::shared_ptr<TbbGlobalRefTable::accessor>>;
 
@@ -834,10 +834,11 @@ private:
 
     /**
      * @brief Decrease memory reference count by accessor, to avoid dead lock.(this function does not care).
+     * @param[in] shmId The shared unit id.
      * @param[in] accessorTable The map of object key and relate accessor.
      * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
      */
-    Status DecreaseRefCntByAccessor(TbbMemoryRefTable::accessor &accessor, bool isShm);
+    Status DecreaseRefCntByAccessor(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor, bool isShm);
 
     /**
      * @brief Fill in object buffer info.
@@ -1209,14 +1210,12 @@ private:
     bool enableRemoteH2D_;
     int32_t devId_ = -1;
 
-    // Protect tbb map memoryRefCount_, use unique_lock in for/while loop.
-    mutable std::shared_timed_mutex memoryRefMutex_;
     // Protect tbb map globalRefCount_, use unique_lock in for/while loop.
     mutable std::shared_timed_mutex globalRefMutex_;
 
     mutable std::shared_timed_mutex shutdownMux_;  // Protecting the process of shutdown.
 
-    TbbMemoryRefTable memoryRefCount_;
+    ClientMemoryRefTable memoryRefCount_;
     TbbGlobalRefTable globalRefCount_;
 
     std::unique_ptr<ClientStateManager> clientStateManager_{ nullptr };
