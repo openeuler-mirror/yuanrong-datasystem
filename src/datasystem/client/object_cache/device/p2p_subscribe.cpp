@@ -752,6 +752,11 @@ Status PromiseWithEvent::CreateEventAndFutureList(size_t eventCount, std::vector
 const std::shared_ptr<AclRtEventWrapper> &PromiseWithEvent::GetEvent()
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (event_ == nullptr) {
+        std::shared_ptr<AclRtEventWrapper> event;
+        LOG_IF_ERROR(AclRtEventWrapper::Create(event), "Create event error");
+        event_ = event;
+    }
     return event_;
 }
 
