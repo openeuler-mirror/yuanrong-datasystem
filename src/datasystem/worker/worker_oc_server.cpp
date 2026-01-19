@@ -1163,11 +1163,7 @@ Status WorkerOCServer::PreShutDown()
                                    }));
         checkAsyncTasksThread_->set_name("CheckAsyncTask");
     } else {
-        {
-            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
-            checkAsyncTasksDone_ = true;
-        }
-        checkAsyncTasksDoneCv_.notify_all();
+        SetCheckAsyncTasksDone(true);
     }
 
     if (scaleIn) {
@@ -1335,11 +1331,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
     // Has async tasks running.
     if (isAsyncTasksRunning) {
         checkNum = updateCheckNum;
-        {
-            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
-            checkAsyncTasksDone_ = false;
-        }
-        checkAsyncTasksDoneCv_.notify_all();
+        SetCheckAsyncTasksDone(false);
         return;
     }
 
@@ -1350,11 +1342,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
                      << ", thisRequestArrivalTime: " << lastRequestArrivalTime << "], retry...";
         lastRequestArrivalTime_ = lastRequestArrivalTime;
         checkNum = updateCheckNum;
-        {
-            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
-            checkAsyncTasksDone_ = false;
-        }
-        checkAsyncTasksDoneCv_.notify_all();
+        SetCheckAsyncTasksDone(false);
         return;
     }
 
@@ -1364,12 +1352,8 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
         return;
     } else {
         LOG(INFO) << "AsyncTasks all finished.";
-        {
-            std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
-            checkAsyncTasksDone_ = true;
-        }
         checkNum = updateCheckNum;
-        checkAsyncTasksDoneCv_.notify_all();
+        SetCheckAsyncTasksDone(true);
     }
 }
 
@@ -1396,6 +1380,15 @@ void WorkerOCServer::CheckAsyncTasks()
         CheckRule(IsAsyncTasksRunning(), checkNum);
         std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
     }
+}
+
+void WorkerOCServer::SetCheckAsyncTasksDone(bool value)
+{
+    {
+        std::lock_guard<std::mutex> lock(checkAsyncTasksDoneMutex_);
+        checkAsyncTasksDone_ = value;
+    }
+    checkAsyncTasksDoneCv_.notify_all();
 }
 
 void WorkerOCServer::NotifyShutdownToEtcd()

@@ -24,8 +24,6 @@
 #include <chrono>
 
 namespace datasystem {
-
-extern volatile sig_atomic_t g_exitFlag;
 extern std::condition_variable g_termSignalCv;
 extern std::mutex g_termSignalMutex;
 
