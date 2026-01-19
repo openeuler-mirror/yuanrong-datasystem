@@ -48,7 +48,7 @@ def check_duplicate_args(args: Any):
         count = raw_args.count(param)
         if count > 1:
             logger.error(
-                f"argument '{param}' can only be specified once. Current args: {args}"
+                f"argument '{param}' can only be specified once."
             )
             return False
     return True
@@ -57,15 +57,15 @@ def check_duplicate_args(args: Any):
 def validate_range_arguments(args: Any):
     """Validates the range of numerical command-line arguments."""
     if not 1 <= args.thread_num <= 128:
-        logger.error(f"thread_num must be between 1 and 128. Current args: {args}")
+        logger.error(f"thread_num must be between 1 and 128.")
         return False
 
     if not 1 <= args.batch_num <= 10000:
-        logger.error(f"batch_num must be between 1 and 10000. Current args: {args}")
+        logger.error(f"batch_num must be between 1 and 10000.")
         return False
 
     if args.num <= 0:
-        logger.error(f"num must be greater than 0. Current args: {args}")
+        logger.error(f"num must be greater than 0.")
         return False
 
     return True
@@ -73,33 +73,50 @@ def validate_range_arguments(args: Any):
 
 def validate_format_arguments(args: Any):
     """Validates the format of various command-line arguments."""
-    size_pattern = r"^\d+(?:B|KB|MB|GB)?$"
-    if not re.match(size_pattern, args.size.upper()):
+    # Validate size format and value
+    size_pattern = r"^(\d+)(B|KB|MB|GB)?$"
+    size_match = re.match(size_pattern, args.size.upper())
+    if not size_match:
         logger.error(
-            f"size format is incorrect, should be nB/nKB/nMB/nGB or just n. Current args: {args}"
+            f"size format is incorrect, should be nB/nKB/nMB/nGB or just n."
         )
         return False
+    
+    # Ensure size value is greater than 0
+    size_value = int(size_match.group(1))
+    if size_value <= 0:
+        logger.error(f"size value must be greater than 0.")
+        return False
 
+    # Validate prefix format and length
     if not re.match(r"^[a-zA-Z0-9_]+$", args.prefix):
         logger.error(
-            f"prefix must be letters, digits, or underscores. Current args: {args}"
+            f"prefix must be letters, digits, or underscores."
         )
         return False
+    
+    # Ensure prefix length does not exceed 64 characters
+    if len(args.prefix) > 64:
+        logger.error(f"prefix length must not exceed 64 characters.")
+        return False
 
+    # Validate worker addresses format
     worker_address_pattern = r"^([a-zA-Z0-9.]+:\d+)(,[a-zA-Z0-9.]+:\d+)*$"
     if not re.match(worker_address_pattern, args.set_worker_addresses):
-        logger.error(f"set_worker_addresses format is incorrect. Current args: {args}")
+        logger.error(f"set_worker_addresses format is incorrect.")
         return False
     if not re.match(worker_address_pattern, args.get_worker_addresses):
-        logger.error(f"get_worker_addresses format is incorrect. Current args: {args}")
+        logger.error(f"get_worker_addresses format is incorrect.")
         return False
 
+    # Validate owner_worker format and check if it's in the worker list
     if args.owner_worker and not re.match(r"^[a-zA-Z0-9.:]+$|^\s*$", args.owner_worker):
-        logger.error(f"owner_worker format is incorrect. Current args: {args}")
+        logger.error(f"owner_worker format is incorrect.")
         return False
 
+    # Validate numa format
     if args.numa and not re.match(r"^(\d+(-\d+)?)(,(\d+(-\d+)?))*$", args.numa):
-        logger.error(f"numa format is incorrect. Current args: {args}")
+        logger.error(f"numa format is incorrect.")
         return False
 
     return True
@@ -109,10 +126,10 @@ def validate_file_arguments(args: Any):
     """Validates if testcase_file path and its format are correct."""
     if args.testcase_file:
         if not os.path.exists(args.testcase_file):
-            logger.error(f"testcase_file does not exist. Current args: {args}")
+            logger.error(f"testcase_file does not exist.")
             return False
         if not args.testcase_file.endswith(".json"):
-            logger.error(f"testcase_file must be a .json file. Current args: {args}")
+            logger.error(f"testcase_file must be a .json file.")
             return False
 
     return True
@@ -122,7 +139,7 @@ def validate_mutex_arguments(args: Any):
     """Ensures that mutually exclusive command-line arguments are not used together."""
     if args.all and args.testcase_file:
         logger.error(
-            f"Cannot specify both --all and --testcase_file. Current args: {args}"
+            f"Cannot specify both --all and --testcase_file."
         )
         return False
 
@@ -138,13 +155,13 @@ def validate_mutex_arguments(args: Any):
     # Use the helper function in simplified if conditions
     if args.all and _is_any_conflicting_arg_set():
         logger.error(
-            f"When using --all, cannot specify thread_num, batch_num, num, or size. Current args: {args}"
+            f"When using --all, cannot specify thread_num, batch_num, num, or size."
         )
         return False
 
     if args.testcase_file and _is_any_conflicting_arg_set():
         logger.error(
-            f"When using --testcase_file, cannot specify thread_num, batch_num, num, or size. Current args: {args}"
+            f"When using --testcase_file, cannot specify thread_num, batch_num, num, or size."
         )
         return False
 

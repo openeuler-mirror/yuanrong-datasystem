@@ -415,7 +415,7 @@ class KVCommand(BenchmarkBaseCommand):
                     "      - No known CPU information could be parsed from the lscpu output."
                 )
                 self.logger.debug(
-                    f"        [DEBUG] Raw lscpu output:\n{lscpu_full_output}"
+                    "        [DEBUG] Raw lscpu output:\n%s", lscpu_full_output
                 )
 
         if cmd_output.stderr.strip():

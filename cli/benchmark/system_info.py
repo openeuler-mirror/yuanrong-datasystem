@@ -53,12 +53,13 @@ class SystemInfoCollector:
 
     @staticmethod
     def _parse_cpu_info(cpu_result: Any) -> str:
-        """Parse CPU MHz from lscpu output"""
+        """Parse CPU MHz from lscpu output, fallback to CPU max MHz if needed"""
         cpu_mhz = ""
         
         if hasattr(cpu_result, 'stdout'):
             for line in cpu_result.stdout.strip().split('\n'):
-                if 'CPU MHz' in line:
+                # Use regex to match CPU MHz line with optional leading spaces
+                if re.match(r'\s*CPU MHz', line):
                     try:
                         freq_str = line.split(':', 1)[1].strip()
                         freq_int = int(float(freq_str))
@@ -66,8 +67,21 @@ class SystemInfoCollector:
                         break
                     except (ValueError, TypeError):
                         cpu_mhz = "Unknown"
+            
+            # If CPU MHz not found or is Unknown, try CPU max MHz (with optional leading spaces)
+            if not cpu_mhz or cpu_mhz == "Unknown":
+                for line in cpu_result.stdout.strip().split('\n'):
+                    if re.match(r'\s*CPU max MHz', line):
+                        try:
+                            freq_str = line.split(':', 1)[1].strip()
+                            freq_int = int(float(freq_str))
+                            cpu_mhz = f"{freq_int}MHz"
+                            break
+                        except (ValueError, TypeError):
+                            cpu_mhz = "Unknown"
         
-        return cpu_mhz
+        # Ensure we always return something meaningful to prevent table misalignment
+        return cpu_mhz if cpu_mhz else "Unknown"
 
     @staticmethod
     def _parse_thp_status(thp_result: Any) -> str:
