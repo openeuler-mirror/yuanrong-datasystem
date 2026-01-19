@@ -515,6 +515,33 @@ private:
         return objectKeys;
     }
 
+    /**
+     * @brief Prepare error response for migrate data direct.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @param[in] code Status code.
+     * @param[in] message Status message.
+     * @return Status of the call.
+     */
+    Status PrepareMigrateDataDirectError(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp,
+                                         StatusCode code, const std::string &message);
+
+    /**
+     * @brief Pre-check conditions for migrate data direct.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @return Status of the call.
+     */
+    Status PreCheckMigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
+    /**
+     * @brief Migrate data direct implementation.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @return Status of the call.
+     */
+    Status MigrateDataDirectImpl(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ThreadPool> memcpyThreadPool_{ nullptr };

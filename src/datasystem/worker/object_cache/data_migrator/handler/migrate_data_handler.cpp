@@ -89,6 +89,7 @@ void MigrateDataHandler::SplitByCacheType(std::vector<std::string> &memoryDataId
 
 MigrateDataHandler::MigrateResult MigrateDataHandler::MigrateDataToRemote()
 {
+    PerfPoint point(PerfKey::WORKER_MIGRATE_TO_REMOTE);
     INJECT_POINT_NO_RETURN("MigrateDataHandler.MigrateDataToRemote.DelayMigrate",
                            [](int sleepMs) { std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs)); });
     std::vector<std::string> memoryDataIds;
@@ -263,6 +264,7 @@ void MigrateDataHandler::ReleaseResources(const std::unordered_set<ImmutableStri
 
 void MigrateDataHandler::SendDataToRemote()
 {
+    PerfPoint pointAll(PerfKey::WORKER_SEND_DATA_TO_REMOTE);
     if (datas_.empty()) {
         Clear();
         return;
@@ -287,7 +289,9 @@ void MigrateDataHandler::SendDataToRemote()
                                    .batchSize = currBatchSize_,
                                    .progress = progress_ };
     MigrateTransport::Response rsp;
+    PerfPoint point(PerfKey::WORKER_MIGRATE_TRANSPORT_SEND_DATA);
     Status s = transport_->MigrateDataToRemote(req, rsp);
+    point.Record();
     if (s.IsOk()) {
         AdjustMaxBatchSize(rsp.remainBytes);
         successIds_.insert(rsp.successKeys.begin(), rsp.successKeys.end());

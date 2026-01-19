@@ -20,6 +20,8 @@
 
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 
+#include "datasystem/common/inject/inject_point.h"
+
 namespace datasystem {
 namespace object_cache {
 
@@ -27,6 +29,7 @@ Status SpillNodeSelector::SelectNode(const std::string &originAddr, const std::s
                                      std::string &outNode)
 {
     (void)needSize;
+
     if (!preferNode.empty()) {
         outNode = preferNode;
         return Status::OK();
@@ -42,6 +45,9 @@ Status SpillNodeSelector::SelectNode(const std::string &originAddr, const std::s
         LOG(INFO) << errMsg;
         RETURN_STATUS(K_DUPLICATED, errMsg);
     }
+
+    INJECT_POINT_NO_RETURN("SpillNodeSelector.SelectNode.force",
+                           [&outNode](std::string node) { outNode = std::move(node); });
     return Status::OK();
 }
 

@@ -69,6 +69,16 @@ public:
 
 private:
     /**
+     * @brief Log migration progress periodically.
+     */
+    static void LogMigrateProgress(double elapsedSeconds, uint64_t processCount, uint64_t count);
+
+    /**
+     * @brief Create progress reporter for migration.
+     */
+    static std::shared_ptr<MigrateProgress> CreateMigrateProgress(uint64_t objectCount);
+
+    /**
      * @brief Get migration strategy by type.
      * @return Migration strategy instance.
      */
@@ -90,7 +100,7 @@ private:
      * @param[in] strategy Migration data strategy instance used to select the target node for data migration.
      * @return Task future.
      */
-    std::future<MigrateDataHandler::MigrateResult> MigrateDataByNode(const MetaAddrInfo &addr,
+    std::future<MigrateDataHandler::MigrateResult> MigrateDataByNode(const HostPort &addr,
                                                                      const std::vector<std::string> &objectKeys,
                                                                      std::shared_ptr<SelectionStrategy> strategy);
 
@@ -111,7 +121,8 @@ private:
      * @param[in] workerAddr Address of the target Worker node.
      * @return Status The status of the connection and API creation.
      */
-    Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub, HostPort workerAddr);
+    Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
+                                     const HostPort &workerAddr);
 
     /**
      * @brief Handle migration failure result.
