@@ -13,7 +13,11 @@ set(absl_CMAKE_OPTIONS
         -DCMAKE_CXX_STANDARD=17
         -DABSL_PROPAGATE_CXX_STD=ON)
 
-set(absl_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+if (USE_SANITIZER)
+    set(absl_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS}")
+else ()
+    set(absl_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+endif ()
 
 set(absl_PATCHES ${CMAKE_SOURCE_DIR}/third_party/patches/absl/absl_failure_signal_handler.patch)
 

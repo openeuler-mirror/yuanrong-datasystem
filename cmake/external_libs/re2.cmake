@@ -24,9 +24,13 @@ set(re2_CMAKE_OPTIONS
     -DCMAKE_CXX_STANDARD=17
     -Dabsl_DIR:PATH=${absl_PKG_PATH})
 
-set(re2_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+if (USE_SANITIZER)
+    set(re2_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS}")
+else ()
+    set(re2_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+endif ()
 
-add_thirdparty_lib(re2 
+add_thirdparty_lib(re2
   URL ${re2_URL}
   SHA256 ${re2_SHA256}
   FAKE_SHA256 ${re2_FAKE_SHA256}
