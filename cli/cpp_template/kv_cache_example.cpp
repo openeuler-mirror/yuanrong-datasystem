@@ -21,7 +21,7 @@
 #include <iostream>
 
 #include "datasystem/datasystem.h"
-#include "datasystem/kv_cache.h"
+#include "datasystem/kv_client.h"
 
 using datasystem::ConnectOptions;
 using datasystem::Context;
