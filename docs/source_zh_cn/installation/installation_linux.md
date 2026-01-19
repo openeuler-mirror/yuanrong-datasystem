@@ -13,10 +13,6 @@
     - [下载源码](#下载源码)
     - [编译](#编译)
     - [安装](#安装)
-- [镜像编译安装](#镜像编译安装)
-    - [安装git](#安装git)
-    - [容器环境](#容器环境)
-    - [编译](#编译-1)
 
 <!-- /TOC -->
 
@@ -267,7 +263,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 cd yuanrong-datasystem
 bash build.sh
 ```
-<a id="a"></a>
+
 其中：
 
 - `build.sh`中默认的编译线程数为8，如果编译机性能较差可能会出现编译错误，可在执行中增加-j{线程数}来减少线程数量。如`bash build.sh -j4`。
@@ -281,84 +277,6 @@ output/
 |-- openyuanrong_datasystem-0.5.0-cp311-cp311-manylinux_2_34_x86_64.whl
 |-- yr-datasystem-v0.5.0.tar.gz
 ```
-
-### 安装
-
-```bash
-pip install output/openyuanrong_datasystem-*.whl
-```
-## 镜像编译安装
-
-### 通过git获取源码
-
-下载git：
-```bash
-sudo yum install git
-```
-
-克隆代码仓：
-```bash
-git clone https://gitcode.com/openeuler/yuanrong-datasystem
-```
-
-### 容器环境
-
-安装docker组件:
-```bash
-sudo yum install -y docker
-```
-
-根据自己的系统架构拉取对应镜像：
-```bash
-docker pull swr.cn-southwest-2.myhuaweicloud.com/yuanrong-dev/compile_x86:2.1
-```
-```bash
-docker pull swr.cn-southwest-2.myhuaweicloud.com/yuanrong-dev/compile_arm:2.1
-```
-
-启动编译镜像中的bash应用，得到一个编译环境。  
-如果构建环境中没有CANN或者无需使用异构对象的功能，执行：
-```bash
-docker run -it -u root \
--v /root/yuanrong-datasystem:root/yuanrong-datasystem \
-swr.cn-southwest-2.myhuaweicloud.com/yuanrong-dev/compile_x86:2.1 \
-/bin/bash
-```
-`-v /root/yuanrong-datasystem:root/yuanrong-datasystem`左侧路径为宿主机代码仓路径，该选项将宿主机的文件或目录挂载到容器内，使容器可以直接访问宿主机数据。
-
-如果需要进行全量编译，在命令中加入以下选项：
-```bash
---device /dev/infiniband \
--v /usr/lib64/:/usr/lib64/ \
--v /usr/include/:/usr/include/ \
--v /usr/local/Ascend:/usr/local/Ascend \
-```
-其中：
-
-- `--device /dev/infiniband \`用于访问RDMA设备
-- `-v /usr/lib64/:/usr/lib64/`和`-v /usr/include/:/usr/include/`用于挂载rdma-core所需的头文件
-- `-v /usr/local/Ascend:/usr/local/Ascend`用于挂载CANN目录
-
-### 编译
-
-如果构建环境中没有CANN或者无需使用异构对象的功能，可以通过 -X 参数禁用异构对象的编译：
-```bash
-cd yuanrong-datasystem
-bash build.sh -X off
-```
-
-如需编译全量特性，需要在开始编译前需要初始化Ascend相关的环境变量：
-```bash
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-```
-
-执行编译脚本：
-```bash
-cd yuanrong-datasystem
-bash build.sh
-```
-
-`build.sh`[用法参考](#a)
 
 ### 安装
 
