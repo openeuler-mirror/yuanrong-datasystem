@@ -208,7 +208,7 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
         Status rc = WaitForRedirectWhenRefMoving(currentReq, rsp, workerMasterApi, func, mergeFunc);
         if (rc.IsError()) {
             posixPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
-            LOG(ERROR) << "workerMasterApi qurey global ref number failed.";
+            LOG(ERROR) << "workerMasterApi qurey global ref number failed. master addr: " << masterAddr.ToString();
             return rc;
         }
     }
@@ -353,7 +353,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
                 };
             Status masterResult = WaitForRedirectWhenRefMoving(newReq, rsp, workerMasterApi, func, mergeFunc);
             if (masterResult.IsError()) {
-                LOG(ERROR) << "[Ref] GDecreaseRef " << masterResult.ToString();
+                LOG(ERROR) << FormatString("[Ref] GIncreaseRef to master %s failed, err: %s", masterAddr.ToString(),
+                                           masterResult.ToString());
                 (void)failIncIds.insert(failIncIds.end(), currentIncIds.begin(), currentIncIds.end());
                 lastErr = masterResult;
                 continue;
@@ -499,7 +500,8 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
             Status masterResult = GIncreaseMasterRef(currentFirstIncIds, masterAddr, rpcFailedIds);
             if (masterResult.IsError()) {
                 lastErr = masterResult;
-                LOG(WARNING) << "[Ref] GDecreaseRef " << masterResult.ToString();
+                LOG(WARNING) << FormatString("[Ref] GIncreaseRef to master %s failed, err: %s", masterAddr.ToString(),
+                                             masterResult.ToString());
             }
             // rpc fail reset refcount
             if (!rpcFailedIds.empty()) {
@@ -650,6 +652,8 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
             (void)failDecIds.insert(failDecIds.end(), rpcFailedIds.begin(), rpcFailedIds.end());
         }
         if (res.IsError()) {
+            LOG(ERROR) << FormatString("GDecreaseMasterRef to msater %s failed, err: %s", masterAddr.ToString(),
+                                       res.ToString());
             status = res;
         }
     }
