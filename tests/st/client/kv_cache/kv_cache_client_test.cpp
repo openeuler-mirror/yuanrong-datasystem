@@ -51,6 +51,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/object/share_map_object.h"
 
 #define RETRY_IF_OUT_MEMORY(rc_, statement_, maxRetryCnt_)                      \
     do {                                                                        \
@@ -89,7 +90,7 @@ public:
         for (auto addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=1 -log_monitor=true -max_client_num=2000";
+        opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=1 -log_monitor=true -max_client_num=2000 -oc_shm_transfer_threshold_kb=0";
     }
 
     void SetUp() override
@@ -222,6 +223,248 @@ TEST_F(KVCacheClientTest, TestObmm2)
     }
 }
 
+TEST_F(KVCacheClientTest, TestObmm4)
+{
+    const std::string key = "test-key";
+    const size_t size = 1024 * 1024;
+    std::string value(size, 'a');
+
+    std::shared_ptr<Buffer> buffer;
+
+    // Create buffer and set value
+    DS_ASSERT_OK(client_->Create(key, size, {}, buffer));
+    buffer->MemoryCopy(value.data(), value.size());
+    DS_ASSERT_OK(client_->Set(buffer));
+    
+    // check value
+    ASSERT_EQ(value, std::string(reinterpret_cast<const char*>(buffer->ImmutableData()), buffer->GetSize()));
+
+    // check value from client1_
+    Optional<Buffer> buffer2;
+    DS_ASSERT_OK(client1_->Get(key, buffer2));
+    ASSERT_EQ(value, std::string(reinterpret_cast<const char*>(buffer2->ImmutableData()), buffer2->GetSize()));
+
+    // update value
+    std::string value_new(size, 'b');
+    buffer->MemoryCopy(value_new.data(), value_new.size());
+
+    // check new value
+    ASSERT_EQ(value_new, std::string(reinterpret_cast<const char*>(buffer->ImmutableData()), buffer->GetSize()));
+    ASSERT_EQ(value_new, std::string(reinterpret_cast<const char*>(buffer2->ImmutableData()), buffer2->GetSize()));
+}
+
+TEST_F(KVCacheClientTest, TestObmm5)
+{
+    const std::string key = "test-key";
+    const size_t size = 1024 * 1024;
+    std::string value(size, 'a');
+
+    std::shared_ptr<Buffer> buffer;
+
+    // Create buffer and set value
+    DS_ASSERT_OK(client_->Create(key, size, {}, buffer));
+    buffer->MemoryCopy(value.data(), value.size());
+    DS_ASSERT_OK(client_->Set(buffer));
+    
+    // check value
+    ASSERT_EQ(value, std::string(reinterpret_cast<const char*>(buffer->ImmutableData()), buffer->GetSize()));
+
+    // check value from client1_
+    Optional<Buffer> buffer2;
+    DS_ASSERT_OK(client1_->Get(key, buffer2));
+    ASSERT_EQ(value, std::string(reinterpret_cast<const char*>(buffer2->ImmutableData()), buffer2->GetSize()));
+
+    // update value
+    std::string value_new(size, 'b');
+    std::memcpy(buffer->MutableData(), value_new.data(), value_new.size());
+
+    // check new value
+    ASSERT_EQ(value_new, std::string(reinterpret_cast<const char*>(buffer->ImmutableData()), buffer->GetSize()));
+    ASSERT_EQ(value_new, std::string(reinterpret_cast<const char*>(buffer2->ImmutableData()), buffer2->GetSize()));
+}
+
+TEST_F(KVCacheClientTest, TestShareMapObject1)
+{
+    LOG(INFO) << "Init first";
+    const std::string bucketKey = "table-bucket1";
+    int nums = 16, dim = 256;
+    ShareMapObject table_1(bucketKey, client_, dim);
+
+    std::vector<uint64_t> keys;
+    std::vector<std::string> values;
+    std::vector<StringView> values_v;
+    for (int i = 0; i < nums; i++)
+        keys.push_back(i);
+    for (int i = 0; i < nums; i++) {
+        std::string str = FormatString("%03d", i);
+        str += std::string(dim - 3, 'x');
+        values.push_back(str);
+    }
+    for (const auto &str : values) {
+        values_v.push_back(str);
+    }
+
+    table_1.Insert(keys, values_v);
+    table_1.BuildIndex();
+
+    std::vector<StringView> buffers;
+    table_1.Lookup(keys, buffers);
+
+    for (int i = 0; i < nums; i++) {
+        LOG(INFO) << FormatString("Key %llu, expected %s got %s", keys[i], values[i].c_str(),
+                                  std::string(buffers[i].data(), buffers[i].size()));
+        ASSERT_EQ(buffers[i].size(), dim);
+        for (int j = 0; j < dim; j++) {
+            ASSERT_EQ(values[i][j], buffers[i].data()[j]);
+        }
+    }
+}
+
+TEST_F(KVCacheClientTest, TestShareMapObject2)
+{
+    // Bigger one
+    // 64MiB = 64 * 1024 * 1024 = 256 * 256 * 1024
+    LOG(INFO) << "Init first";
+    const std::string bucketKey = "table-bucket1";
+    constexpr int nums = 256 * 1024 + 64, dim = 256;
+    ShareMapObject table_1(bucketKey, client_, dim);
+
+    std::vector<uint64_t> keys;
+    std::vector<std::string> values;
+    std::vector<StringView> values_v;
+    for (int i = 0; i < nums; i++)
+        keys.push_back(i);
+    for (int i = 0; i < nums; i++) {
+        std::string str = FormatString("%08d", i);
+        str += std::string(dim - str.length(), 'x');
+        values.push_back(str);
+    }
+    for (const auto &str : values) {
+        values_v.push_back(str);
+    }
+
+    table_1.Insert(keys, values_v);
+    table_1.BuildIndex();
+
+    std::vector<StringView> buffers;
+    table_1.Lookup(keys, buffers);
+
+    for (int i = 0; i < nums; i++) {
+        // LOG(INFO) << FormatString("Key %llu, expected %s got %s", keys[i], values[i].c_str(),
+        // std::string(buffers[i].data(), buffers[i].size()));
+        ASSERT_EQ(buffers[i].size(), dim);
+        for (int j = 0; j < dim; j++) {
+            ASSERT_EQ(values[i][j], buffers[i].data()[j]);
+        }
+    }
+}
+
+TEST_F(KVCacheClientTest, TestShareMapObject3)
+{
+    // 2 Clients
+    const std::string bucketKey = "table-bucket1";
+    constexpr int nums = 256 * 1024 + 64, dim = 256;
+
+    std::vector<uint64_t> keys;
+    std::vector<std::string> values;
+    std::vector<StringView> values_v;
+    for (int i = 0; i < nums; i++)
+        keys.push_back(i);
+    for (int i = 0; i < nums; i++) {
+        std::string str = FormatString("%08d", i);
+        str += std::string(dim - str.length(), 'x');
+        values.push_back(str);
+    }
+    for (const auto &str : values) {
+        values_v.push_back(str);
+    }
+
+    {
+        ShareMapObject table_1(bucketKey, client_, dim);
+        table_1.Insert(keys, values_v);
+        table_1.BuildIndex();
+
+        std::vector<StringView> buffers;
+        table_1.Lookup(keys, buffers);
+
+        for (int i = 0; i < nums; i++) {
+            // LOG(INFO) << FormatString("Key %llu, expected %s got %s", keys[i], values[i].c_str(),
+            // std::string(buffers[i].data(), buffers[i].size()));
+            ASSERT_EQ(buffers[i].size(), dim);
+            for (int j = 0; j < dim; j++) {
+                ASSERT_EQ(values[i][j], buffers[i].data()[j]);
+            }
+        }
+    }
+    {
+        ShareMapObject table_1_copy(bucketKey, client1_, dim);
+        std::vector<StringView> buffers;
+        table_1_copy.Lookup(keys, buffers);
+
+        for (int i = 0; i < nums; i++) {
+            ASSERT_EQ(buffers[i].size(), dim);
+            for (int j = 0; j < dim; j++) {
+                ASSERT_EQ(values[i][j], buffers[i].data()[j]);
+            }
+        }
+    }
+}
+
+TEST_F(KVCacheClientTest, TestShareMapObjectInsertTwice)
+{
+    // 2 Clients
+    const std::string bucketKey = "table-bucket1";
+    constexpr int nums = 256 * 1024 + 64, dim = 256;
+
+    std::vector<uint64_t> keys;
+    std::vector<std::string> values;
+    std::vector<StringView> values_v;
+    for (int i = 0; i < nums; i++)
+        keys.push_back(i);
+    for (int i = 0; i < nums; i++) {
+        std::string str = FormatString("%08d", i);
+        str += std::string(dim - str.length(), 'x');
+        values.push_back(str);
+    }
+    for (const auto &str : values) {
+        values_v.push_back(str);
+    }
+
+    {
+        ShareMapObject table_1(bucketKey, client_, dim);
+        int p1 = nums / 3;
+        table_1.Insert(std::vector<uint64_t>(keys.begin(), keys.begin() + p1), 
+                        std::vector<StringView>(values_v.begin(), values_v.begin() + p1));
+        table_1.Insert(std::vector<uint64_t>(keys.begin() + p1, keys.end()), 
+                        std::vector<StringView>(values_v.begin() + p1, values_v.end()));
+
+        table_1.BuildIndex();
+
+        std::vector<StringView> buffers;
+        table_1.Lookup(keys, buffers);
+
+        for (int i = 0; i < nums; i++) {
+            // LOG(INFO) << FormatString("Key %llu, expected %s got %s", keys[i], values[i].c_str(),
+            // std::string(buffers[i].data(), buffers[i].size()));
+            ASSERT_EQ(buffers[i].size(), dim);
+            for (int j = 0; j < dim; j++) {
+                ASSERT_EQ(values[i][j], buffers[i].data()[j]);
+            }
+        }
+    }
+    {
+        ShareMapObject table_1_copy(bucketKey, client1_, dim);
+        std::vector<StringView> buffers;
+        table_1_copy.Lookup(keys, buffers);
+
+        for (int i = 0; i < nums; i++) {
+            ASSERT_EQ(buffers[i].size(), dim);
+            for (int j = 0; j < dim; j++) {
+                ASSERT_EQ(values[i][j], buffers[i].data()[j]);
+            }
+        }
+    }
+}
 
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvFailedWithNotEnoughParam)
 {
