@@ -27,7 +27,10 @@ list(APPEND CLIENT_SRCS
         stream_cache/producer_impl.cpp
         stream_cache/stream_client.cpp
         stream_cache/stream_client_impl.cpp
-        stream_cache/producer_consumer_worker_api.cpp)
+        stream_cache/producer_consumer_worker_api.cpp
+        emb_cache/share_object/share_object.cpp
+        emb_cache/share_object/share_vector_object.cpp
+        emb_cache/share_object/share_map_object.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
