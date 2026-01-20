@@ -370,7 +370,8 @@ public:
     virtual Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
                           std::vector<std::string> &failedKeys) = 0;
 
-    Status Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable);
+    virtual Status Prefetch(const std::vector<std::string> &keys,
+                            tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable) = 0;
 
     /**
      * @brief Get device meta info of the keys.
@@ -495,6 +496,8 @@ public:
                  const bool isLocal) override;
     Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
                   std::vector<std::string> &failedKeys) override;
+    Status Prefetch(const std::vector<std::string> &keys,
+                    tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable) override;
     Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
     Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
     Status PrepairForDecreaseShmRef(

@@ -265,11 +265,11 @@ Status ClientWorkerRemoteApi::HealthCheck(ServerState &state)
     return stub_->HealthCheck(opts, req, rsp);
 }
 
-Status ClientWorkerApi::Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable)
+Status ClientWorkerRemoteApi::Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable)
 {
     PrefetchReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
-    req.set_client_id(GetClientId());
+    req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExistReqPb.");
     PrefetchRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_EXIST);
@@ -295,7 +295,7 @@ Status ClientWorkerApi::Prefetch(const std::vector<std::string> &keys, tbb::conc
     return Status::OK();
 }
 
-bool ClientWorkerApi::IsAllGetFailed(GetRspPb &rsp)
+bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
 {
     for (const auto &obj : rsp.objects()) {
         if (obj.data_size() != -1) {

@@ -1542,7 +1542,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
         std::vector<RpcMessage> payloads;
         std::vector<std::string> failedObjectKey;
         std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
-        RETURN_IF_NOT_OK(GetObjectBuffers(objectKeys, rsp, workerApi_[LOCAL_WORKER]->GetWorkerVersion(), readParams, payloads, objectBuffers, failedObjectKey));
+        RETURN_IF_NOT_OK(GetObjectBuffers(objectKeys, rsp, workerApi_[LOCAL_WORKER]->workerVersion_, readParams, payloads, objectBuffers, failedObjectKey));
         buffers.clear();
         for (auto &objectBuffer : objectBuffers) {
             if (objectBuffer == nullptr) {
@@ -1556,7 +1556,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
         return Status::OK();
     }
 
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
@@ -3006,7 +3006,7 @@ Status ObjectClientImpl::Prefetch(const std::vector<std::string> &keys, tbb::con
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
-    std::shared_ptr<ClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Prefetch(keys, prefetchTable), "Set expire ttl failed");
