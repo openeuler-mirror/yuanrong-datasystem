@@ -128,7 +128,7 @@ class BenchCommandTask(BenchTask):
     def execute_command_remotely(self, remote: BenchRemoteInfo):
         """Executes a command on a remote machine via SSH and captures its output."""
 
-        logger.debug("Executing remote command on %s:%s", remote.host, remote.ssh_port)
+        logger.debug("Executing remote command on %s", remote.host)
         logger.debug("Original remote command: %s", self.command)
         logger.debug("Remote command environment: %s", self.env)
 
@@ -137,7 +137,7 @@ class BenchCommandTask(BenchTask):
             new_command = f"{BenchCommandTask.concat_args('', self.env)} {new_command}"
 
         ssh_command = (
-            f"ssh -q {remote.username}@{remote.host} -p {remote.ssh_port} "
+            f"ssh -q {remote.username}@{remote.host} "
             f"-i {shlex.quote(remote.ssh_config_path)} {shlex.quote(new_command)}"
         )
         logger.debug("SSH command: %s", ssh_command)
