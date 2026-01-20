@@ -50,6 +50,7 @@ DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_file_open_limit);
 DS_DECLARE_uint64(spill_file_max_size_mb);
 DS_DECLARE_uint64(spill_size_limit);
+DS_DECLARE_bool(spill_to_remote_worker);
 
 using namespace datasystem::object_cache;
 
@@ -110,6 +111,49 @@ public:
         } else {
             DS_ASSERT_OK(WorkerOcSpill::Instance()->Spill(objectKey, buffer, size, evictable));
         }
+    }
+
+    void MockEvictObjectBatchMigrate(size_t &pendingSpillSize, const std::vector<std::string> &evictKeys,
+                                     uint32_t &batchCount)
+    {
+        WorkerOcEvictionManager::Action action = WorkerOcEvictionManager::Action::MIGRATE;
+        WorkerOcEvictionManager::EvictFailedList evictFailedIds;
+        std::unordered_map<std::string, WorkerOcEvictionManager::SpillTask> spillTasks;
+        std::unordered_set<std::string> batchTaskIds;
+        for (std::string key : evictKeys) {
+            auto trace = std::make_unique<WorkerOcEvictionManager::EvictionTrace>(key);
+            std::shared_ptr<SafeObjType> entry;
+            Status rc = evictionManager_->GetAndLockEntry(key, entry, evictFailedIds);
+            DS_ASSERT_OK(rc);
+            object_cache::ObjectKV objectKV(key, *entry);
+            bool locked = true;
+            Raii unLockRaii([entry, &locked]() {
+                if (locked) {
+                    entry->WUnlock();
+                }
+            });
+            trace->AddObjectKeySize(key, (*entry)->GetDataSize());
+            trace->action = action;
+            rc = evictionManager_->TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked);
+            DS_ASSERT_OK(rc);
+            ASSERT_TRUE(!spillTasks.empty());
+            std::string evictSpillTaskId = evictionManager_->GetSpillTaskId();
+            if (!evictSpillTaskId.empty()) {
+                batchTaskIds.insert(evictSpillTaskId);
+            }
+            auto spilledSize = evictionManager_->ReleaseSpillFutures(spillTasks, evictFailedIds, false);
+            pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
+        }
+        std::string evictSpillTaskId = evictionManager_->GetSpillTaskId();
+        auto it = spillTasks.find(evictSpillTaskId);
+        if (it != spillTasks.end() && !it->second.future.valid() &&
+            !it->second.trace->objectKeySizeMap.empty()) {
+            it->second.future = evictionManager_->SubmitBatchSpillTask(
+                evictSpillTaskId, it->second.trace->objectKeySizeMap);
+        }
+        auto spilledSize = evictionManager_->ReleaseSpillFutures(spillTasks, evictFailedIds, true);
+        pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
+        batchCount = batchTaskIds.size();
     }
 
 protected:
@@ -237,6 +281,27 @@ TEST_F(SpillEvictionTest, DISABLED_TestEvictWaterMark)
     const int sleepUs = 10'000;
     usleep(sleepUs);
     ASSERT_FALSE(WorkerOcSpill::Instance()->IsSpaceExceedLWM());
+}
+
+TEST_F(SpillEvictionTest, TestEvictObjectBatchMigrate)
+{
+    size_t pendingSpillsize = 0;
+    std::vector<std::string> migrateKeys;
+    std::string prefix = "batch_migrate";
+    uint64_t size = 1 * 1024;
+    uint32_t count = 1000;
+    uint32_t batchSize = 512;
+    uint32_t expectBatchCount = (count + batchSize - 1) / batchSize;
+    migrateKeys.reserve(count);
+    CreateObjects(prefix, size, count, WriteMode::NONE_L2_CACHE);
+    for (size_t i = 0; i < count; ++i) {
+        std::string objKey = prefix + GetModeName(WriteMode::NONE_L2_CACHE) + std::to_string(i);
+        migrateKeys.emplace_back(objKey);
+    }
+    uint32_t batchCount;
+    MockEvictObjectBatchMigrate(pendingSpillsize, migrateKeys, batchCount);
+    ASSERT_TRUE(pendingSpillsize == 0);
+    ASSERT_EQ(expectBatchCount, batchCount);
 }
 }  // namespace ut
 }  // namespace datasystem

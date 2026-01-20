@@ -140,17 +140,18 @@ public:
     }
 
 private:
-    enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN };
+    enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN, MIGRATE };
 
     struct EvictionTrace {
         Timer timer;
-        std::string objectKey;
+        std::string taskId;
         uint64_t objectSize;
+        std::unordered_map<std::string, uint64_t> objectKeySizeMap;
         Action action;
         std::string info;
         double spillCost;
         Status rc;
-        EvictionTrace(std::string id) : objectKey(std::move(id)), objectSize(0), action(Action::UNKNOWN), spillCost(0)
+        EvictionTrace(std::string id) : taskId(std::move(id)), objectSize(0), action(Action::UNKNOWN), spillCost(0)
         {
         }
         ~EvictionTrace()
@@ -161,7 +162,7 @@ private:
             auto elapsed = timer.ElapsedMilliSecond();
             auto actionName = GetActionName(action);
             std::stringstream ss;
-            ss << "[ObjectKey " << objectKey << "] ";
+            ss << "[TaskId " << taskId << "] ";
             if (!info.empty()) {
                 ss << info << ", ";
             }
@@ -172,14 +173,36 @@ private:
             ss << "status:" << (rc.IsOk() ? "OK" : rc.GetMsg());
             LOG(INFO) << ss.str();
         }
+
+        void AddObjectKeySize(const std::string &key, uint64_t size)
+        {
+            if (size == 0) {
+                LOG(WARNING) << "The trace object key [" << key << "] is zero, skip it";
+                return;
+            }
+            auto it = objectKeySizeMap.find(key);
+            if (it == objectKeySizeMap.end()) {
+                objectKeySizeMap.emplace(key, size);
+                objectSize += size;
+                return;
+            }
+            LOG(WARNING) << "The trace object key [" << key << "] is repeated, update it";
+            objectSize += size;
+            objectSize -= std::min(objectSize, it->second);
+            it->second = size;
+        }
     };
 
     struct SpillResult {
         Status rc;
         double elapsed;
+        std::vector<std::string> failedKeys;
     };
 
+    enum class TaskType : int { SINGLE, BATCH };
+
     struct SpillTask {
+        TaskType taskType;
         std::future<SpillResult> future;
         std::unique_ptr<EvictionTrace> trace;
     };
@@ -205,10 +228,9 @@ private:
      * @brief Try to evict a single object.
      * @param[in] objectKV The object entry that need to evict and its corresponding objectKey.
      * @param[in] nextAction The next action.
-     * @param[out] spilling Whether this object should be spill.
      * @return Status of the call.
      */
-    Status EvictObject(ObjectKV &objectKV, Action nextAction, bool &spilling);
+    Status EvictObject(ObjectKV &objectKV, Action nextAction);
 
     /**
      * @brief Try to evict a single object.
@@ -229,6 +251,15 @@ private:
      * @param[in] caheType The type of cache.
      */
     void EvictionTask(uint64_t needSize, CacheType caheType = CacheType::MEMORY);
+
+    /**
+     * @brief Migrate memory data to other workers.
+     * @param[in] migrateObjects The list of object keys to be migrated.
+     * @param[out] failedMigrateObjectKeys The list of object keys that are failed.
+     * @return Status of the call.
+     */
+    Status MigrateData(const std::string &taskId, const std::unordered_map<std::string, size_t> &migrateObjects,
+                       std::vector<std::string> &failedMigrateObjectKeys);
 
     /**
      * @brief Indicate if now is above low water mark.
@@ -268,6 +299,26 @@ private:
      * @return Status
      */
     Status SpillImpl(const std::string &objectKey, uint64_t version);
+
+    /**
+     * @brief Submit batch spill task to thread pool.
+     * @param[in] taskId The batch spill taskId.
+     * @param[in] objectKeySizeMap The object key and size map.
+     * @return The future of the async thread.
+     */
+    std::future<WorkerOcEvictionManager::SpillResult> SubmitBatchSpillTask(const std::string &taskId,
+        const std::unordered_map<std::string, uint64_t> &objectKeySizeMap);
+
+    /**
+     * @brief Batch spill object.
+     * @param[in] taskId The batch spill taskId.
+     * @param[in] objectKeySizeMap The object key and size map.
+     * @param[out] failedKeys The failed keys.
+     * @return Status
+     */
+    Status BatchSpillImpl(const std::string &taskId,
+                          const std::unordered_map<std::string, uint64_t> &objectKeySizeMap,
+                          std::vector<std::string> failedKeys);
 
     /**
      * @brief Release finished spill task.
@@ -353,6 +404,11 @@ private:
      * @return the low water mark based on the available shared memory.
      */
     uint64_t GetLowWaterMark(CacheType cacheType = CacheType::MEMORY);
+
+    /**
+     * @brief Get spill task id.
+     */
+    std::string GetSpillTaskId();
 
     std::shared_ptr<ObjectTable> objectTable_;
     EvictionList memEvictionList_;
