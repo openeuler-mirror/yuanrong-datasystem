@@ -22,10 +22,9 @@
 
 #include <fcntl.h>
 #include <iterator>
+#include <map>
 
 #include "datasystem/common/util/file_util.h"
-#include "datasystem/common/util/net_util.h"
-#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/log/log_time.h"
 
@@ -34,8 +33,62 @@ DS_DECLARE_string(log_dir);
 DS_DECLARE_int32(logfile_mode);
 DS_DECLARE_uint32(log_size);
 DS_DECLARE_uint32(max_log_size);
+DS_DECLARE_uint32(max_log_file_num);
 
 namespace datasystem {
+
+void HardDiskExporter::CollectRotatedLogFiles(const std::string &filePath, std::vector<std::string> &files)
+{
+    std::string dir;
+    std::string basename;
+    size_t pos = filePath.find_last_of('/');
+    if (pos == std::string::npos) {
+        LOG(WARNING) << "Invalid log file path: " << filePath;
+        return;
+    }
+    dir = filePath.substr(0, pos);
+    basename = filePath.substr(pos + 1);
+
+    std::string prefix;
+    size_t idx = basename.find(".log");
+    if (idx == std::string::npos) {
+        LOG(WARNING) << "Invalid log file path: " << filePath;
+        return;
+    }
+    prefix = basename.substr(0, idx + 1);  // include dot
+
+    std::string pattern = dir + "/" + prefix + "*[0-9]\\.log";
+    LOG_IF_ERROR(Glob(pattern, files), "Collect rotated log files failed");
+}
+
+void HardDiskExporter::PruneOldLogFiles(const std::vector<std::string> &files)
+{
+    if (FLAGS_max_log_file_num == 0 || files.size() <= FLAGS_max_log_file_num) {
+        return;
+    }
+
+    std::map<uint64_t, std::string> fileMap;
+    for (const auto &file : files) {
+        uint64_t timestamp = 0;
+        if (!GetFileLastModified(file, &timestamp).IsOk()) {
+            continue;
+        }
+        while (fileMap.find(timestamp) != fileMap.end()) {
+            ++timestamp;
+        }
+        fileMap.emplace(timestamp, file);
+    }
+
+    if (fileMap.size() <= FLAGS_max_log_file_num) {
+        return;
+    }
+
+    size_t redundant = fileMap.size() - FLAGS_max_log_file_num;
+    for (auto it = fileMap.begin(); it != fileMap.end() && redundant > 0; it++, redundant--) {
+        LOG_IF_ERROR(DeleteFile(it->second), "Delete old log file failed");
+    }
+}
+
 Status HardDiskExporter::Init(const std::string &filePath)
 {
     RETURN_IF_NOT_OK(CreateFileByPath(filePath));
@@ -115,7 +168,6 @@ void HardDiskExporter::GetLogFilePath(uint64_t &timestamp, std::string &filePath
         auto prefixPath = filePath_.substr(0, index + 1);
         filePath = prefixPath + stringTimestamp + ".log";
     }
-    return;
 }
 
 void HardDiskExporter::ChangeLogFile()
@@ -147,7 +199,12 @@ void HardDiskExporter::ChangeLogFile()
         // Rename failed, old file still in use, retry in next time.
         fileSize_ = lastSize;
     }
-
     (void)CreateFileByPath(filePath_);
+
+    if (ret == 0) {
+        std::vector<std::string> files;
+        CollectRotatedLogFiles(filePath_, files);
+        PruneOldLogFiles(files);
+    }
 }
 }  // namespace datasystem
