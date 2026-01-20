@@ -47,6 +47,8 @@ DS_DEFINE_uint32(
     "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb). "
     "Eviction begins when memory drops below this threshold.The valid range is 100-102400.");
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
+DS_DEFINE_bool(spill_to_remote_worker, false, "It indicates that when node resources are insufficient, "
+               "it supports spilling memory to the memory of other nodes.");
 
 namespace {
 bool ValidateEnableUrma(const char *flagName, bool value)

@@ -159,6 +159,10 @@
         "value": "true",
         "description": "Disable readahead can mitigate the read amplification problem for offset read, default is true"
     },
+    "spill_to_remote_worker": {
+        "value": "false",
+        "description": "It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes. When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers' shared memory. If no worker has available memory, objects spill to disk."
+    },
     "log_monitor": {
         "value": "true",
         "description": "Record performance and resource logs."

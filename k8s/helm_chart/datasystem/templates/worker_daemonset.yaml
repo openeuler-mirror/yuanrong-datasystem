@@ -191,6 +191,7 @@ spec:
         - -spill_file_max_size_mb={{ $.Values.global.spill.spillFileMaxSizeMb }}
         - -spill_file_open_limit={{ $.Values.global.spill.spillFileOpenLimit }}
         - -spill_enable_readahead={{ $.Values.global.spill.spillEnableReadahead }}
+        - -spill_to_remote_worker={{ $.Values.global.spill.spillToRemoteWorker }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
         - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
