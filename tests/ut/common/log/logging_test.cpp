@@ -23,7 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <regex>
+#include <re2/re2.h>
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -114,7 +114,7 @@ public:
 
     bool VerifyLogFiles(const std::string &dir_path, const std::string &pattern, int leftFileNum)
     {
-        std::regex re(pattern);
+        re2::RE2 re(pattern);
         DIR *dir = opendir(dir_path.c_str());
         if (!dir) {
             LOG(ERROR) << "Failed to open directory: " << dir_path << std::endl;
@@ -125,7 +125,7 @@ public:
         struct dirent *entry;
         while ((entry = readdir(dir)) != nullptr) {
             std::string filename = entry->d_name;
-            if (std::regex_match(filename, re)) {
+            if (re2::RE2::FullMatch(filename, re)) {
                 ++count;
                 if (count > leftFileNum) {
                     return false;
@@ -188,7 +188,7 @@ public:
 
     void DeleteFilesMatching(const std::string &dir_path, const std::string &pattern)
     {
-        std::regex re(pattern);
+        re2::RE2 re(pattern);
         DIR *dir = opendir(dir_path.c_str());
         if (!dir) {
             LOG(ERROR) << "Failed to open directory: " << dir_path << std::endl;
@@ -198,7 +198,7 @@ public:
         struct dirent *entry;
         while ((entry = readdir(dir)) != nullptr) {
             std::string filename = entry->d_name;
-            if (std::regex_match(filename, re)) {
+            if (re2::RE2::FullMatch(filename, re)) {
                 std::string full_path = dir_path + "/" + filename;
                 if (unlink(full_path.c_str()) != 0) {
                     LOG(ERROR) << "Failed to delete file: " << full_path << ", error: " << strerror(errno) << std::endl;

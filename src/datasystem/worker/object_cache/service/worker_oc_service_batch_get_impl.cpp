@@ -228,7 +228,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
 }
 
 void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::string> &successIds,
-    const std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<ReadKey, LockedEntity> &entries)
+                                                       const std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                                       std::map<ReadKey, LockedEntity> &entries)
 {
     if (!FLAGS_enable_data_replication) {
         return;
@@ -254,11 +255,9 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
             if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
                 continue;
             }
-            asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
-                queryMeta.meta().object_key(),
-                queryMeta.meta().version(),
-                static_cast<uint32_t>(queryMeta.meta().config().data_format())
-            });
+            asyncUpdateLocationParams.emplace_back(
+                UpdateLocationParam{ queryMeta.meta().object_key(), queryMeta.meta().version(),
+                                     static_cast<uint32_t>(queryMeta.meta().config().data_format()) });
         }
     } else {
         for (auto &queryMeta : queryMetas) {
@@ -269,7 +268,7 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
             const auto &objectKey = meta.object_key();
             if (std::find(successIds.begin(), successIds.end(), objectKey) != successIds.end()) {
                 asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
-                    objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format())});
+                    objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format()) });
             }
         }
     }
@@ -287,17 +286,17 @@ void WorkerOcServiceGetImpl::GroupQueryMeta(
     const static uint64_t maxPayloadSize = FLAGS_batch_get_threshold_mb * 1024 * 1024;
     const auto &meta = info.queryMeta->meta();
     auto &splitList = groupedQueryMetas[info.queryMeta->address()];
+    if (splitList.empty()) {
+        splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
+    }
     if (!(FLAGS_enable_urma) && (FLAGS_batch_get_threshold_mb != 0)) {
         auto payloadSize = meta.data_size() < UINT64_MAX - splitList.back().second
                                ? splitList.back().second + meta.data_size()
                                : UINT64_MAX;
-        if (splitList.empty() || payloadSize > maxPayloadSize) {
+        if (splitList.back().second > 0 && payloadSize > maxPayloadSize) {
             splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
         }
     } else {
-        if (splitList.empty()) {
-            splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
-        }
     }
     splitList.back().first.emplace_back(info);
     splitList.back().second += meta.data_size();
@@ -471,16 +470,16 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             subRc = UpdateRequestForSuccess(objectKV, request);
         }
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_STATUS);
+        if (!dataSizeChanged && subRc.IsError()) {
+            failedInfos.emplace_back(*iter);
+        }
+        BatchGetObjectHandleIndividualStatus(subRc, *readKey, successIds, needRetryIds, failedIds);
         if (!dataSizeChanged) {
-            if (subRc.IsError()) {
-                failedInfos.emplace_back(*iter);
-            }
             iter = infos.erase(iter);
         } else {
             dataSizeChange = true;
             iter++;
         }
-        BatchGetObjectHandleIndividualStatus(subRc, *readKey, successIds, needRetryIds, failedIds);
         lastRc = subRc;
         if (subRc.IsOk()) {
             isFromL2 ? CacheHitInfo::Instance().IncL2Hit(1) : CacheHitInfo::Instance().IncRemoteHit(1);
@@ -581,8 +580,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
     Timer endToEndTimer;
     Status rc =
         BatchGetObjectFromRemoteWorker(address, infos, request, successIds, needRetryIds, failedIds, failedMetas);
-    LOG(INFO) << FormatString("object get from remote finish, use %f millisecond.",
-                             endToEndTimer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("object get from remote finish, use %f millisecond.", endToEndTimer.ElapsedMilliSecond());
     return rc;
 }
 

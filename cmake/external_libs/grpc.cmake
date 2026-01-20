@@ -17,7 +17,7 @@ set(c-ares_CMAKE_OPTIONS
 
 set(c-ares_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
-add_thirdparty_lib(c-ares 
+add_thirdparty_lib(c-ares
   URL ${c-ares_URL}
   SHA256 ${c-ares_SHA256}
   FAKE_SHA256 ${c-ares_FAKE_SHA256}
@@ -81,15 +81,21 @@ if (gRPC_VERSION STREQUAL "1.54.2")
       -DgRPC_BUILD_XDS:BOOL=OFF)
 endif()
 
-set(gRPC_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
-set(gRPC_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
-set(gRPC_LINK_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+if (USE_SANITIZER)
+    set(gRPC_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS}")
+    set(gRPC_C_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS}")
+    set(gRPC_LINK_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS}")
+else ()
+    set(gRPC_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+    set(gRPC_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+    set(gRPC_LINK_FLAGS ${THIRDPARTY_SAFE_FLAGS})
+endif ()
 
-set(gRPC_EXTRA_MSGS 
-    ${c-ares_ROOT} 
-    ${re2_ROOT} 
-    ${absl_ROOT} 
-    ${Protobuf_ROOT} 
+set(gRPC_EXTRA_MSGS
+    ${c-ares_ROOT}
+    ${re2_ROOT}
+    ${absl_ROOT}
+    ${Protobuf_ROOT}
     ${ZLIB_ROOT}
     ${OpenSSL_ROOT})
 
@@ -120,18 +126,18 @@ get_property(gRPC_INCLUDE_DIR TARGET gRPC::grpc++ PROPERTY INTERFACE_INCLUDE_DIR
 include_directories(SYSTEM ${gRPC_INCLUDE_DIR})
 
 # Generate gRPC protobuf cc files.
-# 
+#
 # SRCS is the output variable of the protobuf source files.
-# 
+#
 # HDRS is the output variable of the protobuf header files.
-# 
+#
 # TARGET_DIR is the generate cc files target directory.
 #
 # Additional optional arguments:
 #
 #   PROTO_FILES <file1> <file2> ...
 #       gRPC protobuf source files to be compiled.
-#   
+#
 #   SOURCE_ROOT <dir>
 #       gRPC protobuf source files root directory, default is ${CMAKE_CURRENT_SOURCE_DIR},
 #       if protobuf source files are not in ${CMAKE_SOURCE_DIR}, this variable must be set.
@@ -182,10 +188,10 @@ function(GENERATE_GRPC_CPP SRCS HDRS TARGET_DIR)
             OUTPUT "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.cc" "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h"
             COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
                     $<TARGET_FILE:protobuf::protoc>
-            ARGS ${_PROTO_IMPORT_ARGS} 
-                 -I ${_PROTO_DIR} 
-                 --grpc_out ${TARGET_DIR} 
-                 --cpp_out ${TARGET_DIR} 
+            ARGS ${_PROTO_IMPORT_ARGS}
+                 -I ${_PROTO_DIR}
+                 --grpc_out ${TARGET_DIR}
+                 --cpp_out ${TARGET_DIR}
                  --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
                  ${_ABS_FILE}
             DEPENDS ${_ABS_FILE}

@@ -2,12 +2,12 @@ cmake_minimum_required(VERSION 3.14.1)
 
 # When downloading and extracting files from a URL, the timestamp is handled by using the current system time as the timestamp for the extracted files.
 if(POLICY CMP0135)
-  cmake_policy(SET CMP0135 NEW)
+    cmake_policy(SET CMP0135 NEW)
 endif()
 
 # Enable _ROOT variable support (e.g., ZLIB_ROOT, etc.)
 if(POLICY CMP0074)
-  cmake_policy(SET CMP0074 NEW)
+    cmake_policy(SET CMP0074 NEW)
 endif()
 
 project(Datasystem DESCRIPTION "DataSystem for Distributed Data Cache" LANGUAGES CXX C)
@@ -33,14 +33,15 @@ if (USE_SANITIZER)
     # use Google sanitizers to detect memory leak and thread race.
     string(TOUPPER ${USE_SANITIZER} USE_SANITIZER)
     if (${USE_SANITIZER} STREQUAL "ADDRESS")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer -g3")
+        set(SANITIZER_FLAGS "-fsanitize=address -fno-omit-frame-pointer -g3")
     elseif (${USE_SANITIZER} STREQUAL "THREAD")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=thread -g3")
+        set(SANITIZER_FLAGS "-fsanitize=thread -g3")
     elseif (${USE_SANITIZER} STREQUAL "UNDEFINED")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined -fno-sanitize=alignment -fsanitize=float-cast-overflow -fno-sanitize-recover=all -O0")
+        set(SANITIZER_FLAGS "-fsanitize=undefined -fno-sanitize=alignment -fsanitize=float-cast-overflow -fno-sanitize-recover=all -O0")
     else ()
         message(FATAL_ERROR "Unrecognized google sanitizers mode: ${USE_SANITIZER}")
     endif ()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZER_FLAGS}")
 endif ()
 # -Wall: Enable all warnings.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
