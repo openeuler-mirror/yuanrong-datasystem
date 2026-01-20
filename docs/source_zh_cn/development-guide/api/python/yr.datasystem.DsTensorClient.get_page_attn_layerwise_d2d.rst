@@ -3,7 +3,7 @@ yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d
 
 .. py:method:: yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d(keys, layer_tensors, block_ids)
 
-    将 PagedAttention 的层级 Tensor 作为数据系统的异构对象放在设备上。
+    从数据系统获取 PagedAttention 的层级 Tensor 的异构对象并放在设备上。
 
     put_page_attn_layerwise_d2d 和 get_page_attn_layerwise_d2d 需配套使用。
 

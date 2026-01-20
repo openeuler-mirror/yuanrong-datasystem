@@ -21,4 +21,4 @@ yr.datasystem.hetero_client.HeteroClient.async_mget_h2d
 
     异常：
         - **TypeError** - 输入参数存在非法值。
-        - **RuntimeError** - 给定列表的对象 key 都未执行成功。
+        - **RuntimeError** - 给定列表的对象 key 都未获取成功。

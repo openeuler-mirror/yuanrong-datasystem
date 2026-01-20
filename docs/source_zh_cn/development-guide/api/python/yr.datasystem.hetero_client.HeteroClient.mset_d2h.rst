@@ -18,7 +18,7 @@ yr.datasystem.hetero_client.HeteroClient.mset_d2h
             write_mode = WriteMode.NONE_L2_CACHE
             ttl_second = 0
             existence = ExistenceOpt.NONE
-            cache_type = CacheType.MEMEORY
+            cache_type = CacheType.MEMORY
     异常：
         - **TypeError** - 输入参数存在非法值。
         - **RuntimeError** - 给定列表的对象 key 都未执行成功。
