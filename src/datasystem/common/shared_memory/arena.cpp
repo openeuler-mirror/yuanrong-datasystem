@@ -146,12 +146,12 @@ Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size,
     auto beginTime = clock::now();
     auto status = Jemalloc::Allocate(arenaId, size, pointer);
     if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
-        std::string errorMsg;
-        if (cacheType_ == CacheType::MEMORY) {
-            errorMsg = "Shared memory no space in arena: " + std::to_string(arenaId);
-        } else {
-            errorMsg = "Shared disk no space in arena: " + std::to_string(arenaId);
+        auto it = CACHE_TYPE_STR.find(cacheType_);
+        std::string errHint = "UnknowType";
+        if (it != CACHE_TYPE_STR.end()) {
+            errHint = it->second;
         }
+        std::string errorMsg = FormatString("%s no space in arena: %d", errHint, arenaId);
         status = Status(StatusCode::K_OUT_OF_MEMORY, errorMsg);
     }
     auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - beginTime).count();
@@ -407,12 +407,12 @@ void ArenaManager::FakeAllocate(CacheType type, const std::vector<uint64_t> &are
         void *pointer;
         auto status = Jemalloc::Allocate(arenaInd, hookSize, pointer);
         if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
-            std::string errorMsg;
-            if (type == CacheType::MEMORY) {
-                errorMsg = "Shared memory no space in arena: " + std::to_string(arenaInd);
-            } else {
-                errorMsg = "Shared disk no space in arena: " + std::to_string(arenaInd);
+            auto it = CACHE_TYPE_STR.find(type);
+            std::string errHint = "UnknowType";
+            if (it != CACHE_TYPE_STR.end()) {
+                errHint = it->second;
             }
+            std::string errorMsg = FormatString("%s no space in arena: %d", errHint, arenaInd);
             status = Status(StatusCode::K_OUT_OF_MEMORY, errorMsg);
         }
         if (status.IsOk()) {

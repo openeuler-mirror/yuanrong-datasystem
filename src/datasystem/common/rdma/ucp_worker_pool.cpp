@@ -167,6 +167,7 @@ UcpWorker *UcpWorkerPool::GetOrSelSendWorker(const std::string &ipAddr)
     auto worker = localWorkerPool_[roundRobin_].get();
     roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
     localWorkerSendMap_.emplace(ipAddr, worker);
+    LOG(INFO) << "Emplace new remote ucp worker : " << ipAddr;
 
     return worker;
 }

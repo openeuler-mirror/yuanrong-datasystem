@@ -28,6 +28,7 @@
 #include "datasystem/common/rdma/ucp_worker_pool.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 #include <chrono>
 #include <cstring>
@@ -47,6 +48,7 @@ UcpManager &UcpManager::Instance()
 
 UcpManager::UcpManager() : localSegmentMap_(std::make_unique<UcpSegmentMap>()), eventMap_(std::make_unique<EventMap>())
 {
+    uniqueInstanceId_ = GetStringUuid();
     VLOG(RPC_LOG_LEVEL) << "UcpManager::UcpManager()";
 }
 
@@ -226,6 +228,24 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
     return Status::OK();
 }
 
+Status UcpManager::CheckUcpConnectionStable(const std::string &hostAddress, const std::string &instanceId)
+{
+    TbbInstanceMap::const_accessor constAccessor;
+    auto res = instanceTable_.find(constAccessor, hostAddress);
+    if (!res) {
+        TbbInstanceMap::accessor accessor;
+        if (instanceTable_.insert(accessor, hostAddress)) {
+            accessor->second = instanceId;
+        }
+        return Status::OK();
+    }
+    if (!instanceId.empty()) {
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor->second == instanceId, K_RDMA_NEED_CONNECT,
+                                             "Ucp connect has disconnected and needs to be reconnected!");
+    }
+    return Status::OK();
+}
+
 void UcpManager::InsertSuccessfulEvent(uint64_t requestId)
 {
     std::lock_guard<std::mutex> lock(finishedRequestsMutex_);
@@ -240,6 +260,11 @@ void UcpManager::InsertFailedEvent(uint64_t requestId)
 
 Status UcpManager::RemoveEndpoint(const HostPort &remoteAddress)
 {
+    TbbInstanceMap::accessor acc;
+    std::string addrStr = remoteAddress.ToString();
+    if (instanceTable_.find(acc, addrStr)) {
+        instanceTable_.erase(acc);
+    }
     Status status = workerPool_->RemoveByIp(remoteAddress.ToString());
     if (!status.IsOk()) {
         std::string detailed_msg =

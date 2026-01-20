@@ -110,6 +110,51 @@ TEST_F(RdmaObjectClientTest, RdmaPutGetDeleteShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
+TEST_F(RdmaObjectClientTest, RdmaReconnectTest)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int numKV = 1024;
+    const uint64_t objectSize = 8 * 1024;
+    std::vector<std::string> keys(numKV);
+    std::vector<StringView> values(numKV);
+    std::vector<std::string> valuesForVer(numKV);
+    for (int i = 0; i < numKV; i++) {
+        keys[i] = "keys_" + std::to_string(i);
+        valuesForVer[i] = GenRandomString(objectSize);
+        values[i] = StringView(valuesForVer[i]);
+    }
+
+    auto checkFunc = [&valuesForVer, &keys](std::vector<std::string> getData) {
+        for (size_t i = 0; i < keys.size(); i++) {
+            ASSERT_EQ(valuesForVer[i].size(), getData[i].size());
+            ASSERT_EQ(valuesForVer[i], getData[i]);
+        }
+    };
+
+    std::vector<std::string> valuesGet;
+    valuesGet.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client1->Set(keys[i], values[i]));
+    }
+    DS_ASSERT_OK(client2->Get(keys, valuesGet));
+    checkFunc(valuesGet);
+
+    cluster_->ShutdownNode(WORKER, 1);
+    int32_t sleepSec = 5;
+    sleep(sleepSec);
+    cluster_->StartNode(WORKER, 1, "");
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
+
+    valuesGet.clear();
+    valuesGet.reserve(keys.size());
+    DS_ASSERT_OK(client2->Get(keys, valuesGet));
+    checkFunc(valuesGet);
+}
+
 TEST_F(RdmaObjectClientTest, TestRemoteGet)
 {
     // Test specifically batch get for 8KB * 1024, so it needs multiple batches when allocating in RDMA case.

@@ -24,6 +24,7 @@
 #include <memory>
 #include <thread>
 #include <unordered_map>
+#include <tbb/concurrent_hash_map.h>
 
 #include <ucp/api/ucp.h>
 
@@ -56,6 +57,8 @@ custom_unique_ptr<T> MakeCustomUnique(T *p, std::function<void(T *)> custom_dele
         return nullptr;
     }
 }
+
+using TbbInstanceMap = tbb::concurrent_hash_map<std::string, std::string>;
 
 class Event {
 public:
@@ -181,9 +184,9 @@ public:
      * @param[out] keys The new request id to wait for if not blocking
      * @return Status of the call
      */
-    Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress,
-                         const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                         bool blocking, std::vector<uint64_t> &keys);
+    Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
+                         const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
+                         std::vector<uint64_t> &keys);
 
     /**
      * @brief Remove Remote Endpoint and all associated segments
@@ -218,6 +221,23 @@ public:
      * @param[in] requestId a unique identifier for the request
      */
     virtual void InsertFailedEvent(uint64_t requestId);
+
+    /**
+     * @brief Get local transport unique instance id.
+     * @param[out] instanceId The local instance uuid.
+     */
+    void GetLocalInstanceId(std::string &instanceId)
+    {
+        instanceId = uniqueInstanceId_;
+    }
+
+    /**
+     * @brief Check if the connection is stable.
+     * @param[in] hostAddress The dst port address.
+     * @param[in] instanceId The unqiue instance uuid from dst port.
+     * @return Status of the connection.
+     */
+    Status CheckUcpConnectionStable(const std::string &hostAddress, const std::string &instanceId = "");
 
 private:
     UcpManager();
@@ -307,6 +327,8 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };
+    TbbInstanceMap instanceTable_;
+    std::string uniqueInstanceId_;
 };
 
 }  // namespace datasystem
