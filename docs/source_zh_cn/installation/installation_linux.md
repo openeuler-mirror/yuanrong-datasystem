@@ -237,7 +237,7 @@ pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanro
 ### 下载源码
 
 ```bash
-git clone https://gitee.com/openeuler/yuanrong-datasystem.git
+git clone https://gitcode.com/openeuler/yuanrong-datasystem
 ```
 
 ### 编译
