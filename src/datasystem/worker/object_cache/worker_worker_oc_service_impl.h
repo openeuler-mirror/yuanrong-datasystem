@@ -92,6 +92,14 @@ public:
                        std::vector<::datasystem::RpcMessage> payloads) override;
 
     /**
+     * @brief Migrate data directly.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @return Status of the call.
+     */
+    Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) override;
+
+    /**
      * @brief Get batch of object data from remote worker and load data from disk if necessary.
      * @param [in] serverApi The WriterReader in server side which holds unary rpc socket.
      * @return Status of the call.

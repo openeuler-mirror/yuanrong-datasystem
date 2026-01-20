@@ -189,7 +189,7 @@ static Status InitializeMetadataMemory(const std::string &objectKey, uint64_t me
 
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                               ShmUnit &shmUnit, CacheType cacheType)
+                               ShmUnit &shmUnit, CacheType cacheType, bool retryOnOOM)
 {
     Timer timer;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -203,7 +203,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
     static const std::vector<int> WAIT_MSECOND = { 1, 10, 50, 100, 200, 400, 800, 1600, 3200 };
     Status rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT,
                                        static_cast<memory::CacheType>(cacheType));
-    if (rc.GetCode() == K_OUT_OF_MEMORY) {
+    if (rc.GetCode() == K_OUT_OF_MEMORY && retryOnOOM) {
         INJECT_POINT("worker.AllocateMemory.afterOOM");
         for (int t : WAIT_MSECOND) {
             auto remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
@@ -252,7 +252,7 @@ Status AggregateAllocate(
     const std::string &firstObjectKey,
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> &traversalHelper,
     std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-    std::vector<uint32_t> &shmIndexMapping)
+    std::vector<uint32_t> &shmIndexMapping, bool retryOnOOM)
 {
     // Pre-allocate aggregated chunks of shared memory as ShmOwner, to reduce the number of allocation calls.
     // Aggregate only for small objects (< 1MB size), and batch up to 1024 keys and 2MB size.
@@ -294,8 +294,8 @@ Status AggregateAllocate(
         for (const auto &aggregateSize : aggreatedSizes) {
             std::shared_ptr<ShmOwner> shmOwner = std::make_shared<ShmOwner>();
             // All keys in the batch request should belong to the same tenant.
-            RETURN_IF_NOT_OK(
-                AllocateMemoryForObject(firstObjectKey, aggregateSize, 0, false, evictionManager, *shmOwner));
+            RETURN_IF_NOT_OK(AllocateMemoryForObject(firstObjectKey, aggregateSize, 0, false, evictionManager,
+                                                     *shmOwner, CacheType::MEMORY, retryOnOOM));
             shmOwners.push_back(shmOwner);
         }
     } else {

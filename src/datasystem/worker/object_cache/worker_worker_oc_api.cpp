@@ -21,10 +21,8 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/mem_view.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
@@ -173,6 +171,22 @@ Status WorkerRemoteWorkerOCApi::MigrateData(MigrateDataReqPb &req, const std::ve
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(rpcSession_->MigrateData(req, rsp, payloads));
+    return Status::OK();
+}
+
+Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
+{
+    RpcOptions opts;
+    int64_t remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("Request timeout (%ld ms).", -remainingTime));
+    // Prevent waiting too long when network errors.
+    constexpr int64_t maxTimeoutMs = 180'000;
+    remainingTime = std::min(remainingTime, maxTimeoutMs);
+    opts.SetTimeout(static_cast<int32_t>(remainingTime));
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    RETURN_IF_NOT_OK(rpcSession_->MigrateDataDirect(opts, req, rsp));
     return Status::OK();
 }
 

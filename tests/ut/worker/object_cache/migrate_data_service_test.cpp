@@ -38,7 +38,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
-#include "datasystem/worker/worker_master_api_manager_base.h"
 #include "eviction_manager_common.h"
 
 DS_DECLARE_string(spill_directory);
@@ -72,18 +71,19 @@ public:
     void Init()
     {
         objectTable_ = std::make_shared<ObjectTable>();
-        WorkerOcServiceCrudParam param{ .workerMasterApiManager = nullptr,
-                                        .workerRequestManager = requestManager_,
-                                        .memoryRefTable = nullptr,
-                                        .objectTable = objectTable_,
-                                        .evictionManager = nullptr,
-                                        .workerDevOcManager = nullptr,
-                                        .asyncPersistenceDelManager = nullptr,
-                                        .asyncSendManager = nullptr,
-                                        .asyncRollbackManager = nullptr,
-                                        .metadataSize = 0,
-                                        .persistenceApi = nullptr,
-                                        .etcdCM = nullptr,
+        WorkerOcServiceCrudParam param{
+            .workerMasterApiManager = nullptr,
+            .workerRequestManager = requestManager_,
+            .memoryRefTable = nullptr,
+            .objectTable = objectTable_,
+            .evictionManager = nullptr,
+            .workerDevOcManager = nullptr,
+            .asyncPersistenceDelManager = nullptr,
+            .asyncSendManager = nullptr,
+            .asyncRollbackManager = nullptr,
+            .metadataSize = 0,
+            .persistenceApi = nullptr,
+            .etcdCM = nullptr,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888");
@@ -158,6 +158,7 @@ public:
 protected:
     std::shared_ptr<ThreadPool> threadPool_;
     std::shared_ptr<WorkerOcServiceMigrateImpl> impl_;
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     WorkerRequestManager requestManager_;
 };
 
@@ -217,7 +218,7 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
     CreateObjects("New_Created_", 1, newCreateCount, nowVersion, false, false, req);
     CreateObjects("Exist_", 1, existCount, newerVersion, true, false, req);
 
-    std::map<std::string, std::shared_ptr<SafeObjType>> lockedEntries;
+    LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
     impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);
@@ -243,7 +244,7 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjectsFailed)
     CreateObjects("New_Created_", 1, newCreateCount, nowVersion, false, false, req);
     CreateObjects("Exist_", 1, existCount, newerVersion, true, false, req);
 
-    std::map<std::string, std::shared_ptr<SafeObjType>> lockedEntries;
+    LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
     impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);

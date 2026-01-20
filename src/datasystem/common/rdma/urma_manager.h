@@ -304,6 +304,24 @@ public:
                             bool blocking, std::vector<uint64_t> &keys);
 
     /**
+     * @brief Does a RDMA read from remote worker memory location
+     * 1. Registers the segment if address is not already registered
+     * 2. Imports remote segment
+     * 3. does a urma read
+     * @param[in] UrmaRemoteAddrPb Protobuf contians remote host address, remote urma segment address and data offset
+     * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address)
+     * @param[in] localSegSize Total size of the segment (e.g. Arena size)
+     * @param[in] localObjectAddress Object address
+     * @param[in] dataSize Size of the object
+     * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of object)
+     * @param[out] keys The new request id to wait for if not blocking.
+     * @return Status of the call.
+     */
+    Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
+                    const uint64_t &localObjectAddress, const uint64_t &dataSize, const uint64_t &metaDataSize,
+                    std::vector<uint64_t> &keys);
+
+    /**
      * @brief Remove Remote Device and all associated segments
      * @param[in] remoteAddress Remote Worker Address
      * @return Status of the call.

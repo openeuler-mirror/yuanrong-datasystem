@@ -19,8 +19,10 @@
  */
 #include <cstdint>
 #include <cstring>
+#include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -28,6 +30,7 @@
 
 #include "common.h"
 #include "../../../common/binmock/binmock.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
@@ -36,6 +39,7 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
+#include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
@@ -152,6 +156,11 @@ public:
         FLAGS_spill_size_limit = memSize;
         DS_ASSERT_OK(WorkerOcSpill::Instance()->Init());
         LOG_IF_ERROR(inject::Set("worker.Spill.Sync", "return()"), "set inject point failed");
+    }
+
+    void TearDown() override
+    {
+        RELEASE_STUBS
     }
 
     virtual void Init()
@@ -499,10 +508,11 @@ public:
         objectTable_ = std::make_shared<ObjectTable>();
         strategy_ = std::make_shared<SpillNodeSelector>(nullptr, hostPort_);
         type_ = MigrateType::SPILL;
+        AsyncResourceReleaser::Instance().Init(objectTable_);
     }
 };
 
-TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjects)
+TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByTCP)
 {
     LOG(INFO) << "Test migrate objects for spill type.";
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
@@ -521,5 +531,75 @@ TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjects)
     ASSERT_TRUE(result.skipIds.empty());
     ASSERT_TRUE(result.failedIds.empty());
 }
+
+TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByFastTransport)
+{
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+
+    // Create objects and mark them spilled, but keep shm unit so fast transport can read from memory.
+    constexpr uint64_t size = 100;
+    constexpr uint64_t count = 3;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("League_of_Legends", size, count, objectKeys);
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillOnce(Invoke([](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            rsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+            (void)req;
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&AsyncResourceReleaser::AddTask, (_, _)).Times(0);
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.address, hostPort_.ToString());
+    ASSERT_EQ(result.successIds.size(), count);
+    ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(MigrateDataHandlerSpillTest, TestReleaseFailEnqueueTask)
+{
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+
+    constexpr uint64_t size = 100;
+    constexpr uint64_t count = 3;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("League_of_Legends", size, count, objectKeys);
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillOnce(Invoke([](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            rsp.set_remain_bytes(1024UL * 1024UL * 1024UL);
+            (void)req;
+            return Status::OK();
+        }));
+
+    // Make Release() fail before MigrateDataToRemote() returns (sync path),
+    // then switch to success and let async queue clean up.
+    BINEXPECT_CALL(&AsyncResourceReleaser::Release, (_, _))
+        .Times(AtLeast(static_cast<int>(count)))
+        .WillRepeatedly(Return(Status(K_TRY_AGAIN, "release failed")));
+    DS_ASSERT_OK(inject::Set("AsyncResourceReleaser.WorkerThread.delay", "call(300)"));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.address, hostPort_.ToString());
+    ASSERT_EQ(result.successIds.size(), count);
+    ASSERT_TRUE(result.failedIds.empty());
+
+    // After migrate returns, release stubs so async retries can erase objects.
+    RELEASE_STUBS
+    std::this_thread::sleep_for(std::chrono::milliseconds(400)); // sleep 400 ms to let async queue process.
+    for (const auto &key : objectKeys) {
+        DS_ASSERT_NOT_OK(objectTable_->Contains(key));
+    }
+}
+
 }  // namespace ut
 }  // namespace datasystem

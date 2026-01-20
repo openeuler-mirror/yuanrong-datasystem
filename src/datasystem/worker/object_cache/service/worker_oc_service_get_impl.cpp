@@ -39,6 +39,7 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
@@ -868,54 +869,6 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 }
 
 template <typename Req>
-Status WorkerOcServiceGetImpl::FillGetRequestUrmaInfo(std::shared_ptr<ShmUnit> &shmUnit, uint64_t &metaSz, Req &reqPb)
-{
-    if (!IsUrmaEnabled()) {
-        return Status::OK();
-    }
-    uint64_t segAddress;
-    uint64_t dataOffset;
-    if (FLAGS_urma_register_whole_arena) {
-        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer()) - shmUnit->GetOffset();
-        dataOffset = shmUnit->GetOffset() + metaSz;
-    } else {
-        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
-        dataOffset = metaSz;
-    }
-    auto *urmaInfo = reqPb.mutable_urma_info();
-    urmaInfo->set_seg_va(segAddress);
-    urmaInfo->set_seg_data_offset(dataOffset);
-    auto *remoteAddr = urmaInfo->mutable_request_address();
-    remoteAddr->set_host(localAddress_.Host());
-    remoteAddr->set_port(localAddress_.Port());
-    return Status::OK();
-}
-
-template <typename Req>
-Status WorkerOcServiceGetImpl::FillGetRequestUcpInfo(const std::string &srcIpAddr, std::shared_ptr<ShmUnit> &shmUnit,
-                                                     uint64_t &metaSz, Req &reqPb)
-{
-    if (!IsUcpEnabled()) {
-        return Status::OK();
-    }
-    uint64_t segAddress;
-    uint64_t dataOffset;
-    if (FLAGS_rdma_register_whole_arena) {
-        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer()) - shmUnit->GetOffset();
-        dataOffset = shmUnit->GetOffset() + metaSz;
-    } else {
-        segAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
-        dataOffset = metaSz;
-    }
-    auto *ucpInfo = reqPb.mutable_ucp_info();
-    auto *destIpAddr = ucpInfo->mutable_remote_ip_addr();
-    destIpAddr->set_host(localAddress_.Host());
-    destIpAddr->set_port(localAddress_.Port());
-    RETURN_IF_NOT_OK(FillUcpInfo(segAddress, dataOffset, srcIpAddr, *ucpInfo));
-    return Status::OK();
-}
-
-template <typename Req>
 Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpAddr, uint64_t dataSize,
                                                        ReadObjectKV &objectKV, Req &reqPb, bool &shmUnitAllocated,
                                                        std::shared_ptr<ShmOwner> shmOwner)
@@ -952,13 +905,13 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpA
         entry->SetShmUnit(shmUnit);
         shmUnitAllocated = true;
     }
-    // Early exit for the urma/ucp info.
-    if (!IsFastTransportEnabled()) {
-        return Status::OK();
-    }
     // Fill in urma info and ucp info
-    RETURN_IF_NOT_OK(FillGetRequestUrmaInfo(shmUnit, metaSz, reqPb));
-    RETURN_IF_NOT_OK(FillGetRequestUcpInfo(srcIpAddr, shmUnit, metaSz, reqPb));
+    if (IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(
+            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metaSz, reqPb));
+    } else if (IsUcpEnabled()) {
+        RETURN_IF_NOT_OK(FillRequestUcpInfo(localAddress_, srcIpAddr, shmUnit, metaSz, reqPb));
+    }
 
     return Status::OK();
 }

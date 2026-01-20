@@ -22,6 +22,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -61,7 +62,7 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
 
 bool MigrateDataHandler::ShouldUseFastTransport() const
 {
-    return type_ == MigrateType::SPILL && IsFastTransportEnabled();
+    return type_ == MigrateType::SPILL && IsUrmaEnabled();
 }
 
 void MigrateDataHandler::SplitByCacheType(std::vector<std::string> &memoryDataIds,
@@ -232,6 +233,34 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
     return Status::OK();
 }
 
+void MigrateDataHandler::ReleaseResources(const std::unordered_set<ImmutableString> &successIds)
+{
+    if (type_ != MigrateType::SPILL) {
+        return;
+    }
+    uint64_t releasedCount = 0;
+    uint64_t releasedBytes = 0;
+    for (const auto &data : datas_) {
+        const auto &objectKey = data->Id();
+        if (successIds.find(objectKey) == successIds.end()) {
+            continue;
+        }
+
+        Status rc = AsyncResourceReleaser::Instance().Release(objectKey, data->Version());
+        if (rc.IsError()) {
+            AsyncResourceReleaser::Instance().AddTask(objectKey, data->Version());
+            continue;
+        }
+        releasedCount++;
+        releasedBytes += data->Size();
+    }
+
+    if (releasedCount > 0) {
+        VLOG(1) << FormatString("[Migrate Data] Released %lu objects for spill type, total %lu bytes", releasedCount,
+                                releasedBytes);
+    }
+}
+
 void MigrateDataHandler::SendDataToRemote()
 {
     if (datas_.empty()) {
@@ -264,6 +293,7 @@ void MigrateDataHandler::SendDataToRemote()
         successIds_.insert(rsp.successKeys.begin(), rsp.successKeys.end());
         failedIds_.insert(rsp.failedKeys.begin(), rsp.failedKeys.end());
         TryUpdateRate(rsp.limitRate);
+        ReleaseResources(rsp.successKeys);
     } else {
         LOG(ERROR) << FormatString("[Migrate Data] Send %ld objects[%ld bytes] data to %s failed, error message: %s",
                                    datas_.size(), currBatchSize_, remoteApi_->Address(), s.ToString());

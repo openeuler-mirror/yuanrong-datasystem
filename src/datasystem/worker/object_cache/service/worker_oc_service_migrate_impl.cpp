@@ -35,6 +35,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -59,7 +60,6 @@ DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_
 using worker::WorkerMasterOCApi;
 
 constexpr double MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR = 0.95;
-constexpr double MIGRATE_SPILL_HIGH_WATER_FACTOR = 0.8;
 
 namespace datasystem {
 namespace object_cache {
@@ -150,19 +150,75 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
     return successIds.empty() ? status : Status::OK();
 }
 
-void WorkerOcServiceMigrateImpl::BatchLockForMigrateData(const ObjInfoPbList &infoList, LockedEntryMap &lockedEntries,
-                                                         std::unordered_set<std::string> &successIds,
-                                                         std::unordered_set<std::string> &failedIds)
+Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
-    lockedEntries.clear();
-    std::map<std::string, MigrateDataReqPb::ObjectInfoPb> toLockIds;
-    for (const auto &info : infoList) {
-        (void)toLockIds.emplace(info.object_key(), info);
+    LOG(INFO) << FormatString("[Migrate Data] Count: %d, Objects: %s", req.objects_size(),
+                              VectorToString(GetObjects(req)));
+    RETURN_OK_IF_TRUE(req.objects().empty());
+    auto fillResponseAndReturn = [this, &req, &rsp](StatusCode code, const std::string &message) {
+        std::unordered_set<std::string> failedIds;
+        std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                       [](const auto &info) { return info.object_key(); });
+        FillMigrateDataDirectResponse(failedIds, code == StatusCode::K_OUT_OF_MEMORY, rsp);
+        LOG(INFO) << "[Migrate Data] " << message;
+        return Status(code, message);
+    };
+    if (!IsMemoryAvailable(0, MigrateType::SPILL)) {
+        return fillResponseAndReturn(StatusCode::K_OUT_OF_MEMORY, "OOM");
+    }
+    if (etcdCM_ != nullptr && etcdCM_->CheckLocalNodeIsExiting()) {
+        return fillResponseAndReturn(StatusCode::K_SCALE_DOWN, "Worker is exiting");
+    }
+    if (!IsUrmaEnabled()) {
+        return fillResponseAndReturn(StatusCode::K_RUNTIME_ERROR, "URMA is not enabled");
+    }
+    // 1. Lock objects.
+    LockedEntryMap lockedEntries;
+    std::unordered_set<std::string> successIds;
+    std::unordered_set<std::string> failedIds;
+    BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);
+    Raii raii([this, &lockedEntries]() { BatchUnlock(lockedEntries); });
+
+    // 2. Get object metadata from master.
+    std::unordered_set<std::string> needQueryIds;
+    std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
+                   [](const auto &entry) { return entry.first; });
+    QueryMetaMap metas;
+    Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
+    if (rc.IsError()) {
+        FillMigrateDataDirectResponse(failedIds, false, rsp);
+        return rc;
     }
 
-    for (const auto &item : toLockIds) {
-        const auto &objectKey = item.first;
-        const auto &info = item.second;
+    // 3. Fill metadata to object entry.
+    ObjectInfoMap needReadDataIds;
+    FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds);
+
+    // 4. Fill data to object entry.
+    ObjectInfoMap needSendMasterIds;
+    Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds);
+    bool oom = IsNoSpace(status);
+
+    // 5. Send replace primary copy to master.
+    if (!needSendMasterIds.empty()) {
+        status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, MigrateType::SPILL, successIds, failedIds);
+    }
+    if (!failedIds.empty()) {
+        RollbackObjects(failedIds, needReadDataIds);
+    }
+
+    // 6. Fill response.
+    FillMigrateDataDirectResponse(failedIds, oom, rsp);
+    LOG(INFO) << "[Migrate Data] Migrate direct finish, success size: " << successIds.size()
+              << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
+    return successIds.empty() ? status : Status::OK();
+}
+
+void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t> &toLockIds,
+                                           LockedEntryMap &lockedEntries, std::unordered_set<std::string> &successIds,
+                                           std::unordered_set<std::string> &failedIds)
+{
+    for (const auto &[objectKey, version] : toLockIds) {
         std::shared_ptr<SafeObjType> entry;
         bool isInsert = false;
 
@@ -174,7 +230,7 @@ void WorkerOcServiceMigrateImpl::BatchLockForMigrateData(const ObjInfoPbList &in
         }
         if (isInsert) {
             SetEmptyObjectEntry(objectKey, *entry);
-            (void)lockedEntries.emplace(objectKey, std::move(entry));
+            (void)lockedEntries.emplace(objectKey, std::make_pair(std::move(entry), version));
         } else {
             s = TryLockWithRetry(objectKey, entry, true);
             if (!s.IsOk()) {
@@ -186,16 +242,16 @@ void WorkerOcServiceMigrateImpl::BatchLockForMigrateData(const ObjInfoPbList &in
             if (entry->Get() == nullptr) {
                 SetEmptyObjectEntry(objectKey, *entry);
             }
-            if (!IsNewerVersion(entry, info.version())) {
-                (void)lockedEntries.emplace(objectKey, std::move(entry));
+            if (!IsNewerVersion(entry, version)) {
+                (void)lockedEntries.emplace(objectKey, std::make_pair(std::move(entry), version));
             } else {
                 std::stringstream ss;
                 ss << FormatString(
                     "[Migrate Data] %s version [%ld >= %ld] is newer, cache invalid: %s, primary copy: %s, not need to "
                     "migrate data.",
-                    objectKey, (*entry)->GetCreateTime(), info.version(),
+                    objectKey, (*entry)->GetCreateTime(), version,
                     (*entry)->stateInfo.IsCacheInvalid() ? "true" : "false", (*entry)->GetAddress());
-                if (entry->Get()->IsWriteBackMode() && IsEqualVersion(entry, info.version())) {
+                if (entry->Get()->IsWriteBackMode() && IsEqualVersion(entry, version)) {
                     ss << " Would add to l2 queue.";
                     std::future<Status> future;
                     LOG_IF_ERROR(asyncSendManager_->Add(objectKey, entry, future),
@@ -278,14 +334,16 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const MigrateDataReqPb &req
             LOG(INFO) << FormatString("[Migrate Data] %s lock failed, would not be process this time.", objectKey);
             continue;
         }
-        auto metaIt = metas.find(objectKey);
-        if (metaIt == metas.end() && failedIds.find(objectKey) == failedIds.end()) {
+        const auto &metaIt = metas.find(objectKey);
+        if (metaIt == metas.end()) {
             LOG(INFO) << FormatString("[Migrate Data] %s has been deleted, not need to be process.", objectKey);
-            (void)successIds.emplace(objectKey);
+            if (failedIds.find(objectKey) == failedIds.end()) {
+                (void)successIds.emplace(objectKey);
+            }
             continue;
         }
         Status status =
-            FillOneObjectLocked(lockedIt->second, *it, metaIt->second, payloads, req.type(), needSendMasterIds);
+            FillOneObjectLocked(lockedIt->second.first, *it, metaIt->second, payloads, req.type(), needSendMasterIds);
         if (IsNoSpace(status)) {
             std::transform(it, infoList.end(), std::inserter(failedIds, failedIds.end()),
                            [](const MigrateDataReqPb::ObjectInfoPb &info) { return info.object_key(); });
@@ -307,7 +365,233 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const MigrateDataReqPb &req
                 continue;
             }
             VLOG(1) << "[Migrate Data] " << objectKey << " Set cache invalid";
-            lockedIt->second->Get()->stateInfo.SetCacheInvalid(true);
+            lockedIt->second.first->Get()->stateInfo.SetCacheInvalid(true);
+        }
+    }
+    return lastRc;
+}
+
+void WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
+                                                         std::unordered_set<std::string> &successIds,
+                                                         std::unordered_set<std::string> &failedIds,
+                                                         ObjectInfoMap &needReadDataIds)
+{
+    for (auto &[objectKey, it] : lockedEntries) {
+        const auto &metaIt = metas.find(objectKey);
+        if (metaIt == metas.end()) {
+            LOG(INFO) << FormatString("[Migrate Data] %s has been deleted, not need to be process.", objectKey);
+            if (failedIds.find(objectKey) == failedIds.end()) {
+                (void)successIds.emplace(objectKey);
+            }
+            continue;
+        }
+        const auto &meta = metaIt->second;
+        const auto &version = it.second;
+        if (meta.meta().version() != version) {
+            VLOG(1) << FormatString("[ObjectKey %s] Version %ld != %ld", objectKey, version, meta.meta().version());
+            // Version mismatch means the object has been update, we will no need to update.
+            (void)successIds.emplace(objectKey);
+            continue;
+        }
+        // Fill metadata to object entry
+        auto &entry = it.first;
+        if ((*entry)->IsSpilled()) {
+            LOG_IF_ERROR(WorkerOcSpill::Instance()->Delete(objectKey),
+                         FormatString("[Migrate Data] Delete elder object %s failed", objectKey));
+        }
+        bool isNewCreate = IsNewCreatedObject(entry);
+        SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry);
+        (*entry)->stateInfo.SetPrimaryCopy(true);
+        needReadDataIds.emplace(objectKey, std::make_pair(entry, isNewCreate));
+    }
+}
+
+Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDirectReqPb &req,
+                                                           const ObjectInfoMap &needReadDataIds,
+                                                           std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                                           std::vector<uint32_t> &shmIndexMapping)
+{
+    // Calculate total size of small objects (< 1MB) that need to be aggregated and
+    // verify memory availability for them before attempting aggregate allocation.
+    constexpr uint64_t smallObjectThreshold = 1UL * 1024UL * 1024UL;
+    uint64_t sumSmallObjects = 0;
+    for (int i = 0; i < req.objects_size(); ++i) {
+        const auto &object = req.objects(i);
+        if (needReadDataIds.find(object.object_key()) == needReadDataIds.end()) {
+            continue;
+        }
+        if (object.data_size() < smallObjectThreshold) {
+            sumSmallObjects =
+                (sumSmallObjects > UINT64_MAX - object.data_size()) ? UINT64_MAX : sumSmallObjects + object.data_size();
+        }
+    }
+    static constexpr double factor = 1.2;
+    uint64_t checkSize = static_cast<uint64_t>(static_cast<double>(sumSmallObjects) * factor);
+    if (!IsMemoryAvailable(checkSize, MigrateType::SPILL)) {
+        return Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
+    }
+
+    // Perform aggregate allocation.
+    const size_t metaSz = GetMetadataSize();
+    std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> traversalHelper =
+        [&req, &needReadDataIds, &metaSz](const std::function<void(uint64_t, uint64_t, uint32_t)> &collector,
+                                          bool &needAggregate) {
+            needAggregate = req.objects_size() > 1;
+            for (int i = 0; i < req.objects_size(); i++) {
+                const auto &object = req.objects(i);
+                if (needReadDataIds.find(object.object_key()) == needReadDataIds.end()) {
+                    continue;
+                }
+                collector(object.data_size(), object.data_size() + metaSz, i);
+            }
+        };
+    const auto &firstObjectKey = req.objects().begin()->object_key();
+    return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping, false);
+}
+
+Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDirectReqPb &req,
+                                                           const ObjectInfoMap &needReadDataIds,
+                                                           ObjectInfoMap &needSendMasterIds,
+                                                           std::unordered_set<std::string> &failedIds)
+{
+    // 1. Aggregate allocated memory for small objects.
+    std::vector<uint32_t> shmIndexMapping(req.objects_size(), std::numeric_limits<uint32_t>::max());
+    std::vector<std::shared_ptr<ShmOwner>> shmOwners;
+    Status rc = AggregateAllocateHelper(req, needReadDataIds, shmOwners, shmIndexMapping);
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Migrate Data] Aggregate allocate memory failed: " << rc.ToString();
+        shmOwners.clear();
+    }
+
+    // 2. Start URMA read tasks.
+    std::vector<ReadTask> tasks;
+    Status startRc = StartRemoteReadTasks(req, needReadDataIds, shmIndexMapping, shmOwners, tasks, failedIds);
+    if (tasks.empty()) {
+        return startRc;
+    }
+
+    // 3. Wait tasks and finalize object entries.
+    Status waitRc = WaitRemoteReadTasks(tasks, needSendMasterIds, failedIds);
+    return waitRc.IsError() ? waitRc : startRc;
+}
+
+std::shared_ptr<ShmOwner> WorkerOcServiceMigrateImpl::GetShmOwnerByIndex(
+    int idx, const std::vector<uint32_t> &shmIndexMapping,
+    const std::vector<std::shared_ptr<ShmOwner>> &shmOwners) const
+{
+    if (idx < 0 || static_cast<size_t>(idx) >= shmIndexMapping.size()) {
+        return nullptr;
+    }
+    const auto ownerIdx = shmIndexMapping[idx];
+    return ownerIdx < shmOwners.size() ? shmOwners[ownerIdx] : nullptr;
+}
+
+Status WorkerOcServiceMigrateImpl::ProcessRemoteReadForObject(const MigrateDataDirectReqPb::ObjectInfoPb &object,
+                                                              ObjectInfoMap::const_iterator needReadIt,
+                                                              std::shared_ptr<ShmUnit> shmUnit, size_t metaSize,
+                                                              std::vector<ReadTask> &tasks,
+                                                              std::unordered_set<std::string> &failedIds)
+{
+    const auto &objectKey = object.object_key();
+    const auto dataSize = object.data_size();
+    const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+    uint64_t localSegAddress;
+    uint64_t localSegSize;
+    GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
+
+    std::vector<uint64_t> eventKeys;
+    Status rc =
+        UrmaRead(object.urma_info(), localSegAddress, localSegSize, localObjectAddress, dataSize, metaSize, eventKeys);
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("[Migrate Data] %s urma read failed: %s", objectKey, rc.ToString());
+        failedIds.insert(objectKey);
+        return rc;
+    }
+
+    tasks.push_back(ReadTask{ objectKey, std::move(eventKeys), std::move(shmUnit), needReadIt->second.first,
+                              needReadIt->second.second });
+    return Status::OK();
+}
+
+Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(const MigrateDataDirectReqPb &req,
+                                                        const ObjectInfoMap &needReadDataIds,
+                                                        const std::vector<uint32_t> &shmIndexMapping,
+                                                        const std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+                                                        std::vector<ReadTask> &tasks,
+                                                        std::unordered_set<std::string> &failedIds)
+{
+    tasks.reserve(static_cast<size_t>(req.objects_size()));
+
+    const auto metaSize = GetMetadataSize();
+    Status lastRc;
+
+    auto markRemainingAsFailed = [&req, &needReadDataIds, &failedIds](int fromIdx) {
+        for (int i = fromIdx; i < req.objects_size(); ++i) {
+            const auto &objectKey = req.objects(i).object_key();
+            if (needReadDataIds.find(objectKey) != needReadDataIds.end()) {
+                failedIds.insert(objectKey);
+            }
+        }
+    };
+
+    for (int i = 0; i < req.objects_size(); ++i) {
+        const auto &object = req.objects(i);
+        const auto &objectKey = object.object_key();
+        const auto needReadIt = needReadDataIds.find(objectKey);
+        if (needReadIt == needReadDataIds.end()) {
+            continue;
+        }
+
+        const auto dataSize = object.data_size();
+        auto shmUnit = std::make_shared<ShmUnit>();
+        const auto shmOwner = GetShmOwnerByIndex(i, shmIndexMapping, shmOwners);
+        if (shmOwner) {
+            lastRc = DistributeMemoryForObject(objectKey, dataSize, metaSize, true, shmOwner, *shmUnit);
+        } else {
+            lastRc = Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
+            if (IsMemoryAvailable(dataSize, MigrateType::SPILL)) {
+                lastRc = AllocateMemoryForObject(objectKey, dataSize, metaSize, true, evictionManager_, *shmUnit);
+            }
+        }
+        if (lastRc.IsError()) {
+            LOG(ERROR) << FormatString("[Migrate Data] %s allocate memory failed: %s", objectKey, lastRc.ToString());
+            markRemainingAsFailed(i);
+            break;
+        }
+        evictionManager_->Add(objectKey);
+
+        lastRc = ProcessRemoteReadForObject(object, needReadIt, shmUnit, metaSize, tasks, failedIds);
+    }
+
+    return lastRc;
+}
+
+Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &tasks, ObjectInfoMap &needSendMasterIds,
+                                                       std::unordered_set<std::string> &failedIds)
+{
+    const auto metaSize = GetMetadataSize();
+    Status lastRc;
+    for (auto &task : tasks) {
+        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto errorHandler = [](Status &status) { return status; };
+        Status waitRc = WaitFastTransportEvent(task.eventKeys, remainingTime, errorHandler);
+        if (waitRc.IsError()) {
+            failedIds.insert(task.objectKey);
+            lastRc = waitRc;
+            continue;
+        }
+
+        needSendMasterIds.emplace(task.objectKey, std::make_pair(task.entry, task.isNewCreate));
+
+        task.shmUnit->id = ShmKey::Intern(GetStringUuid());
+        if (metaSize > 0) {
+            (void)memset_s(task.shmUnit->GetPointer(), metaSize, 0, metaSize);
+        }
+        (*task.entry)->SetShmUnit(task.shmUnit);
+        if (task.entry->Get()->IsWriteBackMode()) {
+            std::future<Status> future;
+            LOG_IF_ERROR(asyncSendManager_->Add(task.objectKey, task.entry, future),
+                         FormatString("[Migrate Data] [%s] add to async queue failed", task.objectKey));
         }
     }
     return lastRc;
@@ -420,6 +704,19 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
         } else {
             rsp.set_scale_down_state(MigrateDataRspPb::NONE);
         }
+    }
+}
+
+void WorkerOcServiceMigrateImpl::FillMigrateDataDirectResponse(const std::unordered_set<std::string> &failedIds,
+                                                               bool oom, MigrateDataDirectRspPb &rsp)
+{
+    for (const auto &id : failedIds) {
+        rsp.add_failed_object_keys(id);
+    }
+    if (oom) {
+        rsp.set_remain_bytes(0);
+    } else {
+        rsp.set_remain_bytes(CalcRemainBytes(MigrateType::SPILL));
     }
 }
 
@@ -762,8 +1059,8 @@ void WorkerOcServiceMigrateImpl::ProcessReplacePrimaryRsp(master::ReplacePrimary
     RollbackObjects(rsp.expired_ids(), needSendMasterIds);
 }
 
-void WorkerOcServiceMigrateImpl::RollbackObjects(const google::protobuf::RepeatedPtrField<std::string> &objectKeys,
-                                                 const ObjectInfoMap &objectInfos)
+template <typename Container>
+void WorkerOcServiceMigrateImpl::RollbackObjects(const Container &objectKeys, const ObjectInfoMap &objectInfos)
 {
     for (const auto &objectKey : objectKeys) {
         VLOG(1) << "Rollback object: " << objectKey;
@@ -775,7 +1072,7 @@ void WorkerOcServiceMigrateImpl::RollbackObjects(const google::protobuf::Repeate
         }
         bool needDel = it->second.second;
         auto &entry = it->second.first;
-        if ((*entry)->GetShmUnit() == nullptr) {
+        if ((*entry)->IsSpilled() && (*entry)->GetShmUnit() == nullptr) {
             LOG_IF_ERROR(WorkerOcSpill::Instance()->Delete(objectKey),
                          FormatString("[Migrate Data] Rollback %s from disk failed", objectKey));
         } else {
@@ -828,9 +1125,13 @@ bool WorkerOcServiceMigrateImpl::IsMemoryAvailable(uint64_t size, MigrateType ty
         // overflow check
         return false;
     }
-    const double factor =
-        type == MigrateType::SCALE_DOWN ? MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR : MIGRATE_SPILL_HIGH_WATER_FACTOR;
-    return memOccupied <= (usedMemory + freeMemory) * factor;
+    switch (type) {
+        case MigrateType::SPILL:
+            return memory::Allocator::Instance()->GetMemoryAvailToHighWater() > size;
+        case MigrateType::SCALE_DOWN:
+        default:
+            return memOccupied <= (usedMemory + freeMemory) * MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR;
+    }
 }
 
 bool WorkerOcServiceMigrateImpl::IsSpillAvaialble(uint64_t size) const
@@ -868,17 +1169,6 @@ bool WorkerOcServiceMigrateImpl::IsResourceAvailable(const MigrateType &type, Ca
 bool WorkerOcServiceMigrateImpl::IsNoSpace(const Status &status) const
 {
     return status.GetCode() == StatusCode::K_NO_SPACE || status.GetCode() == StatusCode::K_OUT_OF_MEMORY;
-}
-
-std::vector<std::string> WorkerOcServiceMigrateImpl::GetObjects(const MigrateDataReqPb &req) const
-{
-    std::vector<std::string> objectKeys;
-    objectKeys.reserve(req.objects_size());
-    const auto &infos = req.objects();
-    for (const auto &info : infos) {
-        objectKeys.emplace_back(info.object_key());
-    }
-    return objectKeys;
 }
 }  // namespace object_cache
 }  // namespace datasystem
