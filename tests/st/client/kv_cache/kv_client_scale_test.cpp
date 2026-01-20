@@ -102,6 +102,28 @@ TEST_F(STCScaleUpTest, TestRedirectExpire)
     ASSERT_EQ(rc.GetCode(), K_NOT_FOUND);
 }
 
+TEST_F(STCScaleUpTest, TestEtcdFailedWhenWorkerTimeout)
+{
+    DS_ASSERT_OK(cluster_->StartOBS());
+    StartWorkerAndWaitReady({ 0, 1 });
+    InitTestKVClient(0, client_);
+    InitTestKVClient(1, client1_);
+    auto key = client_->GenerateKey();
+    SetParam param;
+    param.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
+    DS_ASSERT_OK(client1_->Set(key, "aaaaaaa", param));
+    client1_.reset();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "PutToEtcdStore.failed", "1*return(K_RUNTIME_ERROR)"));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
+    sleep(2); // wait worker timeout 2 s
+    client_.reset();
+    StartWorkerAndWaitReady({ 1 });
+    RestartWorkerAndWaitReady({ 0 });
+    InitTestKVClient(0, client_);
+    std::string val;
+    DS_ASSERT_OK(client_->Get(key, val));
+}
+
 TEST_F(STCScaleUpTest, DISABLED_TestRedirectSubscribe)
 {
     DS_ASSERT_OK(cluster_->StartOBS());

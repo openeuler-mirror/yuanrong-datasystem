@@ -117,7 +117,7 @@ public:
     /**
      * @brief Create object meta in Rocksdb.
      * @param[in] objectKey object key parameters.
-     * @param[out] serializedStr serializedStr of the object meta.
+     * @param[in] serializedStr serializedStr of the object meta.
      * @param[in] type Kv write type.
      * @return Status of the call.
      */

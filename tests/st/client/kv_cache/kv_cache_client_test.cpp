@@ -325,6 +325,19 @@ TEST_F(KVCacheClientTest, TestGetFuncMultiKeyErrorCode)
     ASSERT_EQ(client1->Get({ key2, key3 }, valsGet).GetCode(), StatusCode::K_RUNTIME_ERROR);
 }
 
+TEST_F(KVCacheClientTest, TestSetFail)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    auto key = client_->GenerateKey();
+    SetParam param;
+    param.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "PutToEtcdStore.failed", "1*return(K_RUNTIME_ERROR)"));
+    DS_ASSERT_NOT_OK(client->Set(key, "aaaaaaa", param));
+    std::string val;
+    ASSERT_EQ(client->Get({ key }, val).GetCode(), K_NOT_FOUND);
+}
+
 TEST_F(KVCacheClientTest, TestReadOnlyBufferFunction)
 {
     std::shared_ptr<KVClient> client;
