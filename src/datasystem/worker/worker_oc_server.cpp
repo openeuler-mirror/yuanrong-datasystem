@@ -160,8 +160,6 @@ DS_DEFINE_bool(enable_lossless_data_exit_mode, false,
 DS_DEFINE_bool(shared_memory_populate, false,
                "Avoiding page faults during copying improves runtime performance but may result in longer worker "
                "startup times (depending on shared_memory_size_mb).");
-DS_DECLARE_uint32(arena_per_tenant);
-DS_DECLARE_bool(enable_fallocate);
 
 DS_DEFINE_int32(oc_worker_worker_parallel_nums, 16, "worker worker batch rsp control nums, default 0 means unlimited");
 DS_DEFINE_int32(oc_worker_worker_parallel_min, 100,
@@ -171,22 +169,6 @@ DS_DEFINE_uint64(oc_worker_aggregate_single_max, 65536,
 DS_DEFINE_uint64(oc_worker_aggregate_merge_size, 2097152,
                  "Target batch size for worker worker responses, default is 2MB");
 
-static bool ValidatePopulate(const char *flagName, bool value)
-{
-    if (!value) {
-        return true;
-    }
-    if (FLAGS_arena_per_tenant > 1) {
-        LOG(ERROR) << "If " << flagName << " is true, arena_per_tenant must be 1";
-        return false;
-    }
-    if (FLAGS_enable_fallocate) {
-        LOG(ERROR) << "If " << flagName << " is true, enable_fallocate must be false";
-        return false;
-    }
-    return true;
-}
-DS_DEFINE_validator(shared_memory_populate, &ValidatePopulate);
 DS_DECLARE_string(sfs_path);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
