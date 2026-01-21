@@ -65,13 +65,13 @@ Tensor接口
    * - :doc:`yr.datasystem.DsTensorClient.delete <yr.datasystem.DsTensorClient.delete>`
      - 删除 host 中的 key。
    * - :doc:`yr.datasystem.DsTensorClient.dev_send <yr.datasystem.DsTensorClient.dev_send>`
-     - 将 device 上的 tensor 缓存作为数据系统的异构对象发送。
+     - 将 device 上的 Tensor 缓存作为数据系统的异构对象发送。
    * - :doc:`yr.datasystem.DsTensorClient.dev_recv <yr.datasystem.DsTensorClient.dev_recv>`
      - 接收数据系统的异构对象，并将数据写入 tensors。
    * - :doc:`yr.datasystem.DsTensorClient.exist <yr.datasystem.DsTensorClient.exist>`
      - 检查给定 key 在数据系统中是否存在。
    * - :doc:`yr.datasystem.DsTensorClient.dev_mset <yr.datasystem.DsTensorClient.dev_mset>`
-     - 通过数据系统缓存 Device 上的数据。
+     - 通过数据系统缓存 device 上的数据。
    * - :doc:`yr.datasystem.DsTensorClient.dev_mget <yr.datasystem.DsTensorClient.dev_mget>`
      - 获取 device 中的数据，并写入到 Tensor 中。
    * - :doc:`yr.datasystem.DsTensorClient.dev_mget_into_tensor <yr.datasystem.DsTensorClient.dev_mget_into_tensor>`
@@ -116,7 +116,7 @@ Tensor接口
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.dev_subscribe <yr.datasystem.hetero_client.HeteroClient.dev_subscribe>`
      - 订阅发布到数据系统的异构对象，并接收数据写入 data_blob_list。数据通过 device to device 通道直接传输。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.dev_mset <yr.datasystem.hetero_client.HeteroClient.dev_mset>`
-     - 通过数据系统缓存 Device 上的数据。
+     - 通过数据系统缓存 device 上的数据。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.dev_mget <yr.datasystem.hetero_client.HeteroClient.dev_mget>`
      - 获取 device 中的数据。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.dev_local_delete <yr.datasystem.hetero_client.HeteroClient.dev_local_delete>`

@@ -27,7 +27,7 @@ openYuanrong datasystem进程部署所需的系统环境依赖如下：
 |软件名称|版本|作用|
 |-------|----|----|
 | openEuler |22.03|运行openYuanrong datasystem的操作系统|
-|[CANN](#安装cann)|8.2.rc1|运行异构相关特性的依赖库|
+|[CANN](#安装cann)|8.2.RC1|运行异构相关特性的依赖库|
 |[Python](#安装python)|3.9-3.11|openYuanrong datasystem dscli的使用依赖Python环境|
 |[dscli](#安装dscli)|-|用于部署openYuanrong datasystem的命令行工具|
 |[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
@@ -337,7 +337,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 |openEuler |22.03|支持运行Kubernetes与Docker的操作系统|
 |[kubectl](#安装kubectl)|-|运行异构相关特性的依赖库|
 |[Kubernetes](#安装kubernetes)|-|Kubernetes集群，用于编排和管理openYuanrong datasystem的容器|
-|[Helm](#安装helm)|-|openYuanrong datasystem dscli的使用依赖Python环境|
+|[Helm](#安装helm)|-|支持openYuanrong datasystem Kubernetes工程化部署的核心工具|
 |[Docker](#安装docker)|-|提供容器化平台，支持openYuanrong datasystem容器化部署和运行|
 |[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
 |[openYuanrong datasystem镜像](#获取openyuanrong-datasystem镜像)|-|openYuanrong datasystem服务端组件镜像|
@@ -423,9 +423,8 @@ global:
   # 镜像名字和镜像tag，<VERSION>需要替换为对应的版本号
   images:
     datasystem: "openyuanrong-datasystem:0.5.0"
-  
+  # ETCD相关配置
   etcd:
-    # ETCD集群地址
     etcdAddress: "127.0.0.1:2379"
 ```
 

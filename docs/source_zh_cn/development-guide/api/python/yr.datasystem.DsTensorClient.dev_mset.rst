@@ -13,7 +13,7 @@ yr.datasystem.DsTensorClient.dev_mset
         - **keys** (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。
         - **tensors** (list) - : mindspore或pytorch的Tensor列表。约束：Tensor的地址空间必须连续。
 
-    返回值：
+    返回：
         - **failed_keys** (list) - 用于描述 set 失败的 key。
 
     异常：

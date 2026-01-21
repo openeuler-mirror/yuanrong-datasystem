@@ -73,7 +73,7 @@ dscli --version
 |openEuler|22.03|运行/编译openYuanrong datasystem的操作系统|
 |[Python](#安装-python)|3.9-3.11|openYuanrong datasystem的运行/编译依赖Python环境|
 |[CANN](#安装-cann)|8.2.RC1|运行/编译异构相关特性的依赖库|
-|rdma-core|35.1|运行/编译RDMA特性的依赖库|
+|[rdma-core](#安装-rdma-core)|35.1|运行/编译RDMA特性的依赖库|
 
 
 #### 安装 Python

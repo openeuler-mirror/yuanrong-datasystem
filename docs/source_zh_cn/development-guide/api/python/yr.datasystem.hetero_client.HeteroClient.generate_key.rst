@@ -12,4 +12,4 @@ yr.datasystem.hetero_client.HeteroClient.generate_key
         - **key** (string) - 生成的 key。
 
     异常：
-        - **RuntimeError** - 给定列表的对象 key 都未获取成功。
+        - **RuntimeError** - 生成 key 失败。
