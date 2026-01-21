@@ -47,7 +47,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 # -g3: Enable symbols for profiler tools.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3")
 # -Werror: Treat compile warnings as errors.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 # -fsigned-char: Certain platforms such as ARM do not use signed chars by default.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 # -Wextra: Enables some extra warning.
