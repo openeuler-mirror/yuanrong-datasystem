@@ -423,7 +423,7 @@ global:
   # 镜像名字和镜像tag，<VERSION>需要替换为对应的版本号
   images:
     datasystem: "openyuanrong-datasystem:0.5.0"
-  # ETCD集群地址
+  # ETCD相关配置
   etcd:
     etcdAddress: "127.0.0.1:2379"
 ```
