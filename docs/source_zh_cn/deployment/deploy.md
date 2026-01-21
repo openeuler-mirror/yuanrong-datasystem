@@ -79,8 +79,8 @@ conda init bash
 创建虚拟环境，以Python 3.11.4为例：
 
 ```bash
-conda create -n openYuanrong datasystem_py311 python=3.11.4 -y
-conda activate openYuanrong datasystem_py311
+conda create -n openYuanrong-datasystem_py311 python=3.11.4 -y
+conda activate openYuanrong-datasystem_py311
 ```
 
 可以通过以下命令查看Python版本。
@@ -406,7 +406,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 - 通过源码获取：
 
     ```bash
-    git clone -b ${version} https://gitee.com/openeuler/yuanrong-datasystem.git
+    git clone -b ${version} https://gitcode.com/openeuler/yuanrong-datasystem
     cp -r yuanrong-datasystem/docker/chart/datasystem /tmp
     ```
 

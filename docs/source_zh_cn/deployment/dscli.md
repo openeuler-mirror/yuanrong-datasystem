@@ -519,7 +519,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 1. 编写数据系统安装脚本：
     ```bash
     cat << EOF > install.sh
-    conda create env --name python39
+    conda create --name python39
     conda activate python39
     pip install yr_datasystem
     EOF
@@ -532,7 +532,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
         "worker_nodes" : ["127.0.0.1", "127.0.0.2"],
         "ssh_auth": {
             "ssh_user_name": "sn",
-            "ssh_ssh_private_key": "~/.ssh/id_rsa"
+            "ssh_private_key": "~/.ssh/id_rsa"
             }
     },
     ```
@@ -849,7 +849,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | oc_shm_transfer_threshold_kb | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
 | shared_disk_arena_per_tenant | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
-| shared_disk_directory | sting | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
+| shared_disk_directory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | shared_disk_size_mb | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
 
 #### AK/SK相关配置
