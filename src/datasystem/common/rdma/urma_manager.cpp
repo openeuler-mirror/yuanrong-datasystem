@@ -767,6 +767,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
         PerfPoint point1b(PerfKey::URMA_ADVISE_JFR);
         if (urma_advise_jfr(urmaJfsVec_[i].get(), tjfr) != URMA_SUCCESS) {
             (void)urma_unimport_jfr(tjfr);
+            remoteDeviceMap_->BlockingErase(accessor);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to advise jfr"));
         }
         point1b.Record();
@@ -785,16 +786,21 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
     const std::string remoteDeviceId = requestAddress.ToString();
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
-    RemoteDeviceMap::ConstAccessor constAccessor;
+    RemoteDeviceMap::Accessor accessor;
     // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
-    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    auto res = remoteDeviceMap_->Find(accessor, remoteDeviceId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteDeviceId));
     point1.Record();
     PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
     for (int i = 0; i < req.seg_infos_size(); i++) {
         auto &segInfo = req.seg_infos(i);
-        RETURN_IF_NOT_OK(constAccessor.entry->data.ImportRemoteSeg(urmaContext_, segInfo));
+        auto rc = accessor.entry->data.ImportRemoteSeg(urmaContext_, segInfo);
+        if (rc.IsError()) {
+            // clear import jfr and seg to reconnect next time
+            remoteDeviceMap_->BlockingErase(accessor);
+            return rc;
+        }
     }
     point2.Record();
     return Status::OK();
