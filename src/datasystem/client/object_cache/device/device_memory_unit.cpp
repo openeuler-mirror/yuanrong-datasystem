@@ -19,7 +19,7 @@
  */
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 
-#include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
@@ -37,7 +37,7 @@ Status DeviceMemoryUnit::MallocDeviceMemoryIfUserNotSet()
         auto &blob = blobStorage_[i];
         if (blob.pointer == nullptr) {
             VLOG(1) << "Malloc device memory, size: " << blob.size;
-            RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->MallocDeviceMemory(blob.size, blob.pointer));
+            RETURN_IF_NOT_OK(DeviceManagerFactory::GetDeviceManager()->MallocDeviceMemory(blob.size, blob.pointer));
             dsAllocatedStorage_[i] = true;
         }
     }
@@ -69,7 +69,7 @@ DeviceMemoryUnit::~DeviceMemoryUnit()
         const auto &blob = blobStorage_[i];
         if (dsAllocatedStorage_[i] && blob.pointer) {
             freeIndexVec.push_back(i);
-            LOG_IF_ERROR(acl::AclDeviceManager::Instance()->FreeDeviceMemory(blob.pointer),
+            LOG_IF_ERROR(DeviceManagerFactory::GetDeviceManager()->FreeDeviceMemory(blob.pointer),
                          "Release device memory allocated by datasystem failed.");
         }
     }

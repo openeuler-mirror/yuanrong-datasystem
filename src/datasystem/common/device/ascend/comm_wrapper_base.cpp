@@ -18,6 +18,7 @@
 
 #include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -34,7 +35,7 @@ CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, i
       hcclCommState_(HcclCommState::UNCREATE),
       hcclThreadControl_(threadControl)
 {
-    aclImpl_ = acl::AclDeviceManager::Instance();
+    deviceImpl_ = DeviceManagerFactory::GetDeviceManager();
     std::tie(bindThreadId_, pool_) = hcclThreadControl_->AssignThreadToComm(commId_);
     if (bindThreadId_ == -1 || pool_ == nullptr) {
         LOG(ERROR) << "Comm object init error with commId : " << commId;
@@ -42,7 +43,7 @@ CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, i
     }
     resource_ = std::make_shared<acl::TwoPhaseAclPipeLineResource>();
     auto func = [this] {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclImpl_->SetDeviceIdx(localDeviceIdx_), "Acl set device failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(deviceImpl_->SetDevice(localDeviceIdx_), "Acl set device failed.");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(resource_->Init(localDeviceIdx_), "Init resource failed");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(resource_->NotifyStart(), "NotifyStart failed");
         return Status::OK();

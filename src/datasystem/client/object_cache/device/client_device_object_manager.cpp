@@ -29,7 +29,7 @@
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/util/format.h"
@@ -42,7 +42,7 @@
 namespace datasystem {
 namespace object_cache {
 ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
-    : devInterImpl_(acl::AclDeviceManager::Instance()),
+    : devInterImpl_(DeviceManagerFactory::GetDeviceManager()),
       objClientImpl_(impl),
       clientDevOJTimeoutMs_(impl->requestTimeoutMs_)
 {
@@ -50,7 +50,7 @@ ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
 
 Status ClientDeviceObjectManager::Init()
 {
-    devInterImpl_ = acl::AclDeviceManager::Instance();
+    devInterImpl_ = DeviceManagerFactory::GetDeviceManager();
     std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
     commFactory_ = std::make_shared<HcclCommFactory>(workerApi, &aclResourceMgr_);
@@ -266,7 +266,7 @@ Status ClientDeviceObjectManager::GetSendStatus(const std::shared_ptr<DeviceBuff
 }
 
 Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<DeviceBlobList> &devBlobList,
-                                                           std::vector<Buffer *> &bufferList, aclrtMemcpyKind copyKind,
+                                                           std::vector<Buffer *> &bufferList, MemcpyKind copyKind,
                                                            bool enableHugeTlb)
 {
     DeviceBatchCopyHelper helper;
@@ -277,7 +277,7 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         aclResourceMgr_.SetPolicyDirect();
         return Status::OK();
     });
-    if (copyKind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST) {
+    if (copyKind == MemcpyKind::DEVICE_TO_HOST) {
         auto policy = aclResourceMgr_.GetD2HPolicy();
         if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
             return swapOutPool_->AclMemcpyBatchD2H(deviceId, helper.dstBuffers, helper.srcBuffers, helper.bufferMetas);
@@ -341,7 +341,7 @@ AsyncAclMemCopyPool::AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr) : a
     fftsCopyPool_ = std::make_unique<ThreadPool>(1);
     const int h2hThreadCount = 2;
     h2hCopyPool_ = std::make_unique<ThreadPool>(h2hThreadCount);
-    devInterImpl_ = acl::AclDeviceManager::Instance();
+    devInterImpl_ = DeviceManagerFactory::GetDeviceManager();
     for (size_t i = 0; i < AclHostMemMgr::GetPiplineNums(); i++) {
         aclrtStream copyStream = nullptr;
         copyStreams_.emplace_back(copyStream);
@@ -354,7 +354,7 @@ Status AsyncAclMemCopyPool::AclMemcpyBatchD2H(uint32_t deviceId, const std::vect
 {
     PerfPoint point(PerfKey::CLIENT_D2H_MEMCPY_INIT);
     if (deviceNow_ != static_cast<int32_t>(deviceId)) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDeviceIdx(deviceId), "Failed to init.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
     }
     RETURN_IF_NOT_OK(aclResourceMgr_->Init());
     point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY_RUN);
@@ -368,7 +368,7 @@ Status AsyncAclMemCopyPool::AclMemcpyBatchH2D(uint32_t deviceId, const std::vect
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY_INIT);
     if (deviceNow_ != static_cast<int32_t>(deviceId)) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDeviceIdx(deviceId), "Failed to init.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
     }
     RETURN_IF_NOT_OK(aclResourceMgr_->Init());
     point.RecordAndReset(PerfKey::CLIENT_H2D_MEMCPY_RUN);
@@ -378,23 +378,23 @@ Status AsyncAclMemCopyPool::AclMemcpyBatchH2D(uint32_t deviceId, const std::vect
 
 Status AsyncAclMemCopyPool::AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList,
                                            std::vector<size_t> &destMaxList, std::vector<void *> &srcList,
-                                           std::vector<size_t> &countList, aclrtMemcpyKind kind, size_t batchSize)
+                                           std::vector<size_t> &countList, MemcpyKind kind, size_t batchSize)
 {
     auto fut =
         copyPool_->Submit([this, deviceIdx, &dstList, &destMaxList, &srcList, &countList, kind, batchSize]() -> Status {
             if (deviceNow_ != static_cast<int32_t>(deviceIdx)) {
-                RETURN_IF_NOT_OK(devInterImpl_->SetDeviceIdx(deviceIdx));
+                RETURN_IF_NOT_OK(devInterImpl_->SetDevice(deviceIdx));
                 deviceNow_ = deviceIdx;
             }
             if (copyStreams_[0] == nullptr) {
-                RETURN_IF_NOT_OK(devInterImpl_->RtCreateStream(&copyStreams_[0]));
+                RETURN_IF_NOT_OK(devInterImpl_->CreateStream(&copyStreams_[0]));
             }
             Status ret;
             for (auto i = 0ul; i < batchSize; i++) {
-                RETURN_IF_NOT_OK(devInterImpl_->aclrtMemcpyAsync(dstList[i], destMaxList[i], srcList[i], countList[i],
-                                                                 kind, copyStreams_[0]));
+                RETURN_IF_NOT_OK(devInterImpl_->MemcpyAsync(dstList[i], destMaxList[i], srcList[i], countList[i],
+                                                            kind, copyStreams_[0]));
             }
-            return devInterImpl_->RtSynchronizeStream(copyStreams_[0]);
+            return devInterImpl_->SynchronizeStream(copyStreams_[0]);
         });
     return fut.get();
 }
@@ -403,7 +403,7 @@ AsyncAclMemCopyPool::~AsyncAclMemCopyPool()
 {
     for (auto &stream : copyStreams_) {
         if (stream != nullptr) {
-            LOG_IF_ERROR(devInterImpl_->RtDestroyStream(stream), "Destory stream failed.");
+            LOG_IF_ERROR(devInterImpl_->DestroyStream(stream), "Destory stream failed.");
         }
     }
 }

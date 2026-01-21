@@ -3,7 +3,7 @@
 
 #include <memory>
 
-#include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 
 namespace datasystem {
@@ -78,14 +78,16 @@ public:
         if (event == nullptr) {
             event = std::make_shared<AclRtEventWrapper>();
         }
-        return acl::AclDeviceManager::Instance()->DSAclrtCreateEvent(&(event->GetRef()));
+        auto deviceMgr = DeviceManagerFactory::GetDeviceManager();
+        return deviceMgr->CreateEvent(&(event->GetRef()));
     }
 
     ~AclRtEventWrapper()
     {
         auto event = GetRef();
         if (event != nullptr) {
-            acl::AclDeviceManager::Instance()->DSAclrtDestroyEvent(event);
+            auto deviceMgr = DeviceManagerFactory::GetDeviceManager();
+            deviceMgr->DestroyEvent(event);
             event = nullptr;
         }
     }
@@ -99,10 +101,11 @@ public:
     {
         auto event = GetRef();
         CHECK_FAIL_RETURN_STATUS(event != nullptr, K_RUNTIME_ERROR, "Event is nullptr");
+        auto deviceMgr = DeviceManagerFactory::GetDeviceManager();
         if (timeoutMs != 0) {
-            return acl::AclDeviceManager::Instance()->DSAclrtSynchronizeEventWithTimeout(event, timeoutMs);
+            return deviceMgr->SynchronizeEventWithTimeout(event, timeoutMs);
         }
-        return acl::AclDeviceManager::Instance()->DSAclrtSynchronizeEvent(event);
+        return deviceMgr->SynchronizeEvent(event);
     }
 
     /**
@@ -114,7 +117,8 @@ public:
     {
         auto event = Get();
         CHECK_FAIL_RETURN_STATUS(event != nullptr, K_RUNTIME_ERROR, "Event is nullptr");
-        return acl::AclDeviceManager::Instance()->DSAclrtRecordEvent(event, stream);
+        auto deviceMgr = DeviceManagerFactory::GetDeviceManager();
+        return deviceMgr->RecordEvent(event, stream);
     }
 
     /**
@@ -124,7 +128,8 @@ public:
     Status QueryEventStatus()
     {
         CHECK_FAIL_RETURN_STATUS(Get() != nullptr, K_RUNTIME_ERROR, "Event is nullptr");
-        return acl::AclDeviceManager::Instance()->DSAclrtQueryEventStatus(Get());
+        auto deviceMgr = DeviceManagerFactory::GetDeviceManager();
+        return deviceMgr->QueryEventStatus(Get());
     }
 };
 }  // namespace datasystem

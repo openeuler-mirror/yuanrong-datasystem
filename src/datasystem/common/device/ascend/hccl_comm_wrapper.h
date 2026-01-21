@@ -46,7 +46,7 @@ public:
      * @param[in] rank The rank in local.
      * @return Status of the call.
      */
-    Status InitHcclComm(int numRanks, HcclRootInfo &rootInfo, int rank);
+    Status InitHcclComm(int numRanks, CommRootInfo &rootInfo, int rank);
 
     /**
      * @brief Init hccl communicator.
@@ -54,7 +54,7 @@ public:
      * @param[in] rootInfo The root info.
      * @return Status of the call.
      */
-    Status InitCommunicator(HcclRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) override;
+    Status InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) override;
     /**
      * @brief P2P send the data to the receiving side.
      * @param[in] blobs The list of the blob info.
@@ -99,7 +99,7 @@ public:
      * @param[in] rootInfo Transfer a blank rootinfo, create a reference, and transfer a value.
      * @return Status of the call.
      */
-    Status CreateRootInfo(HcclRootInfo &rootInfo) override;
+    Status CreateRootInfo(CommRootInfo &rootInfo) override;
 
 private:
     /**

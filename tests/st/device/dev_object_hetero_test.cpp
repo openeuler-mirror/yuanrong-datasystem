@@ -73,6 +73,7 @@ class DevObjectHeteroTest : public DevTestHelper {
     {
         const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
         if (ascend_root == nullptr) {
+            DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
             BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly([]() {
                 return AclDeviceManagerMock::Instance();
             });
@@ -323,7 +324,7 @@ void DevObjectHeteroTest::DeleteDeviceData(std::vector<std::string> &keys, std::
     DS_ASSERT_OK(client->ShutDown());
 }
 
-TEST_F(DevObjectHeteroTest, DISABLED_TestDevMSetAndDevMGetInSameRank)
+TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetInSameRank)
 {
     size_t deviceId = 0;
     size_t blkSz = 100, numOfObjs = 10, blksPerObj = 5;
@@ -353,6 +354,63 @@ TEST_F(DevObjectHeteroTest, DISABLED_TestDevMSetAndDevMGetInSameRank)
     AclDeviceManager::Instance()->aclrtResetDevice(deviceId_);
     AclDeviceManager::Instance()->aclFinalize();
     client.reset();
+}
+
+TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetCrossDeviceInSameNode)
+{
+    size_t setDeviceId = 0;
+    size_t getDeviceId = 1;
+    size_t blkSz = 100, numOfObjs = 10, blksPerObj = 5;
+    std::vector<std::string> objectIds;
+    std::vector<std::string> failedIdList;
+    std::vector<DeviceBlobList> devSetBlobList;
+    std::vector<DeviceBlobList> devGetBlobList;
+    std::shared_ptr<HeteroClient> getClient;
+    std::shared_ptr<HeteroClient> setClient;
+
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        objectIds.emplace_back(GetStringUuid());
+    }
+
+    // Step 1: Initialize Device 0 and DevMSet
+    this->deviceId_ = setDeviceId;
+    InitAcl(deviceId_);
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, deviceId_);
+    InitTestHeteroClient(0, setClient);
+
+    DS_ASSERT_OK(setClient->DevMSet(objectIds, devSetBlobList, failedIdList));
+    ASSERT_EQ(failedIdList.size(), 0);
+    LOG(INFO) << "DevMSet completed on device " << setDeviceId;
+
+    // Step 2: Cleanup Device 0 and switch to Device 1
+    AclDeviceManager::Instance()->aclrtResetDevice(deviceId_);
+    AclDeviceManager::Instance()->aclFinalize();
+    devGetBlobList.clear();
+    devSetBlobList.clear();
+
+    // Step 3: Initialize Device 1 and DevMGet
+    this->deviceId_ = getDeviceId;
+    InitAcl(deviceId_);
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, deviceId_);
+    InitTestHeteroClient(1, getClient);
+
+    DS_ASSERT_OK(getClient->DevMGet(objectIds, devGetBlobList, failedIdList, RPC_TIMEOUT));
+    ASSERT_EQ(failedIdList.size(), 0);
+    LOG(INFO) << "DevMGet completed on device " << getDeviceId;
+
+    // Step 4: Verify content
+    std::string expectedValue(blkSz, 'b');
+    for (size_t j = 0; j < numOfObjs; j++) {
+        for (size_t k = 0; k < blksPerObj; k++) {
+            CheckDevPtrContent(devGetBlobList[j].blobs[k].pointer, devGetBlobList[j].blobs[k].size, expectedValue);
+        }
+    }
+
+    // Step 5: Cleanup
+    AclDeviceManager::Instance()->aclrtResetDevice(deviceId_);
+    AclDeviceManager::Instance()->aclFinalize();
+    setClient.reset();
+    getClient.reset();
 }
 
 TEST_F(DevObjectHeteroTest, DISABLED_TestDevMGetPartDataFromTwoKey)

@@ -675,8 +675,8 @@ Status P2PSubscribe::AsyncGet(const std::vector<std::shared_ptr<DeviceBuffer>> &
             for (size_t i = 0; i < blobsInPut.size(); i++) {
                 auto adjustedPtr =
                     static_cast<void *>(static_cast<uint8_t *>(blobsInPut[i].pointer) + buffer->bufferInfo_->srcOffset);
-                RETURN_IF_NOT_OK(aclImpl_->MemCopyD2D(blobsInGet[i].pointer, blobsInGet[i].size,
-                                                      static_cast<void *>(adjustedPtr), blobsInGet[i].size));
+                RETURN_IF_NOT_OK(deviceImpl_->MemCopyD2D(blobsInGet[i].pointer, blobsInGet[i].size,
+                    static_cast<void *>(adjustedPtr), blobsInGet[i].size));
             }
             auto promise = std::make_shared<PromiseWithEvent>(devObjKey);
             promise->CreateEventAndFutureList(0, futureVec);

@@ -28,14 +28,14 @@ namespace datasystem {
 
 /**
  * @brief Print the root info, rootInfo include some control character so it can't print directly.
- * @param[in] rootInfo The HcclRootInfo reference.
+ * @param[in] rootInfo The CommRootInfo reference.
  */
 
 template <typename T>
 inline static void PrintRootInfo(const T &rootInfo)
 {
     std::stringstream forPrint;
-    for (char i : rootInfo.internal) {
+    for (char i : rootInfo.data) {
         if (i >= '!' && i <= '`') {
             forPrint << i;
         }
@@ -157,8 +157,8 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
             RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_CLIENT_DEADLOCK, msg)));
         }
 
-        HcclRootInfo rootInfo;
-        if (rootInfoResp.root_info().length() != sizeof(rootInfo.internal)) {
+        CommRootInfo rootInfo;
+        if (rootInfoResp.root_info().length() != sizeof(rootInfo.data)) {
             std::string msg = FormatString(
                 "The rsp rootInfo size is not as expected: %d, which usually indicates that the receiver "
                 "did not send the rootInfo properly. Check if there are any errors on the receiver side, peerId: %s",
@@ -166,8 +166,8 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
                 peerId);
             RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_RUNTIME_ERROR, msg)));
         }
-        auto ret = memcpy_s(static_cast<void *>(rootInfo.internal),
-            sizeof(rootInfo.internal),
+        auto ret = memcpy_s(static_cast<void *>(rootInfo.data),
+            sizeof(rootInfo.data),
             static_cast<const void *>(rootInfoResp.root_info().c_str()),
             rootInfoResp.root_info().length());
         if (ret != EOK) {
@@ -270,13 +270,13 @@ void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::str
         VLOG(1) << FormatString("Try to acquire write lock, peerId: %s", peerId);
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
 
-        HcclRootInfo rootInfo;
+        CommRootInfo rootInfo;
         RETURN_IF_NOT_OK(SetStateIfError(comm, comm->CreateRootInfo(rootInfo)));
 
         // rootInfo contain \0, must construct string like this.
         // use c_str() return to rootInfo.
         SendRootInfoReqPb req;
-        req.set_root_info(std::string(std::begin(rootInfo.internal), std::end(rootInfo.internal)));
+        req.set_root_info(std::string(std::begin(rootInfo.data), std::end(rootInfo.data)));
         req.set_dst_client_id(localClientId);
         req.set_dst_device_id(localDeviceId);
         req.set_src_client_id(remoteClientId);

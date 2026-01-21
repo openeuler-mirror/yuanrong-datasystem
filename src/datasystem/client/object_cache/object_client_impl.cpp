@@ -41,7 +41,7 @@
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/mmap_table_entry.h"
 #include "datasystem/client/object_cache/client_worker_api.h"
-#include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
@@ -783,7 +783,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY);
     if (!IsRemoteH2DEnabled()) {
         RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList,
-                                                              aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
+                                                              MemcpyKind::HOST_TO_DEVICE,
                                                               workerApi_[LOCAL_WORKER]->enableHugeTlb_));
     } else {
         // Group buffers by data source in RH2D scenario
@@ -815,7 +815,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
         }
         if (!localSourceDevBlobList.empty()) {
             RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(localSourceDevBlobList, localSourceBufferList,
-                                                                  aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE,
+                                                                  MemcpyKind::HOST_TO_DEVICE,
                                                                   workerApi_[LOCAL_WORKER]->enableHugeTlb_));
         }
         for (size_t i = 0; i < remoteSourceDevBlobList.size(); i++) {
@@ -879,7 +879,7 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
         bufferRawPtrList.emplace_back(buff.get());
     }
     RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(filterDevBlobList, bufferRawPtrList,
-                                                          aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST,
+                                                          MemcpyKind::DEVICE_TO_HOST,
                                                           workerApi_[LOCAL_WORKER]->enableHugeTlb_));
 
     return Status::OK();
@@ -2826,7 +2826,7 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
 Status ObjectClientImpl::CheckDeviceValid(std::vector<uint32_t> deviceId)
 {
     PerfPoint point(PerfKey::CLIENT_CHECK_DEVICE_VALID);
-    return acl::AclDeviceManager::Instance()->VerifyDeviceId(deviceId);
+    return DeviceManagerFactory::GetDeviceManager()->VerifyDeviceId(deviceId);
 }
 
 void ObjectClientImpl::StartPerfThread()

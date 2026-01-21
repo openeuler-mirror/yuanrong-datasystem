@@ -63,6 +63,7 @@ enum StatusCode : uint32_t {
     K_CLIENT_DEADLOCK = 33,
     K_LRU_HARD_LIMIT = 34,
     K_LRU_SOFT_LIMIT = 35,
+    K_NOT_SUPPORTED = 36,
 
     // rpc error code, range: [1000, 2000)
     K_RPC_CANCELLED = 1000,
