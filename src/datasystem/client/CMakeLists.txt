@@ -1,3 +1,4 @@
+find_package(etcd-cpp-api REQUIRED PATHS ${etcd_cpp_apiv3_ROOT} CONFIG)
 list(APPEND CLIENT_SRCS
         datasystem.cpp
         client_worker_common_api.cpp
@@ -28,9 +29,19 @@ list(APPEND CLIENT_SRCS
         stream_cache/stream_client.cpp
         stream_cache/stream_client_impl.cpp
         stream_cache/producer_consumer_worker_api.cpp
+        emb_cache/emb_client.cpp
+        emb_cache/emb_client_impl.cpp
+        emb_cache/emb_table_bucket.cpp
+        emb_cache/emb_table_meta.cpp
+        emb_cache/hash_function/city.cc
+        emb_cache/hash_function/MurmurHash3.cpp
+        emb_cache/hash_function/xxhash.c
         emb_cache/share_object/share_object.cpp
         emb_cache/share_object/share_vector_object.cpp
-        emb_cache/share_object/share_map_object.cpp)
+        emb_cache/share_object/share_map_object.cpp
+        emb_cache/share_object_master/etcd_queue.cpp
+        emb_cache/share_object_master/share_object_master.cpp
+        emb_cache/share_object_master/share_object_api.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
@@ -56,7 +67,9 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_acl_device
         common_shared_memory
         common_rdma
-        common_parallel)
+        common_parallel
+        emb_service_protos
+        etcd-cpp-api)
 
 if (ENABLE_PERF)
     file(GLOB_RECURSE PERF_CLIENT_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} perf_client/*.cpp )
@@ -72,6 +85,9 @@ target_link_libraries(datasystem_static PRIVATE "${CLIENT_DEPEND_LIBS}")
 add_library(datasystem SHARED ${CLIENT_SRCS})
 target_compile_options(datasystem PRIVATE "-fvisibility=hidden")
 target_link_libraries(datasystem PRIVATE "${CLIENT_DEPEND_LIBS}")
+
+target_include_directories(datasystem_static PUBLIC ${etcd_cpp_apiv3_ROOT}/include)
+target_include_directories(datasystem PUBLIC ${etcd_cpp_apiv3_ROOT}/include)
 
 add_custom_target(clean_datasystem_rpath
     COMMAND ${CMAKE_COMMAND} -D "BIN_FILE=$<TARGET_FILE:datasystem>" -P "${CMAKE_SOURCE_DIR}/cmake/scripts/CleanBuildRpath.cmake"

@@ -98,6 +98,19 @@ public:
         DS_ASSERT_OK(client->Init());
     }
 
+    void InitTestEmbClient(uint32_t workerIndex, std::shared_ptr<EmbClient> &client, InitParams params = {}, 
+                        int32_t timeoutMs = 60000, bool enableCrossNode = false, bool enableExclusive = false)
+       ConnectOptions connectOptions;
+        InitConnectOpt(workerIndex, connectOptions, timeoutMs, enableCrossNode, enableExclusive);
+        client = std::make_shared<EmbClient>(connectOptions);
+        DS_ASSERT_OK(client->Init(params));
+        if (client == nullptr) {
+            LOG(ERROR) << "Failed to initialize EmbClient: client is nullptr. TableIndex: ";
+        } else {
+            LOG(INFO) << "client init success";
+        }
+    }
+ 
     void InitTestDsClient(uint32_t workerIndex, std::shared_ptr<DsClient> &client, int32_t timeoutMs = 60000)
     {
         ConnectOptions connectOptions;
