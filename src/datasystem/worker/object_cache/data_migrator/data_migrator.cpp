@@ -57,38 +57,47 @@ uint64_t DataMigrator::CalculateTotalSize(const std::unordered_set<ImmutableStri
     return totalSize;
 }
 
+void DataMigrator::LogMigrateProgress(double elapsedSeconds, uint64_t processCount, uint64_t count)
+{
+    if (processCount < count) {
+        LOG(INFO) << FormatString(
+            "[Migrate Data Process] The task has been executed for %.2f seconds, %ld/%ld objects finished, "
+            "still have %ld objects need to migrate data...",
+            elapsedSeconds, processCount, count, (count - processCount));
+    } else if (processCount == count) {
+        LOG(INFO) << FormatString(
+            "[Migrate Data Process] The task is complete(%ld objects) and takes for %.2f seconds.", count,
+            elapsedSeconds);
+    } else {
+        LOG(WARNING) << FormatString(
+            "[Migrate Data Process] The task has been executed for %.2f seconds, %ld/%ld objects finished, "
+            "something wrong happen...",
+            elapsedSeconds, processCount, count);
+    }
+}
+
+std::shared_ptr<MigrateProgress> DataMigrator::CreateMigrateProgress(uint64_t objectCount)
+{
+    constexpr uint64_t intervalSeconds = 60;
+    return std::make_shared<MigrateProgress>(objectCount, intervalSeconds, DataMigrator::LogMigrateProgress);
+}
+
 Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
                              const std::unordered_map<std::string, uint64_t> &objectSizes)
 {
+    PerfPoint pointAll(PerfKey::WORKER_MIGRATE_E2E);
     if (objectKeys.empty()) {
         LOG(INFO) << "[Migrate Data] No object data need to be migrated, we have finish the job, task id: " << taskId_;
         return Status::OK();
     }
-    uint64_t intervalSeconds = 60;
-    progress_ = std::make_shared<MigrateProgress>(
-        objectKeys.size(), intervalSeconds, [](double elapsedSeconds, uint64_t processCount, uint64_t count) {
-            if (processCount < count) {
-                LOG(INFO) << FormatString(
-                    "[Migrate Data Process] The task has been executed for %.2f seconds, %ld/%ld objects finished, "
-                    "still have %ld objects need to migrate data...",
-                    elapsedSeconds, processCount, count, (count - processCount));
-            } else if (processCount == count) {
-                LOG(INFO) << FormatString(
-                    "[Migrate Data Process] The task is complete(%ld objects) and takes for %.2f seconds.", count,
-                    elapsedSeconds);
-            } else {
-                LOG(WARNING) << FormatString(
-                    "[Migrate Data Process] The task has been executed for %.2f seconds, %ld/%ld objects finished, "
-                    "something wrong happen...",
-                    elapsedSeconds, processCount, count);
-            }
-        });
+    progress_ = CreateMigrateProgress(objectKeys.size());
     failedKeys_.clear();
     skippedKeys_.clear();
     LOG(INFO) << FormatString(
         "[Migrate Data] Processing data migrate begin, migrate type: %d, object size: %zu, task id: %s",
         static_cast<int>(type_), objectKeys.size(), taskId_);
 
+    PerfPoint point(PerfKey::WORKER_MIGRATE_TASK_SUBMIT);
     std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
@@ -98,9 +107,17 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
         return Status::OK();
     });
     for (const auto &[addr, objectKeys] : objKeysGrpByMaster) {
-        futures.emplace_back(MigrateDataByNode(addr, objectKeys, GetStrategyByType()));
+        auto workerAddr = addr.GetAddress();
+        if (workerAddr == localAddress_) {
+            std::string standbyWorker;
+            if (etcdCM_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker).IsOk()) {
+                LOG_IF_ERROR(workerAddr.ParseString(standbyWorker), "[Migrate Data] Parse worker address failed");
+            }
+        }
+        futures.emplace_back(MigrateDataByNode(workerAddr, objectKeys, GetStrategyByType()));
     }
 
+    point.RecordAndReset(PerfKey::WORKER_MIGRATE_TASK_EXECUTE);
     while (!futures.empty()) {
         std::vector<std::future<MigrateDataHandler::MigrateResult>> newFutures;
         RETURN_IF_NOT_OK(HandleMigrateDataResult(objectSizes, futures, newFutures));
@@ -116,7 +133,7 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::ConstructFailedFutu
     MigrateDataHandler::MigrateResult result;
     result.address = workerAddr;
     result.status = status;
-    (void)result.failedIds.insert(objectKeys.begin(), objectKeys.end());
+    result.failedIds.insert(objectKeys.begin(), objectKeys.end());
     result.strategy = std::move(strategy);
     std::promise<MigrateDataHandler::MigrateResult> p;
     p.set_value(result);
@@ -134,23 +151,21 @@ MigrateDataHandler::MigrateResult DataMigrator::MigrateDataByNodeImpl(
 }
 
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateDataByNode(
-    const MetaAddrInfo &addr, const std::vector<std::string> &objectKeys, std::shared_ptr<SelectionStrategy> strategy)
+    const HostPort &addr, const std::vector<std::string> &objectKeys, std::shared_ptr<SelectionStrategy> strategy)
 {
     std::shared_ptr<WorkerRemoteWorkerOCApi> remoteWorkerStub;
-    HostPort workerAddr = addr.GetAddressAndSaveDbName();
-    Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, workerAddr);
+    Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, addr);
     auto traceID = Trace::Instance().GetTraceID();
-    return rc.IsOk()
-               ? threadPool_->Submit([this, remoteWorkerStub, objectKeys, traceID, strategy]() {
-                     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-                     return MigrateDataByNodeImpl(remoteWorkerStub, objectKeys, strategy);
-                 })
-               : ConstructFailedFuture(workerAddr.ToString().empty() ? localAddress_.ToString() : workerAddr.ToString(),
-                                       rc, objectKeys, strategy);
+    return rc.IsOk() ? threadPool_->Submit([this, remoteWorkerStub, objectKeys, traceID, strategy]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        return MigrateDataByNodeImpl(remoteWorkerStub, objectKeys, strategy);
+    })
+                     : ConstructFailedFuture(addr.ToString().empty() ? localAddress_.ToString() : addr.ToString(), rc,
+                                             objectKeys, strategy);
 }
 
 Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
-                                               HostPort workerAddr)
+                                               const HostPort &workerAddr)
 {
     if (workerAddr == localAddress_) {
         return Status(StatusCode::K_NOT_FOUND, __LINE__, __FILE__,
@@ -234,8 +249,7 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::RedirectMigrateData
         LOG(ERROR) << FormatString("[Migrate Data] Failed to parse worker address [%s]: %s", originAddr, rc.ToString());
         return ConstructFailedFuture(nextWorker, rc, objectKeys, strategy);
     }
-    MetaAddrInfo addr(hostPort, "");
-    return MigrateDataByNode(addr, objectKeys, strategy);
+    return MigrateDataByNode(hostPort, objectKeys, strategy);
 }
 
 }  // namespace object_cache

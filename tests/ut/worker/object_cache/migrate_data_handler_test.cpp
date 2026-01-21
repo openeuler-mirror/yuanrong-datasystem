@@ -601,5 +601,31 @@ TEST_F(MigrateDataHandlerSpillTest, TestReleaseFailEnqueueTask)
     }
 }
 
+TEST_F(MigrateDataHandlerSpillTest, TestFastTransportRetryOnRpcError)
+{
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+
+    constexpr uint64_t size = 100;
+    constexpr uint64_t count = 3;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("League_of_Legends", size, count, objectKeys);
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .WillOnce(Return(Status(StatusCode::K_RPC_UNAVAILABLE, "rpc error")))
+        .WillOnce(Return(Status(StatusCode::K_RPC_UNAVAILABLE, "rpc error")))
+        .WillOnce(Return(Status::OK()));
+
+    BINEXPECT_CALL(&AsyncResourceReleaser::AddTask, (_, _)).Times(0);
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.address, hostPort_.ToString());
+    ASSERT_EQ(result.successIds.size(), count);
+    ASSERT_TRUE(result.failedIds.empty());
+}
+
 }  // namespace ut
 }  // namespace datasystem

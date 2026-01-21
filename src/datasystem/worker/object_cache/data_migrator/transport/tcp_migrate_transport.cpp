@@ -55,6 +55,8 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
                               std::make_move_iterator(memViews.end()));
     }
 
+    INJECT_POINT("TcpMigrateTransport.MigrateDataToRemote.delay");
+
     // 2. Migrate data with retry.
     MigrateDataRspPb rspPb;
     Status rc = RetryOnRPCErrorByCount(maxRetryCount_,

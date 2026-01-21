@@ -67,6 +67,7 @@ void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &
 
 Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &rsp)
 {
+    PerfPoint point(PerfKey::WORKER_MIGRATE_DIRECT_REQ_BUILD);
     HostPort localAddress;
     RETURN_IF_NOT_OK(localAddress.ParseString(req.localAddr));
     // 1. Construct request.
@@ -101,6 +102,7 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
                             totalDataBytes, migrateDirectTimeoutMs);
 
     // 2. Migrate data with retry.
+    point.RecordAndReset(PerfKey::WORKER_MIGRATE_DIRECT_RPC);
     MigrateDataDirectRspPb rspPb;
     Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
                                        [&]() {
@@ -109,6 +111,7 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
                                            return req.api->MigrateDataDirect(reqPb, rspPb);
                                        },
                                        {});
+    point.RecordAndReset(PerfKey::WORKER_MIGRATE_DIRECT_RSP_PROCESS);
     if (rc.IsOk()) {
         ProcessMigrateResponse(reqPb, rspPb, req, rsp);
     }

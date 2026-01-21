@@ -152,27 +152,46 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
 
 Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
+    PerfPoint pointAll(PerfKey::WORKER_SERVER_MIGRATE_DATA_DIRECT);
     LOG(INFO) << FormatString("[Migrate Data] Count: %d, Objects: %s", req.objects_size(),
                               VectorToString(GetObjects(req)));
     RETURN_OK_IF_TRUE(req.objects().empty());
-    auto fillResponseAndReturn = [this, &req, &rsp](StatusCode code, const std::string &message) {
-        std::unordered_set<std::string> failedIds;
-        std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
-                       [](const auto &info) { return info.object_key(); });
-        FillMigrateDataDirectResponse(failedIds, code == StatusCode::K_OUT_OF_MEMORY, rsp);
-        LOG(INFO) << "[Migrate Data] " << message;
-        return Status(code, message);
-    };
+    RETURN_IF_NOT_OK(PreCheckMigrateDataDirect(req, rsp));
+    return MigrateDataDirectImpl(req, rsp);
+}
+
+Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectError(const MigrateDataDirectReqPb &req,
+                                                                 MigrateDataDirectRspPb &rsp, StatusCode code,
+                                                                 const std::string &message)
+{
+    std::unordered_set<std::string> failedIds;
+    std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                   [](const auto &info) { return info.object_key(); });
+    FillMigrateDataDirectResponse(failedIds, code == StatusCode::K_OUT_OF_MEMORY, rsp);
+    LOG(INFO) << "[Migrate Data] " << message;
+    return Status(code, message);
+}
+
+Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDirectReqPb &req,
+                                                             MigrateDataDirectRspPb &rsp)
+{
     if (!IsMemoryAvailable(0, MigrateType::SPILL)) {
-        return fillResponseAndReturn(StatusCode::K_OUT_OF_MEMORY, "OOM");
+        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_OUT_OF_MEMORY, "OOM");
     }
     if (etcdCM_ != nullptr && etcdCM_->CheckLocalNodeIsExiting()) {
-        return fillResponseAndReturn(StatusCode::K_SCALE_DOWN, "Worker is exiting");
+        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_SCALE_DOWN, "Worker is exiting");
     }
     if (!IsUrmaEnabled()) {
-        return fillResponseAndReturn(StatusCode::K_RUNTIME_ERROR, "URMA is not enabled");
+        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_RUNTIME_ERROR, "URMA is not enabled");
     }
+    return Status::OK();
+}
+
+Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirectReqPb &req,
+                                                         MigrateDataDirectRspPb &rsp)
+{
     // 1. Lock objects.
+    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_LOCK);
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
@@ -180,6 +199,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
     Raii raii([this, &lockedEntries]() { BatchUnlock(lockedEntries); });
 
     // 2. Get object metadata from master.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_QUERY_META);
     std::unordered_set<std::string> needQueryIds;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
                    [](const auto &entry) { return entry.first; });
@@ -191,15 +211,18 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
     }
 
     // 3. Fill metadata to object entry.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_META);
     ObjectInfoMap needReadDataIds;
     FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds);
 
     // 4. Fill data to object entry.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
     ObjectInfoMap needSendMasterIds;
     Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds);
     bool oom = IsNoSpace(status);
 
     // 5. Send replace primary copy to master.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_REPLACE_PRIMARY);
     if (!needSendMasterIds.empty()) {
         status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, MigrateType::SPILL, successIds, failedIds);
     }
@@ -208,6 +231,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
     }
 
     // 6. Fill response.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_RSP);
     FillMigrateDataDirectResponse(failedIds, oom, rsp);
     LOG(INFO) << "[Migrate Data] Migrate direct finish, success size: " << successIds.size()
               << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
@@ -455,6 +479,7 @@ Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDire
                                                            std::unordered_set<std::string> &failedIds)
 {
     // 1. Aggregate allocated memory for small objects.
+    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_ALLOCATE_AGGREGATE);
     std::vector<uint32_t> shmIndexMapping(req.objects_size(), std::numeric_limits<uint32_t>::max());
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
     Status rc = AggregateAllocateHelper(req, needReadDataIds, shmOwners, shmIndexMapping);
@@ -463,7 +488,8 @@ Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDire
         shmOwners.clear();
     }
 
-    // 2. Start URMA read tasks.
+    // 2. Start remote read tasks.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_START_REMOTE_READ);
     std::vector<ReadTask> tasks;
     Status startRc = StartRemoteReadTasks(req, needReadDataIds, shmIndexMapping, shmOwners, tasks, failedIds);
     if (tasks.empty()) {
@@ -471,6 +497,7 @@ Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDire
     }
 
     // 3. Wait tasks and finalize object entries.
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_WAIT_REMOTE_READ);
     Status waitRc = WaitRemoteReadTasks(tasks, needSendMasterIds, failedIds);
     return waitRc.IsError() ? waitRc : startRc;
 }
@@ -492,6 +519,7 @@ Status WorkerOcServiceMigrateImpl::ProcessRemoteReadForObject(const MigrateDataD
                                                               std::vector<ReadTask> &tasks,
                                                               std::unordered_set<std::string> &failedIds)
 {
+    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_REMOTE_READ_ONE);
     const auto &objectKey = object.object_key();
     const auto dataSize = object.data_size();
     const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
