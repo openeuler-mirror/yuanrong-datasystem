@@ -291,11 +291,16 @@ Status EmbClientImpl::Load(const std::string &tableKey, const std::vector<std::s
     // 1.这里改成pair<keyfile, valuefile>,下面这行改成master_.enqueue(tableKey, {embKeyFilesPath, embValueFilesPath});
     RETURN_IF_NOT_OK(master_->enqueue(embKeyFilesPath, embValueFilesPath));
 
-    std::string getKeyFilesPath;
-    std::string getValueFilesPath;
-    // 轮询
     while (true) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(master_->dequeue(getKeyFilesPath, getValueFilesPath), "download file failed");
+        auto msg = master_->dequeue();
+        if (msg == nullptr) {
+            break;
+        }
+
+        std::string combinedPath = msg.value;
+        size_t pos = combinedPath.find(':');
+        getKeyFilesPath = combinedPath.substr(0, pos);
+        getValueFilesPath = combinedPath.substr(pos + 1);}}
 
         auto downloader = DownloaderFactory::createDownloader(getKeyFilesPath);
         auto keyFutrue = downloader->download(getKeyFilesPath, master_->localPath_);

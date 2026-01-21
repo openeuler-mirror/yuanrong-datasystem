@@ -31,7 +31,7 @@ public:
     // 生产者：线程安全，阻塞直到 etcd 返回 OK
     datasystem::Status push(const std::string &key, const std::string &value);
  
-    datasystem::Status pushEOF(const std::string &key);
+    datasystem::Status pushEOF();
 
     // 消费者：阻塞直到拿到一条消息；返回空代表永久失败
     std::unique_ptr<Message> pop();

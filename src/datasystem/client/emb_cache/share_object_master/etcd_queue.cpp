@@ -50,9 +50,12 @@ datasystem::Status EtcdMPMCQueue::push(const std::string &key, const std::string
     return datasystem::Status::OK();
 }
 
-datasystem::Status EtcdMPMCQueue::pushEOF(const std::string &key)
+datasystem::Status EtcdMPMCQueue::pushEOF()
 {
-    return push(key, EOFMSG);
+    auto resp = etcd_.put(prefix_, EOFMSG).get();
+    if (!resp.is_ok())
+        return datasystem::Status(datasystem::StatusCode::K_IO_ERROR, "etcd push failed: " + resp.error_message());
+    return datasystem::Status::OK();
 }
 
 std::unique_ptr<Message> EtcdMPMCQueue::pop()

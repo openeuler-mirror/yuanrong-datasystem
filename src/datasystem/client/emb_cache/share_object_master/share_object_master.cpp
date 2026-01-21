@@ -45,7 +45,7 @@ datasystem::Status ShareObjectMaster::enqueue(const std::vector<std::string> &em
         RETURN_IF_NOT_OK(etcdQueue->push(std::to_string(i), msgValue));
     }
     // 发布eof消息
-    RETURN_IF_NOT_OK(etcdQueue->pushEOF(std::to_string(embKeyFilesPath.size())));
+    RETURN_IF_NOT_OK(etcdQueue->pushEOF());
     return datasystem::Status::OK();
 }
 
