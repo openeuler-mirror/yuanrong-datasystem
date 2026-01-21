@@ -31,6 +31,7 @@ CMAKE_FILES_L0=(
   "tbb.cmake"
   "xml2.cmake"
   "zlib.cmake"
+  "cpprestsdk.cmake"
   )
 
 CMAKE_FILES_L1=(
@@ -38,6 +39,7 @@ CMAKE_FILES_L1=(
   "protobuf.cmake" # absl
   "libcurl.cmake" # openssl
   "grpc.cmake" # protobuf/openssl/zlib
+  "etcdapiv3.cmake"
   "sdk_c_obs.cmake"
   )
 
@@ -46,6 +48,7 @@ DEPENDENCIES=(
   "protobuf:absl" 
   "libcurl:openssl"
   "grpc:protobuf:openssl:zlib:re2"
+  "etcdapiv3:cpprestsdk:grpc:protobuf"
   "sdk_c_obs:libcurl:securec:openssl:iconv:xml2:pcre:cjson:spdlog"
 )
 

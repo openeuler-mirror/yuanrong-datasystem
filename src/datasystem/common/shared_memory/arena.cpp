@@ -19,7 +19,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <string>
+#include <vector>
 
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
 
 #ifdef __linux__
@@ -38,7 +41,7 @@
 #include "datasystem/common/shared_memory/jemalloc.h"
 #include "datasystem/common/shared_memory/mmap/dev_mmap.h"
 #include "datasystem/common/shared_memory/mmap/disk_mmap.h"
-#include "datasystem/common/shared_memory/mmap/mem_mmap.h"
+#include "datasystem/common/shared_memory/mmap/obmm_mmap.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -58,6 +61,8 @@ DS_DEFINE_uint32(
     "the first time, but each arena will use one more fd. The valid range is 0 to 32.");
 DS_DEFINE_validator(shared_disk_arena_per_tenant, &Validator::ValidateSharedDiskArenaPerTenant);
 DS_DECLARE_string(shared_disk_directory);
+
+DS_DEFINE_string(local_mem_id, "", "Our mem id list");
 
 namespace datasystem {
 namespace memory {
@@ -322,6 +327,30 @@ void ArenaManager::Init(DevMemFuncRegister devMemFuncRegister)
     StartCheckExpiredTenantResource();
 }
 
+std::vector<int64_t> ArenaManager::GetMemIds()
+{
+    if (FLAGS_local_mem_id.empty()) {
+        return {};
+    }
+    const std::string pattern = "[,\\s+]+";
+    std::vector<int64_t> result;
+    auto res = SplitToUniqueStr(FLAGS_local_mem_id, pattern);
+    if (res.empty()) {
+        LOG(FATAL) << "Invalid local mem id: " << FLAGS_local_mem_id;
+    }
+    for (const auto &memIdStr : res) {
+        try {
+            int memId = std::stoi(memIdStr);
+            result.emplace_back(memId);
+        } catch (std::invalid_argument &invalidArgument) {
+            LOG(FATAL) << "Invalid local mem id: " << FLAGS_local_mem_id;
+        } catch (std::out_of_range &outOfRange) {
+            LOG(FATAL) << "Invalid local mem id: " << FLAGS_local_mem_id;
+        }
+    }
+    return result;
+}
+
 uint64_t ArenaManager::RoundUpToNextMultiple(uint64_t size)
 {
     if (size % HUGE_PAGE_SIZE == 0) {
@@ -349,13 +378,18 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         // account for extra Jemalloc overhead
         fakeAllocateSize = static_cast<uint64_t>(overhead * maxSize);
     }
-    uint64_t mmapSize = maxSize / rate;
+    uint64_t mmapSize = maxSize;
     if (FLAGS_enable_huge_tlb) {
         mmapSize = RoundUpToNextMultiple(mmapSize);
     }
     {
         std::lock_guard<std::shared_timed_mutex> l(mutex_);
         std::vector<std::shared_ptr<Arena>> arenas;
+        auto memIds = GetMemIds();
+        if (!memIds.empty()) {
+            FLAGS_arena_per_tenant = memIds.size();
+            LOG(INFO) << "Init with mem id: " << VectorToString(memIds);
+        }
         auto arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
         arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) ? 1 : arenasNum;
         arenas.reserve(arenasNum);
@@ -379,7 +413,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
                               FormatString("arena %d reuse, but exists in ArenaManager.", arenaInd));
             }
 
-            Status rc = arena->Init(devMemFuncRegister_);
+            Status rc = arena->Init(devMemFuncRegister_, memIds[i]);
             if (rc.IsError()) {
                 LOG(ERROR) << "Init arena " << arenaInd << " failed: " << rc;
                 arenas_[arenaInd] = nullptr;
@@ -672,11 +706,11 @@ Arena::Arena(uint32_t arenaId, void *handler, bool populate, bool scaling, uint6
 {
 }
 
-Status Arena::Init(DevMemFuncRegister devMemFuncRegister)
+Status Arena::Init(DevMemFuncRegister devMemFuncRegister, int64_t memId)
 {
     switch (cacheType_) {
         case CacheType::MEMORY:
-            mmap_ = std::make_unique<MemMmap>();
+            mmap_ = std::make_unique<ObmmMmap>(memId);
             break;
         case CacheType::DISK:
             mmap_ = std::make_unique<DiskMmap>();

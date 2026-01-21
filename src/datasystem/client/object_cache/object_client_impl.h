@@ -65,6 +65,7 @@ namespace datasystem {
 namespace object_cache {
 using TbbMemoryRefTable = tbb::concurrent_hash_map<ShmKey, int>;
 using TbbGlobalRefTable = tbb::concurrent_hash_map<std::string, int>;
+using TbbPrefetchTable = tbb::concurrent_hash_map<std::string, ObmmMetaPb>;
 using GlobalRefInfo = std::pair<int, std::shared_ptr<TbbGlobalRefTable::accessor>>;
 
 struct P2PPeer {
@@ -133,7 +134,7 @@ public:
      * @param[out]  failList The objects that are failed to be published
      * @return K_OK on any object success; the error code otherwise.
      */
-    Status Publish(const std::vector<std::shared_ptr<DeviceBuffer>> &buffers, std::vector<std::string> &failList);
+    Status Publish(const std::vector<std::shared_ptr<DeviceBuffer>> &buffers, std::vector<std::string> &failedList);
 
     /**
      * @brief Create the shared memory buffer of the data system.
@@ -278,6 +279,8 @@ public:
      */
     Status Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs, std::vector<Optional<Buffer>> &buffers,
                bool queryL2Cache = true, bool isRH2DSupported = false);
+
+    bool CacheMeta(const std::vector<std::string> &objectKeys, const tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable, GetRspPb &rsp);
 
     /**
      * @brief Some data in an object can be read based on the specified key and parameters.
@@ -601,6 +604,10 @@ public:
      * @return K_OK if at least one key is successfully processed; the error code otherwise.
      */
     Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys);
+
+    Status Prefetch(const std::vector<std::string> &keys);
+
+    Status Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable);
 
     /**
      * @brief Get device meta info of the keys.
@@ -1031,6 +1038,14 @@ private:
     }
 
     /**
+     * @brief Decrease the object reference count by one and if no one holds its ref, release it.
+     * @param[in] shmId The ID of the object to decrease ref
+     * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
+     * @param[in] version Worker version.
+     */
+    void DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version);
+
+    /**
      * @brief Process put in shm scenes.
      * @param[in] objectKey The ID of the object to create.
      * @param[in] data The data pointer of the user.
@@ -1226,6 +1241,8 @@ private:
     bool clientEnableP2Ptransfer_ = false;
     int parallismNum_ = 0;
     uint64_t memcpyParallelThreshold_ = 0;
+
+    TbbPrefetchTable prefetchTable_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

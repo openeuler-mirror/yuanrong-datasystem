@@ -516,6 +516,31 @@ message ExistReqPb {
   string access_key = 102;
 }
 
+message PrefetchReqPb {
+  string client_id = 1;
+  string token = 2;
+  string tenant_id = 3;
+  repeated string object_keys = 4;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ObmmMetaPb {
+  int64 mem_id = 1;
+  uint64 mmap_size = 2;
+  uint64 offset = 3;
+  uint64 metadata_size = 4;
+  uint64 object_size = 5;
+  string shm_id = 6;
+}
+
+message PrefetchRspPb {
+  map<string, ObmmMetaPb> infos = 1;
+}
+
 message ExistRspPb {
   repeated bool exists = 1;
 }
@@ -608,4 +633,6 @@ service WorkerOCService {
   rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
 
   rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
+
+  rpc Prefetch(PrefetchReqPb) returns (PrefetchRspPb) {}
 }

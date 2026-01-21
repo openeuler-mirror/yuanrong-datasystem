@@ -277,7 +277,7 @@ Status WorkerOCServiceImpl::Init()
         [this](const std::string &objectKey, uint64_t version) -> Status { return DeleteObject(objectKey, version); });
     workerDevOcManager_ = std::make_shared<WorkerDeviceOcManager>(this);
     lastReconTime_ = GetSteadyClockTimeStampMs();  // Record current timestamp in case we need reconciliation.
-    RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
+    // RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
 
     asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
     InitServiceImpl();
@@ -2001,6 +2001,15 @@ Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
                                      "validate worker state failed");
     PerfPoint perfPoint(PerfKey::WORKER_EXIST);
     return getProc_->Exist(req, rsp);
+}
+
+Status WorkerOCServiceImpl::Prefetch(const PrefetchReqPb &req, PrefetchRspPb &rsp)
+{
+    ReadLock noReconciliation;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
+                                     "validate worker state failed");
+    PerfPoint perfPoint(PerfKey::WORKER_PRFETCH);
+    return getProc_->Prefetch(req, rsp);
 }
 
 Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)

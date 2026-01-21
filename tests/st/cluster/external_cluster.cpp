@@ -21,6 +21,7 @@
 
 #include <csignal>
 #include <fstream>
+#include <string>
 #include <sys/prctl.h>
 #include <sys/time.h>
 #include <wait.h>
@@ -1008,6 +1009,8 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     } else {
         opts_.workerGflagParams = " -sc_regular_socket_num=0 -sc_stream_socket_num=0 " + opts_.workerGflagParams;
     }
+    std::string mem_id = std::to_string(2 * index + 1) + "," + std::to_string(2 * index + 2);
+    LOG(INFO) << "Worker " << index << " start with memid: '" << mem_id << "'";
     std::string injectActions = "test.start.notWait:call(0)"
                                 + (opts_.injectActions.empty() ? "" : ";" + opts_.injectActions)
                                 + (opts_.disableRocksDB ? ";master.disableRocksDb:1*call()" : "");
@@ -1022,7 +1025,7 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
            + std::to_string(opts_.numZmqServerCtx) + " -oc_thread_num=" + std::to_string(opts_.numOcThreadNum)
            + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum) + " -check_async_queue_empty_time_s=1";
     cmd += " -system_access_key=" + opts_.systemAccessKey + " -system_secret_key=" + opts_.systemSecretKey
-           + " -tenant_access_key=" + opts_.tenantAccessKey + " -tenant_secret_key=" + opts_.tenantSecretKey;
+           + " -tenant_access_key=" + opts_.tenantAccessKey + " -tenant_secret_key=" + opts_.tenantSecretKey + " -local_mem_id=" + mem_id;
     cmd += " -oc_worker_worker_direct_port="
            + ((static_cast<size_t>(index) < opts_.workerOcDirectPorts.size())
                   ? std::to_string(opts_.workerOcDirectPorts[index])

@@ -265,6 +265,36 @@ Status ClientWorkerRemoteApi::HealthCheck(ServerState &state)
     return stub_->HealthCheck(opts, req, rsp);
 }
 
+Status ClientWorkerRemoteApi::Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable)
+{
+    PrefetchReqPb req;
+    *req.mutable_object_keys() = { keys.begin(), keys.end() };
+    req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExistReqPb.");
+    PrefetchRspPb rsp;
+    PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_EXIST);
+    auto status = RetryOnError(
+        rpcTimeoutMs_,
+        [this, &req, &rsp](int32_t realRpcTimeout) {
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+            VLOG(1) << "Start to send rpc to check existence";
+            return stub_->Prefetch(opts, req, rsp);
+        },
+        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    
+    auto &obmmInfos = rsp.infos();
+    for (const auto &info : obmmInfos) {
+        prefetchTable.emplace(info.first, info.second);
+        VLOG(1) << info.first << ", " << info.second.DebugString();
+    }
+
+    LOG(INFO) << "Prefetch success, query size: " << keys.size() << ", success size: " << obmmInfos.size();
+    return Status::OK();
+}
+
 bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
 {
     for (const auto &obj : rsp.objects()) {

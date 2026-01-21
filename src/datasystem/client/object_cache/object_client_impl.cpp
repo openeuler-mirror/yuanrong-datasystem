@@ -1210,6 +1210,21 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, s
 
 void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version)
 {
+    asyncReleasePool_->Execute([this, shmId, isShm, version] {
+        std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_, std::defer_lock);
+        // only shutdown will hold the write lock
+        if (!shutdownLck.try_lock()) {
+            return;
+        }
+        if (!IsClientReady()) {
+            return;
+        }
+        DecreaseReferenceCntImpl(shmId, isShm, version);
+    });
+}
+
+void ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version)
+{
     VLOG(1) << FormatString("[%s] :[clientId: %s][shmId %s]", __FUNCTION__, workerApi_[LOCAL_WORKER]->clientId_,
                             shmId);
     auto DecreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
@@ -1469,8 +1484,11 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
     Status rc = Get(objectKeys, subTimeoutMs, buffers);
     for (auto &buffer : buffers) {
         if (buffer) {
+            PerfPoint p(PerfKey::BUFFER_RLATCH);
             RETURN_IF_NOT_OK(buffer->RLatch());
+            p.RecordAndReset(PerfKey::BUFFER_COPY_TO_STRING);
             vals.emplace_back(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+            p.RecordAndReset(PerfKey::BUFFER_RUNLATCH);
             dataSize += buffer->GetSize();
             RETURN_IF_NOT_OK(buffer->UnRLatch());
         } else {
@@ -1480,14 +1498,64 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
     return rc;
 }
 
+bool ObjectClientImpl::CacheMeta(const std::vector<std::string> &objectKeys, const tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable, GetRspPb &rsp)
+{
+    PerfPoint p(PerfKey::CLIENT_CACHE_HIT);
+    for (const auto &key : objectKeys) {
+        TbbPrefetchTable::const_accessor result;
+        if (prefetchTable.find(result, key)) {
+            auto pb = rsp.add_objects();
+            pb->set_store_fd(result->second.mem_id());
+            pb->set_object_key(key);
+            pb->set_data_size(result->second.object_size());
+            pb->set_metadata_size(result->second.metadata_size());
+            pb->set_mmap_size(result->second.mmap_size());
+            pb->set_offset(result->second.offset());
+            pb->set_version(10086);
+            pb->set_is_seal(true);
+            pb->set_shm_id(result->second.shm_id());
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
                              std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
 {
+    tbb::concurrent_hash_map<std::string, ObmmMetaPb> prefetchTable;
+    RETURN_IF_NOT_OK(Prefetch(objectKeys, prefetchTable));
+    if (prefetchTable.size() != objectKeys.size()) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, FormatString("objectKeys.size(): %lu != prefetchTable.size(): %lu", objectKeys.size(), prefetchTable.size()));
+    }
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+    GetRspPb rsp;
+    if (CacheMeta(objectKeys, prefetchTable, rsp)) {
+        PerfPoint p(PerfKey::CLIENT_GET_FROM_CACHE);
+        VLOG(1) << "cache get: " << VectorToString(objectKeys);
+        std::vector<ReadParam> readParams;
+        std::vector<RpcMessage> payloads;
+        std::vector<std::string> failedObjectKey;
+        std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
+        RETURN_IF_NOT_OK(GetObjectBuffers(objectKeys, rsp, workerApi_[LOCAL_WORKER]->workerVersion_, readParams, payloads, objectBuffers, failedObjectKey));
+        buffers.clear();
+        for (auto &objectBuffer : objectBuffers) {
+            if (objectBuffer == nullptr) {
+                buffers.emplace_back();
+            } else {
+                buffers.emplace_back(std::move(*objectBuffer));
+            }
+        }
+        perfPoint.Record();
+        LOG(INFO) << "Finish to Get objects " << VectorToString(objectKeys);
+        return Status::OK();
+    }
+
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -1522,6 +1590,7 @@ Status ObjectClientImpl::Read(const std::vector<ReadParam> &readParams, std::vec
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     std::vector<std::shared_ptr<Buffer>> objectBuffers(readParams.size());
     std::vector<std::string> objectKeys;
+    objectKeys.reserve(readParams.size());
     for (const auto &param : readParams) {
         objectKeys.emplace_back(param.key);
     }
@@ -1544,6 +1613,7 @@ Status ObjectClientImpl::Read(const std::vector<ReadParam> &readParams, std::vec
 Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
                                             uint32_t version, std::shared_ptr<Buffer> &buffer)
 {
+    VLOG(1) << "objectKey: " << objectKey << ", offset: " << info.offset();
     // Validator check ids in Get(objectKeys, subTimeoutMs, buffers)
     std::shared_ptr<client::MmapTableEntry> mmapEntry;
     uint8_t *pointer;
@@ -1735,39 +1805,38 @@ Status ObjectClientImpl::SetNonShmObjectBuffer(const std::string &objectKey, con
         auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
                                                payloadInfo.is_seal(), version, {}, payloadSharedPtr, nullptr);
         return Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), bufferPtr);
-    } else {
-        std::vector<RpcMessage> objectPayloads;
-        for (int i = 0; i < payloadIndexSize; i++) {
-            auto partIndex = payloadInfo.part_index(i);
-            if (partIndex >= payloads.size()) {
-                RETURN_STATUS(K_UNKNOWN_ERROR,
-                              "The response payload_index in GetRspPb exceeds the response payloads size.");
-            }
-            objectPayloads.emplace_back(std::move(payloads[partIndex]));
-        }
-        auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
-                                               payloadInfo.is_seal(), version, {}, nullptr, nullptr);
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), bufferPtr));
-        size_t offset = 0;
-        for (const auto &part : objectPayloads) {
-            const auto length = part.Size();
-            const auto destSize = std::min(bufferPtr->GetSize() - offset, length);
-            if (destSize < length) {
-                RETURN_STATUS(
-                    StatusCode::K_RUNTIME_ERROR,
-                    FormatString(
-                        "SetNonShmObjectBuffer failed because the MemoryCopy dst size: %zu smaller than src size: %zu",
-                        destSize, length));
-            }
-            Status status =
-                ::datasystem::MemoryCopy(static_cast<uint8_t *>(bufferPtr->MutableData()) + offset, destSize,
-                                         static_cast<const uint8_t *>(part.Data()), length, memoryCopyThreadPool_);
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                status.IsOk(), K_RUNTIME_ERROR, FormatString("Copy data to buffer failed, err: %s", status.ToString()));
-            offset += length;
-        }
-        return Status::OK();
     }
+    std::vector<RpcMessage> objectPayloads;
+    for (int i = 0; i < payloadIndexSize; i++) {
+        auto partIndex = payloadInfo.part_index(i);
+        if (partIndex >= payloads.size()) {
+            RETURN_STATUS(K_UNKNOWN_ERROR,
+                          "The response payload_index in GetRspPb exceeds the response payloads size.");
+        }
+        objectPayloads.emplace_back(std::move(payloads[partIndex]));
+    }
+    auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param, payloadInfo.is_seal(),
+                                           version, {}, nullptr, nullptr);
+    RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), bufferPtr));
+    size_t offset = 0;
+    for (const auto &part : objectPayloads) {
+        const auto length = part.Size();
+        const auto destSize = std::min(bufferPtr->GetSize() - offset, length);
+        if (destSize < length) {
+            RETURN_STATUS(
+                StatusCode::K_RUNTIME_ERROR,
+                FormatString(
+                    "SetNonShmObjectBuffer failed because the MemoryCopy dst size: %zu smaller than src size: %zu",
+                    destSize, length));
+        }
+        Status status =
+            ::datasystem::MemoryCopy(static_cast<uint8_t *>(bufferPtr->MutableData()) + offset, destSize,
+                                     static_cast<const uint8_t *>(part.Data()), length, memoryCopyThreadPool_);
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
+                                             FormatString("Copy data to buffer failed, err: %s", status.ToString()));
+        offset += length;
+    }
+    return Status::OK();
 }
 
 Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
@@ -2921,6 +2990,26 @@ Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t t
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Expire(keys, ttlSeconds, failedKeys), "Set expire ttl failed");
+    perfPoint.Record();
+    return Status::OK();
+}
+
+Status ObjectClientImpl::Prefetch(const std::vector<std::string> &keys)
+{
+    return Prefetch(keys, prefetchTable_);
+}
+
+Status ObjectClientImpl::Prefetch(const std::vector<std::string> &keys, tbb::concurrent_hash_map<std::string, ObmmMetaPb> &prefetchTable)
+{
+    PerfPoint perfPoint(PerfKey::CLIENT_EXPIRE_OBJECT);
+    RETURN_IF_NOT_OK(IsClientReady());
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
+                                         FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Prefetch(keys, prefetchTable), "Set expire ttl failed");
     perfPoint.Record();
     return Status::OK();
 }

@@ -2537,12 +2537,23 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
     return Status::OK();
 }
 
-bool WorkerOcServiceGetImpl::IsLocalObject(const std::string &key)
+bool WorkerOcServiceGetImpl::IsLocalObject(const std::string &key, ObmmMetaPb *pb)
 {
     std::shared_ptr<SafeObjType> entry;
+    bool result = false;
     if (objectTable_->Get(key, entry).IsOk() && entry->RLock(false).IsOk()) {
         Raii unlock([&entry]() { entry->RUnlock(); });
-        return (*entry)->IsBinary() && !(*entry)->IsInvalid();
+        result = (*entry)->IsBinary() && !(*entry)->IsInvalid();
+        if (result && pb) {
+            auto shmUnit = (*entry)->GetShmUnit();
+            pb->set_mem_id(shmUnit->fd);
+            pb->set_mmap_size(shmUnit->mmapSize);
+            pb->set_offset(shmUnit->offset);
+            pb->set_metadata_size(GetMetadataSize());
+            pb->set_object_size(shmUnit->size - GetMetadataSize());
+            pb->set_shm_id(shmUnit->id);
+        }
+        return result;
     }
     return false;
 }
@@ -2592,6 +2603,53 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
     workerOperationTimeCost.Append("Total Exist", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of Exist %s", workerOperationTimeCost.GetInfo());
+    return rc;
+}
+
+Status WorkerOcServiceGetImpl::Prefetch(const PrefetchReqPb &req, PrefetchRspPb &rsp)
+{
+    workerOperationTimeCost.Clear();
+    Timer timer;
+    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
+    const std::string &clientId = req.client_id();
+    LOG(INFO) << "Exist start from client:" << clientId;
+    std::string tenantId;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
+                                         StatusCode::K_INVALID, "invalid object size");
+    auto keys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
+    for (const auto &key : keys) {
+        ObmmMetaPb pb;
+        if (!IsLocalObject(key, &pb)) {
+            continue;
+        }
+        VLOG(1) << "local object: " << key << ", " << pb.DebugString();
+        evictionManager_->Add(key);
+        rsp.mutable_infos()->emplace(key, std::move(pb));
+    }
+
+    QueryMetadataFromMasterResult queryResult;
+    std::vector<master::QueryMetaInfoPb> &queryMetas = queryResult.queryMetas;
+    std::vector<RpcMessage> payloads;
+    std::map<std::string, uint64_t> absentObjectKeys;
+    Status rc = QueryMetadataFromMaster(keys, 0, queryResult, false);
+    for (const auto &meta : queryMetas) {
+        ObmmMetaPb pb;
+        pb.set_mem_id(meta.meta().mem_id());
+        pb.set_mmap_size(meta.meta().mmap_size());
+        pb.set_offset(meta.meta().offset());
+        pb.set_metadata_size(GetMetadataSize());
+        pb.set_object_size(meta.meta().data_size());
+        pb.set_shm_id(meta.meta().shm_id());
+        VLOG(1) << "remote object: " << meta.meta().object_key() << ", " << pb.DebugString();
+        rsp.mutable_infos()->emplace(meta.meta().object_key(), std::move(pb));
+    }
+
+    RequestParam reqParam;
+    reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
+    posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    workerOperationTimeCost.Append("Total Prefetch", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of Prefetch %s", workerOperationTimeCost.GetInfo());
     return rc;
 }
 

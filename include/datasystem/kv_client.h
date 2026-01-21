@@ -363,6 +363,9 @@ public:
     ///         K_RPC_UNAVAILABLE: Network error.
     ///         K_RUNTIME_ERROR: Inner error happen.
     Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys);
+
+    Status Prefetch(const std::vector<std::string> &keys);
+
 private:
     std::shared_ptr<object_cache::ObjectClientImpl> impl_;
 };

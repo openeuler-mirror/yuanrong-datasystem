@@ -114,6 +114,10 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     metadata->set_life_state(static_cast<uint32_t>(params.lifeState));
     metadata->set_ttl_second(params.ttlSecond);
     metadata->set_existence(static_cast<::datasystem::ExistenceOptPb>(params.existence));
+    metadata->set_mem_id(safeObj->GetShmUnit()->fd);
+    metadata->set_mmap_size(safeObj->GetShmUnit()->mmapSize);
+    metadata->set_offset(safeObj->GetShmUnit()->offset);
+    metadata->set_shm_id(safeObj->GetShmUnit()->id);
     ConfigPb *configPb = metadata->mutable_config();
     configPb->set_write_mode(static_cast<uint32_t>(safeObj->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));

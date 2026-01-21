@@ -33,6 +33,9 @@ namespace datasystem {
 namespace object_cache {
 Status Lock::WLock(const uint64_t timeoutSec, uint32_t &lockFlag)
 {
+    (void)timeoutSec;
+    (void)lockFlag;
+#if 0
     Timer timer;
     uint64_t useTimeSec = 0;
     while (true) {
@@ -47,10 +50,16 @@ Status Lock::WLock(const uint64_t timeoutSec, uint32_t &lockFlag)
         }
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckTimeout(timer, useTimeSec, timeoutSec), "");
     }
+#endif
+    return Status::OK();
 }
 
 void Lock::UnWLock(uint32_t &lockFlag, std::function<void()> extendedOperation, std::thread::id tid)
 {
+    (void)lockFlag;
+    (void)extendedOperation;
+    (void)tid;
+#if 0
     if ((__atomic_load_n(&lockFlag, __ATOMIC_RELAXED) & 1) && Find(tid)) {
         uint32_t expectedVal = WRITE_LOCK_NUM;
         if (__atomic_compare_exchange_n(&lockFlag, &expectedVal, NO_LOCK_NUM, false, __ATOMIC_SEQ_CST,
@@ -63,10 +72,14 @@ void Lock::UnWLock(uint32_t &lockFlag, std::function<void()> extendedOperation, 
             FutexWake(&lockFlag);
         }
     }
+#endif
 }
 
 Status Lock::RLock(uint64_t timeoutSec, uint32_t &lockFlag)
 {
+    (void)timeoutSec;
+    (void)lockFlag;
+#if 0
     Timer timer;
     uint64_t useTimeSec = 0;
     while (true) {
@@ -83,10 +96,14 @@ Status Lock::RLock(uint64_t timeoutSec, uint32_t &lockFlag)
         }
         RETURN_IF_NOT_OK(CheckTimeout(timer, useTimeSec, timeoutSec));
     }
+#endif
+    return Status::OK();
 }
 
 bool Lock::TryRLock(uint32_t &lockFlag)
 {
+    (void)lockFlag;
+#if 0
     if (__atomic_load_n(&lockFlag, __ATOMIC_SEQ_CST) == WRITE_LOCK_NUM) {
         return false;
     }
@@ -95,11 +112,16 @@ bool Lock::TryRLock(uint32_t &lockFlag)
         return true;
     }
     __atomic_sub_fetch(&lockFlag, READ_LOCK_NUM, __ATOMIC_SEQ_CST);
-    return false;
+#endif
+    return true;
 }
 
 void Lock::UnRLock(uint32_t &lockFlag, std::function<void()> extendedOperation, std::thread::id tid)
 {
+    (void)lockFlag;
+    (void)extendedOperation;
+    (void)tid;
+#if 0
     uint32_t curLockVal = __atomic_load_n(&lockFlag, __ATOMIC_RELAXED);
     if (curLockVal > WRITE_LOCK_NUM && Find(tid)) {
         Update(tid, 0 - READ_LOCK_NUM);
@@ -112,6 +134,7 @@ void Lock::UnRLock(uint32_t &lockFlag, std::function<void()> extendedOperation, 
             FutexWake(&lockFlag);
         }
     }
+#endif
 }
 
 Status Lock::CheckFutexWaitAndLogError(uint32_t val, const struct timespec &timeout, uint32_t &flag)

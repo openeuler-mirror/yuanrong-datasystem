@@ -901,6 +901,10 @@ void WorkerOcServiceMultiPublishImpl::ConstructCreateReq(const std::vector<std::
         ObjectBaseInfoPb meta;
         meta.set_object_key(objectKey);
         meta.set_data_size((*entries[i])->GetDataSize());
+        meta.set_mem_id((*entries[i])->GetShmUnit()->fd);
+        meta.set_mmap_size((*entries[i])->GetShmUnit()->mmapSize);
+        meta.set_offset((*entries[i])->GetShmUnit()->offset);
+        meta.set_shm_id((*entries[i])->GetShmUnit()->id);
         if (pubReq.object_info(i).blob_sizes_size() > 0) {
             meta.mutable_device_info()->mutable_blob_sizes()->Add(pubReq.object_info(i).blob_sizes().begin(),
                                                                   pubReq.object_info(i).blob_sizes().end());

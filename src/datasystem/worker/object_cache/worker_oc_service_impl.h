@@ -664,6 +664,8 @@ public:
      */
     Status Exist(const ExistReqPb &req, ExistRspPb &rsp) override;
 
+    Status Prefetch(const PrefetchReqPb &req, PrefetchRspPb &rsp) override;
+
     /**
      * @brief Send request of set expiration time for metas.
      * @param[in] req The expire request protobuf.

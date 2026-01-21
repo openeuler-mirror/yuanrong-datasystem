@@ -793,6 +793,10 @@ void OCMetadataManager::ConstructMetaInfo(const CreateMultiMetaReqPb &req, const
     meta.set_data_size(info.data_size());
     meta.set_version(version);
     meta.set_life_state(req.life_state());
+    meta.set_mem_id(info.mem_id());
+    meta.set_mmap_size(info.mmap_size());
+    meta.set_shm_id(info.shm_id());
+    meta.set_offset(info.offset());
     *meta.mutable_config() = req.config();
     meta.set_primary_address(req.address());
     meta.set_ttl_second(req.ttl_second());

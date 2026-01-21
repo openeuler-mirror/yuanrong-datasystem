@@ -183,6 +183,16 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client)
 
+# Compile emb_service
+GENERATE_PROTO_CPP(EMB_SERVICE_SRCS EMB_SERVICE_HDRS ${PROTO_BUILD_DIR}
+        PROTO_FILES ${PROTO_SRC_DIR}/emb_service.proto
+        PROTO_DEPEND proto_lib_depend)
+GEN_GLOBAL_PROTO_LIB_DEPEND(
+        NAME emb_service_protos
+        SOURCE ${EMB_SERVICE_SRCS}
+        DEPEND proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+
 if (WITH_TESTS)
     # Build generic service proto
     GENERATE_ZMQ_CPP(zmq_proto_lib_depend GENERIC_SERVICE_SRCS GENERIC_SERVICE_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/generic_service.proto)

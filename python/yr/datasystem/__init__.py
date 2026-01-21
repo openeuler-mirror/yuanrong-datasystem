@@ -22,6 +22,7 @@ __all__ = [
     "HeteroClient",
     "ObjectClient",
     "KVClient",
+    "EmbClient",
     "Status",
     "StreamClient",
     "SubconfigType",
@@ -42,6 +43,7 @@ from yr.datasystem.lib.libds_client_py import FutureTimeoutException
 from yr.datasystem.stream_client import SubconfigType, StreamClient
 from yr.datasystem.ds_client import DsClient
 from yr.datasystem.kv_client import KVClient
+from yr.datasystem.emb_client import EmbClient
 from yr.datasystem.hetero_client import HeteroClient, Blob, DeviceBlobList, MetaInfo, Future
 from yr.datasystem.util import Status, Context
 
