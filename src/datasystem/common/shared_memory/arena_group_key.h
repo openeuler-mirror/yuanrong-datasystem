@@ -34,6 +34,11 @@ enum class CacheType : int {
     DEV_HOST = 3,
 };
 
+static const std::unordered_map<CacheType, std::string> CACHE_TYPE_STR = { { CacheType::MEMORY, "Shared memory" },
+                                                                           { CacheType::DISK, "Shared disk" },
+                                                                           { CacheType::DEV_DEVICE, "Device pin mem" },
+                                                                           { CacheType::DEV_HOST, "DevHost pin mem" } };
+
 struct ArenaGroupKey {
     std::string tenantId;
     CacheType type;

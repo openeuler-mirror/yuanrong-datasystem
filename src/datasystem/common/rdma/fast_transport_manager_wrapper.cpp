@@ -281,12 +281,14 @@ Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
     return Status::OK();
 }
 
-Status CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId)
+Status CheckTransportConnectionStable(const std::string &hostAddress, const std::string &instanceId)
 {
     (void)hostAddress;
     (void)instanceId;
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().CheckUrmaConnectionStable(hostAddress, instanceId));
+#elif defined(USE_RDMA)
+    RETURN_IF_NOT_OK(UcpManager::Instance().CheckUcpConnectionStable(hostAddress, instanceId));
 #endif
     return Status::OK();
 }
@@ -297,6 +299,11 @@ Status GetLocalTransportInstanceId(std::string &instanceId)
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         UrmaManager::Instance().GetLocalInstanceId(instanceId);
+        return Status::OK();
+    }
+#elif defined(USE_RDMA)
+    if (UcpManager::IsUcpEnabled()) {
+        UcpManager::Instance().GetLocalInstanceId(instanceId);
         return Status::OK();
     }
 #endif

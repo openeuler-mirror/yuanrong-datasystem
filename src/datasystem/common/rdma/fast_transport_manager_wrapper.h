@@ -194,7 +194,7 @@ Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
  * @param[in] instanceId The unqiue instance uuid from dst port.
  * @return Status of the connection.
  */
-Status CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId);
+Status CheckTransportConnectionStable(const std::string &hostAddress, const std::string &instanceId);
 
 /**
  * @brief Get local transport unique instance id.

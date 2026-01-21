@@ -549,9 +549,24 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
     if (!isFastTransportEnabled) {
         return Status::OK();
     }
-    const HostPort requestAddress(req.urma_info().request_address().host(), req.urma_info().request_address().port());
-    RETURN_IF_NOT_OK(CheckUrmaConnectionStable(requestAddress.ToString(), req.urma_instance_id()));
-    return Status::OK();
+    std::string host;
+    int port;
+    if (req.has_urma_info()) {
+        host = req.urma_info().request_address().host();
+        port = req.urma_info().request_address().port();
+    }
+    if (req.has_ucp_info()) {
+        host = req.ucp_info().remote_ip_addr().host();
+        port = req.ucp_info().remote_ip_addr().port();
+    }
+    const HostPort requestAddress(host, port);
+    auto rc = CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
+    if (rc.GetCode() == K_RDMA_NEED_CONNECT) {
+        // Clear remote ucp connection and reconnect in write payload.
+        LOG(INFO) << "Rdma receive get request form restart worker " << requestAddress.ToString();
+        return RemoveRemoteFastTransportNode(requestAddress);
+    }
+    return rc;
 }
 
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
