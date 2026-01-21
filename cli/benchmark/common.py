@@ -172,18 +172,17 @@ class BenchmarkBaseCommand(CliBaseCommand, ABC):
     def run(self, args: Any) -> int:
         """Executes the complete benchmark lifecycle from setup to tear-down."""
         try:
+            if not self.validate(args):
+                return self.FAILURE
+
+            if not self.initialize(args):
+                return self.FAILURE
 
             bench_args = self.generate_bench_args(args)
             os.makedirs(bench_args.log_dir, exist_ok=True)
             log_file_name = "run.log"
             full_log_file_path = os.path.join(bench_args.log_dir, log_file_name)
             BenchmarkBaseCommand._configure_logging_with_file(full_log_file_path)
-
-            if not self.validate(args):
-                return self.FAILURE
-
-            if not self.initialize(args):
-                return self.FAILURE
 
             if not self.pre_run():
                 return self.FAILURE
