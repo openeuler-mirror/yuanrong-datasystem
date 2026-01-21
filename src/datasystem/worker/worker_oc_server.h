@@ -297,6 +297,12 @@ private:
     void CheckAsyncTasks();
 
     /**
+     * @brief Set checkAsyncTasksDone_ flag and notify waiting threads.
+     * @param[in] value The value to set for checkAsyncTasksDone_.
+     */
+    void SetCheckAsyncTasksDone(bool value);
+
+    /**
      * @brief Create all service.
      * @return Status of the call.
      */
