@@ -30,7 +30,7 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 | 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param
 | 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm_info \| spill_disk_info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWokrerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \|Cache Hit Info \|
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm_info \| spill_disk_info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \|Cache Hit Info \|
 | 5 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 
 ### 日志字段
@@ -42,11 +42,11 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | filename | 128 | 输出该条日志的函数所在文件及行号，最大长度128Byte，超出则截断。示例：oc_metadata_manager.cpp:733 |
 | pod_name | 128 | 输出当前worker所属的POD名称，超出长度则截断。示例：ds-worker-hs5qm |
 | pid:tid | 11 | 该日志所属的进程ID和线程ID。进程号最大值为32757，该字段最大长度11.示例：9:177 |
-| traceid | 36 | 请求的traceid。 |
+| trace_id | 36 | 请求的trace_id。 |
 | cluster_name | 128 | 输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。 |
 | Message | 1024 | 自定义消息内容 |
 | status_code | 5 | 该请求的状态，不同消息类型状态值不一样。SDK/datasystem_worker 访问日志，0表示成功，其他表示失败。 |
-| action | 64 | 表示该请求所访问的接口名称。约定前缀：SDK接口：DS_STATE_CLINET、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path} |
+| action | 64 | 表示该请求所访问的接口名称。约定前缀：SDK接口：DS_KV_CLIENT、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path} |
 | cost | 16 | 记录该请求所花费的时间。单位：us |
 | datasize | 16 | 记录Publish请求接收到的Payload大小。 |
 | request param | 2560 | 记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。 |
@@ -56,9 +56,9 @@ openYuanrong datasystem 不同模块日志分类如下表所示：
 | client nums | 5 | 记录已和worker成功建立连接的Client数。最大值为10000. | 
 | object nums | 9 | 记录worker已缓存对象数。按照1亿对象限制数量。| 
 | object total datasize | 13 | 记录worker已缓存对象的大小。按照1T限制大小，长度 13 Byte | 
-| WorkerOcService threadpool | 21 | WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idelNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字。| 
+| WorkerOcService threadpool | 21 | WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idleNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字。| 
 | WorkerWorkerOcService threadpool | 21 | threadpool使用信息 | 
-| MasterWokrerOcService threadpool | 21 |  threadpool使用信息 | 
+| MasterWorkerOcService threadpool | 21 |  threadpool使用信息 | 
 | MasterOcService threadpool | 21 | threadpool使用信息 |
 | write ETCD queue | 15 | 队列使用信息 | 
 | ETCDrequest success rate | 6 | 请求使用率，单位 %,保留3位有效数字 | 

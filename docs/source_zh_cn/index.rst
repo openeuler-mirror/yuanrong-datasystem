@@ -17,7 +17,7 @@ openYuanrong datasystem 的主要特性包括：
 openYuanrong datasystem 适用场景
 --------------------------------
 
-- **LLM 长序列推理 KVCache**：基于异构对象提供分布式多级缓存 (HBM/DRAM/SSD) 和高吞吐 D2D/H2D/D2H 访问能力，构建分布式 KV Cache，实现 Prefill 阶段的 KVCache 缓存以及 Prefill/Decode 实例间 KV Cache 快速传递，提升推理吞吐。
+- **LLM 长序列推理 KV Cache**：基于异构对象提供分布式多级缓存 (HBM/DRAM/SSD) 和高吞吐 D2D/H2D/D2H 访问能力，构建分布式 KV Cache，实现 Prefill 阶段的 KV Cache 缓存以及 Prefill/Decode 实例间 KV Cache 快速传递，提升推理吞吐。
 - **模型推理实例 M->N 快速弹性**：利用异构对象的卡间直通及 P2P 数据分发能力实现模型参数快速复制。
 - **强化学习模型参数重排**：利用异构对象的卡间直通传输能力，快速将模型参数从训练侧同步到推理侧。
 - **训练场景 CheckPoint 快速保存及加载**：基于 KV 接口快速写 Checkpoint，并支持将数据持久化到二级缓存保证数据可靠性。Checkpoint恢复时各节点将 Checkpoint 分片快速加载到异构对象中，利用异构对象的卡间直通传输及 P2P 数据分发能力，快速将 Checkpoint 传递到各节点 HBM。
@@ -68,7 +68,7 @@ openYuanrong datasystem 的部署视图如上图所示：
   :hidden:
 
   self
-  getting-started/getting_started
+  getting-started/getting_started.md
   installation/installation_linux.md
   deployment/index.md
   best_practices/index.md

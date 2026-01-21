@@ -7,7 +7,7 @@ yr.datasystem.kv_client.KVClient
 
     参数：
         - **host** (str) - 数据系统Worker的主机IP地址。
-        - **port** (int) - 数据系统Worker的主机IP端口号。
+        - **port** (int) - 数据系统Worker的服务端口号。
         - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``60000`` 。
         - **client_public_key** (str) - 用于curve认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于curve认证的客户端私钥。默认值： ``""`` 。
@@ -37,13 +37,13 @@ yr.datasystem.kv_client.KVClient
        * - :doc:`msettx <yr.datasystem.kv_client.KVClient.msettx>`
          - 批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。
        * - :doc:`get_read_only_buffers <yr.datasystem.kv_client.KVClient.get_read_only_buffers>`
-         - 获取所有给定键的值。
+         - 以只读缓冲区形式获取给定键的值。
        * - :doc:`get <yr.datasystem.kv_client.KVClient.get>`
          - 获取所有给定键的值。
        * - :doc:`read <yr.datasystem.kv_client.KVClient.read>`
          - 读取指定偏移量的数据。
        * - :doc:`delete <yr.datasystem.kv_client.KVClient.delete>`
-         - 初始化KV缓存客户端以连接到 Worker 。
+         - 删除指定的键值对。
        * - :doc:`generate_key <yr.datasystem.kv_client.KVClient.generate_key>`
          - 生成一个带数据系统 Worker UUID 的 key。
        * - :doc:`exist <yr.datasystem.kv_client.KVClient.exist>`
