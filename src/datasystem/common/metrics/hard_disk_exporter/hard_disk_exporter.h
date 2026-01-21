@@ -74,6 +74,19 @@ private:
      */
     Status CreateFileByPath(const std::string &filePath);
 
+    /**
+     * @brief Collect rotated log files.
+     * @param[in] filePath The active log file path.
+     * @param[out] files Rotated log files matching the pattern.
+     */
+    void CollectRotatedLogFiles(const std::string &filePath, std::vector<std::string> &files);
+
+    /**
+     * @brief Prune oldest rotated logs to satisfy max_log_file_num.
+     * @param[in] files Rotated log files.
+     */
+    void PruneOldLogFiles(const std::vector<std::string> &files);
+
     int fd_ = K_INVALID_FD;
     std::string filePath_;
     size_t fileSize_ = 0;
