@@ -8,7 +8,7 @@ yr.datasystem.hetero_client.HeteroClient.dev_delete
     dev_delete 与 dev_mset / dev_mget 接口配套使用。
 
     参数：
-        - **keys** (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - device 的异构对象的 key。约束：传入的key的数量 `<=10000`。
 
     返回：
         - **failed_keys** (list) - 用于描述 delete 失败的 key。

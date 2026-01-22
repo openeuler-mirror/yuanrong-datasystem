@@ -6,7 +6,7 @@ yr.datasystem.kv_client.KVClient.get_read_only_buffers
     获取所有给定键的值，返回 list[:doc:`ReadOnlyBuffer <yr.datasystem.kv_client.ReadOnlyBuffer>`] 对象列表。
 
     参数：
-        - **keys** (list) - 字符串类型的键列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - 字符串类型的键列表。约束：传入的key的数量 `<=10000`。
         - **timeout_ms** (int) - 等待结果返回的超时时间，单位为毫秒。
 
     返回：

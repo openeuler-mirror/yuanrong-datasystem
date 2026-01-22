@@ -6,7 +6,7 @@ yr.datasystem.hetero_client.HeteroClient.get_meta_info
     获取keys 对应的元数据信息。
 
     参数：
-        - **keys** (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - host 的 key 列表。约束：传入的key的数量 `<=10000`。
         - **is_dev_key** (bool) - key的属性，true 表示D2D类型，false表示D2H类型。
     异常：
         - **TypeError** - 输入参数存在非法值。

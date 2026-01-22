@@ -6,7 +6,7 @@ yr.datasystem.kv_client.KVClient.get
     获取所有给定键的值。
 
     参数：
-        - **keys** (list) - 字符串类型的键列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - 字符串类型的键列表。约束：传入的key的数量 `<=10000`。
         - **convert_to_str** (bool) - 是否将返回值转换为字符串。默认值： ``False`` 。
         - **sub_timeout_ms** (int) - 等待结果返回的超时时间，单位为毫秒。默认值： ``0`` 。
 

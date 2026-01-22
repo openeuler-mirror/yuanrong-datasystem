@@ -6,7 +6,7 @@ yr.datasystem.DsTensorClient.exist
     检查给定 key 在数据系统中是否存在。
 
     参数：
-        - **keys** (list) - 待查询的 key 列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - 待查询的 key 列表。约束：传入的key的数量 `<=10000`。
 
     返回：
         - **exists** (list) - 对应 key 的存在性，返回布尔值列表。
