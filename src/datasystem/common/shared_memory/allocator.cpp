@@ -40,9 +40,24 @@
 
 DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
+DS_DECLARE_uint32(arena_per_tenant);
+DS_DECLARE_bool(enable_fallocate);
 
 namespace datasystem {
 namespace memory {
+namespace {
+Status ValidateSharedMemoryPopulateFlags(bool populate)
+{
+    if (!populate) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(FLAGS_arena_per_tenant <= 1, K_INVALID,
+                             "If shared_memory_populate is true, arena_per_tenant must be 1");
+    CHECK_FAIL_RETURN_STATUS(!FLAGS_enable_fallocate, K_INVALID,
+                             "If shared_memory_populate is true, enable_fallocate must be false");
+    return Status::OK();
+}
+}  // namespace
 
 const int HUNDRED_PERCENT = 100;
 const double HIGH_WATER_MARK_RATIO = 0.8;
@@ -117,6 +132,7 @@ Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool s
     if (arenaManager_) {
         return Status::OK();
     }
+    RETURN_IF_NOT_OK(ValidateSharedMemoryPopulateFlags(populate));
     RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold, streamThreshold));
     RETURN_IF_NOT_OK(InitSharedDisk(shdSize));
     arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
