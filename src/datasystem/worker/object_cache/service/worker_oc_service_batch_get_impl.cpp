@@ -172,7 +172,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                      &tempFailedMetas, index, traceId] {
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
                 lastRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
                                                         tempNeedRetryIds[index], tempFailedIds[index],
                                                         tempFailedMetas[index]);
