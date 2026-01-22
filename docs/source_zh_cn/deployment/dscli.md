@@ -786,7 +786,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | enable_cloud_service_token_rotation | bool | `false` | 启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS |
 
 #### 多集群相关配置
-注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：[多集群模式FAQ](../FAQ/clusterFAQ.md)
+注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：[FAQ](../FAQ/FAQ.md)
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
