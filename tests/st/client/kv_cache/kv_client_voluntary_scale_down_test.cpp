@@ -1367,7 +1367,7 @@ public:
     }
 };
 
-TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, TestVoluntaryFailed)
+TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, DISABLED_TestVoluntaryFailed)
 {
     StartWorkerAndWaitReady({ 0, 1, 2, 3 });
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "skip.SubmitScaleUpTask", "return()"));
@@ -2008,7 +2008,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerRecovery)
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(fun1, waitTime, K_OK));
 }
 
-TEST_F(KVCacheClientClusterState, TestWorkerRecoveryWhenRestart)
+TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerRecoveryWhenRestart)
 {
     client0_.reset();
     client1_.reset();

@@ -70,6 +70,8 @@ public:
         return unpackedRkey_;
     }
 
+    virtual void CleanUnpackedRkey();
+
 private:
     void Clean();
 

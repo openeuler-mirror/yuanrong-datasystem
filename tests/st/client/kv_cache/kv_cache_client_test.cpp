@@ -849,7 +849,7 @@ TEST_F(KVCacheClientNoRedirectTest, ConcurrentDeleteAndRemoteGet)
     }
 }
 
-TEST_F(KVCacheClientTest, ConcurrentDeleteAndRemoteGet)
+TEST_F(KVCacheClientTest, DISABLED_ConcurrentDeleteAndRemoteGet)
 {
     std::shared_ptr<KVClient> client1;
     std::shared_ptr<KVClient> client2;

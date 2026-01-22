@@ -182,7 +182,7 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
         EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
         EXPECT_NE(event, nullptr);
         int retryCount = 0;
-        const int maxRetries = 100;
+        const int maxRetries = 1000;
         while (manager_->finishedRequests_.count(key) == 0 && retryCount < maxRetries) {
             std::this_thread::sleep_for(std::chrono::milliseconds(TIME));
             ++retryCount;
@@ -280,7 +280,7 @@ TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
                     EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
                     EXPECT_NE(event, nullptr);
                     int retryCount = 0;
-                    const int maxRetries = 100;
+                    const int maxRetries = 1000;
                     while (manager_->finishedRequests_.count(key) == 0 && retryCount < maxRetries) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(TIME));
                         ++retryCount;

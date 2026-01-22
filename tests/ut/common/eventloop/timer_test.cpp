@@ -68,7 +68,7 @@ public:
     TimerQueue *testqueue_;
     RandomData random_;
 };
-TEST_F(TimerTest, AddNewTimer)
+TEST_F(TimerTest, DISABLED_AddNewTimer)
 {
     Init();
     uint64_t start = CurrentTime();

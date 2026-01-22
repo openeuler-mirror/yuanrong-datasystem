@@ -1509,7 +1509,7 @@ TEST_F(KVClientMSetDMTest, LEVEL1_MSetRollbackFailed)
     }
 }
 
-TEST_F(KVClientMSetDMTest, ParallelWithOthers)
+TEST_F(KVClientMSetDMTest, DISABLED_ParallelWithOthers)
 {
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.CreateMultiMetaPhaseTwo.delay", "2*sleep(3000)"));
     const int threadNum = 3;

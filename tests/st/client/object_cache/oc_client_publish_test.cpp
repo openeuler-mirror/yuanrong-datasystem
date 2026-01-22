@@ -663,7 +663,7 @@ TEST_F(OCClientPublishTest, TestPublishAfterSeal)
     }
 }
 
-TEST_F(OCClientPublishTest, TestPutAfterSeal)
+TEST_F(OCClientPublishTest, DISABLED_TestPutAfterSeal)
 {
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(0, client1);

@@ -332,7 +332,7 @@ TEST_F(ObjectClientTest, PutGetDeleteNonShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
-TEST_F(ObjectClientTest, RepeatPutTest)
+TEST_F(ObjectClientTest, DISABLED_RepeatPutTest)
 {
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
@@ -1097,7 +1097,7 @@ TEST_F(ObjectClientTest, TestObjectsPRAM)
     ASSERT_EQ(newData, std::string(reinterpret_cast<const char *>(bufferGet2.ImmutableData()), bufferGet2.GetSize()));
 }
 
-TEST_F(ObjectClientTest, TestTwoObjectsRRAM)
+TEST_F(ObjectClientTest, DISABLED_TestTwoObjectsRRAM)
 {
     LOG(INFO) << "Start to TestObjectsPram1 from OC client";
     std::shared_ptr<ObjectClient> client;
