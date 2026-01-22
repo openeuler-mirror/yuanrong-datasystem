@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/HeteroClient';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -669,7 +669,7 @@ document.write(`
 <dd><p>批量获取异构设备内存上的数据。DevPublish 和 DevSubscribe 必须同时使用。通过 DevSubscribe 获取数据后，数据系统会自动删除该异构对象，并且不再管理与该对象对应的异构设备内存。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 要获取的一组ke，y最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>keys</strong> - 需要获取的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
 <li><p><strong>devBlobList</strong> - 传出参数，描述用于接收的异构设备内存结构的列表。详见 <a class="reference internal" href="struct-DeviceBlobList.html#_CPPv414DeviceBlobList" title="DeviceBlobList"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">DeviceBlobList</span></code></a> 章节。</p></li>
 <li><p><strong>futureVec</strong> - 传出参数，异步返回的 <a class="reference internal" href="Future.html#_CPPv46Future" title="Future"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Future</span></code></a> 列表，用于获取发送异步操作结果。</p></li>
 </ul>
@@ -686,7 +686,7 @@ document.write(`
 <strong>note</strong>: 数据系统不负责管理异构设备（Device）数据的生命周期，只管理了其对应的元数据，使用该接口时需要用户自行保证数据的生命周期。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>key</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
 <li><p><strong>devBlobList</strong> - 传入参数，用于获取异构设备内存上的数据。详见 <a class="reference internal" href="struct-DeviceBlobList.html#_CPPv414DeviceBlobList" title="DeviceBlobList"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">DeviceBlobList</span></code></a> 章节。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回设置失败的key。</p></li>
 </ul>
@@ -739,7 +739,7 @@ document.write(`
 <dd><p>异步删除数据在异构设备的key(通过 <a class="reference internal" href="#_CPPv4N12HeteroClient7DevMSetERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERNSt6vectorINSt6stringEEE" title="HeteroClient::DevMSet"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">DevMSet()</span></code></a> 缓存的key)。执行此命令后，数据系统将不再管理与该key对应的设备内存。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>key</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>异步删除操作结果通过 std::shared_future&lt; <a class="reference internal" href="struct-AsyncResult.html#_CPPv411AsyncResult" title="AsyncResult"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">AsyncResult</span></code></a>&gt; 返回。</p>
@@ -753,7 +753,7 @@ document.write(`
 <dd><p>批量删除数据在异构设备的key（由DevMset缓存的key）。执行此命令后，数据系统将不再管理与该key对应的设备内存。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>key</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回删除失败的key。</p></li>
 </ul>
 </dd>
@@ -768,7 +768,7 @@ document.write(`
 <dd><p>删除当前客户端连接存储在数据系统中的数据副本。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>key</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回删除失败的key。</p></li>
 </ul>
 </dd>

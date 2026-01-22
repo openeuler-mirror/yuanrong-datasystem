@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/dscli';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -595,11 +595,11 @@ document.write(`
 <li><p><a class="reference internal" href="#dscli-stop">dscli stop</a></p></li>
 <li><p><a class="reference internal" href="#dscli-up">dscli up</a></p></li>
 <li><p><a class="reference internal" href="#dscli-down">dscli down</a></p></li>
+<li><p><a class="reference internal" href="#dscli-runscript">dscli runscript</a></p></li>
 <li><p><a class="reference internal" href="#dscli-generate-helm-chart">dscli generate_helm_chart</a></p></li>
 <li><p><a class="reference internal" href="#dscli-generate-cpp-template">dscli generate_cpp_template</a></p></li>
 <li><p><a class="reference internal" href="#dscli-generate-config">dscli generate_config</a></p></li>
 <li><p><a class="reference internal" href="#dscli-collect-log">dscli collect_log</a></p></li>
-<li><p><a class="reference internal" href="#dscli-runscript">dscli runscript</a></p></li>
 </ul>
 </li>
 <li><p><a class="reference internal" href="#id14">配置项说明</a></p>
@@ -1062,7 +1062,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </section>
 <section id="id11">
 <h3>日志收集<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
-<p>通过 <a class="reference internal" href="#dscli-collect-log">dscli collect_log</a> 命令可快速收集节点上的日志：</p>
+<p>通过 <a class="reference internal" href="#dscli-collect-log">dscli collect_log</a> 命令可快速收集集群日志：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>collect_log<span class="w"> </span>--cluster_config_path<span class="w"> </span>./cluster_config.json
 </pre></div>
 </div>
@@ -1074,7 +1074,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <ol class="arabic">
 <li><p>编写数据系统安装脚本：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cat<span class="w"> </span><span class="s">&lt;&lt; EOF &gt; install.sh</span>
-<span class="s">conda create env --name python39</span>
+<span class="s">conda create --name python39</span>
 <span class="s">conda activate python39</span>
 <span class="s">pip install yr_datasystem</span>
 <span class="s">EOF</span>
@@ -1086,7 +1086,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <span class="w">    </span><span class="nt">&quot;worker_nodes&quot;</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;127.0.0.2&quot;</span><span class="p">],</span>
 <span class="w">    </span><span class="nt">&quot;ssh_auth&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="nt">&quot;ssh_user_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sn&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;ssh_ssh_private_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;~/.ssh/id_rsa&quot;</span>
+<span class="w">        </span><span class="nt">&quot;ssh_private_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;~/.ssh/id_rsa&quot;</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="p">},</span>
 </pre></div>
@@ -1126,9 +1126,9 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <td><p>-w &lt;…&gt;</p></td>
 <td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379”<br><strong>注意</strong>：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数</p></td>
 </tr>
-<tr class="row-odd"><td><p>–datasystem_home_dir &lt;DIR&gt;</p></td>
+<tr class="row-odd"><td><p>–datasystem_home_dir</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
-<td><p>替换配置文件中当前路径的目录。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 datasystem_home_dir 的值</p></td>
+<td><p>指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 datasystem_home_dir 的值</p></td>
 </tr>
 <tr class="row-even"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
@@ -1449,7 +1449,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <p>集群相关配置项位于 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 文件中，包含 datasystem_worker 的命令行参数相关的配置项</p>
 <blockquote>
 <div><p><strong>注意事项：</strong></p>
-<p>单机快速部署 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span></code> 通过直接传入 datasystem_worker 的命令行参数进行配置，需要将表格中的配置项进行映射，以配置项 <code class="docutils literal notranslate"><span class="pre">max_client_num</span></code> 为例，在单机快速部署时如需配置该配置项，应当写为 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">-start</span> <span class="pre">-w</span> <span class="pre">--max_client_num</span> <span class="pre">200</span></code>。</p>
+<p>单机快速部署 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span></code> 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 <code class="docutils literal notranslate"><span class="pre">max_client_num</span></code> 为例，如需在启动时配置该项，应当写为 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span> <span class="pre">--max_client_num</span> <span class="pre">200</span></code>。</p>
 </div></blockquote>
 <section id="id17">
 <h4>资源相关配置<a class="headerlink" href="#id17" title="Link to this heading">#</a></h4>
@@ -1495,7 +1495,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><td><p>unix_domain_socket_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/uds&quot;</span></code></p></td>
-<td><p>Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限</p></td>
+<td><p>配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限</p></td>
 </tr>
 <tr class="row-even"><td><p>worker_address</p></td>
 <td><p>string</p></td>
@@ -1670,7 +1670,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>eviction_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘</p></td>
+<td><p>后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中</p></td>
 </tr>
 </tbody>
 </table>
@@ -1705,12 +1705,12 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><td><p>log_async_queue_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
-<td><p>异步日志的消息队列大小</p></td>
+<td><p>异步日志的消息队列最大容量（消息条数）</p></td>
 </tr>
 <tr class="row-even"><td><p>log_compress</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式</p></td>
+<td><p>控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储</p></td>
 </tr>
 <tr class="row-odd"><td><p>logbufsecs</p></td>
 <td><p>int</p></td>
@@ -1985,7 +1985,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </tr>
 <tr class="row-odd"><td><p>check_async_queue_empty_time_s</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">15</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>datasystem-worker检测异步队列为空的时间，单位为秒</p></td>
 </tr>
 <tr class="row-even"><td><p>data_migrate_rate_limit_mb</p></td>
@@ -2036,7 +2036,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><td><p>memory_reclamation_time_second</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
-<td><p>释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率</p></td>
+<td><p>释放后的内存回收时间控制日志消息的最大缓冲时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率</p></td>
 </tr>
 <tr class="row-even"><td><p>async_delete</p></td>
 <td><p>bool</p></td>
@@ -2099,7 +2099,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
 <tr class="row-even"><td><p>shared_disk_directory</p></td>
-<td><p>sting</p></td>
+<td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>

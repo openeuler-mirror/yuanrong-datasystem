@@ -2,8 +2,9 @@
 
 <!-- TOC -->
 
-- [最小化配置项](#最小化配置项)
-- [详细配置项](#详细配置项)
+- [openYuanrong datasystem Kubernetes配置项](#openyuanrong-datasystem-kubernetes配置项)
+  - [最小化配置项](#最小化配置项)
+  - [详细配置项](#详细配置项)
     - [镜像相关配置](#镜像相关配置)
     - [命名空间相关配置](#命名空间相关配置)
     - [资源相关配置](#资源相关配置)
@@ -56,7 +57,7 @@ global:
 
 > **注意事项：**
 >
-> [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 的大小必须小于 [global.resources.requests.memory](#资源相关配置)
+> [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 的大小必须小于 [global.resources.datasystemWorker.requests.memory](#资源相关配置)
 
 ```yaml
 global:
@@ -73,7 +74,7 @@ global:
     datasystemWorker:
       limits:
         cpu: "3"
-        # 该值必须大于等于 requests.memory
+        # 该值必须大于等于 datasystemWorker.requests.memory
         memory: "5Gi"
       requests:
         cpu: "3"
@@ -137,7 +138,7 @@ global:
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | global.ipc.ipcThroughSharedMemory | bool | `true` | datasystem-worker共享内存启用开关 |
-| global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
+| global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录。UDS文件在该路径下产生，路径最大长度不能超过80个字符。该目录将挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
 | global.port.datasystemWorker | int | `31501` | openYuanrong datasystem DaemonSet占用的主机端口号 |
 | global.rpc.enableCurveZmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | global.rpc.curveKeyDir | string | `"/home/sn/datasystem/curve_key_dir"` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
@@ -209,6 +210,7 @@ global:
 | global.spill.spillFileOpenLimit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | global.spill.spillEnableReadahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
 | global.spill.evictionThreadNum | int | `1` | 后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘 |
+| global.spill.spillToRemoteWorker | bool | `false` | 表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。 |
 
 - **样例1**：
 
@@ -248,6 +250,22 @@ global:
       mountPath: "/opt/spill/yr_datasystem_spill"
     ```
 
+- **样例3**：
+
+    Spill目录为 "/opt/spill/yr_datasystem_spill"，大小为10GB。当spillToRemoteWorker为true时，如果本节点内存不足，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。
+
+    ```yaml
+    global:
+      spill:
+        spillDirectory: "/opt/spill/yr_datasystem_spill"
+        spillSizeLimit: "10737418240"
+        spillThreadNum: 8
+        spillFileMaxSizeMb: 200
+        spillFileOpenLimit: 512
+        spillEnableReadahead: true
+        evictionThreadNum: 1
+        spillToRemoteWorker: true
+    ```
 
 ### 日志与可观测相关配置
 
@@ -258,7 +276,7 @@ global:
 | global.log.logAsync | bool | `true` | 是否开启异步刷新日志功能 |
 | global.log.logAsyncQueueSize | int | `65536` | 异步日志的消息队列大小 |
 | global.log.logCompress | bool | `true` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
-| global.log.logBufSecs | int | `10` | 最多缓冲这么多秒的日志消息 |
+| global.log.logBufSecs | int | `10` | 日志消息的最大缓冲时间（以秒为单位） |
 | global.log.logFilename | string | `""` | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | global.log.logRetentionDay | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | global.log.maxLogFileNum | int | `25` | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
@@ -268,7 +286,7 @@ global:
 | global.observability.logMonitorIntervalMs | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | global.log.minLogLevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | global.log.enableUcxLog | bool | `false` | 是否开启UCX RDMA日志，保存在`${logDir}/worker/ucx.log`当中 |
-| global.log.ucxLogLevel | string | `INFO` | 设置UCX RDMA日志级别 |
+| global.log.ucxLogLevel | string | `ERROR` | 设置UCX日志级别，可选值包括`FATAL`、`ERROR`、`WARN`、`INFO`、`DEBUG`、`TRACE`。建议生产环境使用 `ERROR` 或 `WARN`，调试时使用 `DEBUG`或`TRACE` |
 
 **样例**：
 ```yaml
@@ -313,9 +331,9 @@ global:
 | global.l2Cache.obs.cloudServiceTokenRotation.identityProvider | string | `""` | 为 openYuanrong datasystem 提供权限的 Provider。例如：csms-datasystem |
 | global.l2Cache.obs.cloudServiceTokenRotation.projectId | string | `""` | 对象存储服务(OBS) 的项目ID。例如：fb6a00ff7ae54a5fbb8ff855d0841d00。 |
 | global.l2Cache.obs.cloudServiceTokenRotation.regionId | string | `""` | 对象存储服务(OBS) 的区域ID。例如：cn-north-7 |
-| global.l2Cache.obs.cloudServiceTokenRotation.enableTokenByAgency | bool | `false` | 是否通过委托代理访问其他账号的 对象存储服务(OBS) ，默认值为 `false`。若设为 `true`，需指定 `tokenAgencyName` 和 `tokenAgencyDomain`。 |
-| global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyDomain | string | `""` | 用于代理访问其他账号的委托名称。例如：obs_access |
-| global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyName | string | `""` | 用于代理访问其他账号的委托方域名。例如：op_svc_cff |
+| global.l2Cache.obs.cloudServiceTokenRotation.enableTokenByAgency | bool | `false` | 是否通过委托代理访问其他账号的对象存储服务(OBS)，默认值为 `false`。若设为 `true`，需指定 `tokenAgencyName` 和 `tokenAgencyDomain`。 |
+| global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyDomain | string | `""` | 用于代理访问其他账号的委托方域名。例如：obs_access |
+| global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyName | string | `""` | 用于代理访问其他账号的委托名称。例如：op_svc_cff |
 
 :::
 
@@ -376,8 +394,8 @@ global:
 | global.reliability.nodeDeadTimeoutS | int | `300` | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `nodeTimeoutS` |
 | global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
 | global.reliability.enableHashRingSelfHealing | bool | `false` | 是否启用哈希环自愈功能，如果该值为 `true`，当哈希环状态异常时会启用自愈修复哈希环 |
-| global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置 |
-| global.reliability.addNodeWaitTimeS | int | `60` | 新节点加入哈希环的等待超时时间 |
+| global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
+| global.reliability.addNodeWaitTimeS | int | `60` | 新节点加入哈希环的等待超时时间（以秒为单位） |
 | global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
 | global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
@@ -388,9 +406,9 @@ global:
 |-----|------|---------|-------------|
 | global.gracefulShutdown.scaleInTaint | string | `"datasystem/offline=true:NoExecute"` | 识别优雅退出的污点，格式为 `key=value:effect`。当节点打上与 `scaleInTaint` 相匹配的污点时，该节点上的 datasystem-worker 会触发主动缩容优雅退出 |
 | global.gracefulShutdown.enableLosslessDataExitMode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
-| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `15` | datasystem-worker检测异步队列为空的时间，单位为秒 |
+| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | global.gracefulShutdown.dataMigrateRateLimitMb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
-| global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间，0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod |
+| global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod |
 
 ### 性能相关配置
 
@@ -401,7 +419,7 @@ global:
 | global.performance.sharedMemoryPopulate | bool | `false` | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arenaPerTenant'必须设置为1，'enableFallocate'必须设置为false |
 | global.performance.enableThp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
 | global.performance.arenaPerTenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
-| global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率 |
+| global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
@@ -417,7 +435,7 @@ global:
 | global.performance.sharedDiskArenaPerTenant  | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
 | global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
 | global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
-| global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX RDMA运行时的底层传输协议 |
+| global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX使用的 RDMA传输模式。默认选用 "rc_x" 以获得最佳性能；若当前环境不支持，可改用 "rc"、"ud" 或 "dc"。各模式适用场景详见[UCX传输模式说明](https://github.com/openucx/ucx/wiki/UCX-environment-parameters) |
 | global.performance.ocWorkerAggregateMergeSize | int | `2097152` | worker响应的目标批量大小，默认值为2MB |
 | global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
 | global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |

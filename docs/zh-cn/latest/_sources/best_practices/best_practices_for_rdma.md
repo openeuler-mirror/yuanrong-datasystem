@@ -1,6 +1,6 @@
 # RDMA最佳实践
 
-远程直接内存访问（Remote Direct Memory Access，RDMA）是一种面向大规模数据中心与并行计算的互联技术，将网络传输与内存访问深度融合，通过旁路内核与硬件卸载，实现跨节点间高带宽、极低时延的数据直接搬移。RDMA统一了分布式系统中的通信与存储访问路径，大幅降低了处理器的协议栈开销，支持异构计算单元间的高效协同，是构建高性能计算、AI 训练及分布式数据库的关键底层基础设施。
+远程直接内存访问（Remote Direct Memory Access，RDMA）是一种面向大规模数据中心与并行计算的互联技术，将网络传输与内存访问深度融合，通过旁路内核与硬件卸载，实现跨节点间高带宽、极低时延的数据直接搬移。RDMA 统一了分布式系统中的通信与存储访问路径，大幅降低了处理器的协议栈开销，支持异构计算单元间的高效协同，是构建高性能计算、AI 训练及分布式数据库的关键底层基础设施。
 
 openYuanrong datasystem 现已集成对 RDMA 的支持，实现了分布式缓存在物理节点之间的硬件级加速。基于 RDMA 构建的全局缓存抽象，透明化了下层拓扑，使得应用能够以极简的编程方式，在跨节点通信场景中实现数据直通，充分释放底层硬件性能。
 
@@ -29,7 +29,7 @@ git clone https://gitcode.com/openeuler/yuanrong-datasystem.git
 
 ### 编译
 
-默认配置下数据系统会启用异构能力的编译，需要编译环境中具备CANN依赖，如无需异构能力支持，可禁用异构能力。
+默认配置下数据系统会启用异构能力的编译，需要编译环境中具备 CANN 依赖，如无需异构能力支持，可禁用异构能力。
 
 ::::{tab-set}
 
@@ -82,16 +82,31 @@ etcd --listen-client-urls http://0.0.0.0:2379 \
 
 :::{tab-item}  进程部署
 
-openYuanrong datasystem 进程部署主要通过dscli工具，在使用前请确保在两个节点中已安装 openYuanrong datasystem wheel 包。
+openYuanrong datasystem 进程部署主要通过 dscli 工具，在使用前请确保在两个节点中已安装 openYuanrong datasystem wheel 包。
 
 分别在两个节点执行如下命令：
 
 ```bash
-dscli start -w --worker_address "${node_address}" --etcd_address "${etcd_address}" --enable_rdma true
+# 指定UCX使用的RDMA传输模式
+export UCX_TLS=rc_x
+# （可选）配置UCX日志
+export UCX_LOG_FILE=/tmp/ucx.log
+export UCX_LOG_LEVEL=ERROR
+# 启动datasystem worker
+dscli start \
+    -w \
+    --worker_address "${node_address}" \
+    --etcd_address "${etcd_address}" \
+    --enable_rdma true \
+    --arena_per_tenant 1
 ```
 参数说明：
+- `UCX_TLS`：用于选择UCX的RDMA传输模式，默认选用`"rc_x"` 加速型可靠连接传输模式，以获得最佳性能，若网卡不支持该模式，可选择`"rc"`、`"ud"`与`"dc"`等，详情参考[UCX环境配置](https://github.com/openucx/ucx/wiki/UCX-environment-parameters)
+- `UCX_LOG_FILE`：指定UCX日志的输出文件路径（例如 `/tmp/ucx.log`）。仅当设置了`UCX_LOG_LEVEL`时生效。日志文件需确保运行用户有写入权限。
+- `UCX_LOG_LEVEL`：设置UCX日志级别，可选值包括`FATAL`、`ERROR`、`WARN`、`INFO`、`DEBUG`、`TRACE`。建议生产环境使用 `ERROR` 或 `WARN`，调试时使用 `DEBUG`或`TRACE`
 - `node_address`：当前节点的通信地址与端口。格式为 `IP:Port`，例如：`192.168.0.1:31501`。
 - `etcd_address`：ETCD集群的访问地址列表。格式为多个 `IP:Port` 的逗号分隔字符串，例如：`192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379`。
+- `arena_per_tenant`：不应超过系统内存资源限制，避免初始化失败，默认值为`1`，在保证功能的前提下提供最快的启动速度
 
 :::
 
@@ -113,25 +128,39 @@ cp -r yuanrong-datasystem/docker/chart/datasystem /tmp
 ```yaml
 global:
   # 其他配置项...
-  # 请注意分配的arena数量及sharedMemory大小与允许的资源匹配
+  # 请注意分配的arenaPerTenant及sharedMemory大小与允许的资源匹配
 
   imageRegistry: ""
   images:
     datasystem: "openyuanrong-datasystem:0.6.0"
   
-  # （可选）开启RDMA日志
-  # 默认在/home/yuanrong/datasystem/logs/worker下
+  # （可选）UCX RDMA日志配置
+  # 日志将保存至${logDir}/worker/ucx.log
   log:
-    enableUcxLog: true
-    ucxLogLevel: "INFO"
+    # 是否开启UCX RDMA日志
+    enableUcxLog: false
+    # 日志级别，建议生产环境使用ERROR/WARN，调试时可设为DEBUG/TRACE
+    ucxLogLevel: "ERROR"
 
   etcd:
     # ETCD集群地址
     etcdAddress: "192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379"
   
   performance:
+    # arena数量不应超过系统内存资源限制，避免初始化失败
+    # 默认值为1，在保证功能的前提下提供最快的启动速度
+    arenaPerTenant: 1
     # 开启RDMA能力
     enableRdma: true
+    # 指定UCX使用的RDMA传输模式
+    # 默认选用"rc_x"加速型可靠连接传输模式，以获得最佳性能。
+    # 若当前网卡或驱动不支持 "rc_x"，可尝试以下替代选项：
+    #   - "rc"   : 可靠连接模式，兼容性更好；
+    #   - "ud"   : 不可靠数据报模式，适用于低延迟、小消息场景；
+    #   - "dc"   : 动态连接模式，适用于大规模节点通信（需Mellanox网卡支持）。
+    # 更多传输模式及其详细说明，请参阅：
+    # https://github.com/openucx/ucx/wiki/UCX-environment-parameters
+    ucxTransportLayerSelection: "rc_x"
   
   # 挂载IB设备相关目录，默认已挂载/dev/infiniband与/sys/class/infiniband，无需重复挂载
   # 例外情况请参考以下格式自行挂载
@@ -204,14 +233,6 @@ print("[OK] Get value")
 为确保RDMA组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。
 
 
-### 关闭LPI
-
-LPI 用于优化功耗管理与资源分配，建议在 BIOS 启动时禁用掉改功能以提升 CPU 性能，配置步骤如下：
-
-```text
-BIOS -> Advanced -> Power And Performance Configuration -> CPU PM Control
-```
-
 ### 开启大页内存
 
 开启大页内存可有效提升内存的分配与拷贝性能，开启大页内存可参考附录文档：[大页内存配置指南](../appendix/hugepage_guide.md)。
@@ -223,10 +244,12 @@ BIOS -> Advanced -> Power And Performance Configuration -> CPU PM Control
 :::{tab-item}  进程部署
 
 ```bash
+export UCX_TLS=rc_x
 dscli start -w \
     --worker_address "${node_address}" \
     --etcd_address "${etcd_address}" \
     --enable_rdma true \
+    --arena_per_tenant 1 \
     --enable_huge_tlb true
 ```
 
@@ -247,8 +270,13 @@ global:
     etcdAddress: "192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379"
   
   performance:
+    # arena数量不应超过系统内存资源限制，避免初始化失败
+    # 默认值为1，在保证功能的前提下提供最快的启动速度
+    arenaPerTenant: 1
     # 开启RDMA能力
     enableRdma: true
+    # 选择RDMA高性能传输模式
+    ucxTransportLayerSelection: "rc_x"
     # 开启大页内存
     enableHugeTlb: true
 ```
@@ -263,6 +291,9 @@ global:
 绑定NUMA节点可减少远程内存访问，提升缓存访问性能，进程部署时绑定NUMA节点命令如下：
 
 ```bash
+# 指定UCX使用的RDMA传输模式
+export UCX_TLS=rc_x
+# 启动datasystem worker
 dscli start \
     --cpunodebind 0 \
     --localalloc \
@@ -270,6 +301,7 @@ dscli start \
     --worker_address "${node_address}" \
     --etcd_address "${etcd_address}" \
     --enable_rdma true \
+    --arena_per_tenant 1 \
     --enable_huge_tlb true
     
 ```

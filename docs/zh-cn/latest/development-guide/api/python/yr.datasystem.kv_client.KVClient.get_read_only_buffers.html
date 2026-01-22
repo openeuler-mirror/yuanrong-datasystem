@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -510,14 +510,16 @@ document.write(`
 <dl class="py method">
 <dt class="sig sig-object py" id="yr.datasystem.kv_client.KVClient.get_read_only_buffers">
 <span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">get_read_only_buffers</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_ms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient.get_read_only_buffers" title="Link to this definition">#</a></dt>
-<dd><p>获取所有给定键的值。</p>
+<dd><p>获取所有给定键的值，返回 list[<a class="reference internal" href="yr.datasystem.kv_client.ReadOnlyBuffer.html"><span class="doc">ReadOnlyBuffer</span></a>] 对象列表。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>keys</strong> (list) - 字符串类型的键列表。约束：传入的key的数量不能超过1万。</p></li>
 <li><p><strong>timeout_ms</strong> (int) - 等待结果返回的超时时间，单位为毫秒。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p><cite>ReadOnlyBuffer</cite> 对象列表。</p>
+<dt>返回：</dt><dd><ul class="simple">
+<li><p><strong>ReadOnlyBuffer</strong> (list) - 对象列表。</p></li>
+</ul>
 </dd>
 <dt>异常：</dt><dd><ul class="simple">
 <li><p><strong>RuntimeError</strong> - 如果获取所有键的值失败，将抛出运行时错误。</p></li>

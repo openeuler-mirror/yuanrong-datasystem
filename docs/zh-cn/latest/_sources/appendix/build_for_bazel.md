@@ -31,8 +31,8 @@ demo
 │       ├── BUILD.bazel
 │       ├── include
 │       ├── lib
-|       └── BUILD.WORKSPACE
-└── WORKSAPCE
+|       └── WORKSPACE
+└── WORKSPACE
 ```
 
 ### 2. 声明 datasystem 为本地仓库
@@ -42,7 +42,7 @@ demo
 ```bazel
 local_repository(
     name = "datasystem",
-    path = "thirdparty/datasystem/bazel",
+    path = "thirdparty/datasystem",
 )
 ```
 

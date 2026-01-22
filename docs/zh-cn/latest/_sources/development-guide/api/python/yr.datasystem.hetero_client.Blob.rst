@@ -7,7 +7,7 @@ yr.datasystem.hetero_client.Blob
 
     参数：
         - **dev_ptr** (int) - 用于描述 Device 上的内存指针。
-        - **size** (list) - 用于描述内存的大小。
+        - **size** (int) - 用于描述内存的大小。
 
     输出：
         Blob

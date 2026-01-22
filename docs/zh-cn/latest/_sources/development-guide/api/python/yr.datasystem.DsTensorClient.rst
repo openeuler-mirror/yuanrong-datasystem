@@ -44,7 +44,7 @@ yr.datasystem.DsTensorClient
        * - :doc:`exist <yr.datasystem.DsTensorClient.exist>`
          - 检查给定 key 在数据系统中是否存在。
        * - :doc:`dev_mset <yr.datasystem.DsTensorClient.dev_mset>`
-         - 通过数据系统缓存 Device 上的数据。
+         - 通过数据系统缓存 device 上的数据。
        * - :doc:`dev_mget <yr.datasystem.DsTensorClient.dev_mget>`
          - 获取 device 中的数据，并写入到 Tensor 中。
        * - :doc:`dev_mget_into_tensor <yr.datasystem.DsTensorClient.dev_mget_into_tensor>`

@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'best_practices/best_pracitces_for_ub';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
@@ -564,7 +563,7 @@ document.write(`
 </tr>
 <tr class="row-odd"><td><p>Make</p></td>
 <td><p>-</p></td>
-<td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
+<td><p>openYuanrong datasystem使用的编译构建工具</p></td>
 </tr>
 <tr class="row-even"><td><p>CMake</p></td>
 <td><p>3.18.3+</p></td>
@@ -635,7 +634,7 @@ document.write(`
 <p>openYuanrong datasystem 进程部署主要通过dscli工具，在使用前请确保在两个节点中已安装 openYuanrong datasystem wheel 包。</p>
 <blockquote>
 <div><p><strong>容器内进程部署注意事项</strong></p>
-<p>🔔 <strong>重要提示</strong>：在拉起容器前，请挂在如下宿主机目录，确保容器内的URMA二进制文件与宿主机版本一致：</p>
+<p>🔔 <strong>重要提示</strong>：在拉起容器前，请挂载如下宿主机目录，确保容器内的URMA二进制文件与宿主机版本一致：</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>宿主机路径</p></th>
@@ -764,7 +763,7 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/c
 <p>为确保灵衢（UB）组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。</p>
 <section id="lpi">
 <h3>关闭LPI<a class="headerlink" href="#lpi" title="Link to this heading">#</a></h3>
-<p>LPI 用于优化功耗管理与资源分配，建议在 BIOS 启动时禁用掉改功能以提升 CPU 性能，配置步骤如下：</p>
+<p>LPI 用于优化功耗管理与资源分配，建议在 BIOS 启动时禁用该功能以提升 CPU 性能，配置步骤如下：</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>BIOS -&gt; Advanced -&gt; Power And Performance Configuration -&gt; CPU PM Control
 </pre></div>
 </div>
