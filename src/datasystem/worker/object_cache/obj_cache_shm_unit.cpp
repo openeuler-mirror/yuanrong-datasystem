@@ -22,6 +22,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -46,7 +47,9 @@ namespace object_cache {
 
 ObjCacheShmUnit::ObjCacheShmUnit()
 {
-    remoteH2DHostInfoMap_ = std::make_shared<RemoteH2DHostInfoMap>();
+    if (IsRemoteH2DEnabled()) {
+        remoteH2DHostInfoMap_ = std::make_shared<RemoteH2DHostInfoMap>();
+    }
 }
 
 Status ObjCacheShmUnit::FreeResources()
@@ -124,9 +127,14 @@ void ObjCacheShmUnit::SetAddress(const std::string &newAddress)
 void ObjCacheShmUnit::SetRemoteHostInfo(const std::string &clientCommId,
                                         const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
 {
-    RemoteH2DHostInfoMap::accessor accessor;
-    remoteH2DHostInfoMap_->insert(accessor, clientCommId);
-    accessor->second = remoteH2DHostInfo;
+    if (IsRemoteH2DEnabled()) {
+        RemoteH2DHostInfoMap::accessor accessor;
+        remoteH2DHostInfoMap_->insert(accessor, clientCommId);
+        accessor->second = remoteH2DHostInfo;
+    } else {
+        // Handle the case when remote H2D is not enabled
+        LOG(WARNING) << "Remote H2D is not enabled";
+    }
 }
 
 std::shared_ptr<RemoteH2DHostInfoMap> ObjCacheShmUnit::GetRemoteHostInfo() const
