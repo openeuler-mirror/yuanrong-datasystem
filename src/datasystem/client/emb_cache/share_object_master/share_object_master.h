@@ -40,7 +40,7 @@ public:
     datasystem::Status enqueue(const std::vector<std::string> &embKeyFilesPath,
                                const std::vector<std::string> &embValueFilesPath);
  
-    std::unique_ptr<Message> dequeue();
+    std::unique_ptr<EtcdMPMCQueue::Message> dequeue();
  
 private:
     std::unordered_map<std::string, std::unique_ptr<ShareObjectApi>> shareObjectApiMap;

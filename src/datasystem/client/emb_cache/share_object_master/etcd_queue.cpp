@@ -10,7 +10,7 @@ EtcdMPMCQueue::EtcdMPMCQueue(const std::string &endpoints,
 {
     watcherPtr_ = std::make_unique<etcd::Watcher>(etcd_, prefix_, from_index_,
                 [&](etcd::Response resp) {
-                    if (resp.error_code())
+                    if (resp.error_code() || resp.events().empty())
                         return;
                     for (auto const &ev : resp.events()) {
                         if (ev.event_type() != etcd::Event::EventType::PUT)
@@ -28,8 +28,8 @@ EtcdMPMCQueue::EtcdMPMCQueue(const std::string &endpoints,
                             local_queue_.emplace(key, ev.kv().as_string());
                             cv_.notify_one();
                         }
-                        from_index_ = ev.kv().modified_index() + 1;
                     }
+                    from_index_ = resp.events().back().kv().modified_index() + 1;
                 },
                 true);
 }
@@ -58,16 +58,16 @@ datasystem::Status EtcdMPMCQueue::pushEOF()
     return datasystem::Status::OK();
 }
 
-std::unique_ptr<Message> EtcdMPMCQueue::pop()
+std::unique_ptr<EtcdMPMCQueue::Message> EtcdMPMCQueue::pop()
 {
     std::unique_lock<std::mutex> lk(mu_);
-    cv_.wait(lk, [this] { return !local_queue_.empty()});
+    cv_.wait(lk, [this] { return !local_queue_.empty();});
     if (local_queue_.front().value == EOFMSG) {
         local_queue_.pop();
         return nullptr;
     }
 
-    auto msg = std::make_unique<Message>(std::move(local_queue_.front()));
+    auto msg = std::make_unique<Message>(local_queue_.front());
     local_queue_.pop();
     return msg;
 }

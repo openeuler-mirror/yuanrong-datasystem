@@ -40,7 +40,8 @@ add_thirdparty_lib(cpprestsdk
     CONF_OPTIONS ${cpprestsdk_CMAKE_OPTIONS}
     CXX_FLAGS ${cpprestsdk_CXX_FLAGS})
  
-# 查找并包含 cpprestsdkfind_package(cpprestsdk REQUIRED PATHS ${cpprestsdk_ROOT} CONFIG)
+# 查找并包含 cpprestsdk
+find_package(cpprestsdk REQUIRED PATHS ${cpprestsdk_ROOT} CONFIG)
  
 get_property(cpprestsdk_INCLUDE_DIR TARGET cpprestsdk::cpprest PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 include_directories(SYSTEM ${cpprestsdk_INCLUDE_DIR})
