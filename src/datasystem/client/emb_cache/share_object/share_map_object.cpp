@@ -13,6 +13,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/common/perf/perf_manager.h"
 
 namespace datasystem {
 
@@ -90,25 +91,29 @@ Status ShareMapObject::Lookup(const std::vector<uint64_t> &keys, std::vector<Str
         return Status(StatusCode::K_RECOVERY_ERROR, FormatString("Table [%s] vector is null", key_.c_str()));
     }
 
-    buffers.reserve(keys.size());
-    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
-
     buffers.resize(keys.size());
+    
+    PerfPoint point(PerfKey::EMBCLIENT_SMO_ACQUIRE_LOCK);
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    point.Record();
 
     auto lookup = [&, this](size_t start, size_t end) {
         StringView keyBuffer;
         StringView valueBuffer;
         for (size_t i = start; i < end; i++) {
+            PerfPoint point1(PerfKey::EMBCLIENT_SMO_HASH_INDEX);
             size_t index = hash_index(keys[i]);
             // LOG(INFO) << FormatString("Key %llu is at %llu", keys[i], index);
-            Status valueRes = shareValue_->Lookup(index, valueBuffer);
-#if !defined(NDEBUG)
+            point1.RecordAndReset(PerfKey::EMBCLIENT_SMO_LOOKUP_KEY);
             Status keyRes = shareKey_->Lookup(index, keyBuffer);
+            point1.RecordAndReset(PerfKey::EMBCLIENT_SMO_VERIFY_KEY);
             if (std::memcmp(keyBuffer.data(), &keys[i], sizeof(keys[i])) != 0) {
                 LOG(ERROR) << FormatString("Lookup key mismatch, expected %llu, got %llu.", keys[i],
                                            *reinterpret_cast<const uint64_t *>(keyBuffer.data()));
             }
-#endif
+            point1.RecordAndReset(PerfKey::EMBCLIENT_SMO_LOOKUP_VALUE);
+            Status valueRes = shareValue_->Lookup(index, valueBuffer);
+            point1.Record();
             buffers[i] = valueBuffer;
         }
         return Status::OK();
@@ -119,7 +124,10 @@ Status ShareMapObject::Lookup(const std::vector<uint64_t> &keys, std::vector<Str
         return lookup(0, keys.size());
     }
 
-    return Parallel::ParallelFor<size_t>(0, keys.size(), lookup, 0, parallism);
+    PerfPoint point2(PerfKey::EMBCLIENT_SMO_PARALLEL_LOOKUP);
+    Status status =  Parallel::ParallelFor<size_t>(0, keys.size(), lookup, 0, parallism);
+    point2.Record();
+    return status;
 }
 
 Status ShareMapObject::BuildIndex()
@@ -307,6 +315,13 @@ Status ShareMapObject::DeserializeMeta(const std::string &serializedMeta)
 
     LOG(INFO) << FormatString("ShareMapObject [%s] meta: size %llu version %llu dimsize %llu ", key_.c_str(), tempSize,
                               tempVersion, tempDim);
+        
+    if (std::string_view(serializedMeta.data() + (metaSize - key_.length()), key_.length()) != key_) {
+        auto errMsg = FormatString("Key [%s] Meta is invalid. Get meta size %zu, expected %zu. Get meta key: %s, expected: %s.", key_.c_str(), serializedMeta.size(), metaSize, std::string(serializedMeta.data() + (metaSize - key_.length()), key_.length()).c_str(), key_.c_str());
+        LOG(ERROR) << errMsg;
+        return Status(StatusCode::K_INVALID, errMsg);
+    }
+    
 
     if (std::string_view(serializedMeta.data() + (metaSize - key_.length()), key_.length()) != key_) {
         auto errMsg = FormatString(

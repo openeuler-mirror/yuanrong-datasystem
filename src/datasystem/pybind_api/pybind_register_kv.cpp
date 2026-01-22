@@ -514,14 +514,16 @@ PybindDefineRegisterer g_pybind_define_f_EmbClient("EmbClient", PRIORITY_LOW, []
             [](EmbClient &client,
                const std::vector<uint64_t> &keys) {
                 std::vector<StringView> buffers;
+                PerfPoint point(PerfKey::EMBCLIENT_CPP);
                 Status status = client.Find(keys, buffers);
+                point.RecordAndReset(PerfKey::EMBCLIENT_CPP_PREPARE_RET_PY);
                 py::list vals;
 
                 for (const StringView& buffer: buffers) {
                     py::bytes val(buffer.data(), buffer.size());
                     vals.append(std::move(val));
                 }
-
+                point.Record();
                 return std::make_pair(status, std::move(vals));
         })
         .def("BuildIndex",
