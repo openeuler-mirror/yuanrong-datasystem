@@ -110,6 +110,7 @@ spec:
         - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
+        - -enable_remote_h2d={{ $.Values.global.performance.enableRemoteH2D }}
         - -eviction_thread_num={{ $.Values.global.spill.evictionThreadNum }}
         - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
         - -iam_kit={{ $.Values.global.tenantAuth.iamKit }}
@@ -133,6 +134,7 @@ spec:
         - -sc_scan_interval_ms={{ $.Values.global.rpc.scScanIntervalMs }}
         - -sc_metrics_log_interval_s={{ $.Values.global.log.scMetricsLogIntervalS }}
         - -sc_cache_pages={{ $.Values.global.resources.datasystemWorker.scCachePages }}
+        - -sc_thread_num={{ $.Values.global.rpc.scThreadNum }}
         - -page_size={{ $.Values.global.resources.datasystemWorker.pageSize }}
         - -remote_send_thread_num={{ $.Values.global.rpc.remoteSendThreadNum }}
         - -master_sc_thread_num={{ $.Values.global.rpc.masterScThreadNum }}

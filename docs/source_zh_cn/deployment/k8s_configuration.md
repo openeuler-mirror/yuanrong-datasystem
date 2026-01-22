@@ -156,6 +156,7 @@ global:
 | global.rpc.maxRpcSessionNum | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | global.rpc.streamIdleTimes | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
 | global.rpc.remoteSendThreadNum | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
+| global.rpc.scThreadNum | int | `128` | 配置流缓存master工作的最大线程数 |
 
 **样例**：
 配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号
@@ -423,6 +424,7 @@ global:
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
+| global.performance.enableRemoteH2D | bool | `false` | 如果为true，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值：false |
 | global.performance.ocShmTransferThresholdKB  | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输 |
 | global.performance.urmaMode | string | `UB` | 是否开用Urma通过IB或UB运行，默认情况下，UB将与URMA一起运行 |

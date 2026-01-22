@@ -103,6 +103,14 @@
         "value": "4",
         "description": "The shared page group count for each remote worker, should be in range [1, 64]."
     },
+    "enable_remote_h2d": {
+        "value": "false",
+        "description": "Option to turn on Remote H2D, default false."
+    },
+    "sc_thread_num": {
+        "value": "128",
+        "description": "Number of threads for (non rpc) stream cache service work."
+    },
     "master_sc_thread_num": {
         "value": "128",
         "description": "Max number of threads for (non rpc) master stream cache service work."
