@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/example/object';</script>
     <script src="../../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -513,7 +513,7 @@ document.write(`
 <h1>Object<a class="headerlink" href="#object" title="Link to this heading">#</a></h1>
 <section id="id1">
 <h2>基本概念<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
-<p>openYuanrong datasystem (下文中称为数据系统)的object接口，基于共享内存实现 host上的 Object 语义读写，提供基于引用计数管理生命周期，将共享内存抽象为 buffer，直接映射共享内存指针，提供更底层灵活的编程接口。</p>
+<p>openYuanrong datasystem (下文中称为数据系统)的Object接口，基于共享内存实现 host上的 Object 语义读写，提供基于引用计数管理生命周期，将共享内存抽象为 buffer，直接映射共享内存指针，提供更底层灵活的编程接口。</p>
 </section>
 <section id="id2">
 <h2>样例代码<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
@@ -604,7 +604,7 @@ C++</label><div class="sd-tab-content docutils">
 </section>
 <section id="id4">
 <h2>数据溢出到磁盘<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
-<p>Object 数据支持将数据溢出到磁盘，相关配置与 KV 相同，详情参见 <a class="reference internal" href="kv.html#id6"><span class="std std-ref">KV</span></a> 中的描述。</p>
+<p>Object 接口支持将数据溢出到磁盘，相关配置与 KV 相同，详情参见 <a class="reference internal" href="kv.html#id6"><span class="std std-ref">KV</span></a> 中的描述。</p>
 </section>
 <section id="id5">
 <h2>使用限制<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>

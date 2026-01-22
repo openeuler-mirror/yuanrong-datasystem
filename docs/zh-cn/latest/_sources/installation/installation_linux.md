@@ -73,7 +73,7 @@ dscli --version
 |openEuler|22.03|运行/编译openYuanrong datasystem的操作系统|
 |[Python](#安装-python)|3.9-3.11|openYuanrong datasystem的运行/编译依赖Python环境|
 |[CANN](#安装-cann)|8.2.RC1|运行/编译异构相关特性的依赖库|
-|rdma-core|35.1|运行/编译RDMA特性的依赖库|
+|[rdma-core](#安装-rdma-core)|35.1|运行/编译RDMA特性的依赖库|
 
 
 #### 安装 Python
@@ -180,7 +180,7 @@ lrwxrwxrwx. 1 root root 14 Mar 23  2022 /usr/lib64/librdmacm.so -> librdmacm.so.
 
 |软件名称|版本|作用|
 |-|-|-|
-|[wheel](#安装wheel和setuptools)|0.32.0+|openYuanrong datasystem使用的Python打包工具|
+|[wheel](#安装wheel和setuptools)|0.35.1+|openYuanrong datasystem使用的Python打包工具|
 |[setuptools](#安装wheel和setuptools)|44.0+|openYuanrong datasystem使用的Python包管理工具|
 |[GCC](#安装依赖库)|7.5.0+|用于编译openYuanrong datasystem的C编译器|
 |[G++](#安装依赖库)|7.5.0+|用于编译openYuanrong datasystem的C++编译器|
@@ -237,7 +237,7 @@ pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanro
 ### 下载源码
 
 ```bash
-git clone https://gitee.com/openeuler/yuanrong-datasystem.git
+git clone https://gitcode.com/openeuler/yuanrong-datasystem
 ```
 
 ### 编译

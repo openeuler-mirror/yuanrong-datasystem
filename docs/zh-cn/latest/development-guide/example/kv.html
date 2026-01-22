@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/example/kv';</script>
     <script src="../../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -599,19 +599,19 @@ C++</label><div class="sd-tab-content docutils">
 <p>KV 数据存储在数据系统的共享内存中，当内存不足时，支持自动将数据溢出到磁盘并从内存中删除数据。当数据需要读取时，自动从磁盘中加载到共享内存。
 若磁盘空间也不足时，如果数据已写入到二级缓存，则自动将数据从本地磁盘和内存中删除。当数据需要读取时，自动从二级缓存加载到共享内存。
 使用 KV 溢出功能，需要在部署时指定相关参数，默认为关闭。</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># The path of the spilling, empty means local_dick spill disabled.</span>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># The path of the spilling, empty means local_disk spill disabled.</span>
 <span class="c1"># It will create a new subdirectory(&quot;datasystem_spill_data&quot;) under the SPILL_DIRECTORY to store the spill file.</span>
 <span class="c1"># Example: If SPILL_DIRECTORY is &quot;/home/spill&quot;, spill files will exist in the &quot;/home/spill/datasystem_spill_data&quot;.</span>
 <span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 </pre></div>
 </div>
-<p>数据溢出有以下参数，可用于设置磁盘空间上限、溢出的并发线程、文件大小等参数，用于性能调优。</p>
+<p>数据溢出有以下参数，可用于设置磁盘空间上限、溢出的并发线程、文件大小、是否可以迁移数据到远端内存等参数，用于性能调优。</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># Maximum amount of spilled data that can be stored in the spill directory. If spill is enable and spillSizeLimit is 0, spillSizeLimit will be set to 95% of the spill directory.</span>
 <span class="c1"># Unit for spillSizeLimit is Bytes.</span>
 <span class="nt">spillSizeLimit</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
 <span class="c1"># It represents the maximum parallelism of writing files, more threads will consume more CPU and I/O resources.</span>
 <span class="nt">spillThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
-<span class="c1"># The size limit of single spill file, spilling objects which lager than that value with one object per file.</span>
+<span class="c1"># The size limit of single spill file, spilling objects which larger than that value with one object per file.</span>
 <span class="c1"># If there are some big objects, you can increase this value to avoid run out of inodes quickly.</span>
 <span class="c1"># The valid range is 200-10240.</span>
 <span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
@@ -623,6 +623,9 @@ C++</label><div class="sd-tab-content docutils">
 <span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <span class="c1"># Thread number of eviction for object cache.</span>
 <span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="c1"># It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes.</span>
+<span class="c1"># When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers&#39; shared memory. If no worker has available memory, objects spill to disk.</span>
+<span class="nt">spillToRemoteWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 </pre></div>
 </div>
 </section>

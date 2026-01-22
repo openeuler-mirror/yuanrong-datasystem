@@ -11,4 +11,4 @@ yr.datasystem.stream_client.Producer.send
 
     异常：
         - **TypeError** - 输入参数存在非法值。
-        - **RuntimeError** - 发送失败。
+        - **RuntimeError** - 生产者发送数据失败。

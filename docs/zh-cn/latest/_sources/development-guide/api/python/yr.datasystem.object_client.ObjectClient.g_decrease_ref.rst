@@ -6,11 +6,11 @@ yr.datasystem.object_client.ObjectClient.g_decrease_ref
     减少给定列表对象 key 的全局引用计数。
 
     参数：
-        - **object_keys** (int) - 对象 key 列表。约束：传入的object key的数量不能超过1万。
+        - **object_keys** (list) - 对象 key 列表。约束：传入的object key的数量不能超过1万。
 
     返回：
         failed_object_keys，减全局引用计数失败的对象 key 列表。
 
     异常：
         - **TypeError** - 输入参数存在非法值。
-        - **RuntimeError** - 给定列表的对象 key 减全局引用计数都未成功。
+        - **RuntimeError** - 给定列表的对象 key 减少全局引用计数都未成功。

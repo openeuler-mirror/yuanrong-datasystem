@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.kv_client.KVClient';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -509,12 +509,12 @@ document.write(`
 <h1>yr.datasystem.kv_client.KVClient<a class="headerlink" href="#yr-datasystem-kv-client-kvclient" title="Link to this heading">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="yr.datasystem.kv_client.KVClient">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.</span></span><span class="sig-name descname"><span class="pre">KVClient</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">port</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connect_timeout_ms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">60000</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_public_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_private_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">server_public_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">access_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">secret_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tenant_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enable_cross_node_connection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient" title="Link to this definition">#</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.</span></span><span class="sig-name descname"><span class="pre">KVClient</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">port</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connect_timeout_ms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">60000</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_public_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client_private_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">server_public_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">access_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">secret_key</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tenant_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enable_cross_node_connection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient" title="Link to this definition">#</a></dt>
 <dd><p>KV缓存客户端。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>host</strong> (str) - 数据系统Worker的主机IP地址。</p></li>
-<li><p><strong>port</strong> (int) - 数据系统Worker的主机IP端口号。</p></li>
+<li><p><strong>port</strong> (int) - 数据系统Worker的服务端口号。</p></li>
 <li><p><strong>connect_timeout_ms</strong> (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： <code class="docutils literal notranslate"><span class="pre">60000</span></code> 。</p></li>
 <li><p><strong>client_public_key</strong> (str) - 用于curve认证的客户端公钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
 <li><p><strong>client_private_key</strong> (str) - 用于curve认证的客户端私钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
@@ -551,7 +551,7 @@ document.write(`
 <td><p>批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.get_read_only_buffers.html"><span class="doc">get_read_only_buffers</span></a></p></td>
-<td><p>获取所有给定键的值。</p></td>
+<td><p>以只读缓冲区形式获取给定键的值。</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.get.html"><span class="doc">get</span></a></p></td>
 <td><p>获取所有给定键的值。</p></td>
@@ -560,7 +560,7 @@ document.write(`
 <td><p>读取指定偏移量的数据。</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.delete.html"><span class="doc">delete</span></a></p></td>
-<td><p>初始化KV缓存客户端以连接到 Worker 。</p></td>
+<td><p>删除指定的键值对。</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.generate_key.html"><span class="doc">generate_key</span></a></p></td>
 <td><p>生成一个带数据系统 Worker UUID 的 key。</p></td>

@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
@@ -180,6 +179,7 @@
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -510,14 +510,11 @@ document.write(`
 <dl class="py method">
 <dt class="sig sig-object py" id="yr.datasystem.hetero_client.HeteroClient.async_dev_delete">
 <span class="sig-prename descclassname"><span class="pre">yr.datasystem.hetero_client.HeteroClient.</span></span><span class="sig-name descname"><span class="pre">async_dev_delete</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.hetero_client.HeteroClient.async_dev_delete" title="Link to this definition">#</a></dt>
-<dd></dd></dl>
-
-<p>异步接口，从数据系统删除此 key 的元数据，不再管理此 key 对应的 device 内存。可通过返回的Future查询删除结果。</p>
-<blockquote>
-<div><p>async_dev_delete 与 dev_mset / dev_mget 接口配套使用。</p>
+<dd><p>异步接口，从数据系统删除此 key 的元数据，不再管理此 key 对应的 device 内存。可通过返回的Future查询删除结果。</p>
+<p>async_dev_delete 与 dev_mset / dev_mget 接口配套使用。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><ul class="simple">
@@ -529,7 +526,8 @@ document.write(`
 </ul>
 </dd>
 </dl>
-</div></blockquote>
+</dd></dl>
+
 </section>
 
 

@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,10 +48,9 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
-    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/k8s_configuration';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
@@ -531,6 +530,8 @@ document.write(`
 <h1>openYuanrong datasystem Kubernetes配置项<a class="headerlink" href="#openyuanrong-datasystem-kubernetes" title="Link to this heading">#</a></h1>
 <!-- TOC -->
 <ul class="simple">
+<li><p><a class="reference internal" href="#openyuanrong-datasystem-kubernetes">openYuanrong datasystem Kubernetes配置项</a></p>
+<ul>
 <li><p><a class="reference internal" href="#id1">最小化配置项</a></p></li>
 <li><p><a class="reference internal" href="#id2">详细配置项</a></p>
 <ul>
@@ -552,6 +553,8 @@ document.write(`
 <li><p><a class="reference internal" href="#id13">挂载路径相关配置</a></p></li>
 <li><p><a class="reference internal" href="#id14">混合部署相关配置</a></p></li>
 <li><p><a class="reference internal" href="#id15">Kubernetes精细化控制配置</a></p></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -603,7 +606,7 @@ document.write(`
 <p>默认情况下，每个 openYuanrong datasystem DaemonSet 最大可使用 2GB 共享内存空间用于缓存数据，如果需要调整该值，可以通过 <a class="reference internal" href="#id5">global.resources.datasystemWorker.sharedMemory</a> 调整。</p>
 <blockquote>
 <div><p><strong>注意事项：</strong></p>
-<p><a class="reference internal" href="#id5">global.resources.datasystemWorker.sharedMemory</a> 的大小必须小于 <a class="reference internal" href="#id5">global.resources.requests.memory</a></p>
+<p><a class="reference internal" href="#id5">global.resources.datasystemWorker.sharedMemory</a> 的大小必须小于 <a class="reference internal" href="#id5">global.resources.datasystemWorker.requests.memory</a></p>
 </div></blockquote>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
 <span class="w">  </span><span class="c1"># 镜像：openyuanrong_datasystem:0.5.0</span>
@@ -619,7 +622,7 @@ document.write(`
 <span class="w">    </span><span class="nt">datasystemWorker</span><span class="p">:</span>
 <span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
 <span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3&quot;</span>
-<span class="w">        </span><span class="c1"># 该值必须大于等于 requests.memory</span>
+<span class="w">        </span><span class="c1"># 该值必须大于等于 datasystemWorker.requests.memory</span>
 <span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;5Gi&quot;</span>
 <span class="w">      </span><span class="nt">requests</span><span class="p">:</span>
 <span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;3&quot;</span>
@@ -791,7 +794,7 @@ document.write(`
 <tr class="row-odd"><td><p>global.ipc.udsDir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;/home/uds&quot;</span></code></p></td>
-<td><p>Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限</p></td>
+<td><p>Unix Domain Socket (UDS) 文件存储目录。UDS文件在该路径下产生，路径最大长度不能超过80个字符。该目录将挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限</p></td>
 </tr>
 <tr class="row-even"><td><p>global.port.datasystemWorker</p></td>
 <td><p>int</p></td>
@@ -1014,6 +1017,11 @@ document.write(`
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘</p></td>
 </tr>
+<tr class="row-odd"><td><p>global.spill.spillToRemoteWorker</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -1049,6 +1057,21 @@ document.write(`
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/data/ssd/yr_datasystem_spill&quot;</span>
 <span class="w">  </span><span class="c1"># 容器内挂载目录，需要和 `spillDirectory` 保持一致</span>
 <span class="w">  </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>样例3</strong>：</p>
+<p>Spill目录为 “/opt/spill/yr_datasystem_spill”，大小为10GB。当spillToRemoteWorker为true时，如果本节点内存不足，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">spill</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
+<span class="w">    </span><span class="nt">spillSizeLimit</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;10737418240&quot;</span>
+<span class="w">    </span><span class="nt">spillThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
+<span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">    </span><span class="nt">spillToRemoteWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </pre></div>
 </div>
 </li>
@@ -1093,7 +1116,7 @@ document.write(`
 <tr class="row-odd"><td><p>global.log.logBufSecs</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10</span></code></p></td>
-<td><p>最多缓冲这么多秒的日志消息</p></td>
+<td><p>日志消息的最大缓冲时间（以秒为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>global.log.logFilename</p></td>
 <td><p>string</p></td>
@@ -1142,8 +1165,8 @@ document.write(`
 </tr>
 <tr class="row-odd"><td><p>global.log.ucxLogLevel</p></td>
 <td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">INFO</span></code></p></td>
-<td><p>设置UCX RDMA日志级别</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></td>
+<td><p>设置UCX日志级别，可选值包括<code class="docutils literal notranslate"><span class="pre">FATAL</span></code>、<code class="docutils literal notranslate"><span class="pre">ERROR</span></code>、<code class="docutils literal notranslate"><span class="pre">WARN</span></code>、<code class="docutils literal notranslate"><span class="pre">INFO</span></code>、<code class="docutils literal notranslate"><span class="pre">DEBUG</span></code>、<code class="docutils literal notranslate"><span class="pre">TRACE</span></code>。建议生产环境使用 <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> 或 <code class="docutils literal notranslate"><span class="pre">WARN</span></code>，调试时使用 <code class="docutils literal notranslate"><span class="pre">DEBUG</span></code>或<code class="docutils literal notranslate"><span class="pre">TRACE</span></code></p></td>
 </tr>
 </tbody>
 </table>
@@ -1262,17 +1285,17 @@ OBS</label><div class="sd-tab-content docutils">
 <tr class="row-even"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.enableTokenByAgency</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否通过委托代理访问其他账号的 对象存储服务(OBS) ，默认值为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。若设为 <code class="docutils literal notranslate"><span class="pre">true</span></code>，需指定 <code class="docutils literal notranslate"><span class="pre">tokenAgencyName</span></code> 和 <code class="docutils literal notranslate"><span class="pre">tokenAgencyDomain</span></code>。</p></td>
+<td><p>是否通过委托代理访问其他账号的对象存储服务(OBS)，默认值为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。若设为 <code class="docutils literal notranslate"><span class="pre">true</span></code>，需指定 <code class="docutils literal notranslate"><span class="pre">tokenAgencyName</span></code> 和 <code class="docutils literal notranslate"><span class="pre">tokenAgencyDomain</span></code>。</p></td>
 </tr>
 <tr class="row-odd"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyDomain</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>用于代理访问其他账号的委托名称。例如：obs_access</p></td>
+<td><p>用于代理访问其他账号的委托方域名。例如：obs_access</p></td>
 </tr>
 <tr class="row-even"><td><p>global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyName</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>用于代理访问其他账号的委托方域名。例如：op_svc_cff</p></td>
+<td><p>用于代理访问其他账号的委托名称。例如：op_svc_cff</p></td>
 </tr>
 </tbody>
 </table>
@@ -1456,12 +1479,12 @@ SFS</label><div class="sd-tab-content docutils">
 <tr class="row-odd"><td><p>global.reliability.livenessProbeTimeoutS</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">150</span></code></p></td>
-<td><p>Kubernetes 存活探针超时时间配置</p></td>
+<td><p>Kubernetes 存活探针超时时间配置（以秒为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>global.reliability.addNodeWaitTimeS</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
-<td><p>新节点加入哈希环的等待超时时间</p></td>
+<td><p>新节点加入哈希环的等待超时时间（以秒为单位）</p></td>
 </tr>
 <tr class="row-odd"><td><p>global.reliability.autoDelDeadNode</p></td>
 <td><p>bool</p></td>
@@ -1505,7 +1528,7 @@ SFS</label><div class="sd-tab-content docutils">
 </tr>
 <tr class="row-even"><td><p>global.gracefulShutdown.checkAsyncQueueEmptyTimeS</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">15</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>datasystem-worker检测异步队列为空的时间，单位为秒</p></td>
 </tr>
 <tr class="row-odd"><td><p>global.gracefulShutdown.dataMigrateRateLimitMb</p></td>
@@ -1516,7 +1539,7 @@ SFS</label><div class="sd-tab-content docutils">
 <tr class="row-even"><td><p>global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>优雅退出的最大处理时间，0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod</p></td>
+<td><p>优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod</p></td>
 </tr>
 </tbody>
 </table>
@@ -1561,7 +1584,7 @@ SFS</label><div class="sd-tab-content docutils">
 <tr class="row-odd"><td><p>global.performance.memoryReclamationTimeSecond</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
-<td><p>释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率</p></td>
+<td><p>释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率</p></td>
 </tr>
 <tr class="row-even"><td><p>global.performance.asyncDelete</p></td>
 <td><p>bool</p></td>
@@ -1641,7 +1664,7 @@ SFS</label><div class="sd-tab-content docutils">
 <tr class="row-odd"><td><p>global.performance.ucxTransportLayerSelection</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">rc_x</span></code></p></td>
-<td><p>UCX RDMA运行时的底层传输协议</p></td>
+<td><p>UCX使用的 RDMA传输模式。默认选用 “rc_x” 以获得最佳性能；若当前环境不支持，可改用 “rc”、“ud” 或 “dc”。各模式适用场景详见<a class="reference external" href="https://github.com/openucx/ucx/wiki/UCX-environment-parameters">UCX传输模式说明</a></p></td>
 </tr>
 <tr class="row-even"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
 <td><p>int</p></td>

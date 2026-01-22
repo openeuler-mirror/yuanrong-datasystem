@@ -20,11 +20,11 @@
     - [dscli stop](#dscli-stop)
     - [dscli up](#dscli-up)
     - [dscli down](#dscli-down)
+    - [dscli runscript](#dscli-runscript)
     - [dscli generate_helm_chart](#dscli-generate_helm_chart)
     - [dscli generate_cpp_template](#dscli-generate_cpp_template)
     - [dscli generate_config](#dscli-generate_config)
     - [dscli collect_log](#dscli-collect_log)
-    - [dscli runscript](#dscli-runscript)
 - [配置项说明](#配置项说明)
     - [集群配置项](#集群配置项)
     - [命令行参数配置项](#命令行参数配置项)
@@ -504,7 +504,7 @@ bash run.sh <worker_address>
 
 ### 日志收集
 
-通过 [dscli collect_log](#dscli-collect_log) 命令可快速收集节点上的日志：
+通过 [dscli collect_log](#dscli-collect_log) 命令可快速收集集群日志：
 
 ```bash
 dscli collect_log --cluster_config_path ./cluster_config.json
@@ -519,7 +519,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 1. 编写数据系统安装脚本：
     ```bash
     cat << EOF > install.sh
-    conda create env --name python39
+    conda create --name python39
     conda activate python39
     pip install yr_datasystem
     EOF
@@ -532,7 +532,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
         "worker_nodes" : ["127.0.0.1", "127.0.0.2"],
         "ssh_auth": {
             "ssh_user_name": "sn",
-            "ssh_ssh_private_key": "~/.ssh/id_rsa"
+            "ssh_private_key": "~/.ssh/id_rsa"
             }
     },
     ```
@@ -557,7 +557,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待 worker 服务就绪的最大时间（默认：90秒） |
 |--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成 |
 |--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"<br>**注意**：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数|
-|--datasystem_home_dir &lt;DIR&gt; |-d &lt;DIR&gt; | 替换配置文件中当前路径的目录。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 datasystem_home_dir 的值 |
+|--datasystem_home_dir |-d &lt;DIR&gt; | 指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 datasystem_home_dir 的值 |
 |--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
 |--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
 |--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面 |
@@ -695,7 +695,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 > **注意事项：**
 >
-> 单机快速部署 `dscli start -w` 通过直接传入 datasystem_worker 的命令行参数进行配置，需要将表格中的配置项进行映射，以配置项 `max_client_num` 为例，在单机快速部署时如需配置该配置项，应当写为 `dscli -start -w --max_client_num 200`。
+> 单机快速部署 `dscli start -w` 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 `max_client_num` 为例，如需在启动时配置该项，应当写为 `dscli start -w --max_client_num 200`。
 
 #### 资源相关配置
 
@@ -709,7 +709,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | ipc_through_shared_memory | bool | `true` | datasystem-worker共享内存启用开关 |
-| unix_domain_socket_dir | string | `"./datasystem/uds"` | Unix Domain Socket (UDS) 文件存储目录配置，UDS文件该在该路径下产生，路径最大长度不能超过80个字符。该目录会被自动挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
+| unix_domain_socket_dir | string | `"./datasystem/uds"` | 配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限 |
 | worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | enable_curve_zmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
 | curve_key_dir | string | `""` | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
@@ -748,7 +748,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_file_max_size_mb | int | `200` | 单个溢出文件的最大大小（以MB为单位）；对于小于此值的对象，会聚合存储于同一个文件中；对于超过此值的对象，将以单个对象单独存为一个文件 |
 | spill_file_open_limit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | spill_enable_readahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
-| eviction_thread_num | int | `1` | 后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘 |
+| eviction_thread_num | int | `1` | 后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中 |
 
 #### 日志与可观测相关配置
 
@@ -757,8 +757,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_dir | string | `"./datasystem/logs"` | 日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下 |
 | v | int | `0` | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
 | log_async | bool | `true` | 是否开启异步刷新日志功能 |
-| log_async_queue_size | int | `65536` | 异步日志的消息队列大小 |
-| log_compress | bool | `true` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
+| log_async_queue_size | int | `65536` | 异步日志的消息队列最大容量（消息条数） |
+| log_compress | bool | `true` | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
 | logbufsecs | int | `10` | 最多缓冲这么多秒的日志消息 |
 | log_filename | string | `""` | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
@@ -824,7 +824,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | enable_lossless_data_exit_mode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
-| check_async_queue_empty_time_s | int | `15` | datasystem-worker检测异步队列为空的时间，单位为秒 |
+| check_async_queue_empty_time_s | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | data_migrate_rate_limit_mb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
 
 #### 性能相关配置
@@ -836,7 +836,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | shared_memory_populate | bool | `false` | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arena_per_tenant'必须设置为1，'enable_fallocate'必须设置为false |
 | enable_thp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
 | arena_per_tenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
-| memory_reclamation_time_second | int | `600` | 释放后的内存回收时间，未回收的内存可以提供给下次分配复用，提升分配效率 |
+| memory_reclamation_time_second | int | `600` | 释放后的内存回收时间控制日志消息的最大缓冲时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
 | async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
@@ -849,7 +849,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | oc_shm_transfer_threshold_kb | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
 | shared_disk_arena_per_tenant | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
-| shared_disk_directory | sting | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
+| shared_disk_directory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | shared_disk_size_mb | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
 
 #### AK/SK相关配置
