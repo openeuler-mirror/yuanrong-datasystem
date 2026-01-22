@@ -41,7 +41,8 @@ constexpr int32_t DEFAULT_FUTURE_GET_TIMEOUT_MS = 60000;
 
 class AsyncResultFuture {
 public:
-    explicit AsyncResultFuture(std::shared_future<AsyncResult> future) : future_(std::move(future))
+    AsyncResultFuture(std::shared_future<AsyncResult> future, std::string traceId)
+        : future_(std::move(future)), traceId_(std::move(traceId))
     {
     }
 
@@ -50,14 +51,16 @@ public:
         AsyncResult result;
         {
             if (timeoutMs > std::numeric_limits<int64_t>::max()) {
-                throw std::runtime_error("timeoutMs out of scope");
+                throw std::runtime_error(
+                    FormatString("timeoutMs out of scope, timeoutMs: %s, traceId: %s", timeoutMs, traceId_));
             }
             // When C++ blocks waiting for a future, release the GIL to avoid blocking Python execution.
             py::gil_scoped_release release;
             auto status = future_.wait_for(std::chrono::milliseconds(timeoutMs));
             if (status == std::future_status::timeout) {
                 py::gil_scoped_acquire acquire;
-                throw std::runtime_error("Future get timeout");
+                throw std::runtime_error(
+                    FormatString("Future get timeout, timeoutMs: %s, traceId: %s", timeoutMs, traceId_));
             }
             result = future_.get();
         }
@@ -72,6 +75,7 @@ public:
 
 private:
     std::shared_future<AsyncResult> future_;
+    std::string traceId_;
 };
 
 PybindDefineRegisterer g_pybind_define_f_AsyncResultFuture("AsyncResultFuture", PRIORITY_LOW, [](const py::module *m) {
@@ -161,7 +165,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  std::shared_future<AsyncResult> future = client.AsyncMSetD2H(objectKeys, devBlobList, setParam);
-                 return AsyncResultFuture(std::move(future));
+                 return AsyncResultFuture(std::move(future), Trace::Instance().GetTraceID());
              })
 
         .def("async_mget_h2d",
@@ -169,7 +173,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                 const std::vector<DeviceBlobList> &devBlobList, uint64_t subTimeoutMs) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  std::shared_future<AsyncResult> future = client.AsyncMGetH2D(objectKeys, devBlobList, subTimeoutMs);
-                 return AsyncResultFuture(std::move(future));
+                 return AsyncResultFuture(std::move(future), Trace::Instance().GetTraceID());
              })
 
         .def("dev_publish",
@@ -226,7 +230,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                  py::gil_scoped_release release;
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  std::shared_future<AsyncResult> future = client.AsyncDevDelete(objectIds);
-                 return AsyncResultFuture(std::move(future));
+                 return AsyncResultFuture(std::move(future), Trace::Instance().GetTraceID());
              })
 
         .def("dev_local_delete",
