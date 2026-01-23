@@ -1666,7 +1666,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                                                                std::unordered_set<std::string> &failedIds,
                                                                std::set<ReadKey> &needRetryIds)
 {
-    const size_t kMinParallelRequests = 2;
+    // The current parallel logic has a memory leak, we'll skip it for now.
+    const size_t kMinParallelRequests = SIZE_MAX;
     if (queryMetas.size() < kMinParallelRequests) {
         return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
