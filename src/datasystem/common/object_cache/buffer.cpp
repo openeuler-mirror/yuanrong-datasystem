@@ -31,6 +31,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/memory.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
 
@@ -47,7 +48,9 @@ Buffer::Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
 Status Buffer::Init()
 {
     auto clientImpl = clientImpl_.lock();
-    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
+    if (clientImpl == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+    }
     RETURN_IF_NOT_OK(CheckDeprecated());
 
     // Special check for Remote H2D. If the remote host info exists,
@@ -168,7 +171,9 @@ Buffer::~Buffer()
 Status Buffer::MemoryCopy(const void *data, uint64_t length)
 {
     auto clientImpl = clientImpl_.lock();
-    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
+    if (clientImpl == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+    }
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
@@ -193,7 +198,9 @@ int64_t Buffer::GetSize() const
 Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
 {
     auto clientImplSharedPtr = clientImpl_.lock();
-    RETURN_RUNTIME_ERROR_IF_NULL(clientImplSharedPtr);
+    if (clientImplSharedPtr == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+    }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
@@ -208,7 +215,9 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
 Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
 {
     auto clientImpl = clientImpl_.lock();
-    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
+    if (clientImpl == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+    }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
@@ -274,7 +283,9 @@ const void *Buffer::ImmutableData()
 Status Buffer::InvalidateBuffer()
 {
     auto clientImpl = clientImpl_.lock();
-    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
+    if (clientImpl == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+    }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     RETURN_IF_NOT_OK(clientImpl->InvalidateBuffer(bufferInfo_->objectKey));
@@ -289,7 +300,9 @@ RemoteH2DHostInfo *Buffer::GetRemoteHostInfo()
 Status Buffer::CheckDeprecated()
 {
     auto clientImpl = clientImpl_.lock();
-    RETURN_RUNTIME_ERROR_IF_NULL(clientImpl);
+    if (clientImpl == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+    }
     RETURN_OK_IF_TRUE(!isShm_);
 
     // In the shared memory scenario, the worker may have released the memory when the network is unavailable.
