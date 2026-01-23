@@ -24,6 +24,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
@@ -34,6 +35,7 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/common/util/thread_pool.h"
 
 namespace datasystem {
 struct RemoteH2DHostInfo {
@@ -58,7 +60,7 @@ struct HostSegment {
     ~HostSegment();
 };
 
-using HostSegmentMap = LockMap<uint64_t, std::shared_ptr<HostSegment>>;
+using HostSegmentMap = LockMap<uint64_t, std::unordered_map<uint64_t, std::shared_ptr<HostSegment>>>;
 using RemoteSegmentMap = LockMap<std::string, std::shared_ptr<HostSegment>>;
 
 struct RemoteH2DContext {
@@ -71,6 +73,7 @@ struct RemoteH2DContext {
     WaitPost waitPost;
     std::shared_ptr<aclrtStream> stream{ nullptr };
     std::mutex mutex;
+    int32_t devId;
 };
 
 using CommunicatorMap = LockMap<std::string, std::shared_ptr<RemoteH2DContext>>;
@@ -99,11 +102,11 @@ public:
     static bool IsRemoteH2DEnabled();
 
     /**
-     * @brief Set NPU device index according to FLAGS_remote_h2d_device_id.
-     * @note The device index is currently assumed to remain the same in the client process.
+     * @brief Set NPU device index according to the specified devId, or FLAGS_remote_h2d_device_ids otherwise.
+     * @param[in] devId Optional. Specify the device id to execute on.
      * @return Status of the call.
      */
-    Status SetDeviceIdx();
+    Status SetDeviceIdx(std::optional<int32_t> specifiedDevId = std::nullopt);
 
     /**
      * @brief Get an unique identifier for connection between device and the remote host.
@@ -113,12 +116,20 @@ public:
     Status GetClientCommUuid(std::string &commId);
 
     /**
+     * @brief Get a vector of device ids the worker is allowed to use, as specified by the flag remote_h2d_device_ids.
+     * @param[out] devIds The vector of device ids.
+     * @return Status of the call.
+     */
+    Status GetWorkerDeviceIds(std::vector<int32_t> *devIds = nullptr);
+
+    /**
      * @brief Get the root info for communicator connection.
      * @param[in] key The client uuid for the connection.
      * @param[out] p2pRootInfo The p2p root info for communicator connection.
+     * @param[in] devId Specify the device id to execute on.
      * @return Status of the call.
      */
-    Status P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo);
+    Status P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo, int32_t devId);
 
     /**
      * @brief Fill the segment info for device side import purposes.
@@ -126,9 +137,11 @@ public:
      * @param[in] segDataOffset The actual data starting offset.
      * @param[in] key The segment address as the key.
      * @param[out] segmentPb The segment protobuf to be filled.
+     * @param[in] devId Specify the device id to execute on.
      * @return Status of the call.
      */
-    Status FillSegmentInfo(uint64_t segLen, uint64_t segDataOffset, uint64_t key, RemoteHostSegmentPb &segmentPb);
+    Status FillSegmentInfo(uint64_t segLen, uint64_t segDataOffset, uint64_t key, RemoteHostSegmentPb &segmentPb,
+                           int32_t devId);
 
     /**
      * @brief Establish communicator connection, in blocking manner.
@@ -137,10 +150,11 @@ public:
      * @param[in] p2pRootInfo The root info for the connection.
      * @param[in] kind The p2p connection direction.
      * @param[out] p2pComm The p2p comm and stream for actual data operation if applicable.
+     * @param[in] devId Optional. Specify the device id to execute on.
      * @return Status of the call.
      */
     Status P2PCommInitRootInfo(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
-                               std::shared_ptr<RemoteH2DContext> &p2pComm);
+                               std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId = -1);
 
     /**
      * @brief Register host side memory (shared memory) to NPU device as segment.
@@ -190,6 +204,10 @@ private:
     std::unique_ptr<HostSegmentMap> hostSegmentMap_;
     // Segment info to imported remote segment mapping.
     std::unique_ptr<RemoteSegmentMap> remoteSegmentMap_;
+    // List of all device ids the worker is allowed to use
+    std::vector<int32_t> workerDeviceIds_;
+    // Whether or not RemoteH2D is enabled
+    static bool enableRemoteH2D_;
 };
 }  // namespace datasystem
 

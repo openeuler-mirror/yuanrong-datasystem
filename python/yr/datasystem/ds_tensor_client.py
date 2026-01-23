@@ -183,6 +183,7 @@ class DsTensorClient:
             ["client_private_key", client_private_key, str],
             ["server_public_key", server_public_key, str],
             ["req_timeout_ms", req_timeout_ms, int],
+            ["enable_remote_h2d", enable_remote_h2d, bool]
         ]
         validator.check_args_types(args)
         self._hetero_client = HeteroClient(

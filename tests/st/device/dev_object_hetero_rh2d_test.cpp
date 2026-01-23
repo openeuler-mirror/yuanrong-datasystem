@@ -64,9 +64,9 @@ public:
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.workerGflagParams =
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
-            "-client_dead_timeout_s=15 -enable_remote_h2d=true";
-        opts.workerSpecifyGflagParams[0] += " -remote_h2d_device_id=7 ";
-        opts.workerSpecifyGflagParams[1] += " -remote_h2d_device_id=5 ";
+            "-client_dead_timeout_s=15";
+        opts.workerSpecifyGflagParams[0] += " -remote_h2d_device_ids=7 ";
+        opts.workerSpecifyGflagParams[1] += " -remote_h2d_device_ids=5 ";
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
@@ -111,7 +111,7 @@ class DevObjectHeteroRH2DMismatchTest : public DevObjectHeteroRH2DTest {
         opts.workerGflagParams =
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
             "-client_dead_timeout_s=15";
-        opts.workerSpecifyGflagParams[0] += " -enable_remote_h2d=true -remote_h2d_device_id=7 ";
+        opts.workerSpecifyGflagParams[0] += " -remote_h2d_device_ids=7 ";
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
@@ -124,6 +124,19 @@ class DevObjectHeteroRH2DDistributedTest : public DevObjectHeteroRH2DTest {
         DevObjectHeteroRH2DTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams += " -enable_worker_worker_batch_get=true ";
         opts.enableDistributedMaster = "true";
+    }
+};
+
+class DevObjectHeteroRH2DNoNpuTest : public DevObjectHeteroRH2DTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = DEFAULT_WORKER_NUM;
+        opts.workerGflagParams =
+            " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
+            "-client_dead_timeout_s=15";
+            opts.enableDistributedMaster = "false";
+            opts.numEtcd = 1;
+            FLAGS_v = 0;
     }
 };
 
@@ -382,5 +395,23 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_RemoteH2DTest2)
     const size_t blksPerObj = 6;
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_, blksPerObj);
 }
+
+TEST_F(DevObjectHeteroRH2DNoNpuTest, DISABLED_RemoteH2DTestNoNpu)
+{
+    // Test that Remote H2D is turned off when the workers have no npu's specified.
+    // Clients will also have RH2D enabled.
+    InitAcl(deviceId_);
+
+    std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
+    std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
+
+    std::shared_ptr<DsClient> client1;
+    std::shared_ptr<DsClient> client2;
+    InitTestDsClientForRemoteH2D(0, client1);
+    InitTestDsClientForRemoteH2D(1, client2);
+
+    RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
+}
+
 }  // namespace st
 }  // namespace datasystem

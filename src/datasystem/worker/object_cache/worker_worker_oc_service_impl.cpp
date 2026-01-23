@@ -336,22 +336,33 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     (void)metadataSize;
     (void)rsp;
 #ifdef BUILD_HETERO
+    tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;
+    // Assign new commId a new devId
+    if (!commDevIdMap_.find(acc, commId)) {
+        std::vector<int32_t> devIds;
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetWorkerDeviceIds(&devIds));
+        commDevIdMap_.insert(acc, commId);
+        acc->second = devIds[nextDevIdIndex_.fetch_add(1) % devIds.size()];
+    }
+    int32_t devId = acc->second;
+
     // Send root info to client
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PGetRootInfo(commId, rsp.mutable_root_info()));
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PGetRootInfo(commId, rsp.mutable_root_info(), devId));
 
     // Initialize communicator connection (accept client).
     // Fixme: error handling
     auto traceId = Trace::Instance().GetTraceID();
-    communicatorThreadPool_->Execute([rootInfo = rsp.root_info(), commId = commId, traceId]() {
+    communicatorThreadPool_->Execute([rootInfo = rsp.root_info(), commId = commId, traceId, devId]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_ptr<RemoteH2DContext> p2pComm;
-        LOG_IF_ERROR(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, rootInfo, P2P_SENDER, p2pComm),
+        LOG_IF_ERROR(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, rootInfo, P2P_SENDER, p2pComm, devId),
                      "P2PCommInitRootInfo failed.");
     });
 
     // Send segment info to client
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(localSegSize, shmUnit->GetOffset() + metadataSize,
-                                                                  localSegAddress, *rsp.mutable_remote_host_segment()));
+                                                                  localSegAddress, *rsp.mutable_remote_host_segment(),
+                                                                  devId));
 
     // Send offset info to client
     auto *dataInfoPb = rsp.mutable_data_info();
