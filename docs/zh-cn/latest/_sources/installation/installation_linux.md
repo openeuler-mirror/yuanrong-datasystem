@@ -8,6 +8,7 @@
 - [环境准备](#环境准备)
     - [基础依赖](#基础依赖)
     - [源码编译额外依赖](#源码编译额外依赖)
+    - [编译镜像下载](#编译镜像下载)
 - [安装 nightly 版本](#安装-nightly-版本)
 - [源码编译安装](#源码编译安装)
     - [下载源码](#下载源码)
@@ -207,6 +208,23 @@ pip install -U setuptools
 sudo yum install gcc gcc-c++ git patch make libtool cmake -y
 ```
 
+### 编译镜像下载
+
+如果需要快速安装，可以使用构建好的编译镜像，镜像地址：swr.cn-southwest-2.myhuaweicloud.com/openyuanrong/datasystem-compile:<version>
+
+ | 镜像版本 | 支持架构 |	 
+ | ------ | ------ |	 
+ | v0.6.3-openeuler-22.03 | X86_64、ARM64 |	 
+
+```bash
+docker pull swr.cn-southwest-2.myhuaweicloud.com/openyuanrong/datasystem-compile:v0.6.3-openeuler-22.03
+```
+
+#### 编译镜像说明
+
+- 编译镜像包含编译所需的所有依赖，包括C++ SDK、命令行工具、Python SDK等，可以快速体验openYuanrong datasystem。
+- 编译镜像不包含[Ascend](#安装-cann)和[Rdma](#安装-rdma-core)相关依赖，需要自行安装。
+
 ## 安装 nightly 版本
 
 如需安装指定版本（或未正式发布 wheel），可用官方 nightly 地址。wheel文件命名遵循：
@@ -237,7 +255,7 @@ pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/openyuanro
 ### 下载源码
 
 ```bash
-git clone https://gitcode.com/openeuler/yuanrong-datasystem
+git clone https://gitcode.com/openeuler/yuanrong-datasystem.git
 ```
 
 ### 编译

@@ -367,12 +367,6 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 
 #### 获取openYuanrong datasystem镜像
 
-- 通过镜像仓获取镜像：
-
-    ```bash
-    docker pull openeuler/yuanrong-datasystem:<version>
-    ```
-
 - 源码编译构建镜像
 
     如果需要从源码构建镜像，需要先完成 [源码编译](../installation/installation_linux.md)。源码编译完成之后执行如下命令：
@@ -406,7 +400,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 - 通过源码获取：
 
     ```bash
-    git clone -b ${version} https://gitcode.com/openeuler/yuanrong-datasystem
+    git clone -b ${version} https://gitcode.com/openeuler/yuanrong-datasystem.git
     cp -r yuanrong-datasystem/docker/chart/datasystem /tmp
     ```
 

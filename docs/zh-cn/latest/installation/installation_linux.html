@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,7 +48,7 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
@@ -392,7 +392,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
 </ul>
 
     </div>
@@ -506,13 +506,17 @@ document.write(`
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">安装依赖库</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">编译镜像下载</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">编译镜像说明</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nightly">安装 nightly 版本</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">源码编译安装</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">下载源码</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">编译</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">安装</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">安装</a></li>
 </ul>
 </li>
 </ul>
@@ -535,13 +539,14 @@ document.write(`
 <ul>
 <li><p><a class="reference internal" href="#id3">基础依赖</a></p></li>
 <li><p><a class="reference internal" href="#id4">源码编译额外依赖</a></p></li>
+<li><p><a class="reference internal" href="#id6">编译镜像下载</a></p></li>
 </ul>
 </li>
 <li><p><a class="reference internal" href="#nightly">安装 nightly 版本</a></p></li>
-<li><p><a class="reference internal" href="#id6">源码编译安装</a></p>
+<li><p><a class="reference internal" href="#id8">源码编译安装</a></p>
 <ul>
-<li><p><a class="reference internal" href="#id7">下载源码</a></p></li>
-<li><p><a class="reference internal" href="#id8">编译</a></p></li>
+<li><p><a class="reference internal" href="#id9">下载源码</a></p></li>
+<li><p><a class="reference internal" href="#id10">编译</a></p></li>
 <li><p><a class="reference internal" href="#id1">安装</a></p></li>
 </ul>
 </li>
@@ -780,6 +785,33 @@ pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </s
 </div>
 </section>
 </section>
+<section id="id6">
+<h3>编译镜像下载<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<p>如果需要快速安装，可以使用构建好的编译镜像，镜像地址：swr.cn-southwest-2.myhuaweicloud.com/openyuanrong/datasystem-compile:<version></p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>镜像版本</p></th>
+<th class="head"><p>支持架构</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>v0.6.3-openeuler-22.03</p></td>
+<td><p>X86_64、ARM64</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>swr.cn-southwest-2.myhuaweicloud.com/openyuanrong/datasystem-compile:v0.6.3-openeuler-22.03
+</pre></div>
+</div>
+<section id="id7">
+<h4>编译镜像说明<a class="headerlink" href="#id7" title="Link to this heading">#</a></h4>
+<ul class="simple">
+<li><p>编译镜像包含编译所需的所有依赖，包括C++ SDK、命令行工具、Python SDK等，可以快速体验openYuanrong datasystem。</p></li>
+<li><p>编译镜像不包含<a class="reference internal" href="#cann">Ascend</a>和<a class="reference internal" href="#rdma-core">Rdma</a>相关依赖，需要自行安装。</p></li>
+</ul>
+</section>
+</section>
 </section>
 <section id="nightly">
 <h2>安装 nightly 版本<a class="headerlink" href="#nightly" title="Link to this heading">#</a></h2>
@@ -804,16 +836,16 @@ openYuanrong_datasystem_sdk-<span class="o">{</span>version<span class="o">}</sp
 </pre></div>
 </div>
 </section>
-<section id="id6">
-<h2>源码编译安装<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
-<section id="id7">
-<h3>下载源码<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem
+<section id="id8">
+<h2>源码编译安装<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
+<section id="id9">
+<h3>下载源码<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
 </pre></div>
 </div>
 </section>
-<section id="id8">
-<h3>编译<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<section id="id10">
+<h3>编译<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
 <p>如果构建环境中没有CANN或者无需使用异构对象的功能，可以通过 <code class="docutils literal notranslate"><span class="pre">-X</span></code> 参数禁用异构对象的编译：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem
 bash<span class="w"> </span>build.sh<span class="w"> </span>-X<span class="w"> </span>off
@@ -844,8 +876,8 @@ bash<span class="w"> </span>build.sh
 </pre></div>
 </div>
 </section>
-<section id="id9">
-<h3>安装<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<section id="id11">
+<h3>安装<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>output/openyuanrong_datasystem-*.whl
 </pre></div>
 </div>
@@ -911,13 +943,17 @@ bash<span class="w"> </span>build.sh
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">安装依赖库</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">编译镜像下载</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">编译镜像说明</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nightly">安装 nightly 版本</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">源码编译安装</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">下载源码</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">编译</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">安装</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">安装</a></li>
 </ul>
 </li>
 </ul>

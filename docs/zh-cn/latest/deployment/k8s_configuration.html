@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,7 +48,7 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
@@ -392,7 +392,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
 </ul>
 
     </div>
@@ -881,6 +881,11 @@ document.write(`
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>配置服务端用于将元素发送到远程工作线程的线程数量</p></td>
 </tr>
+<tr class="row-odd"><td><p>global.rpc.scThreadNum</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
+<td><p>配置流缓存master工作的最大线程数</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -1346,7 +1351,7 @@ SFS</label><div class="sd-tab-content docutils">
 </section>
 <section id="id8">
 <h3>多集群相关配置<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
-<p>注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：<a class="reference internal" href="../FAQ/clusterFAQ.html"><span class="std std-doc">多集群模式FAQ</span></a></p>
+<p>注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：<a class="reference internal" href="../FAQ/FAQ.html"><span class="std std-doc">FAQ</span></a></p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
@@ -1601,87 +1606,92 @@ SFS</label><div class="sd-tab-content docutils">
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启worker到worker的对象数据批量获取，默认值为false</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocShmTransferThresholdKB</p></td>
+<tr class="row-odd"><td><p>global.performance.enableRemoteH2D</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>如果为true，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值：false</p></td>
+</tr>
+<tr class="row-even"><td><p>global.performance.ocShmTransferThresholdKB</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">500</span></code></p></td>
 <td><p>在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.enableUrma</p></td>
+<tr class="row-odd"><td><p>global.performance.enableUrma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启Urma以实现对象worker之间的数据传输</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.urmaMode</p></td>
+<tr class="row-even"><td><p>global.performance.urmaMode</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">UB</span></code></p></td>
 <td><p>是否开用Urma通过IB或UB运行，默认情况下，UB将与URMA一起运行</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.urmaPollSize</p></td>
+<tr class="row-odd"><td><p>global.performance.urmaPollSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>一次可轮询的完整记录数量，该设备最多可轮询16条记录</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.urmaRegisterWholeArena</p></td>
+<tr class="row-even"><td><p>global.performance.urmaRegisterWholeArena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.urmaConnectionSize</p></td>
+<tr class="row-odd"><td><p>global.performance.urmaConnectionSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
 <td><p>jfs和jfr对的数量</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.urmaEventMode</p></td>
+<tr class="row-even"><td><p>global.performance.urmaEventMode</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否使用中断模式轮询完成事件</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.sharedDiskDirectory</p></td>
+<tr class="row-odd"><td><p>global.performance.sharedDiskDirectory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.sharedDiskSize</p></td>
+<tr class="row-even"><td><p>global.performance.sharedDiskSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.sharedDiskArenaPerTenant</p></td>
+<tr class="row-odd"><td><p>global.performance.sharedDiskArenaPerTenant</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.enableRdma</p></td>
+<tr class="row-even"><td><p>global.performance.enableRdma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否为OC工作节点之间的数据传输启用RDMA</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.rdmaRegisterWholeArena</p></td>
+<tr class="row-odd"><td><p>global.performance.rdmaRegisterWholeArena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ucxTransportLayerSelection</p></td>
+<tr class="row-even"><td><p>global.performance.ucxTransportLayerSelection</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">rc_x</span></code></p></td>
 <td><p>UCX使用的 RDMA传输模式。默认选用 “rc_x” 以获得最佳性能；若当前环境不支持，可改用 “rc”、“ud” 或 “dc”。各模式适用场景详见<a class="reference external" href="https://github.com/openucx/ucx/wiki/UCX-environment-parameters">UCX传输模式说明</a></p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
+<tr class="row-odd"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2097152</span></code></p></td>
 <td><p>worker响应的目标批量大小，默认值为2MB</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocWorkerAggregateSingleMax</p></td>
+<tr class="row-even"><td><p>global.performance.ocWorkerAggregateSingleMax</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
 <td><p>批量处理worker最大单个项目大小，默认为64KB</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.ocWorkerWorkerParallelMin</p></td>
+<tr class="row-odd"><td><p>global.performance.ocWorkerWorkerParallelMin</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">100</span></code></p></td>
 <td><p>并行工作线程批处理响应的最小数据计数，默认值为100</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocWorkerWorkerParallelNums</p></td>
+<tr class="row-even"><td><p>global.performance.ocWorkerWorkerParallelNums</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
 <td><p>worker并行数量，0表示无限制</p></td>

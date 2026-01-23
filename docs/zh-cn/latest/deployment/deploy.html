@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,7 +48,7 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
@@ -392,7 +392,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
 </ul>
 
     </div>
@@ -991,11 +991,6 @@ dscli<span class="w"> </span>stop<span class="w"> </span>-f<span class="w"> </sp
 <section id="id20">
 <h4>获取openYuanrong datasystem镜像<a class="headerlink" href="#id20" title="Link to this heading">#</a></h4>
 <ul>
-<li><p>通过镜像仓获取镜像：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>openeuler/yuanrong-datasystem:&lt;version&gt;
-</pre></div>
-</div>
-</li>
 <li><p>源码编译构建镜像</p>
 <p>如果需要从源码构建镜像，需要先完成 <a class="reference internal" href="../installation/installation_linux.html"><span class="std std-doc">源码编译</span></a>。源码编译完成之后执行如下命令：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem/k8s/docker
@@ -1026,7 +1021,7 @@ bash<span class="w"> </span>docker_build.sh<span class="w"> </span><span class="
 <p>请注意命令运行成功后会在”/tmp”目录下生成helm chart目录。</p>
 </li>
 <li><p>通过源码获取：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
 cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/chart/datasystem<span class="w"> </span>/tmp
 </pre></div>
 </div>

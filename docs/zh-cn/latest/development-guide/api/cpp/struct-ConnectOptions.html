@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
   
@@ -48,7 +48,7 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
@@ -392,7 +392,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../../../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../FAQ/FAQ.html">FAQ</a></li>
 </ul>
 
     </div>
@@ -505,6 +505,8 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions9secretKeyE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::secretKey</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions8tenantIdE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::tenantId</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableCrossNodeConnection</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions25enableExclusiveConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableExclusiveConnection</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions15enableRemoteH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableRemoteH2D</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions11SetAkSkAuthERKNSt6stringERK14SensitiveValueRKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::SetAkSkAuth()</span></code></a></li>
 </ul>
 </li>
@@ -600,6 +602,18 @@ document.write(`
 <dd><p>如果为 true，允许客户端在与当前数据系统Worker 连接异常时自动切换到备用节点。默认值：false</p>
 </dd></dl>
 
+<dl class="cpp member">
+<dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions25enableExclusiveConnectionE">
+<span id="_CPPv3N14ConnectOptions25enableExclusiveConnectionE"></span><span id="_CPPv2N14ConnectOptions25enableExclusiveConnectionE"></span><span id="ConnectOptions::enableExclusiveConnection__b"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enableExclusiveConnection</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions25enableExclusiveConnectionE" title="Link to this definition">#</a><br /></dt>
+<dd><p>如果为 true，开启IPC性能调优功能，减小客户端与同节点服务端的访问时延。默认值：false</p>
+</dd></dl>
+
+<dl class="cpp member">
+<dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions15enableRemoteH2DE">
+<span id="_CPPv3N14ConnectOptions15enableRemoteH2DE"></span><span id="_CPPv2N14ConnectOptions15enableRemoteH2DE"></span><span id="ConnectOptions::enableRemoteH2D__b"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enableRemoteH2D</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions15enableRemoteH2DE" title="Link to this definition">#</a><br /></dt>
+<dd><p>如果为 true，开启 RH2D 功能，该功能需要服务端同步开启 <code class="docutils literal notranslate"><span class="pre">enable_remote_h2d</span></code> 能力。默认值：false</p>
+</dd></dl>
+
 <p><strong>公共函数</strong></p>
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions11SetAkSkAuthERKNSt6stringERK14SensitiveValueRKNSt6stringE">
@@ -676,6 +690,8 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions9secretKeyE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::secretKey</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions8tenantIdE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::tenantId</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableCrossNodeConnection</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions25enableExclusiveConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableExclusiveConnection</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions15enableRemoteH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableRemoteH2D</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14ConnectOptions11SetAkSkAuthERKNSt6stringERK14SensitiveValueRKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::SetAkSkAuth()</span></code></a></li>
 </ul>
 </li>
