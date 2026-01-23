@@ -6,7 +6,7 @@ yr.datasystem.hetero_client.HeteroClient.exist
     检查给定的键在数据系统中是否存在。
  
     参数：
-        - **keys** (list) - 待查询的键列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - 待查询的键列表。约束：传入的key的数量 `<=10000`。
  
     返回：
         - **exists** (list) - 对应key的存在性。

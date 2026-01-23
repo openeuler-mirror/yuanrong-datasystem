@@ -9,7 +9,7 @@ yr.datasystem.hetero_client.HeteroClient.mset_d2h
     mset_d2h 成功的数据是immutable的，不要对已存在的key set新值，否则新值不会生效。   
 
     参数：
-        - **keys** (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - host 的 key 列表。约束：传入的key的数量 `<=10000`。
         - **data_blob_list** (list) - :class:`yr.datasystem.hetero_client.DeviceBlobList` 列表。
         - **set_param** (SetParam) - :class:`yr.datasystem.kv_client.SetParam`, key的设置参数, 默认为SetParam(),各属性如下:
 

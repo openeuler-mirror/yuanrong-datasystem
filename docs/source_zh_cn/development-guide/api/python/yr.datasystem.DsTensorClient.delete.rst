@@ -9,7 +9,7 @@ yr.datasystem.DsTensorClient.delete
         删除不存在的 key 也认为删除成功。
 
     参数：
-        - **keys** (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - host 的 key 列表。约束：传入的key的数量 `<=10000`。
 
     返回：
         - **failed_keys** (list) - 用于描述 delete 失败的 key。

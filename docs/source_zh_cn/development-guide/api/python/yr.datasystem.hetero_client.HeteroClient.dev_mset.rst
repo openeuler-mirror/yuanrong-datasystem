@@ -10,7 +10,7 @@ yr.datasystem.hetero_client.HeteroClient.dev_mset
     dev_mget 后不会自动删除异构对象，如对象不再使用，可调用 dev_local_delete 或 dev_delete 删除。
 
     参数：
-        - **keys** (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - device 的异构对象的 key。约束：传入的key的数量 `<=10000`。
         - **data_blob_list** (list) - :class:`yr.datasystem.hetero_client.DeviceBlobList` 列表。
 
     返回值：
