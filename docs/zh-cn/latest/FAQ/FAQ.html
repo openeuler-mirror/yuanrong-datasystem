@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>多集群模式FAQ &#8212; openYuanrong datasystem  documentation</title>
+    <title>FAQ &#8212; openYuanrong datasystem  documentation</title>
   
   
   
@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,11 +48,11 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'FAQ/clusterFAQ';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'FAQ/FAQ';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -391,7 +391,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">多集群模式FAQ</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">FAQ</a></li>
 </ul>
 
     </div>
@@ -482,7 +482,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>多集群模式FAQ</h1>
+    <h1>FAQ</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -493,6 +493,7 @@ document.write(`
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">一、多集群模式为实验性特性，可能出现以下问题</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#docker-dscli">二、<code class="docutils literal notranslate"><span class="pre">docker</span></code> 容器内 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 当前工作目录如果在挂载目录下，启动会失败</a></li>
 </ul>
             </nav>
         </div>
@@ -505,7 +506,7 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="faq">
-<h1>多集群模式FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h1>
+<h1>FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h1>
 <section id="id1">
 <h2>一、多集群模式为实验性特性，可能出现以下问题<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="highlight-none notranslate"><div class="highlight"><pre><span></span>1. 启用多集群功能之后，如果集群B上有节点正在主动缩容或扩容，集群A上的节点a在此时删除设置在集群B上的数据可能会导致a节点coredump
@@ -515,6 +516,38 @@ document.write(`
 3. 启用多集群功能之后，集群第一次启动的场景，偶现worker在etcd中的状态一直是recover，且无法恢复成ready
 </pre></div>
 </div>
+</section>
+<section id="docker-dscli">
+<h2>二、<code class="docutils literal notranslate"><span class="pre">docker</span></code> 容器内 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 当前工作目录如果在挂载目录下，启动会失败<a class="headerlink" href="#docker-dscli" title="Link to this heading">#</a></h2>
+<p>数据系统启动过程中，会修改临时创建的 unix domain socket 的文件权限。但在容器中这个操作可能会被阻止。如果 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 如果没有指定 <code class="docutils literal notranslate"><span class="pre">-d</span></code> 工作目录，会默认在当前路径下创建 <code class="docutils literal notranslate"><span class="pre">datasystem/uds</span></code> 来存放临时 socket 文件。又由于 <code class="docutils literal notranslate"><span class="pre">docker</span></code> 容器默认用户命名空间隔离，如果 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 在挂载路径下执行，您可能会遇到如下的启动错误。</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="n">root</span><span class="nd">@efdb9297de57</span> <span class="n">yuanrong</span><span class="o">-</span><span class="n">datasystem</span><span class="p">]</span><span class="c1"># dscli start -w --worker_address &quot;127.0.0.1:31501&quot; --etcd_address &quot;127.0.0.1:2379&quot;</span>
+<span class="p">[</span><span class="n">INFO</span><span class="p">]</span> <span class="n">Log</span> <span class="n">directory</span> <span class="n">configured</span> <span class="n">at</span><span class="p">:</span> <span class="o">/</span><span class="n">workspace</span><span class="o">/</span><span class="n">yuanrong</span><span class="o">-</span><span class="n">datasystem</span><span class="o">/</span><span class="n">datasystem</span><span class="o">/</span><span class="n">logs</span>
+<span class="p">[</span><span class="n">INFO</span><span class="p">]</span> <span class="n">Starting</span> <span class="n">worker</span> <span class="n">service</span> <span class="k">with</span> <span class="n">PID</span><span class="p">:</span> <span class="mi">3757</span>
+<span class="p">[</span><span class="n">ERROR</span><span class="p">]</span> <span class="p">[</span>  <span class="n">FAILED</span>  <span class="p">]</span> <span class="n">Worker</span> <span class="n">exited</span> <span class="k">with</span> <span class="n">code</span> <span class="mi">255</span>
+ <span class="n">output</span><span class="p">:</span> <span class="n">WARNING</span><span class="p">:</span> <span class="n">Ignore</span> <span class="n">register</span> <span class="n">validator</span> <span class="k">for</span> <span class="n">flag</span><span class="p">:</span> <span class="n">validator</span> <span class="n">already</span> <span class="n">registered</span>
+<span class="mi">2026</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">14</span><span class="n">T02</span><span class="p">:</span><span class="mi">57</span><span class="p">:</span><span class="mf">34.144815</span> <span class="o">|</span> <span class="n">E</span> <span class="o">|</span> <span class="n">file_util</span><span class="o">.</span><span class="n">cpp</span><span class="p">:</span><span class="mi">642</span> <span class="o">|</span> <span class="n">efdb9297de57</span> <span class="o">|</span> <span class="mi">3757</span><span class="p">:</span><span class="mi">3757</span> <span class="o">|</span> <span class="mi">3</span><span class="n">ebd1347</span><span class="o">-</span><span class="mi">1</span><span class="n">ae2</span><span class="o">-</span><span class="mi">46</span><span class="n">a4</span><span class="o">-</span><span class="mi">906</span><span class="n">b</span><span class="o">-</span><span class="n">a1dcde8db79e</span> <span class="o">|</span>  <span class="o">|</span>  <span class="n">Change</span> <span class="n">mode</span> <span class="n">on</span> <span class="o">/</span><span class="n">workspace</span><span class="o">/</span><span class="n">yuanrong</span><span class="o">-</span><span class="n">datasystem</span><span class="o">/</span><span class="n">datasystem</span><span class="o">/</span><span class="n">uds</span><span class="o">/</span><span class="mi">643</span><span class="n">b8b95</span> <span class="n">fail</span><span class="p">:</span> <span class="mi">22</span>
+<span class="mi">2026</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">14</span><span class="n">T02</span><span class="p">:</span><span class="mi">57</span><span class="p">:</span><span class="mf">34.144822</span> <span class="o">|</span> <span class="n">E</span> <span class="o">|</span> <span class="n">worker_oc_server</span><span class="o">.</span><span class="n">cpp</span><span class="p">:</span><span class="mi">585</span> <span class="o">|</span> <span class="n">efdb9297de57</span> <span class="o">|</span> <span class="mi">3757</span><span class="p">:</span><span class="mi">3757</span> <span class="o">|</span> <span class="mi">3</span><span class="n">ebd1347</span><span class="o">-</span><span class="mi">1</span><span class="n">ae2</span><span class="o">-</span><span class="mi">46</span><span class="n">a4</span><span class="o">-</span><span class="mi">906</span><span class="n">b</span><span class="o">-</span><span class="n">a1dcde8db79e</span> <span class="o">|</span>  <span class="o">|</span>  <span class="n">InitWorkerService</span> <span class="n">failed</span><span class="o">.</span> <span class="n">Detail</span><span class="p">:</span> <span class="n">code</span><span class="p">:</span> <span class="p">[</span><span class="n">IO</span> <span class="n">error</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="p">[</span><span class="n">Thread</span> <span class="n">ID</span> <span class="mi">281473735008288</span> <span class="n">IO</span> <span class="n">error</span><span class="o">.</span> <span class="n">Change</span> <span class="n">mode</span> <span class="n">on</span> <span class="o">/</span><span class="n">workspace</span><span class="o">/</span><span class="n">yuanrong</span><span class="o">-</span><span class="n">datasystem</span><span class="o">/</span><span class="n">datasystem</span><span class="o">/</span><span class="n">uds</span><span class="o">/</span><span class="mi">643</span><span class="n">b8b95</span> <span class="n">fail</span><span class="p">:</span> <span class="mi">22</span>
+<span class="n">Line</span> <span class="n">of</span> <span class="n">code</span> <span class="p">:</span> <span class="mi">642</span>
+<span class="n">File</span>         <span class="p">:</span> <span class="n">file_util</span><span class="o">.</span><span class="n">cpp</span>
+<span class="n">traceId</span>      <span class="p">:</span> <span class="mi">3</span><span class="n">ebd1347</span><span class="o">-</span><span class="mi">1</span><span class="n">ae2</span><span class="o">-</span><span class="mi">46</span><span class="n">a4</span><span class="o">-</span><span class="mi">906</span><span class="n">b</span><span class="o">-</span><span class="n">a1dcde8db79e</span><span class="p">]</span>
+<span class="mi">2026</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">14</span><span class="n">T02</span><span class="p">:</span><span class="mi">57</span><span class="p">:</span><span class="mf">34.144826</span> <span class="o">|</span> <span class="n">E</span> <span class="o">|</span> <span class="n">worker_main</span><span class="o">.</span><span class="n">cpp</span><span class="p">:</span><span class="mi">270</span> <span class="o">|</span> <span class="n">efdb9297de57</span> <span class="o">|</span> <span class="mi">3757</span><span class="p">:</span><span class="mi">3757</span> <span class="o">|</span> <span class="mi">3</span><span class="n">ebd1347</span><span class="o">-</span><span class="mi">1</span><span class="n">ae2</span><span class="o">-</span><span class="mi">46</span><span class="n">a4</span><span class="o">-</span><span class="mi">906</span><span class="n">b</span><span class="o">-</span><span class="n">a1dcde8db79e</span> <span class="o">|</span>  <span class="o">|</span>  <span class="n">code</span><span class="p">:</span> <span class="p">[</span><span class="n">IO</span> <span class="n">error</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="p">[</span><span class="n">Thread</span> <span class="n">ID</span> <span class="mi">281473735008288</span> <span class="n">IO</span> <span class="n">error</span><span class="o">.</span> <span class="n">Change</span> <span class="n">mode</span> <span class="n">on</span> <span class="o">/</span><span class="n">workspace</span><span class="o">/</span><span class="n">yuanrong</span><span class="o">-</span><span class="n">datasystem</span><span class="o">/</span><span class="n">datasystem</span><span class="o">/</span><span class="n">uds</span><span class="o">/</span><span class="mi">643</span><span class="n">b8b95</span> <span class="n">fail</span><span class="p">:</span> <span class="mi">22</span>
+<span class="n">Line</span> <span class="n">of</span> <span class="n">code</span> <span class="p">:</span> <span class="mi">642</span>
+<span class="n">File</span>         <span class="p">:</span> <span class="n">file_util</span><span class="o">.</span><span class="n">cpp</span>
+<span class="n">traceId</span>      <span class="p">:</span> <span class="mi">3</span><span class="n">ebd1347</span><span class="o">-</span><span class="mi">1</span><span class="n">ae2</span><span class="o">-</span><span class="mi">46</span><span class="n">a4</span><span class="o">-</span><span class="mi">906</span><span class="n">b</span><span class="o">-</span><span class="n">a1dcde8db79e</span><span class="p">]</span>
+<span class="mi">2026</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">14</span><span class="n">T02</span><span class="p">:</span><span class="mi">57</span><span class="p">:</span><span class="mf">45.182239</span> <span class="o">|</span> <span class="n">E</span> <span class="o">|</span> <span class="n">worker_main</span><span class="o">.</span><span class="n">cpp</span><span class="p">:</span><span class="mi">308</span> <span class="o">|</span> <span class="n">efdb9297de57</span> <span class="o">|</span> <span class="mi">3757</span><span class="p">:</span><span class="mi">3757</span> <span class="o">|</span>  <span class="o">|</span>  <span class="o">|</span>  <span class="n">Worker</span> <span class="n">runtime</span> <span class="n">error</span><span class="p">:</span><span class="n">code</span><span class="p">:</span> <span class="p">[</span><span class="n">IO</span> <span class="n">error</span><span class="p">],</span> <span class="n">msg</span><span class="p">:</span> <span class="p">[</span><span class="n">Thread</span> <span class="n">ID</span> <span class="mi">281473735008288</span> <span class="n">IO</span> <span class="n">error</span><span class="o">.</span> <span class="n">Change</span> <span class="n">mode</span> <span class="n">on</span> <span class="o">/</span><span class="n">workspace</span><span class="o">/</span><span class="n">yuanrong</span><span class="o">-</span><span class="n">datasystem</span><span class="o">/</span><span class="n">datasystem</span><span class="o">/</span><span class="n">uds</span><span class="o">/</span><span class="mi">643</span><span class="n">b8b95</span> <span class="n">fail</span><span class="p">:</span> <span class="mi">22</span>
+<span class="n">Line</span> <span class="n">of</span> <span class="n">code</span> <span class="p">:</span> <span class="mi">642</span>
+<span class="n">File</span>         <span class="p">:</span> <span class="n">file_util</span><span class="o">.</span><span class="n">cpp</span>
+<span class="n">traceId</span>      <span class="p">:</span> <span class="mi">3</span><span class="n">ebd1347</span><span class="o">-</span><span class="mi">1</span><span class="n">ae2</span><span class="o">-</span><span class="mi">46</span><span class="n">a4</span><span class="o">-</span><span class="mi">906</span><span class="n">b</span><span class="o">-</span><span class="n">a1dcde8db79e</span><span class="p">]</span>
+
+<span class="p">[</span><span class="n">ERROR</span><span class="p">]</span> <span class="p">[</span>  <span class="n">FAILED</span>  <span class="p">]</span> <span class="n">Start</span> <span class="n">worker</span> <span class="n">service</span> <span class="o">@</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">31501</span> <span class="n">failed</span><span class="p">:</span> <span class="n">Worker</span> <span class="n">service</span> <span class="n">exited</span> <span class="n">abnormally</span> <span class="k">with</span> <span class="n">code</span> <span class="mi">255</span>
+<span class="p">[</span><span class="n">ERROR</span><span class="p">]</span> <span class="n">Start</span> <span class="n">failed</span><span class="p">:</span> <span class="n">The</span> <span class="n">worker</span> <span class="n">service</span> <span class="n">exited</span> <span class="n">abnormally</span>
+</pre></div>
+</div>
+<p>解决方法：</p>
+<ol class="arabic simple">
+<li><p>在容器的非挂载目录中执行 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code></p></li>
+<li><p>给 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 命令增加参数 <code class="docutils literal notranslate"><span class="pre">-d</span> <span class="pre">/tmp/</span></code> ，指定工作路径为非挂载目录</p></li>
+</ol>
 </section>
 </section>
 
@@ -555,6 +588,7 @@ document.write(`
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">一、多集群模式为实验性特性，可能出现以下问题</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#docker-dscli">二、<code class="docutils literal notranslate"><span class="pre">docker</span></code> 容器内 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 当前工作目录如果在挂载目录下，启动会失败</a></li>
 </ul>
   </nav></div>
 
