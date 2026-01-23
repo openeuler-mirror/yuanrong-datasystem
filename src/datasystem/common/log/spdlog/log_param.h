@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_LOG_SPDLOG_LOG_PARAM_H
 #define DATASYSTEM_COMMON_LOG_SPDLOG_LOG_PARAM_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -60,25 +61,6 @@ struct GlobalLogParam {
     uint32_t maxAsyncQueueSize = log_param::DEFAULT_MAX_ASYNC_QUEUE_SIZE;
     uint32_t asyncThreadCount = log_param::DEFAULT_ASYNC_THREAD_COUNT;
 };
-
-// The recommended semantics of the log levels are as follows:
-//
-// INFO:
-//   Use for state changes or other major events, or to aid debugging.
-// WARNING:
-//   Use for undesired but relatively expected events, which may indicate a
-//   problem
-// ERROR:
-//   Use for undesired and unexpected events that the program can recover from.
-//   All ERRORs should be actionable - it should be appropriate to file a bug
-//   whenever an ERROR occurs in production.
-// FATAL:
-//   Use for undesired and unexpected events that the program cannot recover
-//   from.
-
-// Variables of type LogSeverity are widely taken to lie in the range
-// [0, NUM_SEVERITIES-1].  Be careful to preserve this assumption if
-// you ever need to change their values or add a new severity.
 
 enum LogSeverity { INFO = 0, WARNING = 1, ERROR = 2, FATAL = 3 };
 

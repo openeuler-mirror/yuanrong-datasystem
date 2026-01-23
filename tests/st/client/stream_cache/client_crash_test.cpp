@@ -160,7 +160,7 @@ Status ClientSC1::CreateProducer(std::shared_ptr<Producer> &producer, int64_t de
 
 Status ClientSC1::Subscribe(const std::string &subName, std::shared_ptr<Consumer> &consumer)
 {
-    SubscriptionConfig config(std::move(subName), SubscriptionType::STREAM);
+    SubscriptionConfig config(subName, SubscriptionType::STREAM);
     return client_->Subscribe(streamName_, config, consumer);
 }
 

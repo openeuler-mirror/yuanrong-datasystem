@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_UTIL_THREAD_H
 
 #include <pthread.h>
+#include <string>
 #include <thread>
 
 namespace datasystem {
