@@ -81,14 +81,23 @@ class KVBenchTestCase(BenchTestCase):
             "perf_workers": perf_workers,
             "access_key": args.access_key,
             "secret_key": args.secret_key,
+            "numa": args.numa,
         }
         return command_args
 
     def generate_commands(self, command_args: dict[str, Any], bin_path: str) -> str:
         """Formats a full command string from arguments and binary path."""
+        # Extract numa parameter if present
+        numa = command_args.pop("numa", "")
+        
         command_args_str = BenchCommandTask.concat_args("--", command_args)
-        command = [bin_path, self.command, command_args_str]
-        return " ".join(command)
+        base_command = [bin_path, self.command, command_args_str]
+        
+        # If numa is specified, wrap the command with taskset -c
+        if numa:
+            return f"taskset -c {numa} {' '.join(base_command)}"
+        else:
+            return " ".join(base_command)
 
     def generate_remote_info(self, worker_address: str) -> Union[BenchRemoteInfo, None]:
         """Fetches remote node configuration details from the executor."""

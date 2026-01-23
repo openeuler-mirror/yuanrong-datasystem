@@ -122,7 +122,11 @@ class BenchCommandTask(BenchTask):
 
         logger.debug("Local command stdout: %s", stdout_str)
         logger.debug("Local command stderr: %s", stderr_str)
-
+        logger.debug("Local command return code: %d", process.returncode)
+    
+        # Log error if return code is not 0 and stderr is not empty
+        if process.returncode != 0 and stderr_str.strip():
+            logger.error("Local command failed with return code %d. Error: %s", process.returncode, stderr_str.strip())
         return stdout_str, stderr_str
 
     def execute_command_remotely(self, remote: BenchRemoteInfo):
@@ -165,7 +169,11 @@ class BenchCommandTask(BenchTask):
         
         logger.debug("Remote command stdout: %s", stdout_str)
         logger.debug("Remote command stderr: %s", stderr_str)
-        
+        logger.debug("Remote command return code: %d", process.returncode)
+    
+        # Log error if return code is not 0 and stderr is not empty
+        if process.returncode != 0 and stderr_str.strip():
+            logger.error("Remote command failed with return code %d. Error: %s", process.returncode, stderr_str.strip())     
         return stdout_str, stderr_str
 
     def get_output(self) -> Union[BenchCommandOutput, None]:
