@@ -34,7 +34,6 @@
 #include <cstring>
 #include <iostream>
 #include <shared_mutex>
-#include <ucs/type/status.h>
 
 constexpr uint32_t DEFAULT_UCP_WORKER_NUM = 4;
 constexpr uint64_t MAX_MSG_SIZE = 512 * 1024 * 1024;
@@ -60,12 +59,17 @@ UcpManager::~UcpManager()
     localSegmentMap_.reset();
     eventMap_.reset();
     UcpDeleteContext();
+    ucp_dlopen::Cleanup();
     VLOG(RPC_LOG_LEVEL) << "UcpManager::~UcpManager() done";
 }
 
 Status UcpManager::Init()
 {
     LOG(INFO) << "UcpManager::Init()";
+    // Initialize UCP dlopen loader
+    if (!datasystem::ucp_dlopen::Init()) {
+        RETURN_STATUS_LOG_ERROR(K_RDMA_ERROR, "Failed to initialize UCP dlopen loader");
+    }
     RETURN_IF_NOT_OK(UcpCreateContext());
     RETURN_IF_NOT_OK(UcpCreateWorkerPool());
     serverStop_ = false;

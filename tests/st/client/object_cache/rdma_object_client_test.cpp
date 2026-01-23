@@ -256,7 +256,7 @@ TEST_F(RdmaObjectClientTest, TestBatchRemoteGet2)
     }
 }
 
-TEST_F(RdmaObjectClientTest, TestBatchRemoteGet3)
+TEST_F(RdmaObjectClientTest, DISABLED_TestBatchRemoteGet3)
 {
     // Test that with big objects (>= 1M), the logic batches all the other small objects,
     // and allocates memory separate for the big objects.

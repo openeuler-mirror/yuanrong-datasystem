@@ -29,8 +29,6 @@
 #include <iostream>
 #include <poll.h>
 
-#include "ucp/api/ucp_def.h"
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/ucp_manager.h"

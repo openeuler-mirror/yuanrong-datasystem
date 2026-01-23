@@ -28,9 +28,7 @@
 #include <memory>
 #include <string>
 
-#include "ucp/api/ucp.h"
-#include "ucp/api/ucp_def.h"
-
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/utils/status.h"
 

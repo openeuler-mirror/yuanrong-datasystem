@@ -32,8 +32,8 @@ if (BUILD_HETERO)
 endif()
 
 if (BUILD_WITH_RDMA)
-    list(APPEND RDMA_SRCS ucp_manager.cpp ucp_worker_pool.cpp ucp_worker.cpp ucp_endpoint.cpp ucp_segment.cpp)
-    list(APPEND RDMA_DEPEND_LIBS ${UCX_LIBRARIES})
+    list(APPEND RDMA_SRCS ucp_manager.cpp ucp_worker_pool.cpp ucp_worker.cpp ucp_endpoint.cpp ucp_segment.cpp ucp_dlopen_util.cpp)
+    list(APPEND RDMA_DEPEND_LIBS dl)
 endif()
 
 add_library(common_rdma STATIC ${FAST_TRANSPORT_SRCS} ${URMA_SRCS} ${RDMA_SRCS})

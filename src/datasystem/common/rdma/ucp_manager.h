@@ -26,8 +26,6 @@
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
 
-#include <ucp/api/ucp.h>
-
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
@@ -38,6 +36,7 @@
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/rdma/ucp_segment.h"
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
