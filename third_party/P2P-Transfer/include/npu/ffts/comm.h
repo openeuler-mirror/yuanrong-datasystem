@@ -11,11 +11,13 @@
 #include <stdint.h>
 #include "hccl/hccl.h"
 #include "hccl/hccl_common.h"
+#include "version/hccl_version.h"
 
 using RdmaHandle = void *;
 using SocketHandle = void *;
 using FdHandle = void *;
 
+#if HCCL_VERSION < ((9 * 100000000) + (4 * 1000000))
 enum class HcclCMDType {
     HCCL_CMD_INVALID = 0,
     HCCL_CMD_BROADCAST = 1,
@@ -30,6 +32,7 @@ enum class HcclCMDType {
     HCCL_CMD_GATHER,
     HCCL_CMD_MAX
 };
+#endif
 
 #define unlikely(x)     x
 
