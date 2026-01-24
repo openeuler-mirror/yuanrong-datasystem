@@ -209,7 +209,7 @@ class KVCommand(BenchmarkBaseCommand):
             help="Batch number (default: 1, max 10000)",
         )
         parser.add_argument(
-            "-n", "--num", type=int, default=1, help="Number of keys (default: 1)"
+            "-n", "--num", type=int, default=100, help="Number of data items (default: 100)"
         )
         parser.add_argument(
             "-s",
@@ -224,7 +224,7 @@ class KVCommand(BenchmarkBaseCommand):
             "--prefix",
             type=str,
             default="Bench",
-            help="Prefix of the key (default: Bench)",
+            help="Prefix of the key (default: Bench, length: 1-64, only letters, numbers and underscores)",
         )
         parser.add_argument(
             "--owner_worker",
@@ -247,13 +247,16 @@ class KVCommand(BenchmarkBaseCommand):
             "-S",
             "--set_worker_addresses",
             required=True,
-            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2). (required)",
+            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2) for executing set operations. "
+                 "dsbench will create a task for each worker to write test data. (required)",
         )
         parser.add_argument(
             "-G",
             "--get_worker_addresses",
             required=True,
-            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2). (required)",
+            help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2) for executing get operations. "
+                 "dsbench will create a task for each worker to read test data, and use the first worker "
+                 "to delete test data. (required)",
         )
         parser.add_argument("--access_key", type=str, default="", metavar="", help="Access key (default: empty)")
         parser.add_argument("--secret_key", type=str, default="", metavar="", help="Secret key (default: empty)")

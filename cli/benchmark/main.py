@@ -77,15 +77,15 @@ def create_main_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         metavar="",
-        help="Set the min log level, INFO: 0, WARNING: 1, ERROR: 2 (default: 2).",
+        help="Set the datasystem client min log level, INFO: 0, WARNING: 1, ERROR: 2 (default: 2).",
     )
 
     parser.add_argument(
         "--log_monitor_enable",
         type=bool,
         default=False,
-        metavar="",
-        help="Enable log monitor (default: false).",
+        metavar="true/false",
+        help="Enable datasystem client log monitor (default: false). Requires boolean value (true/false).",
     )
 
     subparsers = parser.add_subparsers(

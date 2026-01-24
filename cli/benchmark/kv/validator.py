@@ -95,9 +95,9 @@ def validate_format_arguments(args: Any):
         )
         return False
     
-    # Ensure prefix length does not exceed 64 characters
-    if len(args.prefix) > 64:
-        logger.error(f"prefix length must not exceed 64 characters.")
+    # Ensure prefix length is between 1 and 64 characters
+    if not 1 <= len(args.prefix) <= 64:
+        logger.error(f"prefix length must be between 1 and 64 characters.")
         return False
 
     # Validate worker addresses format
