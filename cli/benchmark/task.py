@@ -97,10 +97,10 @@ class BenchCommandTask(BenchTask):
     def execute_command_locally(self):
         """Executes a command on the local machine and captures its output."""
         env = self.env or {}
-        
+
         logger.debug("Executing local command: %s", self.command)
         logger.debug("Local command environment: %s", env)
-        
+
         process = subprocess.Popen(
             self.command,
             shell=True,
@@ -116,14 +116,14 @@ class BenchCommandTask(BenchTask):
             error_msg = f"Local command execution timed out: '{self.command}'"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from None
-        
+
         stdout_str = stdout.decode("utf-8")
         stderr_str = stderr.decode("utf-8")
 
         logger.debug("Local command stdout: %s", stdout_str)
         logger.debug("Local command stderr: %s", stderr_str)
         logger.debug("Local command return code: %d", process.returncode)
-    
+
         # Log error if return code is not 0 and stderr is not empty
         if process.returncode != 0 and stderr_str.strip():
             logger.error("Local command failed with return code %d. Error: %s", process.returncode, stderr_str.strip())
@@ -145,7 +145,7 @@ class BenchCommandTask(BenchTask):
             f"-i {shlex.quote(remote.ssh_config_path)} {shlex.quote(new_command)}"
         )
         logger.debug("SSH command: %s", ssh_command)
-        
+
         process = subprocess.Popen(
             ssh_command,
             shell=True,
@@ -163,17 +163,17 @@ class BenchCommandTask(BenchTask):
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg) from None
-        
+
         stdout_str = stdout.decode("utf-8")
         stderr_str = stderr.decode("utf-8")
-        
+
         logger.debug("Remote command stdout: %s", stdout_str)
         logger.debug("Remote command stderr: %s", stderr_str)
         logger.debug("Remote command return code: %d", process.returncode)
-    
+
         # Log error if return code is not 0 and stderr is not empty
         if process.returncode != 0 and stderr_str.strip():
-            logger.error("Remote command failed with return code %d. Error: %s", process.returncode, stderr_str.strip())     
+            logger.error("Remote command failed with return code %d. Error: %s", process.returncode, stderr_str.strip())
         return stdout_str, stderr_str
 
     def get_output(self) -> Union[BenchCommandOutput, None]:
@@ -183,11 +183,11 @@ class BenchCommandTask(BenchTask):
     def run(self):
         """Executes the command either locally or remotely."""
         logger.debug("Running command task for address: %s", self.worker_address)
-        
+
         if self.remote is None:
             stdout, stderr = self.execute_command_locally()
         else:
             stdout, stderr = self.execute_command_remotely(self.remote)
-        
+
         self.output = BenchCommandOutput(stdout, stderr)
         logger.debug("Command task completed for address: %s", self.worker_address)

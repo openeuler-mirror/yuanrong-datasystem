@@ -200,12 +200,17 @@ Status KVBench::FetchOwnerId(const std::string &ownerWorkerAddr, const std::stri
     HostPort hostPort;
     RETURN_IF_NOT_OK(hostPort.ParseString(ownerWorkerAddr));
 
-    ConnectOptions connectOptions = { .host = hostPort.Host(), .port = hostPort.Port() };
+    ConnectOptions connectOptions = { .host = hostPort.Host(), .port = hostPort.Port(), .connectTimeoutMs = 3000 };
     connectOptions.accessKey = accessKey;
     connectOptions.secretKey = secretKey;
 
     KVClient client(connectOptions);
-    RETURN_IF_NOT_OK(client.Init());
+    auto initStatus = client.Init();
+    if (initStatus.IsError()) {
+        return Status(initStatus.GetCode(), __LINE__, __FILE__,
+                      "Failed to connect to owner_worker: " + ownerWorkerAddr +
+                      ". Please check if owner_worker is correct. Error: " + initStatus.GetMsg());
+    }
 
     std::string key;
     RETURN_IF_NOT_OK(client.GenerateKey("No", key));

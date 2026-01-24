@@ -19,6 +19,17 @@ from typing import Any
 
 logger = logging.getLogger("dsbench")
 
+# Common regex patterns
+# IPv4:PORT pattern
+IPV4_PORT_PATTERN = (
+    r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):"
+    r"([1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$"
+)
+# IPv6:PORT pattern (with brackets)
+IPV6_PORT_PATTERN = r"^\[([0-9a-fA-F:.]+)\]:([1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$"
+# Combined IP:PORT pattern (supports both IPv4 and IPv6)
+IP_PORT_PATTERN = f"({IPV4_PORT_PATTERN})|({IPV6_PORT_PATTERN})"
+
 
 def check_duplicate_args(args: Any):
     """Ensure that unique command-line arguments are not specified multiple times."""
@@ -81,7 +92,7 @@ def validate_format_arguments(args: Any):
             f"size format is incorrect, should be nB/nKB/nMB/nGB or just n."
         )
         return False
-    
+
     # Ensure size value is greater than 0
     size_value = int(size_match.group(1))
     if size_value <= 0:
@@ -94,7 +105,7 @@ def validate_format_arguments(args: Any):
             f"prefix must be letters, digits, or underscores."
         )
         return False
-    
+
     # Ensure prefix length is between 1 and 64 characters
     if not 1 <= len(args.prefix) <= 64:
         logger.error(f"prefix length must be between 1 and 64 characters.")
@@ -109,9 +120,9 @@ def validate_format_arguments(args: Any):
         logger.error(f"get_worker_addresses format is incorrect.")
         return False
 
-    # Validate owner_worker format and check if it's in the worker list
-    if args.owner_worker and not re.match(r"^[a-zA-Z0-9.:]+$|^\s*$", args.owner_worker):
-        logger.error(f"owner_worker format is incorrect.")
+    # Validate owner_worker format
+    if args.owner_worker and not re.match(IP_PORT_PATTERN, args.owner_worker):
+        logger.error(f"owner_worker format error. Use IP:PORT.")
         return False
 
     # Validate numa format
