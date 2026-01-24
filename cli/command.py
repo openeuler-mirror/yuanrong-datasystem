@@ -76,13 +76,20 @@ class BaseCommand:
         cls.logger = logging.getLogger("dscli")
         formatter = logging.Formatter("[%(levelname)s] %(message)s")
 
-        # Console handler (shows INFO and above)
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(formatter)
+        # Handler for INFO level (output to stdout)
+        info_handler = logging.StreamHandler(sys.stdout)
+        info_handler.setLevel(logging.INFO)
+        info_handler.addFilter(lambda record: record.levelno == logging.INFO)
+        info_handler.setFormatter(formatter)
+
+        # Handler for WARNING and above levels (output to stderr)
+        error_handler = logging.StreamHandler(sys.stderr)
+        error_handler.setLevel(logging.WARNING)
+        error_handler.setFormatter(formatter)
 
         cls.logger.setLevel(logging.INFO)
-        cls.logger.addHandler(console_handler)
+        cls.logger.addHandler(info_handler)
+        cls.logger.addHandler(error_handler)
 
     def run(self, args):
         """
