@@ -20,6 +20,7 @@
 #ifndef WORKER_UPDATE_FLAG_CHECK_H
 #define WORKER_UPDATE_FLAG_CHECK_H
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 

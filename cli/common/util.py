@@ -272,12 +272,17 @@ def scp_upload(local_file, remote_host, remote_path, user_name, private_key):
     if remote_path in UNSAFE:
         raise ValueError(f"Remote path {remote_path} is outside allowed directory")
 
+    is_ipv6 = is_valid_ip(remote_host)
+    remote_host_arg = remote_host
+    if is_ipv6:
+        remote_host_arg = "[" + remote_host + "]"
+
     scp_command = [
         "scp",
         "-i",
         private_key,
         local_file,
-        f"{user_name}@{remote_host}:{remote_path}",
+        f"{user_name}@{remote_host_arg}:{remote_path}",
     ]
     try:
         subprocess.check_call(scp_command, stdout=subprocess.DEVNULL)
@@ -298,13 +303,18 @@ def scp_download(remote_host, remote_path, local_path, user_name, private_key):
     Raises:
         RuntimeError: If the file download fails.
     """
+    is_ipv6 = is_valid_ip(remote_host)
+    remote_host_arg = remote_host
+    if is_ipv6:
+        remote_host_arg = "[" + remote_host + "]"
+
     os.makedirs(local_path, exist_ok=True)
     scp_command = [
         "scp",
         "-r",
         "-i",
         private_key,
-        f"{user_name}@{remote_host}:{remote_path}",
+        f"{user_name}@{remote_host_arg}:{remote_path}",
         local_path,
     ]
     try:

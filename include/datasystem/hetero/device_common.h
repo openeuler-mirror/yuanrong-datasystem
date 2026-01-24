@@ -22,6 +22,7 @@
 #ifndef DATASYSTEM_HETERO_DEVICE_COMMON_H
 #define DATASYSTEM_HETERO_DEVICE_COMMON_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 

@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_CONSTANTS_H
 #define DATASYSTEM_COMMON_CONSTANTS_H
 
+#include <cstdint>
 #include <string>
 
 namespace datasystem {
