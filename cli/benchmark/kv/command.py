@@ -146,7 +146,7 @@ class KVCommand(BenchmarkBaseCommand):
 
     def _get_remote_node_info(self, address: str) -> dict[str, any]:
         """Get node information from remote IP using dsbench show command."""
-        result = executor.execute('bash -l -c "source ~/.bashrc && dsbench show"', address)
+        result = executor.execute('bash -l -c "dsbench show"', address)
         node_info = {}
 
         if hasattr(result, 'stderr'):
@@ -503,11 +503,9 @@ class KVCommand(BenchmarkBaseCommand):
             if key not in parsed_params:
                 parsed_params[key] = "N/A"
 
-        ps_cmd = f"ps -ww -C datasystem_worker -f | grep -F 'worker_address={worker_addr}' | grep -v grep"
-
         worker_pid, has_valid_output, extracted_params = (
             self._parse_and_extract_worker_params(
-                ps_cmd, worker_addr, param_display_map.keys()
+                worker_addr, param_display_map.keys()
             )
         )
 
@@ -603,14 +601,16 @@ class KVCommand(BenchmarkBaseCommand):
         self.logger.info("=" * 100)
 
     def _parse_and_extract_worker_params(
-        self, full_ps_command: str, worker_addr: str, param_names_to_find: set[str]
+        self, worker_addr: str, param_names_to_find: set[str]
     ) -> tuple[str, bool, dict[str, str]]:
         """
         Executes the 'ps' command, parses its output, and extracts the worker's pid
         and specified parameters.
         Returns a tuple: (pid, has_valid_output_flag, extracted_params_dict)
         """
-        ps_result = executor.execute(full_ps_command, worker_addr)
+        # Use simple ps command without pipes
+        ps_command = "ps -C datasystem_worker -o pid,cmd"
+        ps_result = executor.execute(ps_command, worker_addr)
 
         if not isinstance(ps_result, BenchCommandOutput):
             error_msg = str(ps_result)
@@ -633,8 +633,19 @@ class KVCommand(BenchmarkBaseCommand):
         if not raw_output:
             return "N/A", False, {}
 
+        # Filter output in Python
+        filtered_lines = []
+        for line in raw_output.split('\n'):
+            line = line.strip()
+            if f'worker_address={worker_addr}' in line:
+                filtered_lines.append(line)
+
+        if not filtered_lines:
+            return "N/A", False, {}
+
+        # Parse the first matching line
         pid, extracted_params = self._parse_ps_output_string(
-            raw_output, param_names_to_find
+            '\n'.join(filtered_lines), param_names_to_find
         )
 
         return pid, True, extracted_params
@@ -653,8 +664,8 @@ class KVCommand(BenchmarkBaseCommand):
 
             if pid == "N/A":
                 parts = line.split()
-                if len(parts) > 1:
-                    pid = parts[1]
+                if len(parts) > 0:
+                    pid = parts[0]
 
             for param_name in param_names_to_find:
                 match = re.search(rf"--{param_name}=(\S+)", line)

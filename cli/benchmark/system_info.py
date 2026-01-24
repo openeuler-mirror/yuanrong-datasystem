@@ -11,7 +11,7 @@ class SystemInfoCollector:
     @staticmethod
     def get_dscli_version(worker_address: str) -> tuple[str, str]:
         """Get version and commit id from dscli."""
-        result = executor.execute('bash -l -c "source ~/.bashrc && dscli --version"', worker_address)
+        result = executor.execute('bash -l -c "dscli --version"', worker_address)
         version = ""
         commit_id = ""
         
