@@ -224,6 +224,31 @@ TEST_F(KVCacheClientTest, TestRemoteGetStatus)
     ASSERT_TRUE(status.GetMsg().find("Cannot get object from worker and l2 cache") != std::string::npos);
 }
 
+TEST_F(KVCacheClientTest, TestMsetAndMGet)
+{
+    std::shared_ptr<KVClient> client;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    std::vector<std::string> keys;
+    std::vector<StringView> values;
+    size_t bigSize = 1024UL;
+    size_t batchSize = 10'000UL;
+    std::vector<std::string> vals;
+    for (size_t i = 0; i < batchSize; ++i) {
+        keys.emplace_back("key" + std::to_string(i));
+        vals.emplace_back(GenRandomString(bigSize));
+        values.emplace_back(vals.back());
+    }
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client->MSet(keys, values, failedKeys, MSetParam()));
+    std::vector<std::string> getVals;
+    DS_ASSERT_OK(client1->Get(keys, getVals));
+    for (size_t i = 0; i < batchSize; ++i) {
+        ASSERT_EQ(vals[i], getVals[i]);
+    }
+}
+
 TEST_F(KVCacheClientTest, SubscribeTimeoutTest)
 {
     std::shared_ptr<KVClient> client1, client2;
