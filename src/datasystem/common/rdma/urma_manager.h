@@ -110,7 +110,7 @@ public:
      * @param[out] constAccessor Accessor in segment table
      * @return Status of the call.
      */
-    Status GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor);
+    Status GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor) const;
 
     /**
      * @brief Import remote segment and keep record in the device
@@ -137,6 +137,7 @@ public:
 };
 
 using RemoteDeviceMap = LockMap<std::string, RemoteDevice>;
+using TbbRemoteDeviceMap = tbb::concurrent_hash_map<std::string, RemoteDevice>;
 
 class Event {
 public:
@@ -620,7 +621,7 @@ private:
     // Memory address to local segment mapping.
     std::unique_ptr<SegmentMap> localSegmentMap_;
     // Eid to segment maps mapping for remote jfr and segment.
-    std::unique_ptr<RemoteDeviceMap> remoteDeviceMap_;
+    TbbRemoteDeviceMap tbbRemoteDeviceMap_;
     TbbEventMap tbbEventMap_;
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_set<uint64_t> failedRequests_;

@@ -71,14 +71,13 @@ UrmaManager::UrmaManager()
         URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
 #endif
     localSegmentMap_ = std::make_unique<SegmentMap>();
-    remoteDeviceMap_ = std::make_unique<RemoteDeviceMap>();
 }
 
 UrmaManager::~UrmaManager()
 {
     Stop();
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager()";
-    remoteDeviceMap_.reset();
+    tbbRemoteDeviceMap_.clear();
     localSegmentMap_.reset();
     tbbEventMap_.clear();
     urmaJfrVec_.clear();
@@ -729,9 +728,9 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     const std::string remoteDeviceId = urmaInfo.localAddress.ToString();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     // Insert or update the import jfr (in case the sending worker restarts)
-    RemoteDeviceMap::Accessor accessor;
-    auto res = remoteDeviceMap_->Insert(accessor, remoteDeviceId);
-    auto &device = accessor.entry->data;
+    TbbRemoteDeviceMap::accessor accessor;
+    auto res = tbbRemoteDeviceMap_.insert(accessor, remoteDeviceId);
+    auto &device = accessor->second;
     if (!res) {
         RETURN_OK_IF_TRUE(device.urmaInfo_.ToString() == urmaInfo.ToString());
         // Existing entry exists, and we will update the imported jfr (assuming the sending worker restarted)
@@ -745,7 +744,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     urma_eid_t eid;
     auto rc = StrToEid(urmaInfo.eid, eid);
     if (rc.IsError()) {
-        remoteDeviceMap_->BlockingErase(accessor);
+        tbbRemoteDeviceMap_.erase(accessor);
         return rc;
     }
     remoteJfr.jfr_id.eid = eid;
@@ -761,13 +760,13 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
         auto *tjfr = urma_import_jfr(urmaContext_, &remoteJfr, &urmaToken_);
         point1a.Record();
         if (tjfr == nullptr) {
-            remoteDeviceMap_->BlockingErase(accessor);
+            tbbRemoteDeviceMap_.erase(accessor);
             return Status(K_RUNTIME_ERROR, FormatString("Failed to import jfr, %s", urmaInfo.ToString()));
         }
         PerfPoint point1b(PerfKey::URMA_ADVISE_JFR);
         if (urma_advise_jfr(urmaJfsVec_[i].get(), tjfr) != URMA_SUCCESS) {
             (void)urma_unimport_jfr(tjfr);
-            remoteDeviceMap_->BlockingErase(accessor);
+            tbbRemoteDeviceMap_.erase(accessor);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to advise jfr"));
         }
         point1b.Record();
@@ -775,7 +774,6 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     }
     LOG_IF(WARNING, timer.ElapsedSecond() > 1) << "ImportRemoteJfr exceed 1s!";
     device.SetJfrs(tjfrs);
-    accessor.Release();
     point1.Record();
     return Status::OK();
 }
@@ -786,19 +784,19 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
     const std::string remoteDeviceId = requestAddress.ToString();
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
-    RemoteDeviceMap::Accessor accessor;
+    TbbRemoteDeviceMap::accessor accessor;
     // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
-    auto res = remoteDeviceMap_->Find(accessor, remoteDeviceId);
+    auto res = tbbRemoteDeviceMap_.find(accessor, remoteDeviceId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteDeviceId));
     point1.Record();
     PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
     for (int i = 0; i < req.seg_infos_size(); i++) {
         auto &segInfo = req.seg_infos(i);
-        auto rc = accessor.entry->data.ImportRemoteSeg(urmaContext_, segInfo);
+        auto rc = accessor->second.ImportRemoteSeg(urmaContext_, segInfo);
         if (rc.IsError()) {
             // clear import jfr and seg to reconnect next time
-            remoteDeviceMap_->BlockingErase(accessor);
+            tbbRemoteDeviceMap_.erase(accessor);
             return rc;
         }
     }
@@ -819,15 +817,16 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     const std::string remoteDeviceId = requestAddress.ToString();
     PerfPoint point1(PerfKey::URMA_CONNECT_WITH_REMOTE_DEVICE);
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
-    RemoteDeviceMap::ConstAccessor constAccessor;
+    TbbRemoteDeviceMap::const_accessor constAccessor;
     // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
-    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    auto res = tbbRemoteDeviceMap_.find(constAccessor, remoteDeviceId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteDeviceId));
     point1.Record();
     PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
     SegmentMap::ConstAccessor remoteSegAccessor;
-    RETURN_IF_NOT_OK(constAccessor.entry->data.GetRemoteSeg(segVa, remoteSegAccessor));
+    auto &device = constAccessor->second;
+    RETURN_IF_NOT_OK(device.GetRemoteSeg(segVa, remoteSegAccessor));
     point2.Record();
 
     PerfPoint point3(PerfKey::URMA_REGISTER_LOCAL_SEGMENT);
@@ -848,7 +847,11 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         const uint64_t key = requestId_.fetch_add(1);
         const uint64_t index = key % FLAGS_urma_connection_size;
         urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
-        urma_target_jetty_t *importJfr = constAccessor.entry->data.importJfrs_[index].get();
+        const auto &remoteJfrs = device.importJfrs_;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            index < remoteJfrs.size(), K_RUNTIME_ERROR,
+            FormatString("Got invalid urma index with %d, jfrs size is %d", index, remoteJfrs.size()));
+        urma_target_jetty_t *importJfr = remoteJfrs[index].get();
         PerfPoint point4a(PerfKey::URMA_WRITE);
         urma_status_t ret = urma_write(
             urmaJfs, importJfr, remoteSegAccessor.entry->data.segment_.get(),
@@ -886,13 +889,14 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
     const std::string remoteDeviceId = requestAddress.ToString();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
-    RemoteDeviceMap::ConstAccessor constAccessor;
+    TbbRemoteDeviceMap::const_accessor constAccessor;
     // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
-    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    auto res = tbbRemoteDeviceMap_.find(constAccessor, remoteDeviceId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteDeviceId));
     SegmentMap::ConstAccessor remoteSegAccessor;
-    RETURN_IF_NOT_OK(constAccessor.entry->data.GetRemoteSeg(segVa, remoteSegAccessor));
+    auto &device = constAccessor->second;
+    RETURN_IF_NOT_OK(device.GetRemoteSeg(segVa, remoteSegAccessor));
 
     SegmentMap::ConstAccessor localSegAccessor;
     RETURN_IF_NOT_OK(GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor));
@@ -908,7 +912,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t key = requestId_.fetch_add(1);
         const uint64_t index = key % FLAGS_urma_connection_size;
         urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
-        urma_target_jetty_t *importJfr = constAccessor.entry->data.importJfrs_[index].get();
+        urma_target_jetty_t *importJfr = constAccessor->second.importJfrs_[index].get();
         urma_status_t ret =
             urma_read(urmaJfs, importJfr, localSegAccessor.entry->data.segment_.get(),
                       remoteSegAccessor.entry->data.segment_.get(), localObjectAddress + metaDataSize + readOffset,
@@ -934,9 +938,9 @@ urma_target_seg_t *UrmaManager::ImportSegment(urma_seg_t &remoteSegment)
 
 Status UrmaManager::UnimportSegment(const HostPort &remoteAddress, const uint64_t segmentAddress)
 {
-    RemoteDeviceMap::Accessor accessor;
-    if (remoteDeviceMap_->Find(accessor, remoteAddress.ToString())) {
-        RETURN_IF_NOT_OK(accessor.entry->data.UnimportRemoteSeg(segmentAddress));
+    TbbRemoteDeviceMap::accessor accessor;
+    if (tbbRemoteDeviceMap_.find(accessor, remoteAddress.ToString())) {
+        RETURN_IF_NOT_OK(accessor->second.UnimportRemoteSeg(segmentAddress));
         return Status::OK();
     }
     RETURN_STATUS(K_NOT_FOUND, "Cannot unimport jfr, jfr is not imported");
@@ -944,9 +948,9 @@ Status UrmaManager::UnimportSegment(const HostPort &remoteAddress, const uint64_
 
 Status UrmaManager::RemoveRemoteDevice(const HostPort &remoteAddress)
 {
-    RemoteDeviceMap::Accessor accessor;
-    if (remoteDeviceMap_->Find(accessor, remoteAddress.ToString())) {
-        remoteDeviceMap_->BlockingErase(accessor);
+    TbbRemoteDeviceMap::accessor accessor;
+    if (tbbRemoteDeviceMap_.find(accessor, remoteAddress.ToString())) {
+        tbbRemoteDeviceMap_.erase(accessor);
         return Status::OK();
     }
     RETURN_STATUS(K_NOT_FOUND, FormatString("Cannot remove RemoteDevice, RemoteDevice for %s does not exist",
@@ -965,16 +969,13 @@ Status UrmaManager::StrToEid(const std::string &eid, urma_eid_t &out)
 
 Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, const std::string &instanceId)
 {
-    RemoteDeviceMap::ConstAccessor constAccessor;
-    auto res = remoteDeviceMap_->Find(constAccessor, hostAddress);
+    TbbRemoteDeviceMap::const_accessor constAccessor;
+    auto res = tbbRemoteDeviceMap_.find(constAccessor, hostAddress);
     if (!res) {
         RETURN_STATUS(K_URMA_NEED_CONNECT, "No existing connection requires creation.");
     }
-    if (!constAccessor.entry) {
-        RETURN_STATUS_LOG_ERROR(K_URMA_NEED_CONNECT, "The empty connection configuration needs to be recreated!");
-    }
     if (!instanceId.empty()) {
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor.entry->data.urmaInfo_.uniqueInstanceId == instanceId,
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor->second.urmaInfo_.uniqueInstanceId == instanceId,
                                              K_URMA_NEED_CONNECT,
                                              "Urma connect has disconnected and needs to be reconnected!");
         return Status::OK();
@@ -1046,7 +1047,7 @@ void RemoteDevice::SetJfrs(std::vector<urma_target_jetty_t *> &jetties)
     }
 }
 
-Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor)
+Status RemoteDevice::GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor) const
 {
     if ((*remoteSegments_).Find(constAccessor, segVa)) {
         return Status::OK();
