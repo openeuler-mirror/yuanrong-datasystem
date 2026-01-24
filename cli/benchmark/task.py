@@ -102,10 +102,8 @@ class BenchCommandTask(BenchTask):
         logger.debug("Local command environment: %s", env)
         
         process = subprocess.Popen(
-            self.command,
-            shell=True,
+            shlex.split(self.command),
             env=env,
-            executable="/bin/bash",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -147,9 +145,7 @@ class BenchCommandTask(BenchTask):
         logger.debug("SSH command: %s", ssh_command)
         
         process = subprocess.Popen(
-            ssh_command,
-            shell=True,
-            env=self.env,
+            shlex.split(ssh_command),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

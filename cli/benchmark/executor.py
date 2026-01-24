@@ -138,7 +138,7 @@ class Executor:
             return self.pkg_location_cache[worker_address]
 
         pip_show_result = self.execute(
-            'bash -l -c "source ~/.bashrc && pip show openyuanrong-datasystem"', worker_address
+            'bash -l -c "pip show openyuanrong-datasystem"', worker_address
         )
 
         location = None
