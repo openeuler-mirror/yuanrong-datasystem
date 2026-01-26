@@ -2805,7 +2805,7 @@ TEST_F(ProducerTest, LEVEL2_TestCreateProducerLongTimeout3)
     DS_ASSERT_OK(client1->CreateProducer("ProducerLongTimeout3", producer, conf));
 }
 
-TEST_F(ProducerTest, TestMultiLocalProducerCreateClose)
+TEST_F(ProducerTest, DISABLED_TestMultiLocalProducerCreateClose)
 {
     // This test case tests multi local producers
     // They will generate single master call

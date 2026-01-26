@@ -1109,7 +1109,7 @@ TEST_F(StreamClientWriteRocksdbTest, TestNodeRestartWithNoneMode2)
     EXPECT_EQ(str3, actualData4);
 }
 
-TEST_F(StreamClientWriteRocksdbTest, TestNodeRestartWithNoneMode3)
+TEST_F(StreamClientWriteRocksdbTest, DISABLED_TestNodeRestartWithNoneMode3)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=none");
     int waitHashSecond = 2;

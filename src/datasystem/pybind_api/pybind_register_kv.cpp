@@ -32,6 +32,7 @@
 
 using datasystem::ConnectOptions;
 using datasystem::object_cache::ObjectClientImpl;
+using datasystem::object_cache::FullParam;
 namespace datasystem {
 class StateValueBuffer;
 struct MemoryView {
@@ -103,6 +104,9 @@ public:
      */
     [[nodiscard]] int64_t GetSize() const;
 
+    std::shared_ptr<Buffer> GetBuffer() {return buffer_;}
+    uint8_t* MutableData(){ return static_cast<uint8_t*>(const_cast<void*>(buffer_->ImmutableData())); }
+
 private:
     std::shared_ptr<Buffer> buffer_;
 };
@@ -163,7 +167,13 @@ PybindDefineRegisterer g_pybind_define_f_StateValueBuffer(
                  })
             .def("RLatch", [](StateValueBuffer &stateValBuffer,
                               uint64_t timeoutSeconds = 60) { return stateValBuffer.RLatch(timeoutSeconds); })
-            .def("UnRLatch", [](StateValueBuffer &stateValBuffer) { return stateValBuffer.UnRLatch(); });
+            .def("UnRLatch", [](StateValueBuffer &stateValBuffer) { return stateValBuffer.UnRLatch(); })
+            .def("MutableData", [](StateValueBuffer &stateValBuffer) {
+                auto ptr = stateValBuffer.MutableData();
+                auto size = stateValBuffer.GetSize();
+                return py::memoryview::from_memory(ptr, size, false);
+            })
+            .def("GetSize", [](StateValueBuffer &stateValBuffer) { return stateValBuffer.GetSize(); });
     }));
 
 PybindDefineRegisterer g_pybind_define_f_ReadOnlyMemoryViewBuffer(
@@ -172,7 +182,8 @@ PybindDefineRegisterer g_pybind_define_f_ReadOnlyMemoryViewBuffer(
             *m, "ReadOnlyMemoryViewBuffer", pybind11::buffer_protocol())
             .def_buffer([](ReadOnlyMemoryViewBuffer &memViewBuffer) {
                 return py::buffer_info(memViewBuffer.ImmutableData(), memViewBuffer.GetSize(), true);
-            });
+            })
+            .def("GetSize", [](ReadOnlyMemoryViewBuffer &memViewBuffer) { return memViewBuffer.GetSize(); });
     }));
 
 PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](const py::module *m) {
@@ -288,6 +299,90 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                  accessPoint.Record(rc.GetCode(), std::to_string(totalSize), reqParam);
                  return rc;
              })
+        .def("MCreate",
+            [](ObjectClientImpl &client, const std::vector<std::string> &keys,
+            const std::vector<uint64_t> &sizes, WriteMode writeMode, uint32_t ttlSecond) {
+                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                FullParam param;
+                param.writeMode = writeMode;
+                param.ttlSecond = ttlSecond;
+
+                std::vector<std::shared_ptr<Buffer>> buffers;
+                uint64_t totalSize = 0;
+                for (uint64_t size : sizes) {
+                    totalSize += size;
+                }
+                auto status = client.MCreate(keys, sizes, param, buffers);
+                if (status.IsError()) {
+                    LOG(ERROR) << "MCreate failed:" << status.ToString();
+                }
+
+                py::list pyBuffers;
+                if (status.IsOk()) {
+                    for (auto &buf : buffers) {
+                        pyBuffers.append(std::make_shared<StateValueBuffer>(std::move(buf)));
+                    }
+                }
+                AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
+                RequestParam reqParam;
+                reqParam.objectKey = objectKeysToString(keys);
+                reqParam.writeMode = std::to_string(static_cast<int>(writeMode));
+                reqParam.timeout = std::to_string(ttlSecond);
+                accessPoint.Record(status.GetCode(), std::to_string(totalSize), reqParam);
+                return std::make_pair(status, std::move(pyBuffers));
+            })
+        .def("MSetBuffer",
+        [](ObjectClientImpl &client, const std::vector<std::shared_ptr<StateValueBuffer>> &sv_buffers) {
+            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            std::vector<std::shared_ptr<Buffer>> buffers;
+            for (const auto &svb : sv_buffers) {
+                if (svb) {
+                    buffers.push_back(svb->GetBuffer());
+                }
+            }
+            auto status = client.MSet(buffers);
+            return status;
+        })
+        .def("MGetBuffer",
+            [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
+                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                std::vector<Optional<Buffer>> buffers;
+                py::list vals;
+                uint64_t totalSize = 0;
+                Status lastRc;
+                
+                AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+                Raii raii([&accessPoint, &totalSize, &lastRc, keys, timeout_ms] {
+                    RequestParam reqParam;
+                    reqParam.objectKey = objectKeysToString(keys);
+                    reqParam.timeout = std::to_string(timeout_ms);
+                    accessPoint.Record(lastRc.GetCode(), std::to_string(totalSize), reqParam, lastRc.GetMsg());
+                });
+
+                lastRc = client.Get(keys, timeout_ms, buffers);
+                if (lastRc.IsError()) {
+                    return std::make_pair(lastRc, std::move(vals));
+                }
+
+                for (auto &optBuf : buffers) {
+                    if (!optBuf) {
+                        vals.append(py::none());
+                        continue;
+                    }
+
+                    auto svb = std::make_shared<StateValueBuffer>(
+                        std::make_shared<Buffer>(std::move(optBuf.value()))
+                    );
+                    auto view = svb->ImmutableData(true);
+                    if (view) {
+                        totalSize += svb->GetSize();
+                        vals.append(view);
+                    } else {
+                        vals.append(py::none());
+                    }
+                }
+                return std::make_pair(lastRc, std::move(vals));
+            })
         .def("GetReadOnlyBuffers",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();

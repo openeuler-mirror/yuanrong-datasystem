@@ -21,10 +21,68 @@ import random
 import json
 import time
 import unittest
+import pickle
+import ctypes
+import struct
 
 from yr.datasystem.object_client import WriteMode, ObjectClient
 from yr.datasystem.kv_client import KVClient, ExistenceOpt, ReadParam
 from yr.datasystem.util import Context
+
+is_torch_exist = True
+try:
+    import torch
+except ImportError:
+    is_torch_exist = False
+
+HEADER_FMT = "<I"
+HEADER_SIZE = struct.calcsize(HEADER_FMT)
+ENTRY_FMT = "<II"
+ENTRY_SIZE = struct.calcsize(ENTRY_FMT)
+
+
+def serialize(obj):
+    buffers = []
+    meta = pickle.dumps(obj, buffer_callback=buffers.append, protocol=pickle.HIGHEST_PROTOCOL)
+    return [memoryview(meta), *[memoryview(b) for b in buffers]]
+
+
+def deserialize(items):
+    meta = items[0]
+    buffers = [memoryview(b) for b in items[1:]]
+    return pickle.loads(meta, buffers=buffers)
+
+
+def calc_packed_size(items):
+    return HEADER_SIZE + len(items) * ENTRY_SIZE + sum(len(bytes(item)) for item in items)
+
+
+def pack_into(target, items):
+    mv = memoryview(target)
+    header_data = struct.pack(HEADER_FMT, len(items))
+    mv[:len(header_data)] = header_data
+
+    entry_offset = HEADER_SIZE
+    payload_offset = HEADER_SIZE + len(items) * ENTRY_SIZE
+
+    for item in items:
+        entry_data = struct.pack(ENTRY_FMT, payload_offset, item.nbytes)
+
+        mv[entry_offset:entry_offset + ENTRY_SIZE] = entry_data
+        mv[payload_offset:payload_offset + item.nbytes] = item.cast('B')
+
+        entry_offset += ENTRY_SIZE
+        payload_offset += item.nbytes
+
+
+def unpack_from(source):
+    mv = memoryview(source)
+    item_count = struct.unpack_from(HEADER_FMT, mv, 0)[0]
+    offsets = []
+    for i in range(item_count):
+        offset, length = struct.unpack_from(ENTRY_FMT, mv, HEADER_SIZE + i * ENTRY_SIZE)
+        offsets.append((offset, length))
+    return [mv[offset:offset + length] for offset, length in offsets]
 
 
 class TestKVClientMethods(unittest.TestCase):
@@ -56,6 +114,73 @@ class TestKVClientMethods(unittest.TestCase):
         work_addr = work_address.get("value")
         cls.host, cls.port = work_addr.split(":")
         cls.port = int(cls.port)
+
+    @unittest.skipUnless(is_torch_exist, "Run when dependency is exist")
+    def test_mcreate_mset_zero_copy(self):
+        Context.set_trace_id("test_mcreate_mset_zero_copy")
+        client = KVClient(self.host, self.port)
+        client.init()
+
+        data = {
+            "name": "sensor_1",
+            "age": "12",
+            "raw_data": torch.tensor([1, 2, 3], dtype=torch.int64),
+            "weights": torch.tensor([0.5, 0.8], dtype=torch.float64)
+        }
+
+        items = serialize(data)
+        packed_size = calc_packed_size(items)
+        key = "zero_copy_test_key"
+
+        buffers = client.mcreate([key], [packed_size], WriteMode.NONE_L2_CACHE, 60)
+        self.assertEqual(len(buffers), 1)
+
+        target_svb = buffers[0]
+        write_view = target_svb.MutableData()
+        pack_into(write_view, items)
+
+        client.mset_buffer(buffers)
+
+        retrieved_buffers = client.get_buffers([key], timeout_ms=500)
+        self.assertEqual(len(retrieved_buffers), 1)
+
+        read_view = retrieved_buffers[0]
+        items_restored = unpack_from(read_view)
+        restored_data = deserialize(items_restored)
+
+        self.assertEqual(restored_data["name"], data["name"])
+        self.assertTrue(torch.equal(restored_data["raw_data"], data["raw_data"]))
+        self.assertTrue(torch.allclose(restored_data["weights"], data["weights"]))
+
+        client.delete([key])
+
+    def test_mcreate_mset_mget_basic(self):
+        Context.set_trace_id("test_mcreate_mset_mget_basic")
+        client = KVClient(self.host, self.port)
+        client.init()
+
+        keys = ["key1", "key2"]
+        sizes = [100, 200]
+        ttl_second = 1
+
+        buffers = client.mcreate(keys, sizes, WriteMode.NONE_L2_CACHE, ttl_second)
+        self.assertEqual(len(buffers), len(keys))
+
+        self.assertEqual(buffers[0].GetSize(), 100)
+        self.assertEqual(buffers[1].GetSize(), 200)
+
+        client.mset_buffer(buffers)
+
+        retrieved_buffers = client.get_buffers(keys, timeout_ms=500)
+        self.assertEqual(len(retrieved_buffers), len(keys))
+
+        self.assertEqual(retrieved_buffers[0].GetSize(), 100)
+        self.assertEqual(retrieved_buffers[1].GetSize(), 200)
+
+        # Test: Fail to get when times out
+        time.sleep(1.1)
+        with self.assertRaises(RuntimeError):
+            client.get_buffers(keys, timeout_ms=0)
 
     def test_state_init_by_env(self):
         """
