@@ -136,7 +136,6 @@ public:
     std::unique_ptr<SegmentMap> remoteSegments_;
 };
 
-using RemoteDeviceMap = LockMap<std::string, RemoteDevice>;
 using TbbRemoteDeviceMap = tbb::concurrent_hash_map<std::string, RemoteDevice>;
 
 class Event {
