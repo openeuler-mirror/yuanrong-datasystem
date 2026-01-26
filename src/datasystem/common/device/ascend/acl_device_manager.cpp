@@ -721,5 +721,295 @@ Status AclDeviceManager::DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry *ent
     RETURN_RUNTIME_ERROR_IF_NULL(DSP2PScatterBatchFromRemoteHostMemFunc_);
     RETURN_ACL_RESULT(DSP2PScatterBatchFromRemoteHostMemFunc_(entries, batchSize, comm, stream));
 }
+
+// ==================== DeviceManagerBase Interface Implementation ====================
+
+Status AclDeviceManager::Init(const char *configPath)
+{
+    return aclInit(configPath);
+}
+
+Status AclDeviceManager::Finalize()
+{
+    return aclFinalize();
+}
+
+Status AclDeviceManager::GetDeviceCount(uint32_t *count)
+{
+    return aclrtGetDeviceCount(count);
+}
+
+Status AclDeviceManager::QueryDeviceStatus(uint32_t deviceId)
+{
+    return aclrtQueryDeviceStatus(deviceId);
+}
+
+Status AclDeviceManager::SetDevice(int32_t deviceId)
+{
+    return SetDeviceIdx(deviceId);
+}
+
+Status AclDeviceManager::ResetDevice(int32_t deviceId)
+{
+    return aclrtResetDevice(deviceId);
+}
+
+Status AclDeviceManager::Malloc(void **devPtr, size_t size, MemMallocPolicy policy)
+{
+    aclrtMemMallocPolicy aclPolicy;
+    RETURN_IF_NOT_OK(ToAclMemMallocPolicy(policy, aclPolicy));
+    return aclrtMalloc(devPtr, size, aclPolicy);
+}
+
+Status AclDeviceManager::Free(void *devPtr)
+{
+    return aclrtFree(devPtr);
+}
+
+Status AclDeviceManager::MallocHost(void **hostPtr, size_t size)
+{
+    return aclrtMallocHost(hostPtr, size);
+}
+
+Status AclDeviceManager::FreeHost(void *hostPtr)
+{
+    return aclrtFreeHost(hostPtr);
+}
+
+Status AclDeviceManager::MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count,
+                                     MemcpyKind kind, void *stream)
+{
+    aclrtMemcpyKind aclKind;
+    RETURN_IF_NOT_OK(ToAclMemcpyKind(kind, aclKind));
+    return aclrtMemcpyAsync(dst, dstMaxSize, src, count, aclKind,
+                           static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::CreateStream(void **stream)
+{
+    return RtCreateStream(reinterpret_cast<aclrtStream *>(stream));
+}
+
+Status AclDeviceManager::SynchronizeStream(void *stream)
+{
+    return RtSynchronizeStream(static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::SynchronizeStreamWithTimeout(void *stream, int32_t timeoutMs)
+{
+    return RtSynchronizeStreamWithTimeout(static_cast<aclrtStream>(stream), timeoutMs);
+}
+
+Status AclDeviceManager::DestroyStream(void *stream)
+{
+    return RtDestroyStream(static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::DestroyStreamForce(void *stream)
+{
+    return RtDestroyStreamForce(static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::CreateEvent(void **event)
+{
+    return DSAclrtCreateEvent(reinterpret_cast<aclrtEvent *>(event));
+}
+
+Status AclDeviceManager::RecordEvent(void *event, void *stream)
+{
+    return DSAclrtRecordEvent(static_cast<aclrtEvent>(event), static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::SynchronizeEvent(void *event)
+{
+    return DSAclrtSynchronizeEvent(static_cast<aclrtEvent>(event));
+}
+
+Status AclDeviceManager::SynchronizeEventWithTimeout(void *event, int32_t timeoutMs)
+{
+    return DSAclrtSynchronizeEventWithTimeout(static_cast<aclrtEvent>(event), timeoutMs);
+}
+
+Status AclDeviceManager::DestroyEvent(void *event)
+{
+    return DSAclrtDestroyEvent(static_cast<aclrtEvent>(event));
+}
+
+Status AclDeviceManager::QueryEventStatus(void *event)
+{
+    return DSAclrtQueryEventStatus(static_cast<aclrtEvent>(event));
+}
+
+Status AclDeviceManager::CommGetRootInfo(CommRootInfo *rootInfo)
+{
+    HcclRootInfo *hcclRootInfo = nullptr;
+    RETURN_IF_NOT_OK(ToHcclRootInfo(rootInfo, hcclRootInfo));
+    return DSHcclGetRootInfo(hcclRootInfo);
+}
+
+Status AclDeviceManager::CommInitRootInfo(uint32_t nRanks, const CommRootInfo *rootInfo, uint32_t rank, void **comm)
+{
+    const HcclRootInfo *hcclRootInfo = nullptr;
+    RETURN_IF_NOT_OK(ToHcclRootInfo(rootInfo, hcclRootInfo));
+    return DSHcclCommInitRootInfo(nRanks, hcclRootInfo, rank, reinterpret_cast<HcclComm *>(comm));
+}
+
+Status AclDeviceManager::CommSend(void *sendBuf, uint64_t count, CommDataType dataType, uint32_t destRank,
+                                  void *comm, void *stream)
+{
+    HcclDataType hcclDataType;
+    RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
+    return DSHcclSend(sendBuf, count, hcclDataType, destRank,
+                      static_cast<HcclComm>(comm), static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::CommRecv(void *recvBuf, uint64_t count, CommDataType dataType, uint32_t srcRank,
+                                  void *comm, void *stream)
+{
+    HcclDataType hcclDataType;
+    RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
+    return DSHcclRecv(recvBuf, count, hcclDataType, srcRank,
+                      static_cast<HcclComm>(comm), static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::CommDestroy(void *comm)
+{
+    return DSHcclCommDestroy(static_cast<HcclComm>(comm));
+}
+
+Status AclDeviceManager::CommGetAsyncError(void *comm)
+{
+    return DSHcclGetCommAsyncError(static_cast<HcclComm>(comm));
+}
+
+Status AclDeviceManager::P2PGetRootInfo(CommRootInfo *rootInfo)
+{
+    return DSP2PGetRootInfo(reinterpret_cast<HcclRootInfo *>(rootInfo));
+}
+
+Status AclDeviceManager::P2PCommInitRootInfo(const CommRootInfo *rootInfo, P2pKindBase kind, P2pLinkBase link,
+                                             void **comm)
+{
+    P2pKind p2pKind;
+    RETURN_IF_NOT_OK(ToP2pKind(kind, p2pKind));
+    
+    P2pLink p2pLink;
+    RETURN_IF_NOT_OK(ToP2pLink(link, p2pLink));
+    
+    return DSP2PCommInitRootInfo(reinterpret_cast<const HcclRootInfo *>(rootInfo),
+                                 p2pKind,
+                                 p2pLink,
+                                 reinterpret_cast<P2PComm *>(comm));
+}
+
+Status AclDeviceManager::P2PCommDestroy(void *comm)
+{
+    return DSP2PCommDestroy(static_cast<P2PComm>(comm));
+}
+
+Status AclDeviceManager::P2PSend(void *sendBuf, uint64_t count, CommDataType dataType, void *comm, void *stream)
+{
+    HcclDataType hcclDataType;
+    RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
+    return DSP2PSend(sendBuf, count, hcclDataType,
+                     static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::P2PRecv(void *recvBuf, uint64_t count, CommDataType dataType, void *comm, void *stream)
+{
+    HcclDataType hcclDataType;
+    RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
+    return DSP2PRecv(recvBuf, count, hcclDataType,
+                     static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::P2PGetCommAsyncError(void *comm)
+{
+    return DSP2PGetCommAsyncError(static_cast<P2PComm>(comm));
+}
+
+Status AclDeviceManager::NotifyCreate(int32_t deviceId, void **notify)
+{
+    return RtNotifyCreate(deviceId, notify);
+}
+
+Status AclDeviceManager::NotifyDestroy(void *notify)
+{
+    return RtNotifyDestroy(notify);
+}
+
+Status AclDeviceManager::NotifyRecord(void *notify, void *stream)
+{
+    return RtNotifyRecord(notify, stream);
+}
+
+Status AclDeviceManager::NotifyWait(void *notify, void *stream)
+{
+    return RtNotifyWait(notify, stream);
+}
+
+Status AclDeviceManager::LaunchCallback(StreamCallback fn, void *userData, CallbackBlockType blockType, void *stream)
+{
+    aclrtCallbackBlockType aclBlockType;
+    RETURN_IF_NOT_OK(ToAclCallbackBlockType(blockType, aclBlockType));
+    return AclrtLaunchCallback(reinterpret_cast<aclrtCallback>(fn), userData,
+                               aclBlockType, static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::ProcessReport(int32_t timeout)
+{
+    return AclrtProcessReport(timeout);
+}
+
+Status AclDeviceManager::SubscribeReport(uint64_t threadId, void *stream)
+{
+    return AclrtSubscribeReport(threadId, static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::UnSubscribeReport(uint64_t threadId, void *stream)
+{
+    return AclrtUnSubscribeReport(threadId, static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::GeneralCtrl(uintptr_t *ctrl, uint32_t num, uint32_t type)
+{
+    return RtGeneralCtrl(ctrl, num, type);
+}
+
+Status AclDeviceManager::GetDeviceInfo(uint32_t deviceId, int32_t moduleType, int32_t infoType, int64_t *val)
+{
+    return RtGetDeviceInfo(deviceId, moduleType, infoType, val);
+}
+
+Status AclDeviceManager::P2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentBase *segmentInfo,
+                                            P2pSegmentPermBase permissions)
+{
+    P2pSegmentInfo *p2pSegmentInfo = nullptr;
+    RETURN_IF_NOT_OK(ToP2pSegmentInfo(segmentInfo, p2pSegmentInfo));
+    
+    P2pSegmentPermissions p2pPermissions;
+    RETURN_IF_NOT_OK(ToP2pSegmentPermissions(permissions, p2pPermissions));
+    
+    return DSP2PRegisterHostMem(hostBuf, size, p2pSegmentInfo, p2pPermissions);
+}
+
+Status AclDeviceManager::P2PImportHostSegment(P2pSegmentBase segmentInfo)
+{
+    P2pSegmentInfo p2pSegmentInfo;
+    RETURN_IF_NOT_OK(ToP2pSegmentInfo(segmentInfo, p2pSegmentInfo));
+    return DSP2PImportHostSegment(p2pSegmentInfo);
+}
+
+Status AclDeviceManager::P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entries, uint32_t batchSize,
+                                                          void *comm, void *stream)
+{
+    // Convert P2pScatterBase array to P2pScatterEntry array
+    std::vector<P2pScatterEntry> nativeEntries(batchSize);
+    for (uint32_t i = 0; i < batchSize; ++i) {
+        RETURN_IF_NOT_OK(ToP2pScatterEntry(entries[i], nativeEntries[i]));
+    }
+    return DSP2PScatterBatchFromRemoteHostMem(nativeEntries.data(), batchSize,
+                                              static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+}
 }  // namespace acl
 }  // namespace datasystem

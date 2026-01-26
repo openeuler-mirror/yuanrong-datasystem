@@ -39,7 +39,7 @@ public:
      * @param[in] kind The rank in local. The direction of transmission, internally defined type of p2phccl.
      * @return Status of the call.
      */
-    Status InitP2PComm(const HcclRootInfo *rootInfo, P2pKind kind, bool isSameNode);
+    Status InitP2PComm(const CommRootInfo *rootInfo, P2pKindBase kind, bool isSameNode);
 
     /**
      * @brief Init hccl communicator.
@@ -47,7 +47,7 @@ public:
      * @param[in] direction own transmission direction.
      * @return Status of the call.
      */
-    Status InitCommunicator(HcclRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) override;
+    Status InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) override;
 
     /**
      * @brief P2P send the data to the receiving side.
@@ -93,7 +93,7 @@ public:
      * @param[in] rootInfo Transfer a blank rootinfo, create a reference, and transfer a value.
      * @return Status of the call.
      */
-    Status CreateRootInfo(HcclRootInfo &rootInfo) override;
+    Status CreateRootInfo(CommRootInfo &rootInfo) override;
 };
 }  // namespace datasystem
 #endif

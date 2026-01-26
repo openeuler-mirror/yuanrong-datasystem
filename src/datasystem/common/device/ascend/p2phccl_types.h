@@ -22,6 +22,9 @@
 #define DATASYSTEM_COMMON_DEVICE_P2PHCCL_TYPES_H
 
 #include <stdint.h>
+#include <unordered_map>
+#include "datasystem/common/device/device_manager_base.h"
+#include "datasystem/common/device/ascend/cann_types.h"
 
 namespace datasystem {
 #ifdef __cplusplus
@@ -63,7 +66,7 @@ typedef struct P2pSegmentInfoDef {
 } P2pSegmentInfo;
 
 /**
- * @brief P2P Segment Info
+ * @brief P2P Scatter Entry (NPU specific, uses HcclDataType)
  */
 typedef struct P2pScatterEntry {
     void *ddrBuf;
@@ -73,8 +76,147 @@ typedef struct P2pScatterEntry {
     uint32_t numEl;
 } P2pScatterEntry;
 
-}  // namespace datasystem
 #ifdef __cplusplus
 };
 #endif
+}  // namespace datasystem
+
+// ==================== Type Conversion Utilities ====================
+
+namespace datasystem {
+
+/**
+ * @brief Convert P2pKindBase to P2pKind using static map
+ * @param[in] kind Source P2pKindBase value
+ * @param[out] result Reference to store the converted P2pKind
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if kind not in map
+ */
+inline Status ToP2pKind(P2pKindBase kind, P2pKind &result)
+{
+    static const std::unordered_map<int, P2pKind> mapping = {
+        {static_cast<int>(P2pKindBase::RECEIVER), P2P_RECEIVER},
+        {static_cast<int>(P2pKindBase::SENDER), P2P_SENDER},
+        {static_cast<int>(P2pKindBase::BIDIRECTIONAL), P2P_BIDIRECTIONAL},
+    };
+    
+    auto it = mapping.find(static_cast<int>(kind));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "P2pKindBase not supported for P2pKind conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert P2pLinkBase to P2pLink using static map
+ * @param[in] link Source P2pLinkBase value
+ * @param[out] result Reference to store the converted P2pLink
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if link not in map
+ */
+inline Status ToP2pLink(P2pLinkBase link, P2pLink &result)
+{
+    static const std::unordered_map<int, P2pLink> mapping = {
+        {static_cast<int>(P2pLinkBase::HCCS), P2P_LINK_HCCS},
+        {static_cast<int>(P2pLinkBase::ROCE), P2P_LINK_ROCE},
+        {static_cast<int>(P2pLinkBase::AUTO), P2P_LINK_AUTO},
+    };
+    
+    auto it = mapping.find(static_cast<int>(link));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "P2pLinkBase not supported for P2pLink conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert P2pSegmentPermBase to P2pSegmentPermissions using static map
+ * @param[in] perm Source P2pSegmentPermBase value
+ * @param[out] result Reference to store the converted P2pSegmentPermissions
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if perm not in map
+ */
+inline Status ToP2pSegmentPermissions(P2pSegmentPermBase perm, P2pSegmentPermissions &result)
+{
+    static const std::unordered_map<int, P2pSegmentPermissions> mapping = {
+        {static_cast<int>(P2pSegmentPermBase::READ_WRITE), P2P_SEGMENT_READ_WRITE},
+        {static_cast<int>(P2pSegmentPermBase::READ_ONLY), P2P_SEGMETN_READ_ONLY},
+        {static_cast<int>(P2pSegmentPermBase::WRITE_ONLY), P2P_SEGMENT_WRITE_ONLY},
+    };
+    
+    auto it = mapping.find(static_cast<int>(perm));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "P2pSegmentPermBase not supported for P2pSegmentPermissions conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert P2pSegmentBase* to P2pSegmentInfo*
+ * @note Both structures have compatible memory layout
+ * @param[in] segment Source P2pSegmentBase pointer
+ * @param[out] result Reference to store the converted P2pSegmentInfo pointer
+ * @return Status::OK() if conversion succeeded, K_INVALID if segment is null
+ */
+inline Status ToP2pSegmentInfo(P2pSegmentBase *segment, P2pSegmentInfo *&result)
+{
+    if (sizeof(P2pSegmentBase) != sizeof(P2pSegmentInfo)) {
+        return Status(StatusCode::K_INVALID, "P2pSegmentBase size must the same as P2pSegmentInfo");
+    }
+    result = reinterpret_cast<P2pSegmentInfo*>(segment);
+    return Status::OK();
+}
+
+/**
+ * @brief Convert const P2pSegmentBase* to const P2pSegmentInfo*
+ * @note Both structures have compatible memory layout
+ * @param[in] segment Source const P2pSegmentBase pointer
+ * @param[out] result Reference to store the converted const P2pSegmentInfo pointer
+ * @return Status::OK() if conversion succeeded, K_INVALID if segment is null
+ */
+inline Status ToP2pSegmentInfo(const P2pSegmentBase *segment, const P2pSegmentInfo *&result)
+{
+    if (sizeof(P2pSegmentBase) != sizeof(P2pSegmentInfo)) {
+        return Status(StatusCode::K_INVALID, "P2pSegmentBase size must the same as P2pSegmentInfo");
+    }
+    result = reinterpret_cast<const P2pSegmentInfo*>(segment);
+    return Status::OK();
+}
+
+/**
+ * @brief Convert P2pSegmentBase to P2pSegmentInfo
+ * @param[in] segment Source P2pSegmentBase value
+ * @param[out] result Reference to store the converted P2pSegmentInfo value
+ * @return Status::OK() if conversion succeeded
+ */
+inline Status ToP2pSegmentInfo(const P2pSegmentBase &segment, P2pSegmentInfo &result)
+{
+    if (sizeof(P2pSegmentBase) != sizeof(P2pSegmentInfo)) {
+        return Status(StatusCode::K_INVALID, "P2pSegmentBase size must the same as P2pSegmentInfo");
+    }
+    std::copy(
+        reinterpret_cast<const uint8_t*>(&segment),
+        reinterpret_cast<const uint8_t*>(&segment) + sizeof(segment),
+        reinterpret_cast<uint8_t*>(&result)
+    );
+    return Status::OK();
+}
+
+/**
+ * @brief Convert P2pScatterBase to P2pScatterEntry (requires HcclDataType conversion)
+ */
+inline Status ToP2pScatterEntry(const P2pScatterBase &scatter, P2pScatterEntry &entry)
+{
+    entry.ddrBuf = scatter.srcBuf;
+    entry.dstBufs = scatter.dstBufs;
+    entry.counts = scatter.counts;
+    entry.numEl = scatter.numEntries;
+    return ToHcclDataType(scatter.dataType, entry.dataType);
+}
+
+}  // namespace datasystem
+
 #endif

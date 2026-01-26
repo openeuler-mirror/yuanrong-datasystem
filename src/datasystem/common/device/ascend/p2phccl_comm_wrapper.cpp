@@ -39,11 +39,11 @@ void P2PHcclCommWrapper::ShutDown()
             try {
                 pool_->Execute([this, resource = resource_]() {
                     LOG_IF_ERROR(
-                        aclImpl_->RtSynchronizeStreamWithTimeout(resource->PrimaryStream(),
-                                                                 SYNC_STREAM_WAIT_TIMEOUT_MS),
+                        deviceImpl_->SynchronizeStreamWithTimeout(resource->PrimaryStream(),
+                                                                  SYNC_STREAM_WAIT_TIMEOUT_MS),
                         "Timed out waiting for all tasks in Stream to complete, check that HcclRecv is not called");
                     resource->Release();
-                    acl::AclDeviceManager::Instance()->DSP2PCommDestroy(GetRef());
+                    deviceImpl_->P2PCommDestroy(GetRef());
                     LOG(INFO) << "Destroy HcclComm ok";
                 });
             } catch (const std::exception &e) {
@@ -54,18 +54,20 @@ void P2PHcclCommWrapper::ShutDown()
     }
 }
 
-Status P2PHcclCommWrapper::InitP2PComm(const HcclRootInfo *rootInfo, P2pKind kind, bool isSameNode)
+Status P2PHcclCommWrapper::InitP2PComm(const CommRootInfo *rootInfo, P2pKindBase kind, bool isSameNode)
 {
     LOG(INFO) << "InitP2PComm";
     commConnectTimestamp_ = std::chrono::steady_clock::now();
     hcclCommState_ = HcclCommState::CREATING;
     Status rc;
     if (isSameNode) {
-        LOG(INFO) << "InitP2PComm HCCS dir: " << kind;
-        rc = aclImpl_->DSP2PCommInitRootInfo(rootInfo, kind, P2pLink::P2P_LINK_HCCS, &GetRef());
+        LOG(INFO) << "InitP2PComm HCCS dir: " << static_cast<int>(kind);
+        rc = deviceImpl_->P2PCommInitRootInfo(rootInfo,
+            kind, P2pLinkBase::HCCS, reinterpret_cast<void**>(&GetRef()));
     } else {
-        LOG(INFO) << "InitP2PComm ROCE dir: " << kind;
-        rc = aclImpl_->DSP2PCommInitRootInfo(rootInfo, kind, P2pLink::P2P_LINK_ROCE, &GetRef());
+        LOG(INFO) << "InitP2PComm ROCE dir: " << static_cast<int>(kind);
+        rc = deviceImpl_->P2PCommInitRootInfo(rootInfo,
+            kind, P2pLinkBase::ROCE, reinterpret_cast<void**>(&GetRef()));
     }
 
     LOG_IF_ERROR(rc, "HcclCommInitRootInfo failed.");
@@ -91,8 +93,8 @@ Status P2PHcclCommWrapper::P2PSend(const std::vector<Blob> &blobs, const std::sh
         if (injectTest()) {
             continue;
         }
-        RETURN_IF_NOT_OK(aclImpl_->DSP2PSend(blobs[i].pointer, blobs[i].size, HcclDataType::HCCL_DATA_TYPE_INT8,
-                                             comm, stream));
+        RETURN_IF_NOT_OK(deviceImpl_->P2PSend(blobs[i].pointer, blobs[i].size, CommDataType::INT8,
+            comm, stream));
     }
     VLOG(1) << "Send hccl ok";
     return Status::OK();
@@ -121,7 +123,7 @@ Status P2PHcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::sh
     }
     for (size_t i = 0; i < blobs.size(); i++) {
         RETURN_IF_NOT_OK(
-            aclImpl_->DSP2PRecv(blobs[i].pointer, blobs[i].size, HcclDataType::HCCL_DATA_TYPE_INT8, comm, stream));
+            deviceImpl_->P2PRecv(blobs[i].pointer, blobs[i].size, CommDataType::INT8, comm, stream));
     }
 
     RETURN_IF_NOT_OK(event->RecordEvent(stream));
@@ -136,37 +138,37 @@ Status P2PHcclCommWrapper::HcclGetCommAsyncError()
       return Status::OK();
     }
     auto &comm = GetRef();
-    return aclImpl_->DSP2PGetCommAsyncError(comm);
+    return deviceImpl_->P2PGetCommAsyncError(comm);
 }
 
-Status P2PHcclCommWrapper::InitCommunicator(HcclRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode)
+Status P2PHcclCommWrapper::InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode)
 {
     InitPipeline(direction);
     if (direction == HcclCommDirection::SEND) {
-        return InitP2PComm(&rootInfo, P2pKind::P2P_SENDER, isSameNode);
+        return InitP2PComm(&rootInfo, P2pKindBase::SENDER, isSameNode);
     }
-    return InitP2PComm(&rootInfo, P2pKind::P2P_RECEIVER, isSameNode);
+    return InitP2PComm(&rootInfo, P2pKindBase::RECEIVER, isSameNode);
 }
 
 Status P2PHcclCommWrapper::WarmUpComm(HcclCommDirection eventType)
 {
     void *devPtr = nullptr;
-    RETURN_IF_NOT_OK(aclImpl_->MallocDeviceMemory(sizeof(char), devPtr));
-    Raii raii([this, &devPtr]() { aclImpl_->FreeDeviceMemory(devPtr); });
+    RETURN_IF_NOT_OK(deviceImpl_->MallocDeviceMemory(sizeof(char), devPtr));
+    Raii raii([this, &devPtr]() { deviceImpl_->FreeDeviceMemory(devPtr); });
     std::shared_ptr<AclRtEventWrapper> event;
     if (eventType == HcclCommDirection::SEND) {
-        RETURN_IF_NOT_OK(aclImpl_->DSP2PSend(devPtr, WARM_UP_DATA_COUNT, HCCL_DATA_TYPE_INT8, Get(), GetStream()));
+        RETURN_IF_NOT_OK(deviceImpl_->P2PSend(devPtr, WARM_UP_DATA_COUNT, CommDataType::INT8, Get(), GetStream()));
     } else if (eventType == HcclCommDirection::RECV) {
-        RETURN_IF_NOT_OK(aclImpl_->DSP2PRecv(devPtr, WARM_UP_DATA_COUNT, HCCL_DATA_TYPE_INT8, Get(), GetStream()));
+        RETURN_IF_NOT_OK(deviceImpl_->P2PRecv(devPtr, WARM_UP_DATA_COUNT, CommDataType::INT8, Get(), GetStream()));
     }
-    RETURN_IF_NOT_OK(aclImpl_->RtSynchronizeStream(GetStream()));
+    RETURN_IF_NOT_OK(deviceImpl_->SynchronizeStream(GetStream()));
     LOG(INFO) << "communicator p2phccl warmup ok";
     return Status::OK();
 }
 
-Status P2PHcclCommWrapper::CreateRootInfo(HcclRootInfo &rootInfo)
+Status P2PHcclCommWrapper::CreateRootInfo(CommRootInfo &rootInfo)
 {
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclImpl_->DSP2PGetRootInfo(&rootInfo), "GetRootInfo failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(deviceImpl_->P2PGetRootInfo(&rootInfo), "GetRootInfo failed.");
     return Status::OK();
 }
 

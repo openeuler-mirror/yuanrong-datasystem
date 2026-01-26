@@ -32,6 +32,8 @@
 #include "datasystem/common/device/ascend/hccl_comm_wrapper.h"
 #include "datasystem/common/device/ascend/p2phccl_comm_wrapper.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
+#include "datasystem/common/device/device_manager_base.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -44,7 +46,7 @@ using TbbHcclCommTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<C
 class ClientDeviceCurd {
 public:
     ClientDeviceCurd(std::shared_ptr<object_cache::IClientWorkerApi> workerApi)
-        : aclImpl_(acl::AclDeviceManager::Instance()), clientWorkerApi_(std::move(workerApi))
+        : deviceImpl_(DeviceManagerFactory::GetDeviceManager()), clientWorkerApi_(std::move(workerApi))
     {
     }
 
@@ -57,7 +59,7 @@ public:
     virtual ~ClientDeviceCurd() = default;
 
 protected:
-    acl::AclDeviceManager *aclImpl_;
+    DeviceManagerBase *deviceImpl_;
     std::shared_ptr<object_cache::IClientWorkerApi> clientWorkerApi_;
 };
 

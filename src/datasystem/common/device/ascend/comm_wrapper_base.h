@@ -24,6 +24,7 @@
 #include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
+#include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -172,7 +173,7 @@ public:
      * @param[in] direction own transmission direction.
      * @return Status of the call.
      */
-    virtual Status InitCommunicator(HcclRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) = 0;
+    virtual Status InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) = 0;
 
     /**
      * @brief Warm up the hccl communicator wrapper in the send side.
@@ -192,7 +193,7 @@ public:
      * @param[in] rootInfo Transfer a blank rootinfo, create a reference, and transfer a value.
      * @return Status of the call.
      */
-    virtual Status CreateRootInfo(HcclRootInfo &rootInfo) = 0;
+    virtual Status CreateRootInfo(CommRootInfo &rootInfo) = 0;
 
     std::shared_ptr<acl::TwoPhaseAclPipeLineResource> GetP2PResource()
     {
@@ -215,7 +216,7 @@ private:
      */
     Status CheckTranPointer(const void *pointer, const std::string &pointerName);
 
-    acl::AclDeviceManager *aclImpl_;
+    DeviceManagerBase *deviceImpl_;
     AclResourceManager *aclResourceMgr_;
     std::shared_ptr<acl::TwoPhaseAclPipeLineResource> resource_;
     std::unique_ptr<acl::PipeLineP2PSend> sender_;

@@ -30,7 +30,8 @@
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
-#include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/device_manager_base.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/hetero/device_common.h"
 #include "datasystem/object_client.h"
 #include "datasystem/utils/status.h"
@@ -50,12 +51,12 @@ public:
      * @param[in] destMaxList The list of memory size in destination.
      * @param[in] srcList The list of pointer in source.
      * @param[in] countList The list of memory size in source.
-     * @param[in] kind The memory copy kind in CANN.
+     * @param[in] kind The memory copy kind.
      * @param[in] batchSize The size of batch.
      * @return Status K_OK on success; the error code otherwise.
      */
     Status AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList, std::vector<size_t> &destMaxList,
-                          std::vector<void *> &srcList, std::vector<size_t> &countList, aclrtMemcpyKind kind,
+                          std::vector<void *> &srcList, std::vector<size_t> &countList, MemcpyKind kind,
                           size_t batchSize);
     Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
                              const std::vector<BufferView> &deviceBuffers,
@@ -70,9 +71,9 @@ private:
     std::unique_ptr<ThreadPool> copyPool_;
     std::unique_ptr<ThreadPool> h2hCopyPool_;
     std::unique_ptr<ThreadPool> fftsCopyPool_;
-    std::vector<aclrtStream> copyStreams_;
+    std::vector<void *> copyStreams_;
     int32_t deviceNow_ = -1;
-    acl::AclDeviceManager *devInterImpl_;
+    DeviceManagerBase *devInterImpl_;
     AclResourceManager *aclResourceMgr_;
 };
 
@@ -85,7 +86,7 @@ struct DeviceBatchCopyHelper {
     }
 
     Status Prepare(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
-                   aclrtMemcpyKind copyKind)
+                   MemcpyKind copyKind)
     {
         std::vector<void *> hostPointerList;
         std::vector<void *> devPointerList;
@@ -136,20 +137,20 @@ struct DeviceBatchCopyHelper {
             }
             keyStartInBlobs += blobs.size();
         }
-        if (copyKind == aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE) {
+        if (copyKind == MemcpyKind::HOST_TO_DEVICE) {
             srcBuffers = std::move(hostBuffers);
             dstBuffers = std::move(deviceBuffers);
 
             srcList = std::move(hostPointerList);
             dstList = std::move(devPointerList);
-        } else if (copyKind == aclrtMemcpyKind::ACL_MEMCPY_DEVICE_TO_HOST) {
+        } else if (copyKind == MemcpyKind::DEVICE_TO_HOST) {
             srcBuffers = std::move(deviceBuffers);
             dstBuffers = std::move(hostBuffers);
 
             srcList = std::move(devPointerList);
             dstList = std::move(hostPointerList);
         } else {
-            RETURN_STATUS(K_INVALID, "Invalid aclrtMemcpyKind");
+            RETURN_STATUS(K_INVALID, "Invalid MemcpyKind");
         }
         return Status::OK();
     }
@@ -268,12 +269,12 @@ public:
      * @brief The memory copy between devBlobList and bufferList
      * @param[in] devBlobList The 2D list of blob info.
      * @param[in] bufferList The list of buffer.
-     * @param[in] copyKind The memory copy kind in CANN.
+     * @param[in] copyKind The memory copy kind.
      * @param[in] enableHugeTlb The memory is enable huge tlb.
      * @return Status K_OK on success; the error code otherwise.
      */
     Status MemCopyBetweenDevAndHost(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
-                                    aclrtMemcpyKind copyKind, bool enableHugeTlb);
+                                    MemcpyKind copyKind, bool enableHugeTlb);
 
     /**
      * @brief Print MSetD2H detail info
@@ -293,7 +294,7 @@ public:
     void RemoveSubscribe(const std::string &key);
 
 private:
-    acl::AclDeviceManager *devInterImpl_;
+    DeviceManagerBase *devInterImpl_;
     ObjectClientImpl *objClientImpl_;
     AclResourceManager aclResourceMgr_;
     std::shared_ptr<HcclCommFactory> commFactory_;

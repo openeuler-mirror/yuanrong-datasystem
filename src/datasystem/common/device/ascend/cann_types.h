@@ -30,8 +30,12 @@
 #include <runtime/rt_ffts_plus_define.h>
 #include <runtime/rt_stars.h>
 #include <runtime/rt_stars_define.h>
+#include <unordered_map>
+#include "datasystem/common/device/device_manager_base.h"
 #else
 #include <stdint.h>
+#include <unordered_map>
+#include "datasystem/common/device/device_manager_base.h"
 
 namespace datasystem {
 #ifdef __cplusplus
@@ -142,9 +146,204 @@ typedef enum aclrtCallbackBlockType {
     ACL_CALLBACK_BLOCK,
 } aclrtCallbackBlockType;
 
-}  // namespace datasystem
 #ifdef __cplusplus
 };
 #endif
+}  // namespace datasystem
 #endif
-#endif
+
+// ==================== Type Conversion Utilities ====================
+
+namespace datasystem {
+
+/**
+ * @brief Convert CommDataType to HcclDataType using static map
+ * @param[in] dataType Source CommDataType value
+ * @param[out] result Reference to store the converted HcclDataType
+ * @return Status::OK() if conversion succeeded, K_NOT_FOUND if type not in map
+ */
+inline Status ToHcclDataType(CommDataType dataType, HcclDataType &result)
+{
+    static const std::unordered_map<int, HcclDataType> mapping = {
+        {static_cast<int>(CommDataType::INT8), HCCL_DATA_TYPE_INT8},
+        {static_cast<int>(CommDataType::INT16), HCCL_DATA_TYPE_INT16},
+        {static_cast<int>(CommDataType::INT32), HCCL_DATA_TYPE_INT32},
+        {static_cast<int>(CommDataType::INT64), HCCL_DATA_TYPE_INT64},
+        {static_cast<int>(CommDataType::UINT8), HCCL_DATA_TYPE_UINT8},
+        {static_cast<int>(CommDataType::UINT16), HCCL_DATA_TYPE_UINT16},
+        {static_cast<int>(CommDataType::UINT32), HCCL_DATA_TYPE_UINT32},
+        {static_cast<int>(CommDataType::UINT64), HCCL_DATA_TYPE_UINT64},
+        {static_cast<int>(CommDataType::FLOAT16), HCCL_DATA_TYPE_FP16},
+        {static_cast<int>(CommDataType::FLOAT32), HCCL_DATA_TYPE_FP32},
+        {static_cast<int>(CommDataType::FLOAT64), HCCL_DATA_TYPE_FP64},
+        {static_cast<int>(CommDataType::BFLOAT16), HCCL_DATA_TYPE_BFP16},
+    };
+    
+    auto it = mapping.find(static_cast<int>(dataType));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "CommDataType not supported for HCCL conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert HcclDataType to CommDataType using static map
+ * @param[in] dataType Source HcclDataType value
+ * @param[out] result Reference to store the converted CommDataType
+ * @return Status::OK() if conversion succeeded, K_NOT_FOUND if type not in map
+ */
+inline Status ToCommDataType(HcclDataType dataType, CommDataType &result)
+{
+    static const std::unordered_map<int, CommDataType> mapping = {
+        {HCCL_DATA_TYPE_INT8, CommDataType::INT8},
+        {HCCL_DATA_TYPE_INT16, CommDataType::INT16},
+        {HCCL_DATA_TYPE_INT32, CommDataType::INT32},
+        {HCCL_DATA_TYPE_INT64, CommDataType::INT64},
+        {HCCL_DATA_TYPE_UINT8, CommDataType::UINT8},
+        {HCCL_DATA_TYPE_UINT16, CommDataType::UINT16},
+        {HCCL_DATA_TYPE_UINT32, CommDataType::UINT32},
+        {HCCL_DATA_TYPE_UINT64, CommDataType::UINT64},
+        {HCCL_DATA_TYPE_FP16, CommDataType::FLOAT16},
+        {HCCL_DATA_TYPE_FP32, CommDataType::FLOAT32},
+        {HCCL_DATA_TYPE_FP64, CommDataType::FLOAT64},
+        {HCCL_DATA_TYPE_BFP16, CommDataType::BFLOAT16},
+    };
+    
+    auto it = mapping.find(dataType);
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "HcclDataType not supported for CommDataType conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert MemcpyKind to aclrtMemcpyKind using static map
+ * @param[in] kind Source MemcpyKind value
+ * @param[out] result Reference to store the converted aclrtMemcpyKind
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if kind not in map
+ */
+inline Status ToAclMemcpyKind(MemcpyKind kind, aclrtMemcpyKind &result)
+{
+    static const std::unordered_map<int, aclrtMemcpyKind> mapping = {
+        {static_cast<int>(MemcpyKind::HOST_TO_HOST), ACL_MEMCPY_HOST_TO_HOST},
+        {static_cast<int>(MemcpyKind::HOST_TO_DEVICE), ACL_MEMCPY_HOST_TO_DEVICE},
+        {static_cast<int>(MemcpyKind::DEVICE_TO_HOST), ACL_MEMCPY_DEVICE_TO_HOST},
+        {static_cast<int>(MemcpyKind::DEVICE_TO_DEVICE), ACL_MEMCPY_DEVICE_TO_DEVICE},
+    };
+    
+    auto it = mapping.find(static_cast<int>(kind));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "MemcpyKind not supported for ACL conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert aclrtMemcpyKind to MemcpyKind using static map
+ * @param[in] kind Source aclrtMemcpyKind value
+ * @param[out] result Reference to store the converted MemcpyKind
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if kind not in map
+ */
+inline Status ToMemcpyKind(aclrtMemcpyKind kind, MemcpyKind &result)
+{
+    static const std::unordered_map<int, MemcpyKind> mapping = {
+        {ACL_MEMCPY_HOST_TO_HOST, MemcpyKind::HOST_TO_HOST},
+        {ACL_MEMCPY_HOST_TO_DEVICE, MemcpyKind::HOST_TO_DEVICE},
+        {ACL_MEMCPY_DEVICE_TO_HOST, MemcpyKind::DEVICE_TO_HOST},
+        {ACL_MEMCPY_DEVICE_TO_DEVICE, MemcpyKind::DEVICE_TO_DEVICE},
+    };
+    
+    auto it = mapping.find(kind);
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "aclrtMemcpyKind not supported for MemcpyKind conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert MemMallocPolicy to aclrtMemMallocPolicy using static map
+ * @param[in] policy Source MemMallocPolicy value
+ * @param[out] result Reference to store the converted aclrtMemMallocPolicy
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if policy not in map
+ */
+inline Status ToAclMemMallocPolicy(MemMallocPolicy policy, aclrtMemMallocPolicy &result)
+{
+    static const std::unordered_map<int, aclrtMemMallocPolicy> mapping = {
+        {static_cast<int>(MemMallocPolicy::HUGE_FIRST), ACL_MEM_MALLOC_HUGE_FIRST},
+        {static_cast<int>(MemMallocPolicy::HUGE_ONLY), ACL_MEM_MALLOC_HUGE_ONLY},
+        {static_cast<int>(MemMallocPolicy::NORMAL_ONLY), ACL_MEM_MALLOC_NORMAL_ONLY},
+    };
+    
+    auto it = mapping.find(static_cast<int>(policy));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "MemMallocPolicy not supported for ACL conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert CallbackBlockType to aclrtCallbackBlockType using static map
+ * @param[in] blockType Source CallbackBlockType value
+ * @param[out] result Reference to store the converted aclrtCallbackBlockType
+ * @return Status::OK() if conversion succeeded, K_NOT_SUPPORTED if type not in map
+ */
+inline Status ToAclCallbackBlockType(CallbackBlockType blockType, aclrtCallbackBlockType &result)
+{
+    static const std::unordered_map<int, aclrtCallbackBlockType> mapping = {
+        {static_cast<int>(CallbackBlockType::BLOCK), ACL_CALLBACK_BLOCK},
+        {static_cast<int>(CallbackBlockType::NO_BLOCK), ACL_CALLBACK_NO_BLOCK},
+    };
+    
+    auto it = mapping.find(static_cast<int>(blockType));
+    if (it == mapping.end()) {
+        return Status(StatusCode::K_NOT_SUPPORTED,
+            "CallbackBlockType not supported for ACL conversion");
+    }
+    result = it->second;
+    return Status::OK();
+}
+
+/**
+ * @brief Convert CommRootInfo to HcclRootInfo pointer
+ * @note Both structures have compatible memory layout
+ * @param[in] rootInfo Source CommRootInfo pointer
+ * @param[out] result Reference to store the converted HcclRootInfo pointer
+ * @return Status::OK() if conversion succeeded, K_INVALID_PARAMS if rootInfo is null
+ */
+inline Status ToHcclRootInfo(CommRootInfo *rootInfo, HcclRootInfo *&result)
+{
+    if (sizeof(CommRootInfo) < sizeof(HcclRootInfo)) {
+        return Status(StatusCode::K_INVALID, "CommRootInfo size is smaller than HcclRootInfo");
+    }
+    result = reinterpret_cast<HcclRootInfo*>(rootInfo);
+    return Status::OK();
+}
+
+/**
+ * @brief Convert const CommRootInfo to const HcclRootInfo pointer
+ * @note Both structures have compatible memory layout
+ * @param[in] rootInfo Source const CommRootInfo pointer
+ * @param[out] result Reference to store the converted const HcclRootInfo pointer
+ * @return Status::OK() if conversion succeeded, K_INVALID_PARAMS if rootInfo is null
+ */
+inline Status ToHcclRootInfo(const CommRootInfo *rootInfo, const HcclRootInfo *&result)
+{
+    if (sizeof(CommRootInfo) < sizeof(HcclRootInfo)) {
+        return Status(StatusCode::K_INVALID, "CommRootInfo size is smaller than HcclRootInfo");
+    }
+    result = reinterpret_cast<const HcclRootInfo*>(rootInfo);
+    return Status::OK();
+}
+
+}  // namespace datasystem
+#endif // DATASYSTEM_COMMON_DEVICE_CANN_TYPES_H
