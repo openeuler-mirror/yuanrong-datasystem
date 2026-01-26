@@ -940,12 +940,13 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     const HostPort requestAddress(remoteInfo.host, remoteInfo.port);
     const std::string remoteDeviceId = requestAddress.ToString();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
-    RemoteDeviceMap::ConstAccessor constAccessor;
-    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    TbbRemoteDeviceMap::const_accessor constAccessor;
+    auto res = tbbRemoteDeviceMap_.find(constAccessor, remoteDeviceId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteDeviceId));
     SegmentMap::ConstAccessor remoteSegAccessor;
-    RETURN_IF_NOT_OK(constAccessor.entry->data.GetRemoteSeg(segVa, remoteSegAccessor));
+    auto &device = constAccessor->second;
+    RETURN_IF_NOT_OK(device.GetRemoteSeg(segVa, remoteSegAccessor));
     auto sgeNum = objInfos.size();
     urma_sge_t srcSgeList[sgeNum];
     const auto wrSgeMaxNum = 13U;
@@ -984,7 +985,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
         const uint64_t key = requestId_.fetch_add(1);
         index = key % FLAGS_urma_connection_size;
-        urma_target_jetty_t *importJfr = constAccessor.entry->data.importJfrs_[index].get();
+        urma_target_jetty_t *importJfr = constAccessor->second.importJfrs_[index].get();
         wrList[dstSgeIdx] = {
             .opcode = URMA_OPC_WRITE, .flag = flag, .tjetty = importJfr, .user_ctx = key, .rw = rw, .next = NULL
         };
