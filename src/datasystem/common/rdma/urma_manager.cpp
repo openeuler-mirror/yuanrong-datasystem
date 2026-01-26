@@ -18,7 +18,7 @@
  * Description: Urma manager for urma context, jfce, jfs, jfr, jfc queues, etc.
  */
 #include "datasystem/common/rdma/urma_manager.h"
-
+#include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_opcode.h>
 
 #include "datasystem/common/constants.h"
@@ -378,7 +378,8 @@ Status UrmaManager::UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, cust
     jfsConfig.depth = JETTY_SIZE_;
     jfsConfig.trans_mode = URMA_TM_RM;
     jfsConfig.priority = URMA_MAX_PRIORITY; /* Highest priority */
-    jfsConfig.max_sge = 1;
+    const auto maxSge = 13;
+    jfsConfig.max_sge = maxSge;
     jfsConfig.max_inline_data = 0;
     jfsConfig.rnr_retry = URMA_TYPICAL_RNR_RETRY;
     jfsConfig.err_timeout = URMA_TYPICAL_ERR_TIMEOUT;
@@ -927,6 +928,83 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
 
         std::shared_ptr<Event> event;
         RETURN_IF_NOT_OK(CreateEvent(key, event));
+    }
+    return Status::OK();
+}
+
+Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                                    bool blocking, std::vector<uint64_t> &eventKeys)
+{
+    eventKeys.clear();
+    auto segVa = remoteInfo.segAddr;
+    const HostPort requestAddress(remoteInfo.host, remoteInfo.port);
+    const std::string remoteDeviceId = requestAddress.ToString();
+    std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
+    RemoteDeviceMap::ConstAccessor constAccessor;
+    auto res = remoteDeviceMap_->Find(constAccessor, remoteDeviceId);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
+                                         FormatString("Failed to find jfr from %s", remoteDeviceId));
+    SegmentMap::ConstAccessor remoteSegAccessor;
+    RETURN_IF_NOT_OK(constAccessor.entry->data.GetRemoteSeg(segVa, remoteSegAccessor));
+    auto sgeNum = objInfos.size();
+    urma_sge_t srcSgeList[sgeNum];
+    const auto wrSgeMaxNum = 13U;
+    auto dstSgeNum = sgeNum % wrSgeMaxNum == 0 ? sgeNum / wrSgeMaxNum : sgeNum / wrSgeMaxNum + 1;
+    urma_sge_t dstSgeList[dstSgeNum];
+    urma_jfs_wr_t wrList[dstSgeNum];
+    urma_jfs_wr_flag_t flag = { .value = 0 };
+    flag.bs.complete_enable = 1;
+    flag.bs.inline_flag = 0;
+    auto totalWriteSize = 0U;
+    uint64_t index = 0;
+    for (auto dstSgeIdx = 0U, srcSgeIdx = 0U; dstSgeIdx < dstSgeNum; dstSgeIdx++) {
+        auto singleDstWriteSize = 0;
+        urma_sg_t srcSg = { .sge = &srcSgeList[srcSgeIdx], .num_sge = static_cast<uint32_t>(srcSgeIdx) };
+        while (srcSgeIdx < sgeNum) {
+            auto &ele = objInfos[srcSgeIdx];
+            SegmentMap::ConstAccessor localSegAccessor;
+            RETURN_IF_NOT_OK(GetOrRegisterSegment(ele.segAddr, ele.segSize, localSegAccessor));
+            srcSgeList[srcSgeIdx] = urma_sge_t{ .addr = ele.sgeAddr + ele.metaDataSize + ele.readOffset,
+                                                .len = static_cast<uint32_t>(ele.writeSize),
+                                                .tseg = localSegAccessor.entry->data.segment_.get(),
+                                                .user_tseg = NULL };
+            singleDstWriteSize += srcSgeList[srcSgeIdx].len;
+            srcSgeIdx++;
+            if (srcSgeIdx % wrSgeMaxNum == 0) {
+                break;
+            }
+        }
+        srcSg.num_sge = srcSgeIdx - srcSg.num_sge;
+        dstSgeList[dstSgeIdx] = { .addr = segVa + remoteInfo.segOffset + totalWriteSize,
+                                  .len = static_cast<uint32_t>(singleDstWriteSize),
+                                  .tseg = remoteSegAccessor.entry->data.segment_.get(),
+                                  .user_tseg = nullptr };
+        totalWriteSize += singleDstWriteSize;
+        urma_sg_t dstSg = { .sge = &dstSgeList[dstSgeIdx], .num_sge = 1 };
+        urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
+        const uint64_t key = requestId_.fetch_add(1);
+        index = key % FLAGS_urma_connection_size;
+        urma_target_jetty_t *importJfr = constAccessor.entry->data.importJfrs_[index].get();
+        wrList[dstSgeIdx] = {
+            .opcode = URMA_OPC_WRITE, .flag = flag, .tjetty = importJfr, .user_ctx = key, .rw = rw, .next = NULL
+        };
+        eventKeys.emplace_back(key);
+        std::shared_ptr<Event> event;
+        RETURN_IF_NOT_OK(CreateEvent(key, event));
+        if (dstSgeIdx > 0) {
+            wrList[dstSgeIdx - 1].next = &wrList[dstSgeIdx];
+        }
+    }
+    urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
+    urma_jfs_wr_t *bad_wr = NULL;
+    auto ret = urma_post_jfs_wr(urmaJfs, &wrList[0], &bad_wr);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(ret == URMA_SUCCESS, K_RUNTIME_ERROR,
+                                         FormatString("Failed to urma write object, ret = %d", ret));
+    if (blocking) {
+        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto errorHandler = [](Status &status) { return status; };
+        RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
+        eventKeys.clear();
     }
     return Status::OK();
 }

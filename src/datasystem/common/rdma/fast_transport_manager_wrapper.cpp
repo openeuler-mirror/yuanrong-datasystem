@@ -240,6 +240,19 @@ Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddres
     return Status::OK();
 }
 
+Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
+                       std::vector<uint64_t> &eventKeys)
+{
+    (void)remoteInfo;
+    (void)objInfos;
+    (void)blocking;
+    (void)eventKeys;
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaGatherWrite(remoteInfo, objInfos, blocking, eventKeys));
+#endif
+    return Status::OK();
+}
+
 Status FillUcpInfo(uint64_t segAddress, uint64_t dataOffset, const std::string &srcIpAddr, UcpRemoteInfoPb &ucpInfo)
 {
     (void)segAddress;

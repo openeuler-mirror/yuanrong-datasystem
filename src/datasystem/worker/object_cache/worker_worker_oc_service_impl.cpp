@@ -96,7 +96,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     PerfPoint pointSendPayload(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
 
     if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
-        || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER) {
+        || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
+        || rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload({}, FLAGS_oc_worker_worker_direct_port > 0),
                                          "GetObjectRemote send payload error");
     } else if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
@@ -139,7 +140,10 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
         return;
     }
-
+    auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
+    if (isGatherWrite) {
+        return;
+    }
     // If keys are empty, we 1) get payload from spill or 2) urma is not enabled.
     // In both cases we send payload as part of the response.
     // Otherwise we extend the lifecycle of payload only until urma_write is done.
@@ -257,6 +261,35 @@ Status WorkerWorkerOCServiceImpl::AggregaedMemorySend(uint64_t subIndex, Aggrega
 
     ShmGuard shmGuard(aggregatedMem->batchShmUnit, info.batchSizes[subIndex], 0);
     RETURN_IF_NOT_OK(shmGuard.TransferTo(subPayload, 0, info.batchSizes[subIndex]));
+    ParallelRes &loc = parallelRes[subIndex];
+    loc.kps.emplace(startPos, std::make_pair(std::move(subKeys), std::move(subPayload)));
+    return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &info,
+                                              std::shared_ptr<AggregateMemory> aggregatedMem,
+                                              std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req)
+{
+    if (!info.canBatchHandler) {
+        return Status::OK();
+    }
+
+    std::vector<uint64_t> subKeys;
+    std::vector<RpcMessage> subPayload;
+    auto startPos = info.batchStartIndex[subIndex];
+    auto *subReq = req.mutable_requests(startPos);
+    auto &urmaInfo = subReq->urma_info();
+    std::vector<LocalSgeInfo> localSgeInfoList;
+    RemoteSegInfo remoteSegInfo{
+        .segAddr = urmaInfo.seg_va(),
+        .segOffset = urmaInfo.seg_data_offset() - ocClientWorkerSvc_->GetMetadataSize(),
+        .host = urmaInfo.request_address().host(),
+        .port = urmaInfo.request_address().port(),
+    };
+    if (IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, subKeys),
+                                         "Failed in aggregate memory urma write");
+    }
     ParallelRes &loc = parallelRes[subIndex];
     loc.kps.emplace(startPos, std::make_pair(std::move(subKeys), std::move(subPayload)));
     return Status::OK();
@@ -455,19 +488,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         // Support send payload exceed 2GB
         if (isFastTransportEnabled) {
             if (batchPtr) {
-                PerfPoint aggregateCopy(PerfKey::WORKER_AGGREGATE_MEM_COPY);
-                uint64_t dataPos = batchPtr->batchCursor + entry->GetMetadataSize();
-                CHECK_FAIL_RETURN_STATUS(entry->GetMetadataSize() == ocClientWorkerSvc_->GetMetadataSize(),
-                                         K_RUNTIME_ERROR,
-                                         FormatString("Metadata size mismatch, actual = %zu, expected = %zu",
-                                                      entry->GetMetadataSize(), ocClientWorkerSvc_->GetMetadataSize()));
-                uint8_t *destPtr = static_cast<uint8_t *>(batchPtr->batchShmUnit->GetPointer()) + dataPos;
-                uint8_t *srcPtr = static_cast<uint8_t *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize();
-                auto ret = memcpy_s(destPtr, entry->GetDataSize(), srcPtr, entry->GetDataSize());
-                CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
-                                         FormatString("Copy root info failed, the memcpy_s return: %d", ret));
-                batchPtr->batchCursor += Align4BitsCeiling(entry->GetDataSize() + entry->GetMetadataSize());
-                keys.emplace_back(dataPos);
+                batchPtr->localSgeInfos.emplace_back(
+                    LocalSgeInfo{ .segAddr = localSegAddress,
+                                  .segSize = localSegSize,
+                                  .sgeAddr = uintptr_t(shmUnit->GetPointer()),
+                                  .readOffset = req.read_offset(),
+                                  .writeSize = Align4BitsCeiling(entry->GetDataSize() + entry->GetMetadataSize()),
+                                  .metaDataSize = 0 });
+                rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META);
             } else if (IsUrmaEnabled()) {
                 // later add a check on data size and read size.
                 auto shmUnit = entry->GetShmUnit();
@@ -479,6 +507,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                     UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset, size,
                                      entry->GetMetadataSize(), blocking, keys),
                     "Failed in single data urma write");
+                rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);
             } else if (IsUcpEnabled()) {
                 // later add a check on data size and read size.
                 auto shmUnit = entry->GetShmUnit();
@@ -486,8 +515,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                 RETURN_IF_NOT_OK_PRINT_ERROR_MSG(UcpPutPayload(req.ucp_info(), localObjectAddress, offset, size,
                                                                entry->GetMetadataSize(), blocking, keys),
                                                  "Failed in single data ucp put");
+                rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);
             }
-            rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);
         }
 
         // For compatibility, only trigger RH2D if this client request both supports and enables RH2D.
@@ -606,18 +635,16 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
                         uint64_t startPos = info.canBatchHandler ? info.batchStartIndex[i] : i;
                         uint64_t endPos = info.canBatchHandler ? startPos + info.batchReqSize[i] : startPos + 1;
                         std::shared_ptr<AggregateMemory> batchPtr = nullptr;
-                        auto rc = AllocateAggregateMemory(i, info, batchPtr);
-                        if (rc.IsError()) {
-                            LOG(ERROR) << FormatString("[parallel %d] Failed to allocate mem size: %d", i,
-                                                       info.batchSizes[i]);
-                            break;
+                        if (info.canBatchHandler) {
+                            batchPtr = std::make_shared<AggregateMemory>();
+                            batchPtr->localSgeInfos.reserve(endPos - startPos);
                         }
                         for (uint64_t j = startPos; j < endPos; ++j) {
                             auto *subReq = req.mutable_requests(j);
                             GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, parallelRes, batchPtr);
                         }
-                        LOG_IF_ERROR(AggregaedMemorySend(i, info, batchPtr, parallelRes, req),
-                                     FormatString("AggMem %ld Send failed, posRange[%ld - %ld]", i, startPos, endPos));
+                        PerfPoint pDo(PerfKey::URMA_GATHER_WRITE_DO);
+                        LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req), "gather write error!");
                     }
                 });
         });

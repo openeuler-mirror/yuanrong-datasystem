@@ -21,6 +21,7 @@
 #define DATASYSTEM_WORKER_OC_WORKER_SERVICE_IMPL_H
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
@@ -119,6 +120,7 @@ private:
     struct AggregateMemory {
         std::shared_ptr<ShmUnit> batchShmUnit = nullptr;
         uint64_t batchCursor = 0;
+        std::vector<LocalSgeInfo> localSgeInfos;
     };
 
     struct ParallelRes {
@@ -188,6 +190,18 @@ private:
     Status AggregaedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
                                std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
 
+    /**
+     * @brief Helper function to BatchGetObjectRemote to send the aggregate memory without merge small data in remote
+     * node.
+     * @param[in] subIndex Sub slot index of the parallel list.
+     * @param[in] info Aggregated info.
+     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
+     * @param[out] parallelRes Parallel result.
+     * @param[in] req Remote get request.
+     * @return Status of the call.
+     */
+    Status GatherWrite(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> aggregatedMem,
+                       std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
     /**
      * @brief Helper function pre-process and then trigger GetObjectRemoteImpl.
      * @param[in] req Remote get request.
