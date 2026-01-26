@@ -1,0 +1,29 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 19687db..af433b0 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -17,7 +17,7 @@ file(GLOB_RECURSE CPP_CLIENT_CORE_SRC
+                   "${CMAKE_CURRENT_SOURCE_DIR}/**/*.cpp"
+ )
+ 
+-add_library(etcd-cpp-api-core-objects OBJECT ${CPP_CLIENT_CORE_SRC} ${PROTOBUF_GENERATES})
++add_library(etcd-cpp-api-core-objects OBJECT ${CPP_CLIENT_CORE_SRC})
+ use_cxx(etcd-cpp-api-core-objects)
+ set_exceptions(etcd-cpp-api-core-objects)
+ add_dependencies(etcd-cpp-api-core-objects protobuf_generates)
+@@ -38,6 +38,7 @@ if(BUILD_ETCD_CORE_ONLY)
+     use_cxx(etcd-cpp-api-core)
+     set_exceptions(etcd-cpp-api-core)
+     target_link_libraries(etcd-cpp-api-core PUBLIC
++                          etcdapi_proto
+                           ${OPENSSL_LIBRARIES}
+                           ${GRPC_LIBRARIES}
+     )
+@@ -54,6 +55,7 @@ else()
+     use_cxx(etcd-cpp-api)
+     set_exceptions(etcd-cpp-api)
+     target_link_libraries(etcd-cpp-api PUBLIC
++                          etcdapi_proto
+                           ${CPPREST_LIB}  # n.b.: the asynchronous client requires pplx in cpprestsdk
+                           ${OPENSSL_LIBRARIES}
+                           ${GRPC_LIBRARIES}
