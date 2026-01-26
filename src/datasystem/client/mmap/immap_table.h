@@ -17,8 +17,8 @@
 /**
  * Description: Client mmap table management.
  */
-#ifndef DATASYSTEM_CLIENT_MMAP_TABLE_H
-#define DATASYSTEM_CLIENT_MMAP_TABLE_H
+#ifndef DATASYSTEM_CLIENT_MMAP_IMMAP_TABLE_H
+#define DATASYSTEM_CLIENT_MMAP_IMMAP_TABLE_H
 
 #include <memory>
 #include <shared_mutex>
@@ -28,16 +28,18 @@
 #include <unordered_map>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/client/mmap_table_entry.h"
+#include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
-class MmapTable {
+class IMmapTable {
 public:
-    MmapTable() = delete;
+    IMmapTable() = delete;
 
-    MmapTable(bool enableHugeTlb);
+    ~IMmapTable() = default;
+
+    explicit IMmapTable(bool enableHugeTlb);
     /**
      * @brief Look up and mmap the share memory file descriptor.
      * @param[in] clientFd The client share memory file descriptor.
@@ -45,7 +47,8 @@ public:
      * @param[in] mmapSize The share memory file mmap size.
      * @return Status of the call.
      */
-    Status MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize);
+    virtual Status MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
+                                  const std::string &tenantId) = 0;
 
     /**
      * @brief Look up the mmapped share memory file.
@@ -77,7 +80,7 @@ public:
      * @param[in] fd Worker fd.
      * @return Mmap entry.
      */
-    std::shared_ptr<MmapTableEntry> GetMmapEntryByFd(int fd);
+    std::shared_ptr<IMmapTableEntry> GetMmapEntryByFd(int fd);
 
     /**
      * @brief Clear the invalid fds.
@@ -85,12 +88,12 @@ public:
      */
     void ClearExpiredFds(const std::vector<int64_t> &fds);
 
-private:
+protected:
     // Protects 'mmapTable_'.
     std::shared_timed_mutex mutex_;
 
     // The mmap fd table. The key is worker fd, value is mmap entry.
-    std::unordered_map<int, std::shared_ptr<MmapTableEntry>> mmapTable_;
+    std::unordered_map<int, std::shared_ptr<IMmapTableEntry>> mmapTable_;
     //   huge_tlb switch
     bool enableHugeTlb_;
 };

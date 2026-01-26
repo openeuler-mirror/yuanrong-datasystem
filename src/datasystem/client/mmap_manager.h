@@ -26,7 +26,7 @@
 #include <vector>
 
 #include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/client/mmap_table.h"
+#include "datasystem/client/mmap/immap_table.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/utils/status.h"
@@ -38,7 +38,7 @@ namespace client {
  */
 class MmapManager {
 public:
-    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker);
+    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient);
 
     ~MmapManager();
 
@@ -70,7 +70,7 @@ public:
      * @param[in] fd Worker fd.
      * @return Mmap entry.
      */
-    std::shared_ptr<MmapTableEntry> GetMmapEntryByFd(int fd);
+    std::shared_ptr<IMmapTableEntry> GetMmapEntryByFd(int fd);
 
     /**
      * @brief Clear the invalid fds.
@@ -91,8 +91,9 @@ public:
 private:
     // The instance for client communication with the worker.
     std::shared_ptr<IClientWorkerCommonApi> clientWorker_;
-    std::unique_ptr<MmapTable> mmapTable_;
+    std::unique_ptr<IMmapTable> mmapTable_;
     mutable std::shared_timed_mutex mutex_;  // protect mmapTable_.
+    bool enableEmbeddedClient_;
 };
 }  // namespace client
 }  // namespace datasystem

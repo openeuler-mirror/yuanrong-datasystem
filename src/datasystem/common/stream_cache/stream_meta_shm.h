@@ -22,7 +22,7 @@
 
 #include <cstdint>
 #include <memory>
-#include "datasystem/client/mmap_table_entry.h"
+#include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 
@@ -37,7 +37,7 @@ public:
     {
     }
 
-    Status Init(std::shared_ptr<client::MmapTableEntry> mmapTableEntry = nullptr);
+    Status Init(std::shared_ptr<client::IMmapTableEntry> mmapTableEntry = nullptr);
 
     /**
      * @brief Try to increase the usage of shared memory in this node for this stream.
@@ -58,7 +58,7 @@ private:
     uint8_t *shmPtr_;
     const size_t shmSz_;
     uint64_t *usage_{ nullptr };
-    std::shared_ptr<client::MmapTableEntry> mmapTableEntry_;  // for client.
+    std::shared_ptr<client::IMmapTableEntry> mmapTableEntry_;  // for client.
     uint64_t maxStreamSize_ = 0;
 };
 }  // namespace datasystem

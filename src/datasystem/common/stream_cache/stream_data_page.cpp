@@ -276,7 +276,7 @@ StreamPageBase::StreamPageBase(std::shared_ptr<ShmUnitInfo> shmInfo)
     pageUnit_->id = CreatePageId(pageUnit_);
 }
 
-StreamPageBase::StreamPageBase(std::shared_ptr<ShmUnitInfo> shmInfo, std::shared_ptr<client::MmapTableEntry> mmapEntry)
+StreamPageBase::StreamPageBase(std::shared_ptr<ShmUnitInfo> shmInfo, std::shared_ptr<client::IMmapTableEntry> mmapEntry)
     : StreamPageBase(std::move(shmInfo))
 {
     mmapEntry_ = std::move(mmapEntry);
@@ -305,7 +305,7 @@ StreamLobPage::StreamLobPage(std::shared_ptr<ShmUnitInfo> shmInfo, bool isClient
 }
 
 StreamLobPage::StreamLobPage(std::shared_ptr<ShmUnitInfo> shmInfo, bool isClient,
-                             std::shared_ptr<client::MmapTableEntry> mmapEntry)
+                             std::shared_ptr<client::IMmapTableEntry> mmapEntry)
     : StreamPageBase(std::move(shmInfo), std::move(mmapEntry)), isClient_(isClient)
 {
 }
@@ -328,7 +328,7 @@ Status StreamLobPage::Init()
 }
 
 StreamDataPage::StreamDataPage(std::shared_ptr<ShmUnitInfo> shmInfo, uint32_t lockId, bool isClient, bool isSharedPage,
-                               std::shared_ptr<client::MmapTableEntry> mmapEntry)
+                               std::shared_ptr<client::IMmapTableEntry> mmapEntry)
     : StreamPageBase(std::move(shmInfo), std::move(mmapEntry)),
       lockId_(lockId),
       isClient_(isClient),

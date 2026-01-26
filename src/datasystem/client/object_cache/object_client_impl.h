@@ -858,7 +858,7 @@ private:
         const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
         bool isSeal, uint32_t version, const ShmKey &shmId = {},
         const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
-        std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr,
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr,
         std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo = nullptr);
 
     /**
@@ -1019,7 +1019,7 @@ private:
      * @return Status of the call.
      */
     Status MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t offset,
-                       std::shared_ptr<client::MmapTableEntry> &mmapEntry, uint8_t *&pointer);
+                       std::shared_ptr<client::IMmapTableEntry> &mmapEntry, uint8_t *&pointer);
 
     /**
      * @brief Get the buffer info from Buffer

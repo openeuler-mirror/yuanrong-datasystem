@@ -17,27 +17,28 @@
 /**
  * Description: Client mmap table entry management.
  */
-#ifndef DATASYSTEM_CLIENT_MMAP_TABLE_ENTRY_H
-#define DATASYSTEM_CLIENT_MMAP_TABLE_ENTRY_H
+#ifndef DATASYSTEM_CLIENT_MMAP_SHM_MMAP_TABLE_ENTRY_H
+#define DATASYSTEM_CLIENT_MMAP_SHM_MMAP_TABLE_ENTRY_H
 
 #include <atomic>
 #include <cstdint>
 
+#include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
-class MmapTableEntry {
+class ShmMmapTableEntry : public IMmapTableEntry {
 public:
-    MmapTableEntry(int fd, size_t mmapSize);
-    ~MmapTableEntry();
+    ShmMmapTableEntry(int fd, size_t mmapSize) : IMmapTableEntry(fd, mmapSize) {};
+    ~ShmMmapTableEntry();
 
     /**
      * @brief Mmap the client fd.
      * @param[in] enableHugeTlb huge_tlb switch
      * @return Status of the call.
      */
-    Status Init(bool enableHugeTlb);
+    Status Init(bool enableHugeTlb, const std::string &tenantId) override;
 
     /**
      * @brief Get the fd pointer.
@@ -47,13 +48,6 @@ public:
     {
         return pointer_;
     }
-
-private:
-    friend class MmapTable;
-
-    int fd_;
-    size_t size_;
-    uint8_t *pointer_;
 };
 }  // namespace client
 }  // namespace datasystem

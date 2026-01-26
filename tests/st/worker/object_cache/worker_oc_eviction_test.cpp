@@ -23,6 +23,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/client/mmap/embedded_mmap_table.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -52,6 +53,7 @@ DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(shared_disk_directory);
 
 namespace datasystem {
 namespace st {
@@ -2198,5 +2200,69 @@ TEST_F(UrmaEvictionManagerEndToEndTest, UrmaLocalSpillRemoteGetSuccess)
     }
 }
 #endif
+
+class EmbeddedMmapTableTets : public ExternalClusterTest, public EvictionManagerCommon {
+public:
+    ~EmbeddedMmapTableTets() = default;
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 0;
+        opts.numEtcd = 0;
+    }
+
+    void SetUp() override
+    {
+        HostPort workerId;
+        DS_ASSERT_OK(workerId.ParseString("127.0.0.1:34543"));
+        eviction_ = std::make_shared<object_cache::WorkerOcEvictionManager>(nullptr, workerId, workerId);
+        ExternalClusterTest::SetUp();
+    }
+
+public:
+    std::shared_ptr<object_cache::WorkerOcEvictionManager> eviction_;
+};
+
+TEST_F(EmbeddedMmapTableTets, EmbeddeMmapMemoryTest)
+{
+    auto size = 10 * 1024 * 1024;
+    allocator = datasystem::memory::Allocator::Instance();
+    DS_ASSERT_OK(allocator->Init(size, size));
+    std::string workerAddr = "127.0.0.1:" + std::to_string(GetFreePort());
+    auto dataSize = 100;
+    auto shmUnit = std::make_shared<ShmUnit>();
+    auto metadataSize = GetMetaSize(dataSize);
+    DS_ASSERT_OK(AllocateMemoryForObject("objectKey", dataSize, metadataSize, true, eviction_, *shmUnit,
+                                         datasystem::CacheType::MEMORY));
+
+    std::unique_ptr<datasystem::client::EmbeddedMmapTable> mmapTable =
+        std::make_unique<datasystem::client::EmbeddedMmapTable>(false);
+    int unusedClientFd = 0;  // for embeddedclient, no need mmap client fd.
+    DS_ASSERT_OK(mmapTable->MmapAndStoreFd(unusedClientFd, shmUnit->GetFd(), shmUnit->GetMmapSize(), ""));
+    uint8_t *pointer;
+    DS_ASSERT_OK(mmapTable->LookupFdPointer(shmUnit->GetFd(), &pointer));
+}
+
+TEST_F(EmbeddedMmapTableTets, EmbeddeMmapMemoryDisk)
+{
+    std::string dir = cluster_->GetRootDir() + "/shared_disk/";
+    FLAGS_shared_disk_directory = dir.c_str();
+    auto size = 10 * 1024 * 1024;
+    allocator = datasystem::memory::Allocator::Instance();
+    DS_ASSERT_OK(allocator->Init(size, size));
+    std::string workerAddr = "127.0.0.1:" + std::to_string(GetFreePort());
+    auto dataSize = 100;
+    auto shmUnit = std::make_shared<ShmUnit>();
+    auto metadataSize = GetMetaSize(dataSize);
+    DS_ASSERT_OK(AllocateMemoryForObject("objectKey", dataSize, metadataSize, true, eviction_, *shmUnit,
+                                         datasystem::CacheType::DISK));
+
+    std::unique_ptr<datasystem::client::IMmapTable> mmapTable =
+        std::make_unique<datasystem::client::EmbeddedMmapTable>(false);
+    int unusedClientFd = 0;  // for embeddedclient, no need mmap client fd.
+    DS_ASSERT_OK(mmapTable->MmapAndStoreFd(unusedClientFd, shmUnit->GetFd(), shmUnit->GetMmapSize(), ""));
+    uint8_t *pointer;
+    DS_ASSERT_OK(mmapTable->LookupFdPointer(shmUnit->GetFd(), &pointer));
+}
 }  // namespace st
 }  // namespace datasystem

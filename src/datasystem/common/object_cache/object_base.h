@@ -27,7 +27,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/client/mmap_table_entry.h"
+#include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
@@ -345,7 +345,7 @@ struct ObjectBufferInfo {
     bool isSeal = false;
     uint32_t version;
     std::shared_ptr<RpcMessage> payloadPointer;
-    std::shared_ptr<client::MmapTableEntry> mmapEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo = nullptr;
 };
 

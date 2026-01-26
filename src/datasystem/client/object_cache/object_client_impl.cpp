@@ -39,7 +39,7 @@
 #include <nlohmann/json.hpp>
 
 #include "datasystem/client/client_flags_monitor.h"
-#include "datasystem/client/mmap_table_entry.h"
+#include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/client/object_cache/client_worker_api.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/device_helper.h"
@@ -289,7 +289,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, boo
         // local worker api
     }
     RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_));
-    mmapManager_ = std::make_unique<client::MmapManager>(workerApi);
+    mmapManager_ = std::make_unique<client::MmapManager>(workerApi, false);
     const size_t threadCount = 8;
     asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
     asyncGetCopyPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_copy");
@@ -1545,7 +1545,7 @@ Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const 
                                             uint32_t version, std::shared_ptr<Buffer> &buffer)
 {
     // Validator check ids in Get(objectKeys, subTimeoutMs, buffers)
-    std::shared_ptr<client::MmapTableEntry> mmapEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     uint8_t *pointer;
     RETURN_IF_NOT_OK(MmapShmUnit(info.store_fd(), info.mmap_size(), info.offset(), mmapEntry, pointer));
     FullParam param;
@@ -1562,7 +1562,7 @@ Status ObjectClientImpl::SetShmObjectBuffer(const std::string &objectKey, const 
 }
 
 Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t offset,
-                                     std::shared_ptr<client::MmapTableEntry> &mmapEntry, uint8_t *&pointer)
+                                     std::shared_ptr<client::IMmapTableEntry> &mmapEntry, uint8_t *&pointer)
 {
     auto shmBuf = std::make_shared<ShmUnitInfo>();
     shmBuf->fd = fd;
@@ -1580,7 +1580,7 @@ Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t of
 std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
     bool isSeal, uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
-    std::shared_ptr<client::MmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo)
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo)
 {
     auto bufferInfo = std::make_shared<ObjectBufferInfo>();
     bufferInfo->objectKey = objectKey;
@@ -1777,7 +1777,7 @@ Status ObjectClientImpl::SetOffsetReadObjectBuffer(const std::string &objectKey,
     OffsetInfo offsetInfo(offset, size);
     offsetInfo.AdjustReadSize(dataSize);
 
-    std::shared_ptr<client::MmapTableEntry> mmapEntry;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     uint8_t *pointer;
     MmapShmUnit(info.store_fd(), info.mmap_size(), info.offset(), mmapEntry, pointer);
     FullParam param;

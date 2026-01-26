@@ -19,7 +19,7 @@
 
 #include <utility>
 
-#include "datasystem/client/mmap_table.h"
+#include "datasystem/client/mmap/immap_table.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/stream_cache/cursor.h"
@@ -173,7 +173,7 @@ struct DataVerificationHeader {
 class StreamPageBase {
 public:
     explicit StreamPageBase(std::shared_ptr<ShmUnitInfo>);
-    explicit StreamPageBase(std::shared_ptr<ShmUnitInfo> shmInfo, std::shared_ptr<client::MmapTableEntry> mmapEntry);
+    explicit StreamPageBase(std::shared_ptr<ShmUnitInfo> shmInfo, std::shared_ptr<client::IMmapTableEntry> mmapEntry);
     virtual ~StreamPageBase() = default;
 
     /**
@@ -224,7 +224,7 @@ public:
 
 protected:
     std::shared_ptr<ShmUnitInfo> pageUnit_;
-    std::shared_ptr<client::MmapTableEntry> mmapEntry_;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry_;
     uint8_t *startOfPage_{ nullptr };
 
 private:
@@ -235,7 +235,7 @@ class StreamLobPage : public StreamPageBase, public std::enable_shared_from_this
 public:
     explicit StreamLobPage(std::shared_ptr<ShmUnitInfo> shmInfo, bool isClient);
     explicit StreamLobPage(std::shared_ptr<ShmUnitInfo> shmInfo, bool isClient,
-                           std::shared_ptr<client::MmapTableEntry> mmapEntry);
+                           std::shared_ptr<client::IMmapTableEntry> mmapEntry);
     ~StreamLobPage() override = default;
     Status Init();
     Status Insert(const HeaderAndData &element);
@@ -351,7 +351,7 @@ struct StreamPageHeader {
 class StreamDataPage : public StreamPageBase, public std::enable_shared_from_this<StreamDataPage> {
 public:
     explicit StreamDataPage(std::shared_ptr<ShmUnitInfo> shmInfo, uint32_t lockId, bool isClient,
-                            bool isSharedPage = false, std::shared_ptr<client::MmapTableEntry> mmapEntry = nullptr);
+                            bool isSharedPage = false, std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr);
     ~StreamDataPage() override = default;
 
     /**

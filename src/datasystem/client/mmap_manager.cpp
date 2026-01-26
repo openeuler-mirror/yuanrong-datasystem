@@ -19,11 +19,19 @@
  */
 #include "datasystem/client/mmap_manager.h"
 
+#include "datasystem/client/mmap/embedded_mmap_table.h"
+#include "datasystem/client/mmap/shm_mmap_table.h"
+
 namespace datasystem {
 namespace client {
-MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker) : clientWorker_(std::move(clientWorker))
+MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient)
+    : clientWorker_(std::move(clientWorker)), enableEmbeddedClient_(enableEmbeddedClient)
 {
-    mmapTable_ = std::make_unique<MmapTable>(clientWorker_->enableHugeTlb_);
+    if (!enableEmbeddedClient) {
+        mmapTable_ = std::make_unique<ShmMmapTable>(clientWorker_->enableHugeTlb_);
+    } else {
+        mmapTable_ = std::make_unique<EmbeddedMmapTable>(clientWorker_->enableHugeTlb_);
+    }
 }
 
 MmapManager::~MmapManager()
@@ -68,12 +76,17 @@ Status MmapManager::LookupUnitsAndMmapFds(const std::string &tenantId, std::vect
     }
 
     if (!toRecvFds.empty()) {
-        // Notify worker to send fds and receive the client fd.
-        RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
-
-        // Mmap the new client fd.
-        for (size_t i = 0; i < clientFds.size(); i++) {
-            RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i]));
+        if (!enableEmbeddedClient_) {
+            RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
+            // Mmap the new client fd.
+            for (size_t i = 0; i < clientFds.size(); i++) {
+                RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i], tenantId));
+            }
+        } else {
+            for (size_t i = 0; i < toRecvFds.size(); i++) {
+                static const int unusedClientFd = 0;  // for embeddedclient, no need mmap client fd.
+                RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(unusedClientFd, toRecvFds[i], mmapSizes[i], tenantId));
+            }
         }
     }
 
@@ -105,7 +118,7 @@ uint8_t *MmapManager::LookupMmappedFile(const int storeFd)
     return pointer;
 }
 
-std::shared_ptr<MmapTableEntry> MmapManager::GetMmapEntryByFd(int fd)
+std::shared_ptr<IMmapTableEntry> MmapManager::GetMmapEntryByFd(int fd)
 {
     return mmapTable_->GetMmapEntryByFd(fd);
 }

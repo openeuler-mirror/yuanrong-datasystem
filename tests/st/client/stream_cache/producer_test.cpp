@@ -1472,7 +1472,7 @@ TEST_F(ProducerTest, TestWriteBigElementWhenMmapFailed)
     ASSERT_EQ(CreateClient(0, client), Status::OK());
     DS_ASSERT_OK(client->CreateProducer("MmapFailed", producer, defaultProducerConf_));
 
-    DS_ASSERT_OK(inject::Set("MmapTableEntry.mmap", "1*return(K_RUNTIME_ERROR)"));
+    DS_ASSERT_OK(inject::Set("IMmapTableEntry.mmap", "1*return(K_RUNTIME_ERROR)"));
     std::vector<uint8_t> writeElement;
     size_t testSize = 2ul * 1024ul * 1024ul;
     DS_ASSERT_OK(CreateElement(testSize, element, writeElement));
