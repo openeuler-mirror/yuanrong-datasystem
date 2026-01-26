@@ -100,18 +100,20 @@ private:
      * @param[out] lockedEntries Locked object list.
      * @param[out] successIds Success object key list.
      * @param[out] failedIds Failed object key list.
+     * @param[out] needModifyPrimary Need modify primary copy list.
      */
     template <typename T>
     void BatchLockForMigrateData(const T &infoList, LockedEntryMap &lockedEntries,
                                  std::unordered_set<std::string> &successIds,
-                                 std::unordered_set<std::string> &failedIds)
+                                 std::unordered_set<std::string> &failedIds,
+                                 LockedEntryMap &needModifyPrimary)
     {
         lockedEntries.clear();
         std::map<std::string, uint64_t> toLockIds;
         std::transform(infoList.begin(), infoList.end(), std::inserter(toLockIds, toLockIds.end()),
                        [](const auto &info) { return std::make_pair(info.object_key(), info.version()); });
 
-        BatchLock(toLockIds, lockedEntries, successIds, failedIds);
+        BatchLock(toLockIds, lockedEntries, successIds, failedIds, needModifyPrimary);
     }
 
     /**
@@ -120,9 +122,11 @@ private:
      * @param[out] lockedEntries Locked object list.
      * @param[out] successIds Success object key list.
      * @param[out] failedIds Failed object key list.
+     * @param[out] needModifyPrimary Need modify primary copy list.
      */
     void BatchLock(const std::map<std::string, uint64_t> &toLockIds, LockedEntryMap &lockedEntries,
-                   std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds);
+                   std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds,
+                   LockedEntryMap &needModifyPrimary);
 
     /**
      * @brief Batch unlock objects.

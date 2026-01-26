@@ -111,8 +111,12 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
-    BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);
-    Raii raii([this, &lockedEntries]() { BatchUnlock(lockedEntries); });
+    LockedEntryMap needModifyPrimary;
+    BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
+    Raii raii([this, &lockedEntries, needModifyPrimary]() {
+        BatchUnlock(lockedEntries);
+        BatchUnlock(needModifyPrimary);
+    });
 
     if (etcdCM_ != nullptr && etcdCM_->IsDataMigrationStarted()) {
         std::unordered_set<std::string> failedIds;
@@ -138,6 +142,9 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
     Status status = FillObjectsLocked(req, lockedEntries, metas, payloads, successIds, failedIds, needSendMasterIds);
     bool oom = IsNoSpace(status);
 
+    for (const auto &[objectKey, it] : needModifyPrimary) {
+        needSendMasterIds.emplace(objectKey, std::make_pair(it.first, false));
+    }
     // 4. Send replace primary copy to master.
     if (!needSendMasterIds.empty()) {
         status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, req.type(), successIds, failedIds);
@@ -195,8 +202,12 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
-    BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);
-    Raii raii([this, &lockedEntries]() { BatchUnlock(lockedEntries); });
+    LockedEntryMap needModifyPrimary;
+    BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
+    Raii raii([this, &lockedEntries, needModifyPrimary]() {
+        BatchUnlock(lockedEntries);
+        BatchUnlock(needModifyPrimary);
+    });
 
     // 2. Get object metadata from master.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_QUERY_META);
@@ -223,6 +234,9 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
 
     // 5. Send replace primary copy to master.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_REPLACE_PRIMARY);
+    for (const auto &[objectKey, it] : needModifyPrimary) {
+        needSendMasterIds.emplace(objectKey, std::make_pair(it.first, false));
+    }
     if (!needSendMasterIds.empty()) {
         status = ReplacePrimaryImpl(req.worker_addr(), needSendMasterIds, MigrateType::SPILL, successIds, failedIds);
     }
@@ -240,7 +254,8 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
 
 void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t> &toLockIds,
                                            LockedEntryMap &lockedEntries, std::unordered_set<std::string> &successIds,
-                                           std::unordered_set<std::string> &failedIds)
+                                           std::unordered_set<std::string> &failedIds,
+                                           LockedEntryMap &needModifyPrimary)
 {
     for (const auto &[objectKey, version] : toLockIds) {
         std::shared_ptr<SafeObjType> entry;
@@ -275,7 +290,11 @@ void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t>
                     "migrate data.",
                     objectKey, (*entry)->GetCreateTime(), version,
                     (*entry)->stateInfo.IsCacheInvalid() ? "true" : "false", (*entry)->GetAddress());
-                if (entry->Get()->IsWriteBackMode() && IsEqualVersion(entry, version)) {
+                if (IsEqualVersion(entry, version)) {
+                    ss << " And need modify primary copy.";
+                    (void)needModifyPrimary.emplace(objectKey, std::make_pair(entry, version));
+                }
+                if (IsEqualVersion(entry, version) && entry->Get()->IsWriteBackMode()) {
                     ss << " Would add to l2 queue.";
                     std::future<Status> future;
                     LOG_IF_ERROR(asyncSendManager_->Add(objectKey, entry, future),
@@ -284,7 +303,6 @@ void WorkerOcServiceMigrateImpl::BatchLock(const std::map<std::string, uint64_t>
                 LOG(INFO) << ss.str();
                 // The object's version is newer than the request node, it means that the object has been updated before
                 // RPC arrived, so we can just treat it as an success op.
-                entry->WUnlock();
                 (void)successIds.emplace(objectKey);
             }
         }

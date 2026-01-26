@@ -2139,6 +2139,9 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     }
     std::function<Status(CreateCopyMetaReqPb &, CreateCopyMetaRspPb &)> func =
         [&workerMasterApi](CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp) {
+            INJECT_POINT("CreateCopyMeta.skip", []() {
+                return Status::OK();
+            });
             return workerMasterApi->CreateCopyMeta(req, rsp);
         };
     Status rc = RedirectRetryWhenMetaMoving(req, rsp, workerMasterApi, func);
@@ -2232,6 +2235,7 @@ void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
         }
         std::function<Status(CreateMultiCopyMetaReqPb &, CreateMultiCopyMetaRspPb &)> func =
             [&workerMasterApi](CreateMultiCopyMetaReqPb &multiCopyReq, CreateMultiCopyMetaRspPb &multiCopyRsp) {
+                INJECT_POINT("CreateMultiCopyMeta.skip", []() { return Status::OK(); });
                 return workerMasterApi->CreateMultiCopyMeta(multiCopyReq, multiCopyRsp);
             };
         Status status = RedirectRetryWhenMetasMoving(req, rsp, func);
@@ -2247,6 +2251,7 @@ void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
             }
             continue;
         }
+        UpdateLocationRedirectKeysToRetry(rsp.info(), group.second, retryParams);
         // if success, deal the failed_object_keys returned by res
         if (rsp.failed_object_keys().empty()) {
             continue;
@@ -2260,7 +2265,28 @@ void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
         }
     }
 }
-void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
+
+void WorkerOcServiceGetImpl::UpdateLocationRedirectKeysToRetry(
+    const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
+    const std::vector<UpdateLocationParam> &params, std::vector<UpdateLocationParam> &retryParams)
+{
+    if (infos.empty()) {
+        return;
+    }
+    std::unordered_set<std::string> allObjKeySet;
+    for (const auto &redirectInfo : infos) {
+        const auto &redirectObjKeys = redirectInfo.change_meta_ids();
+        allObjKeySet.insert(redirectObjKeys.begin(), redirectObjKeys.end());
+    }
+    for (const auto &param : params) {
+        if (allObjKeySet.find(param.objectKey) != allObjKeySet.end()) {
+            retryParams.emplace_back(param);
+        }
+    }
+}
+
+void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(
+    const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
 {
     LOG(INFO) << "clear objects by update location params";
     for (auto &keyVersion : clearKeyVersions) {

@@ -230,6 +230,16 @@ private:
         std::unordered_map<std::string, uint64_t> &clearObjectKeys);
 
     /**
+     * @brief UpdateLocationTask redirect keys to retry.
+     * @param[in] infos The redirect meta infos.
+     * @param[in] params The update location params.
+     * @param[out] retryParams The retry params.
+     */
+    void UpdateLocationRedirectKeysToRetry(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
+                                           const std::vector<UpdateLocationParam> &params,
+                                           std::vector<UpdateLocationParam> &retryParams);
+
+    /**
      * @brief Batch update location helper function.
      * @param[in] successIds The success objectKeys.
      * @param[in] queryMetas The query metas.
