@@ -152,10 +152,10 @@ class KVBenchSuiteBuilder:
         self.testcases = []
         if mode == KVMode.SINGLE:
             kv_args = KVArgs(
-                num=args.num,
-                size=args.size,
-                thread_num=args.thread_num,
-                batch_num=args.batch_num,
+                num=args.num if args.num is not None else 100,
+                size=args.size if args.size is not None else "1MB",
+                thread_num=args.thread_num if args.thread_num is not None else 8,
+                batch_num=args.batch_num if args.batch_num is not None else 1,
             )
             self.testcases.append(kv_args)
             return

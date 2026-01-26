@@ -198,24 +198,24 @@ class KVCommand(BenchmarkBaseCommand):
             "-t",
             "--thread_num",
             type=int,
-            default=8,
+            default=None,
             help="Number of threads to use (default: 8, max 128)",
         )
         parser.add_argument(
             "-b",
             "--batch_num",
             type=int,
-            default=1,
+            default=None,
             help="Batch number (default: 1, max 10000)",
         )
         parser.add_argument(
-            "-n", "--num", type=int, default=100, help="Number of data items (default: 100)"
+            "-n", "--num", type=int, default=None, help="Number of data items (default: 100)"
         )
         parser.add_argument(
             "-s",
             "--size",
             type=str,
-            default="1MB",
+            default=None,
             help="Data size of key (e.g. 2B/4KB/8MB/1GB or just 2 for 2B) (default: 1MB)",
         )
 

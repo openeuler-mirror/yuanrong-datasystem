@@ -67,15 +67,15 @@ def check_duplicate_args(args: Any):
 
 def validate_range_arguments(args: Any):
     """Validates the range of numerical command-line arguments."""
-    if not 1 <= args.thread_num <= 128:
+    if args.thread_num is not None and not 1 <= args.thread_num <= 128:
         logger.error(f"thread_num must be between 1 and 128.")
         return False
 
-    if not 1 <= args.batch_num <= 10000:
+    if args.batch_num is not None and not 1 <= args.batch_num <= 10000:
         logger.error(f"batch_num must be between 1 and 10000.")
         return False
 
-    if args.num <= 0:
+    if args.num is not None and args.num <= 0:
         logger.error(f"num must be greater than 0.")
         return False
 
@@ -85,19 +85,20 @@ def validate_range_arguments(args: Any):
 def validate_format_arguments(args: Any):
     """Validates the format of various command-line arguments."""
     # Validate size format and value
-    size_pattern = r"^(\d+)(B|KB|MB|GB)?$"
-    size_match = re.match(size_pattern, args.size.upper())
-    if not size_match:
-        logger.error(
-            f"size format is incorrect, should be nB/nKB/nMB/nGB or just n."
-        )
-        return False
+    if args.size is not None:
+        size_pattern = r"^(\d+)(B|KB|MB|GB)?$"
+        size_match = re.match(size_pattern, args.size.upper())
+        if not size_match:
+            logger.error(
+                f"size format is incorrect, should be nB/nKB/nMB/nGB or just n."
+            )
+            return False
 
-    # Ensure size value is greater than 0
-    size_value = int(size_match.group(1))
-    if size_value <= 0:
-        logger.error(f"size value must be greater than 0.")
-        return False
+        # Ensure size value is greater than 0
+        size_value = int(size_match.group(1))
+        if size_value <= 0:
+            logger.error(f"size value must be greater than 0.")
+            return False
 
     # Validate prefix format and length
     if not re.match(r"^[a-zA-Z0-9_]+$", args.prefix):
@@ -181,7 +182,4 @@ def validate_mutex_arguments(args: Any):
 
 def _is_argument_set(args, arg_name):
     """Check if an argument was explicitly set by the user, not using its default."""
-    default_values = {"thread_num": 8, "batch_num": 1, "num": 1, "size": "1MB"}
-    if arg_name in default_values:
-        return args.__dict__[arg_name] != default_values[arg_name]
     return args.__dict__[arg_name] is not None
