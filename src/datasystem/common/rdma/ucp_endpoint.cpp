@@ -65,17 +65,25 @@ Status UcpEndpoint::Init()
     return Status::OK();
 }
 
-Status UcpEndpoint::UnpackRkey(const std::string &remoteRkey)
+ucp_rkey_h UcpEndpoint::GetOrUnpackRkey(const std::string &remoteRkey)
 {
-    CleanUnpackedRkey();
-    
-    ucs_status_t status = ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);
-    if (status != UCS_OK) {
-        LOG(ERROR) << "[UcpEndpoint] Failed to unpack rkey with status " << ucs_status_string(status);
-        RETURN_STATUS(K_RDMA_ERROR, "[UcpEndpoint] Failed to unpack rkey");
+    {
+        std::shared_lock readLock(rkeyMutex_);
+        if (unpackedRkey_ != nullptr && remoteRkey_ == remoteRkey) {
+            return unpackedRkey_;
+        }
     }
 
-    return Status::OK();
+    {
+        std::unique_lock writeLock(rkeyMutex_);
+        CleanUnpackedRkey();
+        remoteRkey_ = remoteRkey;
+        ucs_status_t status = ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);
+        if (status != UCS_OK) {
+            LOG(ERROR) << "[UcpEndpoint] Failed to unpack rkey with status " << ucs_status_string(status);
+        }
+        return unpackedRkey_;
+    }
 }
 
 void UcpEndpoint::CleanUnpackedRkey()
@@ -89,7 +97,10 @@ void UcpEndpoint::CleanUnpackedRkey()
 void UcpEndpoint::Clean()
 {
     // clean up rkey
-    CleanUnpackedRkey();
+    {
+        std::unique_lock writeLock(rkeyMutex_);
+        CleanUnpackedRkey();
+    }
 
     // clean up ep_
     if (ep_ != nullptr) {

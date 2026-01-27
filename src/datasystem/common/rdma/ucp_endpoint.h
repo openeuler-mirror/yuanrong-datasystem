@@ -23,7 +23,6 @@
 #define DATASYSTEM_COMMON_RDMA_UCP_ENDPOINT_H
 
 #include <memory>
-#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -38,38 +37,31 @@ public:
     UcpEndpoint() = default;
 
     explicit UcpEndpoint(const ucp_worker_h &localWorker, const std::string &remoteWorkerAddr);
-    virtual ~UcpEndpoint();
+    ~UcpEndpoint();
 
     /**
      * @brief initialize a UcpEndpoint instance
      * @return Status::OK() if successful, otherwise error message
      */
-    virtual Status Init();
+    Status Init();
 
     /**
      * @brief Unpack an rkey to this endpoint
-     * @param ucpContext Ucp context used in this environment. Passed in by manager
      * @param remoteRkey rkey from remote server
-     * @param remoteSegAddr remote memory head pointer where content will be written to
      * @return an unpacked key used for ucp_put_nbx
      */
-    virtual Status UnpackRkey(const std::string &remoteRkey);
+    ucp_rkey_h GetOrUnpackRkey(const std::string &remoteRkey);
 
     /**
      * @brief fetch the endpoint in this instance
      * @return the ucp endpoint object used for ucp_put_nbx
      */
-    virtual ucp_ep_h GetEp() const
+    ucp_ep_h GetEp() const
     {
         return ep_;
     };
 
-    virtual ucp_rkey_h GetUnpackedRkey() const
-    {
-        return unpackedRkey_;
-    }
-
-    virtual void CleanUnpackedRkey();
+    void CleanUnpackedRkey();
 
 private:
     void Clean();
@@ -82,7 +74,10 @@ private:
 
     // variables for rkey unpack
     ucp_ep_h ep_ = nullptr;
+    std::string remoteRkey_;
     ucp_rkey_h unpackedRkey_ = nullptr;
+
+    std::shared_mutex rkeyMutex_;
 };
 }  // namespace datasystem
 

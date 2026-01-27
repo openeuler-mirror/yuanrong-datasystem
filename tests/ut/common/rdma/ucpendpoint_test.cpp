@@ -84,14 +84,13 @@ protected:
         if (UCS_PTR_IS_PTR(status_ptr)) {
             ucs_status_t status;
             do {
-                ucp_worker_progress(localServer_->GetWorker());  // 推进worker
+                ucp_worker_progress(localServer_->GetWorker());  
                 status = ucp_request_check_status(status_ptr);
             } while (status == UCS_INPROGRESS);
 
-            EXPECT_EQ(UCS_OK, status);  // 确保操作成功
+            EXPECT_EQ(UCS_OK, status);  
             ucp_request_free(status_ptr);
         } else {
-            // 立即完成的情况
             EXPECT_EQ(UCS_OK, UCS_PTR_STATUS(status_ptr));
         }
     }
@@ -109,13 +108,15 @@ TEST_F(UcpEndpointTest, TestEpGenerated)
 TEST_F(UcpEndpointTest, TestUnpackRkeyWithEmptyRkey)
 {
     std::string emptyRkey = "";
-    EXPECT_EQ(ucpEp_->UnpackRkey(emptyRkey), Status::OK());
+    ucp_rkey_h rkey0 = ucpEp_->GetOrUnpackRkey(emptyRkey);
+    ucp_rkey_h rkey1 = ucpEp_->GetOrUnpackRkey(emptyRkey);
+    EXPECT_EQ(rkey0, rkey1);
 }
 
 TEST_F(UcpEndpointTest, TestUnpackRkey)
 {
-    EXPECT_EQ(ucpEp_->UnpackRkey(remoteServer_->GetPackedRkey()), Status::OK());
-    EXPECT_NE(ucpEp_->GetUnpackedRkey(), nullptr);
+    ucp_rkey_h rkey = ucpEp_->GetOrUnpackRkey(remoteServer_->GetPackedRkey());
+    EXPECT_NE(rkey, nullptr);
 }
 }  // namespace ut
 }  // namespace datasystem
