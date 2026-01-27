@@ -50,8 +50,8 @@ inline std::tuple<std::string, int32_t> SplitNpuId(const std::string &npuId)
     return std::make_tuple("", -1);
 }
 
-inline static std::string GetHcclPeerId(const std::string &srcClientId, int32_t srcDeviceId,
-                                        const std::string &dstCilentId, int32_t dstDeviceId)
+inline static std::string GetPeerId(const std::string &srcClientId, int32_t srcDeviceId,
+                                    const std::string &dstCilentId, int32_t dstDeviceId)
 {
     return srcClientId + ";" + std::to_string(srcDeviceId) + "---" + dstCilentId + ";" + std::to_string(dstDeviceId);
 }

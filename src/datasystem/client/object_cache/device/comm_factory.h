@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_HCCL_COMM_FACTORY_H
-#define DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_HCCL_COMM_FACTORY_H
+#ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_COMM_FACTORY_H
+#define DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_COMM_FACTORY_H
 
 #include <future>
 #include <memory>
@@ -29,7 +29,7 @@
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/device/hccl_comm_magr.h"
 #include "datasystem/common/device/ascend/cann_types.h"
-#include "datasystem/common/device/ascend/hccl_comm_wrapper.h"
+#include "datasystem/common/device/comm_wrapper.h"
 #include "datasystem/common/device/ascend/p2phccl_comm_wrapper.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/device_manager_base.h"
@@ -41,7 +41,7 @@ namespace datasystem {
 
 enum class P2PEventType { SEND, RECV };
 
-using TbbHcclCommTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<CommWrapperBase>>;
+using TbbCommTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<CommWrapperBase>>;
 
 class ClientDeviceCurd {
 public:
@@ -63,74 +63,74 @@ protected:
     std::shared_ptr<object_cache::IClientWorkerApi> clientWorkerApi_;
 };
 
-class HcclCommFactory : public ClientDeviceCurd {
+class CommFactory : public ClientDeviceCurd {
 public:
-    HcclCommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi, AclResourceManager *aclResourceMgr);
+    CommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi, AclResourceManager *aclResourceMgr);
 
     void ShutDown();
 
-    ~HcclCommFactory();
+    ~CommFactory();
 
     /**
-     * @brief Get the hccl communicator wrapper, or create it if not existed.
+     * @brief Get the communicator wrapper, or create it if not existed.
      * @param[in] eventType The p2p event type: SEND or RECV
      * @param[in] localDeviceId The local client device id.
      * @param[in] remoteClientId The client id of the remote client that ready to create communicator.
      * @param[in] remoteDeviceId The device id of the remote client.
-     * @param[out] comm The hccl communicator wrapper.
+     * @param[out] comm The communicator wrapper.
      * @return The status of call.
      */
-    Status GetOrCreateHcclComm(P2PEventType eventType, int32_t localDeviceId, const std::string &remoteClientId,
-                               int32_t remoteDeviceId, bool isSameNode, bool enableP2Ptransfer,
-                               std::shared_ptr<CommWrapperBase> &comm);
+    Status GetOrCreateComm(P2PEventType eventType, int32_t localDeviceId, const std::string &remoteClientId,
+                           int32_t remoteDeviceId, bool isSameNode, bool enableP2Ptransfer,
+                           std::shared_ptr<CommWrapperBase> &comm);
 
     /**
-     * @brief Create the hccl communicator wrapper in the send side.
+     * @brief Create the communicator wrapper in the send side.
      * @param[in] localDeviceId The local client device id.
      * @param[in] remoteClientId The client id of the remote client that ready to create communicator.
      * @param[in] remoteDeviceId The device id of the remote client.
-     * @param[out] comm The hccl communicator wrapper.
+     * @param[out] comm The communicator wrapper.
      */
-    void CreateHcclCommInSend(int32_t localDeviceId, const std::string &remoteClientId, int32_t remoteDeviceId,
-                              bool isSameNode, std::shared_ptr<CommWrapperBase> &comm);
+    void CreateCommInSend(int32_t localDeviceId, const std::string &remoteClientId, int32_t remoteDeviceId,
+                          bool isSameNode, std::shared_ptr<CommWrapperBase> &comm);
 
     /**
-     * @brief Create the hccl communicator wrapper in the recv side.
-     * Attention! It should be thread safe to avoid hccl interface coredump.
+     * @brief Create the communicator wrapper in the recv side.
+     * Attention! It should be thread safe to avoid communication interface coredump.
      * @param[in] localDeviceId The local client device id.
      * @param[in] remoteClientId The client id of the remote client that ready to create communicator.
      * @param[in] remoteDeviceId The device id of the remote client.
-     * @param[out] comm The hccl communicator wrapper.
+     * @param[out] comm The communicator wrapper.
      */
-    void CreateHcclCommInRecv(int32_t localDeviceId, const std::string &remoteClientId, int32_t remoteDeviceId,
-                              bool isSameNode, std::shared_ptr<CommWrapperBase> &comm);
+    void CreateCommInRecv(int32_t localDeviceId, const std::string &remoteClientId, int32_t remoteDeviceId,
+                          bool isSameNode, std::shared_ptr<CommWrapperBase> &comm);
 
-    Status CreateHcclCommCheckError(std::shared_ptr<CommWrapperBase> &comm);
-
-    /**
-     * @brief Get all hccl communicator.
-     * @return The list of hccl communicator wrapper.
-     */
-    std::vector<std::shared_ptr<CommWrapperBase>> GetAllHcclComm();
+    Status CreateCommCheckError(std::shared_ptr<CommWrapperBase> &comm);
 
     /**
-     * @brief Create the number of hccl communicator wrapper in table.
-     * @return The number of hccl communicator
+     * @brief Get all communicators.
+     * @return The list of communicator wrappers.
      */
-    size_t GetHcclCommSize();
+    std::vector<std::shared_ptr<CommWrapperBase>> GetAllComm();
+
+    /**
+     * @brief Create the number of communicator wrapper in table.
+     * @return The number of communicators
+     */
+    size_t GetCommSize();
 
     /**
      * @brief Delete comm from commtable_ of factory for operation before comm destructor.
-     * @param[in] commId The std::shared_ptr<HcclCommWrapper> id, can be find in comm->GetCommId()
+     * @param[in] commId The std::shared_ptr<CommWrapper> id, can be find in comm->GetCommId()
      * @return Indicates status whether the deletion is successful.
      */
     Status DelComm(std::string commId);
 
     /**
-     * @brief Destroy the hccl communicator with commId.
-     * @param[in] commId The std::shared_ptr<HcclCommWrapper> id, can be find in comm->GetCommId()
+     * @brief Destroy the communicator with commId.
+     * @param[in] commId The std::shared_ptr<CommWrapper> id, can be find in comm->GetCommId()
      */
-    void DestroyHcclComm(std::string commId);
+    void DestroyComm(std::string commId);
 
     /**
      * @brief Used for status comparison. What status should be set for comm
@@ -142,22 +142,22 @@ public:
                                        Status checkErrorStatus);
 
     /**
-     * @brief Get the mix hcclCommKey by eventType, localDeviceId, remoteClientId and remoteDeviceId.
+     * @brief Get the mix CommKey by eventType, localDeviceId, remoteClientId and remoteDeviceId.
      * @param[in] eventType The p2p event type: SEND or RECV
      * @param[in] localDeviceId The local client device id.
      * @param[in] remoteClientId The client id of the remote client that ready to create communicator.
      * @param[in] remoteDeviceId The device id of the remote client.
      * @return The mix key of eventType, localDeviceId, remoteClientId and remoteDeviceId.
      */
-    static std::string GetHcclCommKey(P2PEventType eventType, int32_t localDeviceId, const std::string &remoteClientId,
-                                      int32_t remoteDeviceId);
+    static std::string GetCommKey(P2PEventType eventType, int32_t localDeviceId, const std::string &remoteClientId,
+                                   int32_t remoteDeviceId);
 
 private:
     /**
      * @brief Handle communicator creation errors and set detailed error state.
      *
      * This function checks if the given status indicates an error, and if so,
-     * sets the detailed HCCL communication state on the communicator object
+     * sets the detailed communication state on the communicator object
      * before returning the error status. If no error is detected, it returns OK status.
      *
      * @param[in] comm Pointer to the Communicator object to set error state on
@@ -169,7 +169,7 @@ private:
 
     /**
      * @brief Asynchronously retry an operation with timeout and error handling.
-     * @param[in] comm The HCCL communicator wrapper shared pointer.
+     * @param[in] comm The communicator wrapper shared pointer.
      * @param[in] processFunc The main processing function to be executed and retried.
      * @param[in] errorCheckFunc Function to check for errors in the communicator state before retrying.
      * @param[in] timeoutMs Maximum timeout in milliseconds for the entire retry operation.
@@ -197,10 +197,24 @@ private:
      */
     std::string GetSubCommIdForIdentifier(std::shared_ptr<CommWrapperBase> &comm);
 
-    TbbHcclCommTable commTable_;
+    /**
+     * @brief Process the send side comm creation logic.
+     * @param[in] comm The comm wrapper shared pointer.
+     * @param[in] localDeviceId Local device ID.
+     * @param[in] remoteDeviceId Remote device ID.
+     * @param[in] remoteClientId Remote client ID.
+     * @param[in] isSameNode Whether on same node.
+     * @param[in] traceId Trace ID for logging.
+     * @return Status.
+     */
+    Status ProcessCommCreationInSend(std::shared_ptr<CommWrapperBase> comm, int32_t localDeviceId,
+                                     int32_t remoteDeviceId, const std::string &remoteClientId, bool isSameNode,
+                                     const std::string &traceId);
+
+    TbbCommTable commTable_;
     // To prevent two threads from trying to create a communication domain at the same time.
     std::shared_timed_mutex mutex_;
-    std::shared_ptr<HcclCommMagr> hcclThreadControl_;
+    std::shared_ptr<HcclCommMagr> commThreadControl_;
     AclResourceManager *aclResourceMgr_;
 };
 }  // namespace datasystem

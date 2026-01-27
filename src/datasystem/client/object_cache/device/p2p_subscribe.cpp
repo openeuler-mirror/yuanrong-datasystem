@@ -25,9 +25,9 @@
 
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
-#include "datasystem/common/device/ascend/hccl_comm_wrapper.h"
+#include "datasystem/common/device/comm_wrapper.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
@@ -43,7 +43,7 @@ namespace datasystem {
 const uint32_t ONE_SECOND_MS = 1000;
 
 P2PSubscribe::P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
-                           std::shared_ptr<HcclCommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs)
+                           std::shared_ptr<CommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs)
     : ClientDeviceCurd(std::move(workerApi)),
       interruptFlag_(false),
       deviceId_(deviceId),
@@ -143,8 +143,8 @@ void P2PSubscribe::ProcessP2PSend(
 
         StartMonitorThread();
         std::shared_ptr<CommWrapperBase> comm;
-        Status rc = commFactory_->GetOrCreateHcclComm(P2PEventType::SEND, deviceId_, recvClientId, recvDeviceId,
-                                                      isSameNode, clientEnableP2Ptransfer_, comm);
+        Status rc = commFactory_->GetOrCreateComm(P2PEventType::SEND, deviceId_, recvClientId, recvDeviceId,
+                                                  isSameNode, clientEnableP2Ptransfer_, comm);
         if (rc.IsError()) {
             LOG(ERROR) << "ObjectKeys: " << VectorToString(objectKeys) << ",  GetOrCreateHcclComm failed, "
                        << rc.ToString();
@@ -381,8 +381,8 @@ void P2PSubscribe::ProcessP2PRecv(
         auto &respList = kv.second;
         std::shared_ptr<CommWrapperBase> comm;
         StartMonitorThread();
-        auto rc = commFactory_->GetOrCreateHcclComm(P2PEventType::RECV, deviceId_, srcClientId, srcDeviceId, isSameNode,
-                                                    clientEnableP2Ptransfer_, comm);
+        auto rc = commFactory_->GetOrCreateComm(P2PEventType::RECV, deviceId_, srcClientId, srcDeviceId, isSameNode,
+                                                clientEnableP2Ptransfer_, comm);
         std::set<std::string> objectKeys;
         std::transform(respList.begin(), respList.end(), std::inserter(objectKeys, objectKeys.end()),
                        [](const DeviceObjectMetaRspPb &resp) { return resp.object_key(); });
@@ -599,18 +599,18 @@ void P2PSubscribe::ProcessHcclCommDestroy(const SubscribeReceiveNpuEventPb &npuE
     auto dstDeviceId = npuEvent.dst_device_id();
     LOG(INFO) << FormatString("Get a event to destroy the HcclComm with the remote client %s;%d", dstClientId,
                               dstDeviceId);
-    auto sendCommId = HcclCommFactory::GetHcclCommKey(P2PEventType::SEND, deviceId_, dstClientId, dstDeviceId);
-    commFactory_->DestroyHcclComm(sendCommId);
-    auto recvCommId = HcclCommFactory::GetHcclCommKey(P2PEventType::RECV, deviceId_, dstClientId, dstDeviceId);
-    commFactory_->DestroyHcclComm(recvCommId);
+    auto sendCommId = CommFactory::GetCommKey(P2PEventType::SEND, deviceId_, dstClientId, dstDeviceId);
+    commFactory_->DestroyComm(sendCommId);
+    auto recvCommId = CommFactory::GetCommKey(P2PEventType::RECV, deviceId_, dstClientId, dstDeviceId);
+    commFactory_->DestroyComm(recvCommId);
 }
 
 void P2PSubscribe::MonitorLoop()
 {
     while (monitorRun_ && !interruptFlag_) {
         {
-            auto hcclCommVec = commFactory_->GetAllHcclComm();
-            for (const auto &comm : hcclCommVec) {
+            auto commVec = commFactory_->GetAllComm();
+            for (const auto &comm : commVec) {
                 auto rc = comm->CheckHealth(connectTimeOutMS_);
                 if (rc.IsError()) {
                     LOG(ERROR) << FormatString("Hccl comm health check failed, %s", rc.ToString());
@@ -646,10 +646,10 @@ void P2PSubscribe::ReleaseMonitorThread()
 
 void P2PSubscribe::CommRefCheckMoreThanOne()
 {
-    if (commFactory_->GetHcclCommSize() > 0 && !interruptFlag_) {
+    if (commFactory_->GetCommSize() > 0 && !interruptFlag_) {
         StartMonitorThread();
     } else {
-        LOG(INFO) << commFactory_->GetHcclCommSize() << " End Hccl Health Moniter Loop";
+        LOG(INFO) << commFactory_->GetCommSize() << " End Hccl Health Moniter Loop";
         StopMonitorThread();
     }
 }
@@ -748,12 +748,12 @@ Status PromiseWithEvent::CreateEventAndFutureList(size_t eventCount, std::vector
     return Status::OK();
 }
 
-const std::shared_ptr<AclRtEventWrapper> &PromiseWithEvent::GetEvent()
+const std::shared_ptr<DeviceRtEventWrapper> &PromiseWithEvent::GetEvent()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (event_ == nullptr) {
-        std::shared_ptr<AclRtEventWrapper> event;
-        LOG_IF_ERROR(AclRtEventWrapper::Create(event), "Create event error");
+        std::shared_ptr<DeviceRtEventWrapper> event;
+        LOG_IF_ERROR(DeviceRtEventWrapper::Create(event), "Create event error");
         event_ = event;
     }
     return event_;
@@ -782,8 +782,8 @@ void PromiseWithEvent::CreateEventIfNotExistUnlock()
     if (event_ != nullptr) {
         return;
     }
-    std::shared_ptr<AclRtEventWrapper> event;
-    LOG_IF_ERROR(AclRtEventWrapper::Create(event), "Create event error");
+    std::shared_ptr<DeviceRtEventWrapper> event;
+    LOG_IF_ERROR(DeviceRtEventWrapper::Create(event), "Create event error");
     event_ = event;
 }
 }  // namespace datasystem

@@ -1,5 +1,21 @@
-#ifndef DATASYSTEM_COMMON_DEVICE_ACL_POINTER_WRAPPER_H
-#define DATASYSTEM_COMMON_DEVICE_ACL_POINTER_WRAPPER_H
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef DATASYSTEM_COMMON_DEVICE_DEVICE_POINTER_WRAPPER_H
+#define DATASYSTEM_COMMON_DEVICE_DEVICE_POINTER_WRAPPER_H
 
 #include <memory>
 
@@ -10,29 +26,29 @@ namespace datasystem {
 /**
  * @brief RAII wrapper for HCCL communicator
  */
-class AclPointerWrapper {
+class DevicePointerWrapper {
 public:
-    explicit AclPointerWrapper(void *pointer) : pointer_(pointer)
+    explicit DevicePointerWrapper(void *pointer) : pointer_(pointer)
     {
     }
 
-    AclPointerWrapper() : AclPointerWrapper(nullptr)
+    DevicePointerWrapper() : DevicePointerWrapper(nullptr)
     {
     }
 
     // Must not be copyable
-    AclPointerWrapper(const AclPointerWrapper &) = delete;
+    DevicePointerWrapper(const DevicePointerWrapper &) = delete;
 
-    AclPointerWrapper &operator=(const AclPointerWrapper &) = delete;
+    DevicePointerWrapper &operator=(const DevicePointerWrapper &) = delete;
 
     // Move constructable
-    AclPointerWrapper(AclPointerWrapper &&other) noexcept
+    DevicePointerWrapper(DevicePointerWrapper &&other) noexcept
     {
         std::swap(pointer_, other.pointer_);
     }
 
     // Move assignable
-    AclPointerWrapper &operator=(AclPointerWrapper &&other) noexcept
+    DevicePointerWrapper &operator=(DevicePointerWrapper &&other) noexcept
     {
         std::swap(pointer_, other.pointer_);
         return *this;
@@ -42,7 +58,7 @@ public:
     {
     }
 
-    virtual ~AclPointerWrapper() = default;
+    virtual ~DevicePointerWrapper() = default;
 
     /**
      * @brief Get the pointer
@@ -62,27 +78,26 @@ public:
         return pointer_;
     }
 
-protected:
     void *pointer_;
 };
 
-class AclRtEventWrapper : public AclPointerWrapper {
+class DeviceRtEventWrapper : public DevicePointerWrapper {
 public:
     /**
      * @brief Create the aclRtEvent wrapper.
      * @param[out] event The aclRtEvent wrapper.
      * @return Status of the call.
      */
-    static Status Create(std::shared_ptr<AclRtEventWrapper> &event)
+    static Status Create(std::shared_ptr<DeviceRtEventWrapper> &event)
     {
         if (event == nullptr) {
-            event = std::make_shared<AclRtEventWrapper>();
+            event = std::make_shared<DeviceRtEventWrapper>();
         }
         auto deviceMgr = DeviceManagerFactory::GetDeviceManager();
         return deviceMgr->CreateEvent(&(event->GetRef()));
     }
 
-    ~AclRtEventWrapper()
+    ~DeviceRtEventWrapper()
     {
         auto event = GetRef();
         if (event != nullptr) {

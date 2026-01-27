@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "datasystem/client/object_cache/device/hccl_comm_factory.h"
+#include "datasystem/client/object_cache/device/comm_factory.h"
 
 #include <memory>
 #include <mutex>
 
 #include "datasystem/common/device/ascend/cann_types.h"
-#include "datasystem/common/device/ascend/hccl_comm_wrapper.h"
+#include "datasystem/common/device/comm_wrapper.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/utils/status.h"
@@ -43,14 +43,14 @@ inline static void PrintRootInfo(const T &rootInfo)
     VLOG(1) << "[RootInfo]:" << forPrint.str();
 }
 
-HcclCommFactory::HcclCommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
-                                 AclResourceManager *aclResourceMgr)
+CommFactory::CommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
+                         AclResourceManager *aclResourceMgr)
     : ClientDeviceCurd(std::move(workerApi)), aclResourceMgr_(aclResourceMgr)
 {
-    hcclThreadControl_ = std::make_shared<HcclCommMagr>();
+    commThreadControl_ = std::make_shared<HcclCommMagr>();
 }
 
-void HcclCommFactory::ShutDown()
+void CommFactory::ShutDown()
 {
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
     for (auto &commPair : commTable_) {
@@ -59,22 +59,22 @@ void HcclCommFactory::ShutDown()
     commTable_.clear();
 }
 
-HcclCommFactory::~HcclCommFactory()
+CommFactory::~CommFactory()
 {
     ShutDown();
 }
 
-Status HcclCommFactory::SetStateIfError(std::shared_ptr<CommWrapperBase> &comm, Status status)
+Status CommFactory::SetStateIfError(std::shared_ptr<CommWrapperBase> &comm, Status status)
 {
     if (status.IsError()) {
-        comm->SetHcclDetailState(status);
+        comm->SetDetailStatus(status);
         return status;
     }
     return Status::OK();
 }
 
-std::string HcclCommFactory::GetHcclCommKey(P2PEventType eventType, int32_t localDeviceId,
-                                            const std::string &remoteClientId, int32_t remoteDeviceId)
+std::string CommFactory::GetCommKey(P2PEventType eventType, int32_t localDeviceId,
+                                    const std::string &remoteClientId, int32_t remoteDeviceId)
 {
     auto splitStr = "==";
     std::stringstream ss;
@@ -83,18 +83,18 @@ std::string HcclCommFactory::GetHcclCommKey(P2PEventType eventType, int32_t loca
     return ss.str();
 }
 
-Status HcclCommFactory::GetOrCreateHcclComm(P2PEventType eventType, int32_t localDeviceId,
-                                            const std::string &remoteClientId, int32_t remoteDeviceId, bool isSameNode,
-                                            bool enableP2Ptransfer, std::shared_ptr<CommWrapperBase> &comm)
+Status CommFactory::GetOrCreateComm(P2PEventType eventType, int32_t localDeviceId,
+                                    const std::string &remoteClientId, int32_t remoteDeviceId, bool isSameNode,
+                                    bool enableP2Ptransfer, std::shared_ptr<CommWrapperBase> &comm)
 {
     PerfPoint perfPoint(PerfKey::GET_OR_CREATE_HCCL_COMMONE);
-    auto commKey = GetHcclCommKey(eventType, localDeviceId, remoteClientId, remoteDeviceId);
-    TbbHcclCommTable::accessor acc;
+    auto commKey = GetCommKey(eventType, localDeviceId, remoteClientId, remoteDeviceId);
+    TbbCommTable::accessor acc;
     VLOG(1) << FormatString("Trying to acquire read lock, commKey: %s", commKey);
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     if (commTable_.find(acc, commKey)) {
         comm = acc->second;
-        return CreateHcclCommCheckError(comm);
+        return CreateCommCheckError(comm);
     }
     LOG(INFO) << FormatString(
         "Comm cache miss, initialize new %s comm, commId: %s", enableP2Ptransfer ? "p2phccl" : "hccl", commKey);
@@ -102,83 +102,39 @@ Status HcclCommFactory::GetOrCreateHcclComm(P2PEventType eventType, int32_t loca
     // If insert failed, mean the hccl comm exist, get it and return.
     if (!commTable_.insert(acc, commKey)) {
         comm = acc->second;
-        return CreateHcclCommCheckError(comm);
+        return CreateCommCheckError(comm);
     }
 
     if (enableP2Ptransfer) {
-        comm = std::make_shared<P2PHcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, hcclThreadControl_,
+        comm = std::make_shared<P2PHcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_,
                                                     aclResourceMgr_);
         acc->second = comm;
         if (eventType == P2PEventType::SEND) {
-            CreateHcclCommInSend(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
-            return CreateHcclCommCheckError(comm);
+            CreateCommInSend(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
+            return CreateCommCheckError(comm);
         }
-        CreateHcclCommInRecv(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
-        return CreateHcclCommCheckError(comm);
+        CreateCommInRecv(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
+        return CreateCommCheckError(comm);
     }
     comm =
-        std::make_shared<HcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, hcclThreadControl_, aclResourceMgr_);
+        std::make_shared<CommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_, aclResourceMgr_);
     acc->second = comm;
     if (eventType == P2PEventType::SEND) {
-        CreateHcclCommInSend(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
-        return CreateHcclCommCheckError(comm);
+        CreateCommInSend(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
+        return CreateCommCheckError(comm);
     }
-    CreateHcclCommInRecv(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
-    return CreateHcclCommCheckError(comm);
+    CreateCommInRecv(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
+    return CreateCommCheckError(comm);
 }
 
-void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::string &remoteClientId,
-                                           int32_t remoteDeviceId, bool isSameNode,
-                                           std::shared_ptr<CommWrapperBase> &comm)
+void CommFactory::CreateCommInSend(int32_t localDeviceId, const std::string &remoteClientId,
+                                   int32_t remoteDeviceId, bool isSameNode,
+                                   std::shared_ptr<CommWrapperBase> &comm)
 {
     auto traceId = Trace::Instance().GetTraceID();
     auto processFunc = [this, comm, localDeviceId, remoteDeviceId, remoteClientId, isSameNode, traceId]() mutable {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
-        INJECT_POINT("CreateHcclCommInSend.sleep");
-        PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_SEND);
-        auto localClientId = clientWorkerApi_->clientId_;
-        auto peerId = GetHcclPeerId(localClientId, localDeviceId, remoteClientId, remoteDeviceId);
-        VLOG(1) << FormatString("Sender try to acquire write lock, peerId: %s", peerId);
-        std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-
-        LOG(INFO) << FormatString("Start to recv RootInfo from worker, peerId: %s", peerId);
-        RecvRootInfoReqPb rootInfoReq;
-        rootInfoReq.set_dst_client_id(remoteClientId);
-        rootInfoReq.set_dst_device_id(remoteDeviceId);
-        rootInfoReq.set_src_client_id(localClientId);
-        rootInfoReq.set_src_device_id(localDeviceId);
-        RecvRootInfoRspPb rootInfoResp;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clientWorkerApi_->RecvRootInfo(rootInfoReq, rootInfoResp),
-                                         "Failed with receive");
-        if (rootInfoResp.is_dead_lock()) {
-            std::string msg = "Deadlock detected, releasing lock and retrying.";
-            LOG(WARNING) << msg;
-            RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_CLIENT_DEADLOCK, msg)));
-        }
-
-        CommRootInfo rootInfo;
-        if (rootInfoResp.root_info().length() != sizeof(rootInfo.data)) {
-            std::string msg = FormatString(
-                "The rsp rootInfo size is not as expected: %d, which usually indicates that the receiver "
-                "did not send the rootInfo properly. Check if there are any errors on the receiver side, peerId: %s",
-                rootInfoResp.root_info().length(),
-                peerId);
-            RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_RUNTIME_ERROR, msg)));
-        }
-        auto ret = memcpy_s(static_cast<void *>(rootInfo.data),
-            sizeof(rootInfo.data),
-            static_cast<const void *>(rootInfoResp.root_info().c_str()),
-            rootInfoResp.root_info().length());
-        if (ret != EOK) {
-            RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Copy root info failed, the memcpy_s return: %d", ret));
-        }
-        LOG(INFO) << "Start init hccl comm";
-        PrintRootInfo(rootInfo);
-        auto rc = comm->InitCommunicator(rootInfo, HcclCommDirection::SEND, isSameNode);
-        RETURN_IF_NOT_OK(SetStateIfError(comm, rc));
-        PerfPoint perfPoint(PerfKey::CLIENT_HCCL_WARMUP_IN_SEND);
-        return comm->WarmUpComm(HcclCommDirection::SEND);
+        return this->ProcessCommCreationInSend(comm, localDeviceId, remoteDeviceId, remoteClientId, isSameNode,
+                                               traceId);
     };
 
     auto commPtr = comm;
@@ -186,7 +142,7 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         constexpr int32_t timeoutMs = 60 * 1000;
         this->AsyncRetryWithTimeout(
-            commPtr, processFunc, [this](auto comm) { return this->CreateHcclCommCheckError(comm); }, timeoutMs,
+            commPtr, processFunc, [this](auto comm) { return this->CreateCommCheckError(comm); }, timeoutMs,
             { StatusCode::K_CLIENT_DEADLOCK },
             [this](auto comm, Status result, Status checkRc) {
                 this->StatusComparisonWithSetStatus(comm, result, checkRc);
@@ -194,8 +150,8 @@ void HcclCommFactory::CreateHcclCommInSend(int32_t localDeviceId, const std::str
     });
 }
 
-void HcclCommFactory::StatusComparisonWithSetStatus(std::shared_ptr<CommWrapperBase> &comm, Status processStatus,
-                                                    Status checkErrorStatus)
+void CommFactory::StatusComparisonWithSetStatus(std::shared_ptr<CommWrapperBase> &comm, Status processStatus,
+                                                Status checkErrorStatus)
 {
     if (processStatus.IsOk() && checkErrorStatus.IsOk()) {
         comm->SetStatus(Status::OK());
@@ -206,14 +162,14 @@ void HcclCommFactory::StatusComparisonWithSetStatus(std::shared_ptr<CommWrapperB
     }
 }
 
-Status HcclCommFactory::CreateHcclCommCheckError(std::shared_ptr<CommWrapperBase> &comm)
+Status CommFactory::CreateCommCheckError(std::shared_ptr<CommWrapperBase> &comm)
 {
-    auto status = comm->HcclGetCommAsyncError();
-    comm->SetHcclDetailState(status);
+    auto status = comm->GetCommAsyncError();
+    comm->SetDetailStatus(status);
     return status;
 }
 
-void HcclCommFactory::AsyncRetryWithTimeout(
+void CommFactory::AsyncRetryWithTimeout(
     std::shared_ptr<CommWrapperBase> comm, std::function<Status()> processFunc,
     std::function<Status(std::shared_ptr<CommWrapperBase>)> errorCheckFunc, int32_t timeoutMs,
     const std::vector<StatusCode> retryableErrors,
@@ -255,18 +211,18 @@ void HcclCommFactory::AsyncRetryWithTimeout(
     (*retryFunction)();
 }
 
-void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::string &remoteClientId,
-                                           int32_t remoteDeviceId, bool isSameNode,
-                                           std::shared_ptr<CommWrapperBase> &comm)
+void CommFactory::CreateCommInRecv(int32_t localDeviceId, const std::string &remoteClientId,
+                                   int32_t remoteDeviceId, bool isSameNode,
+                                   std::shared_ptr<CommWrapperBase> &comm)
 {
     auto traceId = Trace::Instance().GetTraceID();
     auto process = [this, comm, localDeviceId, remoteDeviceId, remoteClientId, isSameNode, traceId]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
-        INJECT_POINT("CreateHcclCommInRecv.sleep");
+        INJECT_POINT("CreateCommInRecv.sleep");
         PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_RECV);
         auto localClientId = clientWorkerApi_->clientId_;
-        auto peerId = GetHcclPeerId(remoteClientId, remoteDeviceId, localClientId, localDeviceId);
+        auto peerId = GetPeerId(remoteClientId, remoteDeviceId, localClientId, localDeviceId);
         VLOG(1) << FormatString("Try to acquire write lock, peerId: %s", peerId);
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
 
@@ -292,17 +248,17 @@ void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::str
 
         LOG(INFO) << "Start init hccl comm";
         PrintRootInfo(rootInfo);
-        rc = comm->InitCommunicator(rootInfo, HcclCommDirection::RECV, isSameNode);
+        rc = comm->InitCommunicator(rootInfo, CommDirection::RECV, isSameNode);
         RETURN_IF_NOT_OK(SetStateIfError(comm, rc));
         PerfPoint perfPoint(PerfKey::CLIENT_HCCL_WARMUP_IN_RECV);
-        return comm->WarmUpComm(HcclCommDirection::RECV);
+        return comm->WarmUpComm(CommDirection::RECV);
     };
     auto commPtr = comm;
     comm->Execute([this, commPtr, process, traceId]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         constexpr int32_t timeoutMs = 60 * 1000;
         this->AsyncRetryWithTimeout(
-            commPtr, process, [this](auto comm) { return this->CreateHcclCommCheckError(comm); }, timeoutMs,
+            commPtr, process, [this](auto comm) { return this->CreateCommCheckError(comm); }, timeoutMs,
             { StatusCode::K_CLIENT_DEADLOCK },
             [this](auto comm, Status result, Status checkRc) {
                 this->StatusComparisonWithSetStatus(comm, result, checkRc);
@@ -310,39 +266,39 @@ void HcclCommFactory::CreateHcclCommInRecv(int32_t localDeviceId, const std::str
     });
 }
 
-std::vector<std::shared_ptr<CommWrapperBase>> HcclCommFactory::GetAllHcclComm()
+std::vector<std::shared_ptr<CommWrapperBase>> CommFactory::GetAllComm()
 {
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-    std::vector<std::shared_ptr<CommWrapperBase>> hcclCommVec;
-    hcclCommVec.reserve(commTable_.size());
+    std::vector<std::shared_ptr<CommWrapperBase>> commVec;
+    commVec.reserve(commTable_.size());
     for (auto &iter : commTable_) {
         if (iter.second != nullptr) {
-            hcclCommVec.emplace_back(iter.second);
+            commVec.emplace_back(iter.second);
         }
     }
-    return hcclCommVec;
+    return commVec;
 }
 
-Status HcclCommFactory::DelComm(std::string commId)
+Status CommFactory::DelComm(std::string commId)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    TbbHcclCommTable::accessor acc;
+    TbbCommTable::accessor acc;
     if (commTable_.find(acc, commId)) {
         (void)commTable_.erase(acc);
     }
     return Status::OK();
 }
 
-size_t HcclCommFactory::GetHcclCommSize()
+size_t CommFactory::GetCommSize()
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     return commTable_.size();
 }
 
-void HcclCommFactory::DestroyHcclComm(std::string commId)
+void CommFactory::DestroyComm(std::string commId)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    TbbHcclCommTable::accessor acc;
+    TbbCommTable::accessor acc;
     if (commTable_.find(acc, commId)) {
         auto comm = acc->second;
         comm->ShutDown();
@@ -350,7 +306,7 @@ void HcclCommFactory::DestroyHcclComm(std::string commId)
     }
 }
 
-std::string HcclCommFactory::GetSubCommIdForIdentifier(std::shared_ptr<CommWrapperBase> &comm)
+std::string CommFactory::GetSubCommIdForIdentifier(std::shared_ptr<CommWrapperBase> &comm)
 {
     const size_t SUB_STR_LENGTH = 7;
     std::string commId = comm->GetCommId();
@@ -358,5 +314,57 @@ std::string HcclCommFactory::GetSubCommIdForIdentifier(std::shared_ptr<CommWrapp
         return FormatString("[%s]", commId.substr(0, SUB_STR_LENGTH));
     }
     return FormatString("[%s]", commId);
+}
+
+Status CommFactory::ProcessCommCreationInSend(std::shared_ptr<CommWrapperBase> comm, int32_t localDeviceId,
+                                              int32_t remoteDeviceId, const std::string &remoteClientId,
+                                              bool isSameNode, const std::string &traceId)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+    TraceGuard subTraceGuard = Trace::Instance().SetSubTraceID(GetSubCommIdForIdentifier(comm));
+    INJECT_POINT("CreateCommInSend.sleep");
+    PerfPoint point(PerfKey::CLIENT_CREATE_HCCL_IN_SEND);
+    auto localClientId = clientWorkerApi_->clientId_;
+    auto peerId = GetPeerId(localClientId, localDeviceId, remoteClientId, remoteDeviceId);
+    VLOG(1) << FormatString("Sender try to acquire write lock, peerId: %s", peerId);
+    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+
+    LOG(INFO) << FormatString("Start to recv RootInfo from worker, peerId: %s", peerId);
+    RecvRootInfoReqPb rootInfoReq;
+    rootInfoReq.set_dst_client_id(remoteClientId);
+    rootInfoReq.set_dst_device_id(remoteDeviceId);
+    rootInfoReq.set_src_client_id(localClientId);
+    rootInfoReq.set_src_device_id(localDeviceId);
+    RecvRootInfoRspPb rootInfoResp;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clientWorkerApi_->RecvRootInfo(rootInfoReq, rootInfoResp),
+                                     "Failed with receive");
+    if (rootInfoResp.is_dead_lock()) {
+        std::string msg = "Deadlock detected, releasing lock and retrying.";
+        LOG(WARNING) << msg;
+        RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_CLIENT_DEADLOCK, msg)));
+    }
+
+    CommRootInfo rootInfo;
+    if (rootInfoResp.root_info().length() != sizeof(rootInfo.data)) {
+        std::string msg = FormatString(
+            "The rsp rootInfo size is not as expected: %d, which usually indicates that the receiver "
+            "did not send the rootInfo properly. Check if there are any errors on the receiver side, peerId: %s",
+            rootInfoResp.root_info().length(),
+            peerId);
+        RETURN_IF_NOT_OK(SetStateIfError(comm, Status(K_RUNTIME_ERROR, msg)));
+    }
+    auto ret = memcpy_s(static_cast<void *>(rootInfo.data),
+        sizeof(rootInfo.data),
+        static_cast<const void *>(rootInfoResp.root_info().c_str()),
+        rootInfoResp.root_info().length());
+    if (ret != EOK) {
+        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Copy root info failed, the memcpy_s return: %d", ret));
+    }
+    LOG(INFO) << "Start init hccl comm";
+    PrintRootInfo(rootInfo);
+    auto rc = comm->InitCommunicator(rootInfo, CommDirection::SEND, isSameNode);
+    RETURN_IF_NOT_OK(SetStateIfError(comm, rc));
+    PerfPoint perfPoint(PerfKey::CLIENT_HCCL_WARMUP_IN_SEND);
+    return comm->WarmUpComm(CommDirection::SEND);
 }
 }  // namespace datasystem

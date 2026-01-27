@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/device/ascend/comm_wrapper_base.h"
+#include "datasystem/common/device/comm_wrapper_base.h"
 
 #include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
@@ -32,11 +32,11 @@ CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, i
       commId_(commId),
       localDeviceIdx_(localDeviceId),
       remoteDeviceIdx_(remoteDeviceId),
-      hcclCommState_(HcclCommState::UNCREATE),
-      hcclThreadControl_(threadControl)
+      commState_(CommState::UNCREATE),
+      commThreadControl_(threadControl)
 {
     deviceImpl_ = DeviceManagerFactory::GetDeviceManager();
-    std::tie(bindThreadId_, pool_) = hcclThreadControl_->AssignThreadToComm(commId_);
+    std::tie(bindThreadId_, pool_) = commThreadControl_->AssignThreadToComm(commId_);
     if (bindThreadId_ == -1 || pool_ == nullptr) {
         LOG(ERROR) << "Comm object init error with commId : " << commId;
         return;
@@ -50,7 +50,7 @@ CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, i
     };
     pool_->Execute([func]() { (void)func(); });
 
-    hcclDetailState_ = Status::OK();
+    commDetailState_ = Status::OK();
 }
 
 CommWrapperBase::~CommWrapperBase()
@@ -100,28 +100,28 @@ void CommWrapperBase::AddReadyCallback(std::function<void()> callback)
 void CommWrapperBase::SetStatus(const Status &commStatus)
 {
     if (commStatus.IsOk()) {
-        hcclCommState_ = HcclCommState::VALID;
+        commState_ = CommState::VALID;
     } else {
-        hcclCommState_ = HcclCommState::INVALID;
+        commState_ = CommState::INVALID;
     }
 }
 
 Status CommWrapperBase::GetDetailStatus() const
 {
-    std::lock_guard<std::mutex> lock(hcclDetailStateMutex_);
-    return hcclDetailState_;
+    std::lock_guard<std::mutex> lock(commDetailStateMutex_);
+    return commDetailState_;
 }
 
-HcclCommState CommWrapperBase::GetCommStatus() const
+CommState CommWrapperBase::GetCommStatus() const
 {
-    return hcclCommState_;
+    return commState_;
 }
 
-void CommWrapperBase::SetHcclDetailState(Status result)
+void CommWrapperBase::SetDetailStatus(const Status &result)
 {
-    std::lock_guard<std::mutex> lock(hcclDetailStateMutex_);
-    if (hcclDetailState_.IsOk()) {
-        hcclDetailState_ = result;
+    std::lock_guard<std::mutex> lock(commDetailStateMutex_);
+    if (commDetailState_.IsOk()) {
+        commDetailState_ = result;
     }
 }
 
@@ -157,15 +157,15 @@ Status CommWrapperBase::CheckHealth(uint32_t createTimeoutMs)
         return false;
     };
     if (injectTest()) {
-        returnRc = HcclCommState::INVALID;
+        returnRc = CommState::INVALID;
     }
-    if (returnRc == HcclCommState::CREATING) {
+    if (returnRc == CommState::CREATING) {
         if (commDuration.count() >= createTimeoutMs) {
             std::string errorMsg = FormatString("HcclComm with %s create timeout in %d ms", commId_, createTimeoutMs);
             return Status(K_HCCL_ERROR, errorMsg);
         }
         // created, and a fault is found when it is called
-    } else if (returnRc == HcclCommState::INVALID) {
+    } else if (returnRc == CommState::INVALID) {
         std::string errorMsg =
             FormatString("HcclComm with %s have error, HcclResult error code is %d", commId_, GetDetailStatus());
         return Status(K_HCCL_ERROR, errorMsg);
@@ -173,9 +173,9 @@ Status CommWrapperBase::CheckHealth(uint32_t createTimeoutMs)
     return Status::OK();
 }
 
-Status CommWrapperBase::InitPipeline(HcclCommDirection direction)
+Status CommWrapperBase::InitPipeline(CommDirection direction)
 {
-    if (direction == HcclCommDirection::SEND) {
+    if (direction == CommDirection::SEND) {
         sender_ = std::make_unique<acl::PipeLineP2PSend>(aclResourceMgr_);
         return sender_->Init(resource_);
     } else {

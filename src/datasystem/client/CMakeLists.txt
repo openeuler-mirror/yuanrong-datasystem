@@ -13,7 +13,7 @@ list(APPEND CLIENT_SRCS
         object_cache/client_memory_ref_table.cpp
         object_cache/device/client_device_object_manager.cpp
         object_cache/device/p2p_subscribe.cpp
-        object_cache/device/hccl_comm_factory.cpp
+        object_cache/device/comm_factory.cpp
         object_cache/device/future.cpp
         object_cache/device/device_memory_unit.cpp
         object_cache/device/hccl_comm_magr.cpp
@@ -52,6 +52,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         share_memory_protos_client
         worker_object_protos_client
         worker_stream_protos_client
+        common_device
         common_acl_device
         common_shared_memory
         common_rdma

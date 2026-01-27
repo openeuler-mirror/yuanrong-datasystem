@@ -29,7 +29,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/thread_pool.h"
 

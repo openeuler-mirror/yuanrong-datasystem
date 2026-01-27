@@ -27,7 +27,7 @@
 #include "common.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/utils/status.h"

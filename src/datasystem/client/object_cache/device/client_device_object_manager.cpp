@@ -53,7 +53,7 @@ Status ClientDeviceObjectManager::Init()
     devInterImpl_ = DeviceManagerFactory::GetDeviceManager();
     std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
-    commFactory_ = std::make_shared<HcclCommFactory>(workerApi, &aclResourceMgr_);
+    commFactory_ = std::make_shared<CommFactory>(workerApi, &aclResourceMgr_);
     swapOutPool_ = std::make_unique<AsyncAclMemCopyPool>(&aclResourceMgr_);
     swapInPool_ = std::make_unique<AsyncAclMemCopyPool>(&aclResourceMgr_);
     return Status::OK();

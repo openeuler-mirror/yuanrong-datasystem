@@ -22,7 +22,7 @@
 #include <mutex>
 #include <numeric>
 
-#include "datasystem/common/device/ascend/comm_wrapper_base.h"
+#include "datasystem/common/device/comm_wrapper_base.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -32,7 +32,7 @@ namespace acl {
 namespace {
 bool EnableMerge(const std::vector<Blob> blobs)
 {
-    if (blobs.size() <= 1) {
+    if (blobs.size() <= 1 || USE_GPU) {
         return false;
     }
 
