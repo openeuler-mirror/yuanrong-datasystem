@@ -83,7 +83,12 @@ Status UcpManager::UcpCreateContext()
     ucp_config_t *config = nullptr;
     ucs_status_t configRet = ucp_config_read(nullptr, nullptr, &config);
     if (configRet != UCS_OK) {
-        RETURN_STATUS_LOG_ERROR(K_RDMA_ERROR, FormatString("Failed to read UCX config, ret = %d", configRet));
+        RETURN_STATUS_LOG_ERROR(
+            K_RDMA_ERROR,
+            FormatString(
+                "Failed to read UCX config, ret = %d. Possible causes: RDMA driver or UCX dependencies are missing or "
+                "incomplete. Set UCX_LOG_FILE to capture detailed UCX logs.",
+                configRet));
     }
     ucp_params_t params;
     memset_s(&params, sizeof(params), 0, sizeof(params));
