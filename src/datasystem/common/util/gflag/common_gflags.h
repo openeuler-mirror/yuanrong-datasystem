@@ -33,5 +33,4 @@ DS_DECLARE_bool(enable_urma);
 DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
-DS_DECLARE_bool(enable_remote_h2d);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

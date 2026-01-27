@@ -23,6 +23,9 @@
 #include <sys/mman.h>
 #include <tuple>
 #include <vector>
+#include <thread>
+
+#include <re2/re2.h>
 
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -33,9 +36,12 @@
 #include "datasystem/object/buffer.h"
 #include "datasystem/utils/status.h"
 
-DS_DEFINE_uint32(remote_h2d_device_id, 3, "The npu device id for remote h2d purposes, default to 2.");
+DS_DEFINE_string(remote_h2d_device_ids, "",
+                 "The NPU device ids to be used for Remote H2D purposes given as a list of comma seperated values");
 
 namespace datasystem {
+bool RemoteH2DManager::enableRemoteH2D_ = false;
+
 HostSegment::HostSegment(std::byte *data, std::uint64_t dataSize, P2pSegmentInfo segmentInfo,
                          P2pSegmentPermissions permissions)
     : data{ data }, dataSize{ dataSize }, segmentInfo{ segmentInfo }, permissions{ permissions }
@@ -62,20 +68,43 @@ RemoteH2DManager &RemoteH2DManager::Instance()
 void RemoteH2DManager::SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId)
 {
     // Note: The parameter needs to be consistent in the same client process.
-    FLAGS_enable_remote_h2d = enableRemoteH2D;
-    FLAGS_remote_h2d_device_id = devId;
+    enableRemoteH2D_ = enableRemoteH2D;
+    FLAGS_remote_h2d_device_ids = std::to_string(devId);
 }
 
 bool RemoteH2DManager::IsRemoteH2DEnabled()
 {
-    return FLAGS_enable_remote_h2d;
+    if (!FLAGS_remote_h2d_device_ids.empty()) {
+        enableRemoteH2D_ = true;
+    }
+    return enableRemoteH2D_;
 }
 
-Status RemoteH2DManager::SetDeviceIdx()
+Status RemoteH2DManager::SetDeviceIdx(std::optional<int32_t> specifiedDevId)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    int32_t devId;
+
     // Assume one process works with only one device index.
-    auto devId = FLAGS_remote_h2d_device_id;
+    if (!specifiedDevId || *specifiedDevId < 0) {
+        try {
+            devId = stoi(FLAGS_remote_h2d_device_ids);
+        } catch (const std::invalid_argument &e) {
+            RETURN_STATUS(StatusCode::K_INVALID, "Invalid Remote H2D device ids set: " + FLAGS_remote_h2d_device_ids);
+        } catch (const std::out_of_range &e) {
+            RETURN_STATUS(StatusCode::K_INVALID, "Remote H2D device id out of range: " + FLAGS_remote_h2d_device_ids);
+        }
+    } else {
+        devId = *specifiedDevId;
+    }
+
+    uint32_t npuCount;
+    RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->aclrtGetDeviceCount(&npuCount));
+    if (devId < 0 || devId > static_cast<int32_t>(npuCount)) {
+        RETURN_STATUS(StatusCode::K_INVALID, "Invalid device id: " + std::to_string(devId) +
+                                             ". Total NPU Count: " + std::to_string(npuCount));
+    }
+
     RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->SetDeviceIdx(devId));
     LOG(INFO) << "RemoteH2DManager::SetDeviceIdx set to " << devId;
     return Status::OK();
@@ -89,10 +118,52 @@ Status RemoteH2DManager::GetClientCommUuid(std::string &commId)
     return Status::OK();
 }
 
-Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo)
+Status RemoteH2DManager::GetWorkerDeviceIds(std::vector<int32_t> *devIds)
+{
+    // Parse gflag for worker device ids if empty
+    if (workerDeviceIds_.empty()) {
+        std::string devIdStr = FLAGS_remote_h2d_device_ids;
+        RE2 pattern("^\\d+(,\\s*\\d+)*$");
+        if (!RE2::FullMatch(devIdStr, pattern)) {
+            RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid form: " + devIdStr +
+                                     ". Must use form \"1, 2, 3\"");
+        }
+
+        size_t start = 0;
+        uint32_t npuCount;
+        RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->aclrtGetDeviceCount(&npuCount));
+
+        while (start < devIdStr.size()) {
+            size_t end = devIdStr.find(',', start);
+            try {
+                workerDeviceIds_.push_back(std::stoi(devIdStr.substr(start, end - start)));
+            } catch (const std::invalid_argument& e) {
+                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid form: " + devIdStr +
+                                         ". Must use form \"1, 2, 3\"");
+            } catch (const std::out_of_range& e) {
+                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag contains out of range number: " + devIdStr);
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            if (workerDeviceIds_[workerDeviceIds_.size() - 1] >= int32_t(npuCount)) {
+                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid id: " +
+                                         std::to_string(workerDeviceIds_[workerDeviceIds_.size() - 1]) +
+                                         ". Total NPU count: " + std::to_string(npuCount));
+            }
+            start = end + 1;
+        }
+    }
+    if (devIds != nullptr) {
+        *devIds = workerDeviceIds_;
+    }
+    return Status::OK();
+}
+
+Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo, int32_t devId)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(SetDeviceIdx());
+    RETURN_IF_NOT_OK(SetDeviceIdx(devId));
     {
         std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
         CommunicatorMap::ConstAccessor constAccessor;
@@ -123,10 +194,10 @@ Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInf
 }
 
 Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo,
-                                             P2pKind kind, std::shared_ptr<RemoteH2DContext> &p2pComm)
+                                             P2pKind kind, std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(SetDeviceIdx());
+    RETURN_IF_NOT_OK(SetDeviceIdx(devId));
     std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
 
     PerfPoint point(PerfKey::P2P_COMM_INIT_ROOT);
@@ -162,6 +233,17 @@ Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const Remot
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
         p2pComm->stream = std::make_shared<aclrtStream>();
         RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get()));
+        if (devId == -1) {
+            try {
+                p2pComm->devId = stoi(FLAGS_remote_h2d_device_ids);
+            } catch (const std::invalid_argument& e) {
+                RETURN_STATUS(StatusCode::K_INVALID, "Invalid RemoteH2D dev ids set: " + FLAGS_remote_h2d_device_ids);
+            } catch (const std::out_of_range &e) {
+                RETURN_STATUS(StatusCode::K_INVALID, "RemoteH2D dev id out of range: " + FLAGS_remote_h2d_device_ids);
+            }
+        } else {
+            p2pComm->devId = devId;
+        }
         communicatorMap_->Find(accessor, key);
         p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZED;
         p2pComm->waitPost.Set();
@@ -180,45 +262,69 @@ Status RemoteH2DManager::RegisterHostMemory(void *data, uint64_t dataSize)
     // Pin the mmaped memory so it can be registered to NPU device.
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(mlock(data, dataSize) == 0, K_RUNTIME_ERROR, "Failed to lock physical pages.");
     LOG(INFO) << "RemoteH2DManager::RegisterHostMemory mlock done";
+    RETURN_IF_NOT_OK(GetWorkerDeviceIds());
 
-    uint64_t castedData = reinterpret_cast<uint64_t>(data);
-    std::shared_lock<std::shared_timed_mutex> l(segmentMutex_);
-    HostSegmentMap::Accessor accessor;
-    if (!hostSegmentMap_->Find(accessor, castedData)) {
-        if (hostSegmentMap_->Insert(accessor, castedData)) {
-            bool needRollback = true;
-            Raii eraseRaii([this, &needRollback, &accessor]() {
-                if (needRollback) {
-                    hostSegmentMap_->BlockingErase(accessor);
-                }
-            });
-            P2pSegmentInfo segmentInfo;
-            P2pSegmentPermissions permissions = P2pSegmentPermissions::P2P_SEGMENT_READ_WRITE;
-            RETURN_IF_NOT_OK(
-                acl::AclDeviceManager::Instance()->DSP2PRegisterHostMem(data, dataSize, &segmentInfo, permissions));
-            // Create Host Segment
-            std::shared_ptr<HostSegment> hostSegment;
-            HostSegment::Create(hostSegment, reinterpret_cast<std::byte *>(data), dataSize, segmentInfo, permissions);
-            accessor.entry->data = hostSegment;
-            needRollback = false;
+    std::vector<std::future<Status>> futures;
+    auto pool = std::make_unique<ThreadPool>(workerDeviceIds_.size(), workerDeviceIds_.size(), "", false, 10 * 1000);
+
+    // Register Host Memory on all allowed devices
+    for (const int32_t &devId : workerDeviceIds_) {
+        futures.emplace_back(pool->Submit([this, devId, data, dataSize] {
+            RETURN_IF_NOT_OK(SetDeviceIdx(devId));
+
+            uint64_t castedData = reinterpret_cast<uint64_t>(data);
+            std::shared_lock<std::shared_timed_mutex> l(segmentMutex_);
+            HostSegmentMap::Accessor accessor;
+            
+            // Insert devId mapping if not yet inserted
+            if (!hostSegmentMap_->Find(accessor, devId)) {
+                RETURN_OK_IF_TRUE(!hostSegmentMap_->Insert(accessor, devId));
+            }
+
+            if (accessor.entry->data.find(castedData) == accessor.entry->data.end()) {
+                bool needRollback = true;
+                Raii eraseRaii([this, &needRollback, &accessor]() {
+                    if (needRollback) {
+                        hostSegmentMap_->BlockingErase(accessor);
+                    }
+                });
+                P2pSegmentInfo segmentInfo;
+                P2pSegmentPermissions permissions = P2pSegmentPermissions::P2P_SEGMENT_READ_WRITE;
+                RETURN_IF_NOT_OK(
+                    acl::AclDeviceManager::Instance()->DSP2PRegisterHostMem(data, dataSize, &segmentInfo, permissions));
+
+                // Create Host Segment
+                std::shared_ptr<HostSegment> hostSegment;
+                HostSegment::Create(hostSegment, reinterpret_cast<std::byte *>(data), dataSize, segmentInfo,
+                                    permissions);
+                accessor.entry->data[castedData] = hostSegment;
+                needRollback = false;
+            }
+
+            return Status::OK();
+        }));
+    }
+    for (auto &future : futures) {
+        if (!future.get().IsOk()) {
+            LOG(ERROR) << "RegisterHostMemory failed";
         }
     }
     return Status::OK();
 }
 
 Status RemoteH2DManager::FillSegmentInfo(uint64_t segLen, uint64_t segDataOffset, uint64_t key,
-                                         RemoteHostSegmentPb &segmentPb)
+                                         RemoteHostSegmentPb &segmentPb, int32_t devId)
 {
     HostSegmentMap::Accessor accessor;
-    if (hostSegmentMap_->Find(accessor, key)) {
-        auto &segInfo = accessor.entry->data->segmentInfo;
+    if (hostSegmentMap_->Find(accessor, devId)) {
+        auto &segInfo = accessor.entry->data[key]->segmentInfo;
         segmentPb.set_name(std::string(std::begin(segInfo.internal), std::end(segInfo.internal)));
         segmentPb.set_seg_va(key);
         segmentPb.set_seg_len(segLen);
         segmentPb.set_seg_data_offset(segDataOffset);
         return Status::OK();
     }
-    return Status(K_NOT_FOUND, FormatString("Cannot find segment for address %zu", key));
+    return Status(K_NOT_FOUND, FormatString("Cannot find segment for devId %d at address %zu", devId, key));
 }
 
 Status RemoteH2DManager::Init()
@@ -338,6 +444,8 @@ RemoteH2DManager::~RemoteH2DManager()
 RemoteH2DContext::~RemoteH2DContext()
 {
     if (p2pComm) {
+        LOG_IF_ERROR(acl::AclDeviceManager::Instance()->SetDeviceIdx(devId),
+                     "Failed to set device id to " + std::to_string(devId));
         LOG_IF_ERROR(acl::AclDeviceManager::Instance()->DSP2PCommDestroy(p2pComm), "Destroy P2P comm failed.");
     }
     if (stream) {

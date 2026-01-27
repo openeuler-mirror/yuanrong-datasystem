@@ -28,6 +28,7 @@
 #include "p2p.h"
 #include "runtime/dev.h"
 #include "npu/RdmaDev.h"
+#include "hccl/adapter_rts_common.h"
 
 // Later make all configurable
 constexpr uint32_t P2P_NUM_PINGPONG_BUFF = 2;
@@ -81,7 +82,7 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
     }
 
     int32_t deviceId;
-    ACL_CHECK_HCCL(aclrtGetDevice(&deviceId));
+    ACL_CHECK_HCCL(hrtGetDeviceRefresh(&deviceId));
 
     // Spin up hccp
     std::shared_ptr<RdmaAgent> agent;
@@ -328,7 +329,7 @@ HcclResult P2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segm
                               P2pSegmentPermissions permissions)
 {
     int32_t deviceId;
-    ACL_CHECK_HCCL(aclrtGetDevice(&deviceId));
+    ACL_CHECK_HCCL(hrtGetDeviceRefresh(&deviceId));
 
     // Spin up hccp
     std::shared_ptr<RdmaAgent> agent;
@@ -359,7 +360,7 @@ HcclResult P2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segm
 HcclResult P2PImportHostSegment(P2pSegmentInfo segmentInfo)
 {
     int32_t deviceId;
-    ACL_CHECK_HCCL(aclrtGetDevice(&deviceId));
+    ACL_CHECK_HCCL(hrtGetDeviceRefresh(&deviceId));
 
     // Spin up hccp
     std::shared_ptr<RdmaAgent> agent;

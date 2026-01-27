@@ -103,10 +103,6 @@
         "value": "4",
         "description": "The shared page group count for each remote worker, should be in range [1, 64]."
     },
-    "enable_remote_h2d": {
-        "value": "false",
-        "description": "Option to turn on Remote H2D, default false."
-    },
     "sc_thread_num": {
         "value": "128",
         "description": "Number of threads for (non rpc) stream cache service work."
@@ -590,5 +586,9 @@
     "yuanrong_iam_passphrase": {
         "value": "",
         "description": "File path of tls pwd, optional for yuanrong iam. Use standard characters only. if ca , cert, key is all empty, connect with yuanrong iam without tls."
+    },
+    "remote_h2d_device_ids": {
+        "value": "",
+        "description": "The NPU device ids to be used for Remote H2D purposes given as a list of comma seperated values, default is none. Assigning values enables RemoteH2D."
     }
 }

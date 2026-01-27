@@ -7,6 +7,7 @@
 #include "hccl/hccl_network_pub.h"
 #include "hccl/adapter_hccp_common.h"
 #include "runtime/dev.h"
+#include "hccl/adapter_rts_common.h"
 
 std::shared_ptr<RdmaAgent> RdmaAgent::instances[MAX_LOCAL_DEVICES];
 std::mutex RdmaAgent::instanceMutex;
@@ -21,7 +22,7 @@ Status RdmaAgent::GetInstance(uint32_t deviceId, std::shared_ptr<RdmaAgent> &out
 
     if (!instances[deviceId]) {
         uint32_t phyId;
-        ACL_CHECK_STATUS(rtGetDevicePhyIdByIndex(deviceId, &phyId));
+        ACL_CHECK_STATUS(hrtGetDevicePhyIdByIndex(deviceId, phyId, true));
         instances[deviceId] = std::make_shared<RdmaAgent>(deviceId, phyId);
         CHECK_STATUS(instances[deviceId]->init());
     }

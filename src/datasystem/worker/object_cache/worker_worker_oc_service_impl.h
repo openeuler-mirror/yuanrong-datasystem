@@ -251,6 +251,8 @@ private:
     EtcdStore *etcdStore_;  // pointer to EtcdStore
     EtcdClusterManager *etcdCm_;
     std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
+    tbb::concurrent_hash_map<std::string, int32_t> commDevIdMap_;
+    std::atomic<unsigned int> nextDevIdIndex_{0}; // Index for next devId in worker device ids from RemoteH2DManager
 };
 }  // namespace object_cache
 }  // namespace datasystem

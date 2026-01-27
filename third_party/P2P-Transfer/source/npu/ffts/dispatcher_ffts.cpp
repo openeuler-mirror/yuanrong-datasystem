@@ -77,7 +77,6 @@ HcclResult hrtGetRdmaDoorbellAddr(int32_t devLogID, int64_t chipID, uint32_t dbI
 
 DeviceType parseDeviceType(const std::string &deviceString)
 {
-    std::cout << "parsing " << deviceString << std::endl;
     if (deviceString == "Ascend910B1" || deviceString == "Ascend910B2" || deviceString == "Ascend910B2C"
         || deviceString == "Ascend910B3" || deviceString == "Ascend910B4" || deviceString == "Ascend910B4-1") {
         return DeviceType::Dev910B;
