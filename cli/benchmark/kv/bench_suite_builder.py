@@ -205,7 +205,7 @@ class KVBenchSuiteBuilder:
         self, kv_args: KVArgs, testcase_index: int
     ) -> BenchTestCase:
         args = self.bench_args.args
-        name = f"{args.prefix}_n{args.num}_{args.size}_b{args.batch_num}_t{args.thread_num}"
+        name = f"{args.prefix}_n{kv_args.num}_{kv_args.size}_b{kv_args.batch_num}_t{kv_args.thread_num}"
         testcase = KVBenchTestCase(name, self.bench_args, self.handler, testcase_index)
         testcase.add_set_task(kv_args)
         testcase.add_get_task(kv_args)

@@ -59,10 +59,38 @@ class KVBenchTestCase(BenchTestCase):
         self.program = "dsbench_cpp"
         self.command = "kv"
 
+    def _get_relative_path(self, subpath: str = "") -> str:
+        """Generates a relative path based on whether current directory is under user's home directory.
+        
+        Args:
+            subpath: Optional subpath to append to the generated path
+            
+        Returns:
+            A relative path that can be used for remote commands
+        """
+        # Check if current directory is under user's home directory
+        home_dir = os.path.expanduser("~")
+        cwd = self.bench_args.cwd
+        # Normalize paths to handle trailing slashes and case differences
+        home_dir = os.path.normpath(home_dir)
+        cwd = os.path.normpath(cwd)
+        # Check if current directory is under home
+        is_under_home = cwd.startswith(home_dir)
+
+        if is_under_home:
+            # Compute relative path from home to log_dir
+            log_dir_rel = os.path.relpath(self.bench_args.log_dir, home_dir)
+            # Set path to ~/relative_path/name/subpath
+            return f"~/{log_dir_rel}/{self.name}/{subpath}"
+        else:
+            # Use just the directory name
+            log_dir_name = os.path.basename(self.bench_args.log_dir)
+            return f"{log_dir_name}/{self.name}/{subpath}"
+
     def to_base_command_args(self, kv_args: KVArgs):
         """Builds a base dictionary of command-line arguments for the benchmark."""
         args = self.bench_args.args
-        perf_path = f"{self.bench_args.log_dir}/{self.name}/perf.log"
+        perf_path = self._get_relative_path("perf.log")
 
         raw_workers = f"{args.set_worker_addresses},{args.get_worker_addresses}"
         unique_workers = (
@@ -112,7 +140,21 @@ class KVBenchTestCase(BenchTestCase):
             )
             return
 
+        # Generate remote info first to know if it's a remote command
+        remote = self.generate_remote_info(worker_address)
+
         env = self.generate_env()
+
+        # For remote commands, adjust DATASYSTEM_CLIENT_LOG_DIR based on current directory
+        if remote:
+            # Use the helper method to get the relative path
+            log_dir = self._get_relative_path()
+            # Remove trailing slash if present
+            log_dir = log_dir.rstrip("/")
+            # Remove ~/ prefix for DATASYSTEM_CLIENT_LOG_DIR
+            log_dir = log_dir.lstrip("~/")
+            env["DATASYSTEM_CLIENT_LOG_DIR"] = log_dir
+
         datasystem_location = executor.get_datasystem_pkg_location(worker_address)
 
         if not datasystem_location:
@@ -135,8 +177,6 @@ class KVBenchTestCase(BenchTestCase):
             executable_bin_path = f"{datasystem_location}/yr/datasystem/dsbench_cpp"
 
         command_str = self.generate_commands(command_args, bin_path=executable_bin_path)
-
-        remote = self.generate_remote_info(worker_address)
 
         task = BenchCommandTask(command_str, env, remote, worker_address)
         self.add_task(task)
