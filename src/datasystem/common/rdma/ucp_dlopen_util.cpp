@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,11 @@
 
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
 
-#include <bit>
 #include <climits>
 #include <dlfcn.h>
 #include <link.h>
+
+#include "securec.h"
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -56,6 +57,7 @@ void *TryLoadLib(const char *const (&candidates)[N])
     }
     return handle;
 }
+
 // Load a raw symbol pointer from the already-open libucp handle.
 // Returns nullptr and logs on failure. Only used for UCP symbols.
 void *LoadUcpSymbol(const char *name)
@@ -102,7 +104,13 @@ Fn LoadFn(const char *name)
     if (!sym) {
         return nullptr;
     }
-    return std::bit_cast<Fn>(sym);
+    Fn fn = nullptr;
+    int ret = memcpy_s(&fn, sizeof(Fn), &sym, sizeof(void *));
+    if (ret != 0) {
+        LOG(ERROR) << "[UcpDlopen] memcpy_s failed while casting UCP symbol: " << ret;
+        return nullptr;
+    }
+    return fn;
 }
 
 template <typename Fn>
@@ -112,7 +120,13 @@ Fn LoadFnUcs(const char *name)
     if (!sym) {
         return nullptr;
     }
-    return std::bit_cast<Fn>(sym);
+    Fn fn = nullptr;
+    int ret = memcpy_s(&fn, sizeof(Fn), &sym, sizeof(void *));
+    if (ret != 0) {
+        LOG(ERROR) << "[UcpDlopen] memcpy_s failed while casting UCS symbol: " << ret;
+        return nullptr;
+    }
+    return fn;
 }
 
 template <typename Ret, typename Fn, typename... Args>
