@@ -100,10 +100,6 @@ private:
      */
     std::shared_ptr<UcpEndpoint> GetOrCreateEndpoint(const std::string &ipAddr, const std::string &remoteWorkerAddr);
 
-    /**
-     * @brief asynchronous put events to log so manager can read the status of the put action
-     */
-    void Wait(void *request);
     void Clean();
 
     static void CallBack(void *request, ucs_status_t status, void *userData);

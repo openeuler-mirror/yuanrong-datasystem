@@ -96,14 +96,9 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSeg
     }
     point.RecordAndReset(PerfKey::RDMA_UCP_WORKER_WRITE);
 
-    Status status = ucpEp->UnpackRkey(remoteRkey);
-    if (status.IsError()) {
-        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
-    }
-    const ucp_rkey_h &rkey = ucpEp->GetUnpackedRkey();
-
+    ucp_rkey_h rkey = ucpEp->GetOrUnpackRkey(remoteRkey);
     if (rkey == nullptr) {
-        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to unpack rkey.");
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to get an unpack rkey.");
     }
 
     ucp_request_param_t putParam{};
