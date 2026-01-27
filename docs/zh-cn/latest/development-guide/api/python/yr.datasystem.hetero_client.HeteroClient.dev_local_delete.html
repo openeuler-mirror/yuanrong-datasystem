@@ -514,7 +514,7 @@ document.write(`
 <p>dev_local_delete 与 dev_mset / dev_mget 接口配套使用。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><ul class="simple">

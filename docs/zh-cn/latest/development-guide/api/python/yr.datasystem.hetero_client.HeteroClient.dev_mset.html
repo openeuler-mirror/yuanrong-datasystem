@@ -515,7 +515,7 @@ document.write(`
 <p>dev_mget 后不会自动删除异构对象，如对象不再使用，可调用 dev_local_delete 或 dev_delete 删除。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>data_blob_list</strong> (list) - <a class="reference internal" href="yr.datasystem.hetero_client.DeviceBlobList.html#yr.datasystem.hetero_client.DeviceBlobList" title="yr.datasystem.hetero_client.DeviceBlobList"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.hetero_client.DeviceBlobList</span></code></a> 列表。</p></li>
 </ul>
 </dd>

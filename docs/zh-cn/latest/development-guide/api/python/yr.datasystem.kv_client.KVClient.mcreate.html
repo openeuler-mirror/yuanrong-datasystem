@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>yr.datasystem.object_client.ObjectClient.get &#8212; openYuanrong datasystem  documentation</title>
+    <title>yr.datasystem.kv_client.KVClient.mcreate &#8212; openYuanrong datasystem  documentation</title>
   
   
   
@@ -52,12 +52,10 @@
     <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.object_client.ObjectClient.get';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/python/yr.datasystem.kv_client.KVClient.mcreate';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="yr.datasystem.object_client.ObjectClient.g_increase_ref" href="yr.datasystem.object_client.ObjectClient.g_increase_ref.html" />
-    <link rel="prev" title="yr.datasystem.object_client.ObjectClient.put" href="yr.datasystem.object_client.ObjectClient.put.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   </head>
@@ -120,6 +118,8 @@
       
       
       
+        
+      
       <div class="bd-sidebar-primary bd-sidebar">
         
 
@@ -167,7 +167,7 @@
  </script></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <ul class="current nav bd-sidenav">
+        <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../../index.html">概述</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../getting-started/getting_started.html">入门</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../installation/installation_linux.html">安装</a></li>
@@ -182,15 +182,15 @@
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 </ul>
 </details></li>
-<li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2 has-children"><a class="reference internal" href="../../example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l3"><a class="reference internal" href="../../example/hetero.html">异构对象</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../../example/kv.html">KV</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../../example/object.html">Object</a></li>
 </ul>
 </details></li>
-<li class="toctree-l2 current active has-children"><a class="reference internal" href="../index.html">API</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
-<li class="toctree-l3 current active has-children"><a class="reference internal" href="index.html">Python</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 has-children"><a class="reference internal" href="../index.html">API</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l4 has-children"><a class="reference internal" href="yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
@@ -278,11 +278,11 @@
 </details></li>
 <li class="toctree-l4"><a class="reference internal" href="yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
 <li class="toctree-l4"><a class="reference internal" href="yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
-<li class="toctree-l4 current active has-children"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l4 has-children"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
-<li class="toctree-l5 current active"><a class="current reference internal" href="#">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
@@ -483,7 +483,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>yr.datasystem.object_client.ObjectClient.get</h1>
+    <h1>yr.datasystem.kv_client.KVClient.mcreate</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -493,7 +493,7 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.object_client.ObjectClient.get"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.object_client.ObjectClient.get()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.kv_client.KVClient.mcreate"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.KVClient.mcreate()</span></code></a></li>
 </ul>
             </nav>
         </div>
@@ -505,23 +505,25 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="yr-datasystem-object-client-objectclient-get">
-<h1>yr.datasystem.object_client.ObjectClient.get<a class="headerlink" href="#yr-datasystem-object-client-objectclient-get" title="Link to this heading">#</a></h1>
+  <section id="yr-datasystem-kv-client-kvclient-mcreate">
+<h1>yr.datasystem.kv_client.KVClient.mcreate<a class="headerlink" href="#yr-datasystem-kv-client-kvclient-mcreate" title="Link to this heading">#</a></h1>
 <dl class="py method">
-<dt class="sig sig-object py" id="yr.datasystem.object_client.ObjectClient.get">
-<span class="sig-prename descclassname"><span class="pre">yr.datasystem.object_client.ObjectClient.</span></span><span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">object_keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_timeout_ms</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.object_client.ObjectClient.get" title="Link to this definition">#</a></dt>
-<dd><p>获取给定列表对象 key 的Buffer。</p>
+<dt class="sig sig-object py" id="yr.datasystem.kv_client.KVClient.mcreate">
+<span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">mcreate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ttl_second</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient.mcreate" title="Link to this definition">#</a></dt>
+<dd><p>创建数据系统共享内存 Buffer ，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>object_keys</strong> (list) - 对象 key 列表。约束：传入的object key的数量 <cite>&lt;=10000</cite>。</p></li>
-<li><p><strong>sub_timeout_ms</strong> (int) - 订阅超时时间，当该值大于 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时，如果列表中有未存在的对象 key，则会在超时时间内等待对象创建并返回，如果超时时间到达之后对象仍未被创建，则返回空。默认值： <code class="docutils literal notranslate"><span class="pre">0</span></code> 。</p></li>
+<li><p><strong>keys</strong> (list) - 键列表。约束：传入的key的数量需要小于2千。</p></li>
+<li><p><strong>vals</strong> (list) - 值列表。</p></li>
+<li><p><strong>write_mode</strong> (<a class="reference internal" href="yr.datasystem.object_client.WriteMode.html#yr.datasystem.object_client.WriteMode" title="yr.datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.WriteMode</span></code></a>) - 控制数据是否写入二级缓存以增强数据可靠性。默认值：<code class="docutils literal notranslate"><span class="pre">WriteMode.NONE_L2_CACHE</span></code>。</p></li>
+<li><p><strong>ttl_second</strong> (int) - 控制数据的过期时间，超时会自动删除，单位为秒。0表示不会自动过期，需要通过调用 <a class="reference internal" href="yr.datasystem.kv_client.KVClient.delete.html#yr.datasystem.kv_client.KVClient.delete" title="yr.datasystem.kv_client.KVClient.delete"><code class="xref py py-func docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.KVClient.delete()</span></code></a> 接口删除 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 才能退出生命周期。默认值：<code class="docutils literal notranslate"><span class="pre">0</span></code>。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>buffers(list): 携带对象 key 列表对应值的 <a class="reference internal" href="yr.datasystem.object_client.Buffer.html#yr.datasystem.object_client.Buffer" title="yr.datasystem.object_client.Buffer"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.Buffer</span></code></a> 列表。</p>
+<dt>返回：</dt><dd><p><cite>StateValueBuffer</cite> 共享内存对象列表。</p>
 </dd>
 <dt>异常：</dt><dd><ul class="simple">
-<li><p><strong>TypeError</strong> - 输入参数存在非法值。</p></li>
-<li><p><strong>RuntimeError</strong> - 给定列表的对象 key 都未获取成功。</p></li>
+<li><p><strong>RuntimeError</strong> - 所有的键都设置失败。</p></li>
+<li><p><strong>TypeError</strong> - 输入参数校验失败，存在非法值。</p></li>
 </ul>
 </dd>
 </dl>
@@ -540,24 +542,6 @@ document.write(`
                 <footer class="prev-next-footer d-print-none">
                   
 <div class="prev-next-area">
-    <a class="left-prev"
-       href="yr.datasystem.object_client.ObjectClient.put.html"
-       title="previous page">
-      <i class="fa-solid fa-angle-left"></i>
-      <div class="prev-next-info">
-        <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">yr.datasystem.object_client.ObjectClient.put</p>
-      </div>
-    </a>
-    <a class="right-next"
-       href="yr.datasystem.object_client.ObjectClient.g_increase_ref.html"
-       title="next page">
-      <div class="prev-next-info">
-        <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">yr.datasystem.object_client.ObjectClient.g_increase_ref</p>
-      </div>
-      <i class="fa-solid fa-angle-right"></i>
-    </a>
 </div>
                 </footer>
               
@@ -574,7 +558,7 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.object_client.ObjectClient.get"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.object_client.ObjectClient.get()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#yr.datasystem.kv_client.KVClient.mcreate"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.KVClient.mcreate()</span></code></a></li>
 </ul>
   </nav></div>
 

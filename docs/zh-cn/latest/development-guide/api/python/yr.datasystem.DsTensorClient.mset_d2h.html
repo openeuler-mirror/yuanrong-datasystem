@@ -514,7 +514,7 @@ document.write(`
 <p>若 host 的 key 不再使用，可调用 delete 接口删除。</p>
 <dl>
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>tensors</strong> (list) - : mindspore或pytorch的Tensor列表。约束：Tensor的地址空间必须连续。</p></li>
 <li><p><strong>set_param</strong> (SetParam) - <a class="reference internal" href="yr.datasystem.kv_client.SetParam.html#yr.datasystem.kv_client.SetParam" title="yr.datasystem.kv_client.SetParam"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.SetParam</span></code></a>, key的设置参数, 默认为SetParam(),各属性如下:</p></li>
 </ul>

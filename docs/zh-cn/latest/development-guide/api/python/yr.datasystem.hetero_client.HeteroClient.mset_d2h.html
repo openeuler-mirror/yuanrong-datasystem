@@ -515,7 +515,7 @@ document.write(`
 mset_d2h 成功的数据是immutable的，不要对已存在的key set新值，否则新值不会生效。</p>
 <dl>
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>data_blob_list</strong> (list) - <a class="reference internal" href="yr.datasystem.hetero_client.DeviceBlobList.html#yr.datasystem.hetero_client.DeviceBlobList" title="yr.datasystem.hetero_client.DeviceBlobList"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.hetero_client.DeviceBlobList</span></code></a> 列表。</p></li>
 <li><p><strong>set_param</strong> (SetParam) - <a class="reference internal" href="yr.datasystem.kv_client.SetParam.html#yr.datasystem.kv_client.SetParam" title="yr.datasystem.kv_client.SetParam"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.SetParam</span></code></a>, key的设置参数, 默认为SetParam(),各属性如下:</p></li>
 </ul>

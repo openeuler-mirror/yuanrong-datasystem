@@ -515,7 +515,7 @@ document.write(`
 <p>dev_mget 后不会自动删除异构对象，如对象不再使用，可调用 dev_local_delete 或 dev_delete 删除。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>tensors</strong> (list) - : mindspore或pytorch的Tensor列表。约束：Tensor的地址空间必须连续。</p></li>
 </ul>
 </dd>

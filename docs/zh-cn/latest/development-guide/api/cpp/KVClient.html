@@ -657,7 +657,7 @@ document.write(`
 <dd><p>批量创建数据系统共享内存Buffer，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。该接口应用于避免创建临时内存，减少内存拷贝的场景。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">·-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节. key的最大个数为10,000，推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">·-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节. key的个数 <cite>&lt;=10000</cite>，推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>sizes</strong> - 设置共享内存Buffer的大小，以字节为单位. 该数组长度需要与 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 的长度相等。</p></li>
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
 <li><p><strong>buffers</strong> - 传出参数，表示创建好的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 数组，该数组的长度与 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 相等，索引位置一一对应，即每个 <code class="docutils literal notranslate"><span class="pre">buffers[i]</span></code> 的值与 <code class="docutils literal notranslate"><span class="pre">keys[i]</span></code> 相对应。</p></li>
@@ -688,7 +688,7 @@ document.write(`
 <dd><p>键值对批量设置接口。可批量设置键值对并返回失败的键。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节. key的最大个数为10,000，推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节. key的个数 <cite>&lt;=10000</cite>，推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>vals</strong> - 需要设置的一组key对应的value. 该数组长度需要与 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 的长度相等。</p></li>
 <li><p><strong>outFailedKeys</strong> - 传出参数，代表设置失败的key。</p></li>
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-MSetParam.html#_CPPv49MSetParam" title="MSetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">MSetParam</span></code></a> 章节。</p></li>
@@ -787,7 +787,7 @@ document.write(`
 <dd><p>批量获取数据。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。传入的key的个数 <cite>&lt;=10000</cite>，推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>subTimeoutMs</strong> - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。</p></li>
 <li><p><strong>vals</strong> - 传出参数，返回一组获取的数据。若有部分数据获取不成功，则对应位置的vector的对象为空。</p></li>
 </ul>
@@ -851,7 +851,7 @@ document.write(`
 <dd><p>批量获取多个键对应的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 。该接口相比 <code class="xref cpp cpp-any docutils literal notranslate"><span class="pre">Status</span> <span class="pre">Get(const</span> <span class="pre">std::vector&lt;std::string&gt;</span> <span class="pre">&amp;keys,</span> <span class="pre">std::vector&lt;std::string&gt;</span> <span class="pre">&amp;vals,</span> <span class="pre">int32_t</span> <span class="pre">subTimeoutMs)</span></code> 少一次从共享内存到临时内存的拷贝，性能更优。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。传入的key的个数 <cite>&lt;=10000</cite>，推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>subTimeoutMs</strong> - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。</p></li>
 <li><p><strong>buffers</strong> - 传出参数，返回的一组使用 <a class="reference internal" href="Optional.html#_CPPv48Optional" title="Optional"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Optional</span></code></a> 封装的共享内存 <a class="reference internal" href="Buffer.html#_CPPv46Buffer" title="Buffer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Buffer</span></code></a> 。若有部分数据获取不成功，则对应位置的vector的对象为空。</p></li>
 </ul>
@@ -887,7 +887,7 @@ document.write(`
 <dd><p>批量删除指定键值对。key不存在时视为删除成功。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。传入的key的个数 <cite>&lt;=10000</cite>，推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回删除失败的key。</p></li>
 </ul>
 </dd>

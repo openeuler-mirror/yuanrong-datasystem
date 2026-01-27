@@ -588,7 +588,7 @@ document.write(`
 <dd><p>批量将数据从异构设备(Device)缓存到数据系统主机(Host)侧。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>devBlobList</strong> - 传入参数，描述用于发送的异构设备内存结构的列表，数据从 <cite>devBlobList</cite> 中的指针获取。详见 <a class="reference internal" href="struct-DeviceBlobList.html#_CPPv414DeviceBlobList" title="DeviceBlobList"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">DeviceBlobList</span></code></a> 章节。</p></li>
 <li><p><strong>setParam</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
 </ul>
@@ -621,7 +621,7 @@ document.write(`
 <dd><p>批量将数据从异构设备(Device)异步缓存到数据系统主机(Host)侧，立即返回 std::shared_future&lt; <a class="reference internal" href="struct-AsyncResult.html#_CPPv411AsyncResult" title="AsyncResult"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">AsyncResult</span></code></a> &gt; 对象。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>devBlobList</strong> - 传入参数，描述用于发送的异构设备内存结构的列表，如果 DeviceBlobList 包含多个 HBM 指针，则数据将被合并并写入主机对应的共享内存。详见 <a class="reference internal" href="struct-DeviceBlobList.html#_CPPv414DeviceBlobList" title="DeviceBlobList"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">DeviceBlobList</span></code></a> 章节。</p></li>
 <li><p><strong>setParam</strong> - 设置参数，详见 <a class="reference internal" href="struct-SetParam.html#_CPPv48SetParam" title="SetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SetParam</span></code></a> 章节。</p></li>
 </ul>
@@ -653,7 +653,7 @@ document.write(`
 <dd><p>将异构设备上的内存作为数据系统的异构对象发布。异构对象可通过 DevSubscribe 获取。DevPublish 和 DevSubscribe 必须同时使用。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>devBlobList</strong> - 传入参数，描述用于发送的异构设备内存结构的列表。详见 <a class="reference internal" href="struct-DeviceBlobList.html#_CPPv414DeviceBlobList" title="DeviceBlobList"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">DeviceBlobList</span></code></a> 章节。</p></li>
 <li><p><strong>futureVec</strong> - 传出参数，异步返回的 <a class="reference internal" href="Future.html#_CPPv46Future" title="Future"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Future</span></code></a> 列表，用于获取发送异步操作结果。</p></li>
 </ul>
@@ -686,7 +686,7 @@ document.write(`
 <strong>note</strong>: 数据系统不负责管理异构设备（Device）数据的生命周期，只管理了其对应的元数据，使用该接口时需要用户自行保证数据的生命周期。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要设置的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>devBlobList</strong> - 传入参数，用于获取异构设备内存上的数据。详见 <a class="reference internal" href="struct-DeviceBlobList.html#_CPPv414DeviceBlobList" title="DeviceBlobList"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">DeviceBlobList</span></code></a> 章节。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回设置失败的key。</p></li>
 </ul>
@@ -719,7 +719,7 @@ document.write(`
 <dd><p>批量删除指定key( <a class="reference internal" href="#_CPPv4N12HeteroClient7MSetD2HERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERK8SetParam" title="HeteroClient::MSetD2H"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">MSetD2H()</span></code></a> / <a class="reference internal" href="#_CPPv4N12HeteroClient12AsyncMSetD2HERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERK8SetParam" title="HeteroClient::AsyncMSetD2H"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">AsyncMSetD2H()</span></code></a> 缓存进来的key)。key不存在时视为删除成功。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code> ，单个key最大长度为255字节。推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回删除失败的key。</p></li>
 </ul>
 </dd>
@@ -739,7 +739,7 @@ document.write(`
 <dd><p>异步删除数据在异构设备的key(通过 <a class="reference internal" href="#_CPPv4N12HeteroClient7DevMSetERKNSt6vectorINSt6stringEEERKNSt6vectorI14DeviceBlobListEERNSt6vectorINSt6stringEEE" title="HeteroClient::DevMSet"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">DevMSet()</span></code></a> 缓存的key)。执行此命令后，数据系统将不再管理与该key对应的设备内存。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>异步删除操作结果通过 std::shared_future&lt; <a class="reference internal" href="struct-AsyncResult.html#_CPPv411AsyncResult" title="AsyncResult"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">AsyncResult</span></code></a>&gt; 返回。</p>
@@ -753,7 +753,7 @@ document.write(`
 <dd><p>批量删除数据在异构设备的key（由DevMset缓存的key）。执行此命令后，数据系统将不再管理与该key对应的设备内存。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回删除失败的key。</p></li>
 </ul>
 </dd>
@@ -768,7 +768,7 @@ document.write(`
 <dd><p>删除当前客户端连接存储在数据系统中的数据副本。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 需要删除的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。推荐单次设置的key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>failedKeys</strong> - 传出参数，返回删除失败的key。</p></li>
 </ul>
 </dd>

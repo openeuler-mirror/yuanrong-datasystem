@@ -617,7 +617,7 @@ document.write(`
 <p>调用 Worker 客户端获取所有给定键的值。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。传入的key的个数 <cite>&lt;=10000</cite>，推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>值的列表。若有部分数据获取不成功，则对应位置的值为null。</p>
@@ -631,7 +631,7 @@ document.write(`
 <p>调用 Worker 客户端获取所有给定键的值。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。传入的key的个数 <cite>&lt;=10000</cite>，推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 <li><p><strong>timeoutMs</strong> - 如果对象未就绪时等待结果返回的超时时间（毫秒）。需要为正整数，0表示不等待。</p></li>
 </ul>
 </dd>
@@ -658,7 +658,7 @@ document.write(`
 <p>调用 Worker 客户端删除所有给定的键。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。传入的key的个数不能超过1万，推荐单次获取key个数小于等于64个。</p></li>
+<li><p><strong>keys</strong> - 键的向量。key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，单个key最大长度为255字节。传入的key的个数 <cite>&lt;=10000</cite>，推荐单次获取key个数 <cite>&lt;=64</cite>。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>删除失败的键列表。</p>

@@ -513,7 +513,7 @@ document.write(`
 <dd><p>获取keys 对应的元数据信息。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - host 的 key 列表。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>is_dev_key</strong> (bool) - key的属性，true 表示D2D类型，false表示D2H类型。</p></li>
 </ul>
 </dd>

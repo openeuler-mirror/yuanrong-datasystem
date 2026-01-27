@@ -687,28 +687,37 @@ document.write(`
 <tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.mset.html"><span class="doc">yr.datasystem.kv_client.KVClient.mset</span></a></p></td>
 <td><p>批量设置键值对。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.msettx.html"><span class="doc">yr.datasystem.kv_client.KVClient.msettx</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.mcreate.html"><span class="doc">yr.datasystem.kv_client.KVClient.mcreate</span></a></p></td>
+<td><p>创建数据系统共享内存 Buffer ，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.mset_buffer.html"><span class="doc">yr.datasystem.kv_client.KVClient.mset_buffer</span></a></p></td>
+<td><p>批量将共享内存 Buffer 缓存到数据系统中。</p></td>
+</tr>
+<tr class="row-odd"><td><p><span class="xref std std-doc">yr.datasystem.kv_client.KVClient.get_buffers</span></p></td>
+<td><p>获取键对应的只读共享内存 Buffer 。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.msettx.html"><span class="doc">yr.datasystem.kv_client.KVClient.msettx</span></a></p></td>
 <td><p>批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.get_read_only_buffers.html"><span class="doc">yr.datasystem.kv_client.KVClient.get_read_only_buffers</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.get_read_only_buffers.html"><span class="doc">yr.datasystem.kv_client.KVClient.get_read_only_buffers</span></a></p></td>
 <td><p>获取所有给定键的值。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.get.html"><span class="doc">yr.datasystem.kv_client.KVClient.get</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.get.html"><span class="doc">yr.datasystem.kv_client.KVClient.get</span></a></p></td>
 <td><p>获取所有给定键的值。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.read.html"><span class="doc">yr.datasystem.kv_client.KVClient.read</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.read.html"><span class="doc">yr.datasystem.kv_client.KVClient.read</span></a></p></td>
 <td><p>读取指定偏移量的数据。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.delete.html"><span class="doc">yr.datasystem.kv_client.KVClient.delete</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.delete.html"><span class="doc">yr.datasystem.kv_client.KVClient.delete</span></a></p></td>
 <td><p>初始化KV缓存客户端以连接到 Worker 。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.generate_key.html"><span class="doc">yr.datasystem.kv_client.KVClient.generate_key</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.generate_key.html"><span class="doc">yr.datasystem.kv_client.KVClient.generate_key</span></a></p></td>
 <td><p>生成一个带数据系统 Worker UUID 的 key。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.exist.html"><span class="doc">yr.datasystem.kv_client.KVClient.exist</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.exist.html"><span class="doc">yr.datasystem.kv_client.KVClient.exist</span></a></p></td>
 <td><p>查看 key 在数据系统中是否存在。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.expire.html"><span class="doc">yr.datasystem.kv_client.KVClient.expire</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.expire.html"><span class="doc">yr.datasystem.kv_client.KVClient.expire</span></a></p></td>
 <td><p>为一组键设置过期生命周期，返回函数操作状态及设置失败的键列表。</p></td>
 </tr>
 </tbody>

@@ -8,7 +8,7 @@ yr.datasystem.DsTensorClient.async_mset_d2h
     若 host 的 key 不再使用，可调用 delete 接口删除。
 
     参数：
-        - **keys** (list) - host 的 key 列表。约束：传入的key的数量不能超过1万。
+        - **keys** (list) - host 的 key 列表。约束：传入的key的数量 `<=10000`。
         - **tensors** (list) - : mindspore或pytorch的Tensor列表。约束：Tensor的地址空间必须连续。
         - **set_param** (SetParam) - :class:`yr.datasystem.kv_client.SetParam`, key的设置参数, 默认为SetParam(),各属性如下:
 

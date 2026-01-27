@@ -12,7 +12,7 @@ yr.datasystem.hetero_client.HeteroClient.mget_h2d
     若 host 的 key 不再使用，可调用 delete 接口删除。
 
     参数：
-        - **keys** (list) - host 的 key 列表。约束：传入的object key的数量不能超过1万。
+        - **keys** (list) - host 的 key 列表。约束：传入的object key的数量 `<=10000`。
         - **data_blob_list** (list) - :class:`yr.datasystem.hetero_client.DeviceBlobList` 列表。
         - **sub_timeout_ms** (int) - 超时时间，当在指定时间内无法获取完成，则抛出异常。
 

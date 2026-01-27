@@ -516,7 +516,7 @@ document.write(`
 如对象不再使用，可调用 dev_local_delete、async_dev_delete 或 dev_delete 删除。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - device 的异构对象的 key 列表。约束：传入的key的数量不超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - device 的异构对象的 key 列表。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>tensor</strong> (Tensor) - 目标 Tensor，用于接收复制的数据。Tensor 必须有足够的大小以容纳所有指定的复制范围。</p></li>
 <li><p><strong>copy_ranges</strong> (list) - CopyRange 对象列表，每个 CopyRange 由 [src_offset (int), dst_offset (int), length (int)] 组成，分别表示源数据中的起始偏移量、目标 Tensor 中的起始偏移量和要复制的数据长度（均以字节为单位）。约束：keys 和 copy_ranges 的长度必须相同。</p></li>
 <li><p><strong>sub_timeout_ms</strong> (int) - 获取操作的超时时间（以毫秒为单位）。默认为``60s``。</p></li>

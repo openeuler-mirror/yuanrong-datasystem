@@ -513,7 +513,7 @@ document.write(`
 <dd><p>删除所有给定键的值。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - 字符串类型的键列表。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - 字符串类型的键列表。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>失败的键列表。</p>

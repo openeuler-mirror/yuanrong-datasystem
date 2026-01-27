@@ -513,7 +513,7 @@ document.write(`
 <dd><p>获取所有给定键的值，返回 list[<a class="reference internal" href="yr.datasystem.kv_client.ReadOnlyBuffer.html"><span class="doc">ReadOnlyBuffer</span></a>] 对象列表。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - 字符串类型的键列表。约束：传入的key的数量不能超过1万。</p></li>
+<li><p><strong>keys</strong> (list) - 字符串类型的键列表。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>timeout_ms</strong> (int) - 等待结果返回的超时时间，单位为毫秒。</p></li>
 </ul>
 </dd>
