@@ -43,12 +43,12 @@ struct UrmaJfrInfo {
     static std::string EidToFmtStr(const urma_eid_t &eid);
 
     template <class Proto>
-    void ToProto(Proto &proto) const
+    void ToProto(Proto &proto, std::uint32_t jfrIndex = 0) const
     {
         proto.set_eid(eid);
         proto.set_uasid(uasid);
-        for (auto jfrId : jfrIds) {
-            proto.add_jfr_ids(jfrId);
+        if (jfrIndex < jfrIds.size()) {
+            proto.add_jfr_ids(jfrIds[jfrIndex]);
         }
         proto.mutable_address()->set_host(localAddress.Host());
         proto.mutable_address()->set_port(localAddress.Port());

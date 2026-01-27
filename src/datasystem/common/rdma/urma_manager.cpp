@@ -755,7 +755,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
 
     std::vector<urma_target_jetty_t *> tjfrs;
     Timer timer;
-    for (uint i = 0; i < FLAGS_urma_connection_size; ++i) {
+    for (uint i = 0; i < urmaInfo.jfrIds.size(); ++i) {
         remoteJfr.jfr_id.id = urmaInfo.jfrIds[i];
         PerfPoint point1a(PerfKey::URMA_IMPORT_JFR);
         auto *tjfr = urma_import_jfr(urmaContext_, &remoteJfr, &urmaToken_);
@@ -846,13 +846,14 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     while (remainSize > 0) {
         const uint64_t writeSize = std::min(remainSize, (uint64_t)urmaDeviceAttribute_.dev_cap.max_write_size);
         const uint64_t key = requestId_.fetch_add(1);
-        const uint64_t index = key % FLAGS_urma_connection_size;
-        urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
+        urma_jfs_t *urmaJfs = urmaJfsVec_[key % FLAGS_urma_connection_size].get();
         const auto &remoteJfrs = device.importJfrs_;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!remoteJfrs.empty(), K_RUNTIME_ERROR, "Write got empty remote jfrs.");
+        const uint64_t jfrIndex = key % remoteJfrs.size();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            index < remoteJfrs.size(), K_RUNTIME_ERROR,
-            FormatString("Got invalid urma index with %d, jfrs size is %d", index, remoteJfrs.size()));
-        urma_target_jetty_t *importJfr = remoteJfrs[index].get();
+            jfrIndex < remoteJfrs.size(), K_RUNTIME_ERROR,
+            FormatString("Got invalid urma index with %d, jfrs size is %d", jfrIndex, remoteJfrs.size()));
+        urma_target_jetty_t *importJfr = remoteJfrs[jfrIndex].get();
         PerfPoint point4a(PerfKey::URMA_WRITE);
         urma_status_t ret = urma_write(
             urmaJfs, importJfr, remoteSegAccessor.entry->data.segment_.get(),
@@ -911,9 +912,11 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     while (remainSize > 0) {
         const uint64_t readSize = std::min(remainSize, (uint64_t)urmaDeviceAttribute_.dev_cap.max_read_size);
         const uint64_t key = requestId_.fetch_add(1);
-        const uint64_t index = key % FLAGS_urma_connection_size;
-        urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
-        urma_target_jetty_t *importJfr = constAccessor->second.importJfrs_[index].get();
+        urma_jfs_t *urmaJfs = urmaJfsVec_[key % FLAGS_urma_connection_size].get();
+        const auto &remoteJfrs = constAccessor->second.importJfrs_;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!remoteJfrs.empty(), K_RUNTIME_ERROR, "Read got empty remote jfrs.");
+        const uint64_t jfrIndex = key % remoteJfrs.size();
+        urma_target_jetty_t *importJfr = remoteJfrs[jfrIndex].get();
         urma_status_t ret =
             urma_read(urmaJfs, importJfr, localSegAccessor.entry->data.segment_.get(),
                       remoteSegAccessor.entry->data.segment_.get(), localObjectAddress + metaDataSize + readOffset,
@@ -957,7 +960,6 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     flag.bs.complete_enable = 1;
     flag.bs.inline_flag = 0;
     auto totalWriteSize = 0U;
-    uint64_t index = 0;
     for (auto dstSgeIdx = 0U, srcSgeIdx = 0U; dstSgeIdx < dstSgeNum; dstSgeIdx++) {
         auto singleDstWriteSize = 0;
         urma_sg_t srcSg = { .sge = &srcSgeList[srcSgeIdx], .num_sge = static_cast<uint32_t>(srcSgeIdx) };
@@ -984,8 +986,11 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         urma_sg_t dstSg = { .sge = &dstSgeList[dstSgeIdx], .num_sge = 1 };
         urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
         const uint64_t key = requestId_.fetch_add(1);
-        index = key % FLAGS_urma_connection_size;
-        urma_target_jetty_t *importJfr = constAccessor->second.importJfrs_[index].get();
+        const auto &remoteJfrs = constAccessor->second.importJfrs_;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!remoteJfrs.empty(), K_RUNTIME_ERROR,
+                                             "Gather write got empty remote jfrs.");
+        uint64_t index = key % remoteJfrs.size();
+        urma_target_jetty_t *importJfr = remoteJfrs[index].get();
         wrList[dstSgeIdx] = {
             .opcode = URMA_OPC_WRITE, .flag = flag, .tjetty = importJfr, .user_ctx = key, .rw = rw, .next = NULL
         };
@@ -996,7 +1001,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
             wrList[dstSgeIdx - 1].next = &wrList[dstSgeIdx];
         }
     }
-    urma_jfs_t *urmaJfs = urmaJfsVec_[index].get();
+    urma_jfs_t *urmaJfs = urmaJfsVec_[requestId_ % FLAGS_urma_connection_size].get();
     urma_jfs_wr_t *bad_wr = NULL;
     auto ret = urma_post_jfs_wr(urmaJfs, &wrList[0], &bad_wr);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(ret == URMA_SUCCESS, K_RUNTIME_ERROR,
@@ -1060,6 +1065,23 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
         return Status::OK();
     }
     RETURN_STATUS(K_URMA_NEED_CONNECT, "Urma connect unstable, need to reconnect!");
+}
+
+uint32_t UrmaManager::GetJfrIndex(const std::string &senderAddr)
+{
+    TbbJfrMap::accessor acc;
+    auto res = urmaSenderRelationtable_.insert(acc, senderAddr);
+    if (!res) {
+        return acc->second;
+    }
+
+    if (FLAGS_urma_connection_size <= 0) {
+        return 0;
+    }
+
+    uint32_t jfrIndex = localJfrIndex_.fetch_add(1) % FLAGS_urma_connection_size;
+    acc->second = jfrIndex;
+    return jfrIndex;
 }
 
 Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)

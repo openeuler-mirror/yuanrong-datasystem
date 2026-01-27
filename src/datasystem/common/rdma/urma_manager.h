@@ -200,6 +200,7 @@ private:
 
 using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
 using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<Event>>;
+using TbbJfrMap = tbb::concurrent_hash_map<std::string, uint32_t>;
 
 class UrmaManager {
 public:
@@ -409,6 +410,13 @@ public:
     {
         instanceId = localUrmaInfo_.uniqueInstanceId;
     }
+
+    /**
+     * @brief Retrieve the index of the jfrs to be given to urma sender form local info.
+     * @param[in] senderAddr Urma sender address.
+     * @return Index of local jfrs.
+     */
+    uint32_t GetJfrIndex(const std::string &senderAddr);
 
 private:
     UrmaManager();
@@ -625,6 +633,8 @@ private:
     urma_reg_seg_flag_t registerSegmentFlag_;
     urma_import_seg_flag_t importSegmentFlag_;
     UrmaJfrInfo localUrmaInfo_;
+    std::atomic<uint32_t> localJfrIndex_{ 0 };
+    TbbJfrMap urmaSenderRelationtable_;
 
     // protect for segment maps.
     mutable std::shared_timed_mutex localMapMutex_;
