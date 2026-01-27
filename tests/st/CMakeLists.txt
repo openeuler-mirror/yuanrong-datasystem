@@ -227,6 +227,10 @@ add_custom_command(
         ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker.key
         ${CMAKE_BINARY_DIR}/tests/st/data/client_plaintext_zmq_curve_test/worker_authorized_clients/worker.key)
 
+if (BUILD_WITH_RDMA)
+        string(REPLACE "LD_LIBRARY_PATH=" "LD_LIBRARY_PATH=${UCX_LIB_PATH}:" TEST_ENVIRONMENT "${TEST_ENVIRONMENT}")
+endif()
+
 add_datasystem_test(ds_st TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_stream_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

@@ -32,8 +32,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "ucp/api/ucp.h"
-
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 #include "datasystem/common/rdma/ucp_worker.h"
 #include "datasystem/utils/status.h"
 

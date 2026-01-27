@@ -31,8 +31,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "ucp/api/ucp.h"
-
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 #include "datasystem/common/rdma/ucp_endpoint.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/utils/status.h"
@@ -112,8 +111,7 @@ private:
         uint64_t request_id;
         void *put_request;
 
-        CallbackContext(UcpWorker *w, uint64_t id, void *req)
-            : worker(w), request_id(id), put_request(req)
+        CallbackContext(UcpWorker *w, uint64_t id, void *req) : worker(w), request_id(id), put_request(req)
         {
         }
     };

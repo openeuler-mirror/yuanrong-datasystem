@@ -24,8 +24,6 @@
 #include <chrono>
 #include <thread>
 
-#include "ucp/api/ucp_def.h"
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
