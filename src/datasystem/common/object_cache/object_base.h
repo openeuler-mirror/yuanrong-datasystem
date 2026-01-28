@@ -41,7 +41,7 @@
 
 namespace datasystem {
 
-using RemoteH2DHostInfoMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<RemoteH2DHostInfo>>;
+using RemoteH2DHostInfoMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<RemoteH2DHostInfoPb>>;
 struct ObjectInterface {
     // The state and config of the object.
     datasystem::StateInfo stateInfo;
@@ -321,7 +321,7 @@ struct ObjectInterface {
     }
 
     virtual void SetRemoteHostInfo(const std::string &clientCommId,
-                                   const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
+                                   const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo)
     {
         (void)clientCommId;
         (void)remoteH2DHostInfo;
@@ -346,7 +346,7 @@ struct ObjectBufferInfo {
     uint32_t version;
     std::shared_ptr<RpcMessage> payloadPointer;
     std::shared_ptr<client::IMmapTableEntry> mmapEntry;
-    std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo = nullptr;
+    std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr;
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };

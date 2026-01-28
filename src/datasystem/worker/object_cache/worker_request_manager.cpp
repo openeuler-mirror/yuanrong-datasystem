@@ -436,9 +436,7 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t object
     RemoteH2DHostInfoMap::const_accessor constAccessor;
     if (IsRemoteH2DEnabled() && safeEntry.remoteH2DHostInfo
         && safeEntry.remoteH2DHostInfo->find(constAccessor, clientCommId_)) {
-        *(info.mutable_remote_host_segment()) = constAccessor->second->segmentInfo;
-        *(info.mutable_root_info()) = constAccessor->second->rootInfo;
-        *(info.mutable_data_info()) = constAccessor->second->dataInfo;
+        *(info.mutable_host_info()) = *(constAccessor->second);
         // Leave the shm unit stuff empty to be clearer.
         info.set_store_fd(0);
         info.set_offset(0);

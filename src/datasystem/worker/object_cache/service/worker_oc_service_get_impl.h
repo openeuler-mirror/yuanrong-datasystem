@@ -686,6 +686,7 @@ private:
     /**
      * @brief Helper function to process the sub response from batched response.
      * @param[in] subResp The sub response of batched response.
+     * @param[in] batchRootInfo The common root info in batched requests.
      * @param[in] meta The object meta info contains remote address and data size.
      * @param[in] objectKV The reserved and locked safe object and its corresponding objectKey.
      * @param[in] payloads The payloads that comes together with response.
@@ -694,9 +695,9 @@ private:
      * @param[out] dataSizeChange Whether the object data size is changed.
      * @return Status of the call.
      */
-    Status HandleBatchSubResponse(const GetObjectRemoteRspPb &subResp, ObjectMetaPb *meta, ReadObjectKV &objectKV,
-                                  std::vector<RpcMessage> &payloads, uint64_t &payloadIndex, bool &tryGetFromElsewhere,
-                                  bool &dataSizeChange);
+    Status HandleBatchSubResponse(const GetObjectRemoteRspPb &subResp, const RemoteH2DRootInfoPb &batchRootInfo,
+                                  ObjectMetaPb *meta, ReadObjectKV &objectKV, std::vector<RpcMessage> &payloads,
+                                  uint64_t &payloadIndex, bool &tryGetFromElsewhere, bool &dataSizeChange);
 
     /**
      * @brief Helper function to process the sub response from batched response, part 2.

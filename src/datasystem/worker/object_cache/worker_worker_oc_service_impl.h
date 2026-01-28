@@ -137,11 +137,13 @@ private:
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The new request id to wait for if not blocking.
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
+     * @param[in] batchRootInfo The common root info for batched requests.
      * @return Status of the call.
      */
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &keys,
-                               std::shared_ptr<AggregateMemory> batchPtr = nullptr);
+                               std::shared_ptr<AggregateMemory> batchPtr = nullptr,
+                               RemoteH2DRootInfoPb *batchRootInfo = nullptr);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.
@@ -210,11 +212,13 @@ private:
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The request id to wait for if not blocking.
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
+     * @param[in] batchRootInfo The common root info for batched requests.
      * @return Status of the call.
      */
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &keys,
-                                  std::shared_ptr<AggregateMemory> batchPtr = nullptr);
+                                  std::shared_ptr<AggregateMemory> batchPtr = nullptr,
+                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr);
 
     /**
      * @brief Get the safe object entry.
@@ -234,10 +238,12 @@ private:
      * @param[in] shmUnit The object shared memory unit.
      * @param[in] metadataSize The metadata size of the object.
      * @param[out] rsp The remote get response.
+     * @param[in] batchRootInfo The common root info for batched requests.
      */
     Status EstablishConnAndFillSeg(const std::string &commId, const uint64_t &localSegAddress,
                                    const uint64_t &localSegSize, std::shared_ptr<ShmUnit> shmUnit,
-                                   uint64_t metadataSize, GetObjectRemoteRspPb &rsp);
+                                   uint64_t metadataSize, GetObjectRemoteRspPb &rsp,
+                                   RemoteH2DRootInfoPb *batchRootInfo = nullptr);
 
     /**
      * @brief Check if the fast transport connection is stable.

@@ -289,14 +289,13 @@ void WorkerOcServiceGetImpl::GroupQueryMeta(
     if (splitList.empty()) {
         splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
     }
-    if (!(FLAGS_enable_urma) && (FLAGS_batch_get_threshold_mb != 0)) {
+    if (!IsFastTransportEnabled() && !IsRemoteH2DEnabled() && (FLAGS_batch_get_threshold_mb != 0)) {
         auto payloadSize = meta.data_size() < UINT64_MAX - splitList.back().second
                                ? splitList.back().second + meta.data_size()
                                : UINT64_MAX;
         if (splitList.back().second > 0 && payloadSize > maxPayloadSize) {
             splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
         }
-    } else {
     }
     splitList.back().first.emplace_back(info);
     splitList.back().second += meta.data_size();
@@ -324,7 +323,8 @@ void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status
     }
 }
 
-Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb &subResp, ObjectMetaPb *meta,
+Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb &subResp,
+                                                      const RemoteH2DRootInfoPb &batchRootInfo, ObjectMetaPb *meta,
                                                       ReadObjectKV &objectKV, std::vector<RpcMessage> &payloads,
                                                       uint64_t &payloadIndex, bool &tryGetFromElsewhere,
                                                       bool &dataSizeChange)
@@ -351,11 +351,10 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
         }
 
         if (IsRemoteH2DEnabled() && (subResp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER)
-            && subResp.has_remote_host_segment() && subResp.has_root_info()) {
-            auto hostInfo = std::make_shared<RemoteH2DHostInfo>();
-            hostInfo->segmentInfo = std::move(subResp.remote_host_segment());
-            hostInfo->rootInfo = std::move(subResp.root_info());
-            hostInfo->dataInfo = std::move(subResp.data_info());
+            && subResp.has_host_info()) {
+            auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
+            *hostInfo = std::move(subResp.host_info());
+            *(hostInfo->mutable_root_info()) = batchRootInfo;
             objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
         }
         if (subResp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
@@ -440,8 +439,8 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         if (subRc.IsOk()) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_PAYLOAD);
             auto &subResp = rspPb.responses(i);
-            subRc = HandleBatchSubResponse(subResp, metaIter, objectKV, payloads, payloadIndex, tryGetFromElsewhere,
-                                           dataSizeChanged);
+            subRc = HandleBatchSubResponse(subResp, rspPb.root_info(), metaIter, objectKV, payloads, payloadIndex,
+                                           tryGetFromElsewhere, dataSizeChanged);
         }
         if (tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_RESP_PT_2);

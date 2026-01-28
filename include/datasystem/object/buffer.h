@@ -40,7 +40,7 @@ class KVClient; // namespace kv_cache
 }
 struct ObjectBufferInfo;
 class ObjectClient;
-struct RemoteH2DHostInfo;
+class RemoteH2DHostInfoPb;
 }  // namespace datasystem
 
 namespace datasystem {
@@ -128,7 +128,7 @@ public:
     /// \brief Getter function for remote host info.
     ///
     /// \return The remote host info for RemoteH2D purpose.
-    RemoteH2DHostInfo *GetRemoteHostInfo();
+    RemoteH2DHostInfoPb *GetRemoteHostInfo();
 
 private:
     friend class datasystem::object_cache::ObjectClientImpl;

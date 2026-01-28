@@ -90,20 +90,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     GetObjectRemoteReqPb req;
     GetObjectRemoteRspPb rsp;
     std::vector<RpcMessage> payload;
-    PerfPoint pointRead(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
+    PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
-    pointRead.Record();
-    PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     INJECT_POINT("worker.GetObjectRemote.afterRead");
     // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
     // is different from the request
     RETURN_IF_NOT_OK(CheckConnectionStable(req));
     RETURN_IF_NOT_OK_EXCEPT(GetObjectRemote(req, rsp, payload), StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
-    pointImpl.Record();
-    PerfPoint pointWrite(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
-    pointWrite.Record();
-    PerfPoint pointSendPayload(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
 
     if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
         || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
@@ -115,7 +112,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
                                          "GetObjectRemote send payload error");
     }
 
-    pointSendPayload.Record();
+    pointImpl.Record();
     LOG(INFO) << FormatString("pull success");
     point.Record();
     return Status::OK();
@@ -146,7 +143,8 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
     std::vector<RpcMessage> subPayload;
     std::vector<uint64_t> fastTransportEventKeys;
 
-    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, fastTransportEventKeys, batchPtr);
+    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, fastTransportEventKeys, batchPtr,
+                                         rsp.mutable_root_info());
     if (status.IsError()) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
@@ -315,14 +313,15 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &keys,
-                                                         std::shared_ptr<AggregateMemory> batchPtr)
+                                                         std::shared_ptr<AggregateMemory> batchPtr,
+                                                         RemoteH2DRootInfoPb *batchRootInfo)
 {
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, keys, batchPtr);
+    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, keys, batchPtr, batchRootInfo);
     INJECT_POINT("worker.batch_get_failure_for_keys", [&objectKey]() {
         if (objectKey == "key2") {
             return Status(K_RUNTIME_ERROR, "Injected K_RUNTIME_ERROR");
@@ -375,7 +374,7 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
 Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &commId, const uint64_t &localSegAddress,
                                                           const uint64_t &localSegSize,
                                                           std::shared_ptr<ShmUnit> shmUnit, uint64_t metadataSize,
-                                                          GetObjectRemoteRspPb &rsp)
+                                                          GetObjectRemoteRspPb &rsp, RemoteH2DRootInfoPb *batchRootInfo)
 {
     (void)commId;
     (void)localSegAddress;
@@ -383,53 +382,58 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     (void)shmUnit;
     (void)metadataSize;
     (void)rsp;
+    (void)batchRootInfo;
 #ifdef BUILD_HETERO
-    tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;
-    // Assign new commId a new devId
-    if (!commDevIdMap_.find(acc, commId)) {
+    PerfPoint point(PerfKey::WORKER_REMOTE_GET_RH2D);
+
+    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_DEV_ID_FAST);
+    int32_t devId = -1;
+    {
+        // fast path: use const accessor
+        tbb::concurrent_hash_map<std::string, int32_t>::const_accessor cacc;
+        if (commDevIdMap_.find(cacc, commId)) {
+            devId = cacc->second;
+        }
+    }
+    if (devId == -1) {
+        // slow path
+        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_DEV_ID_SLOW);
         std::vector<int32_t> devIds;
         RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetWorkerDeviceIds(&devIds));
+        tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;
         commDevIdMap_.insert(acc, commId);
-        acc->second = devIds[nextDevIdIndex_.fetch_add(1) % devIds.size()];
+        acc->second = devIds[nextDevIdIndex_.fetch_add(1, std::memory_order_relaxed) % devIds.size()];
+        devId = acc->second;
     }
-    int32_t devId = acc->second;
+
+    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_SET_DEV);
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx(devId));
 
     // Send root info to client
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PGetRootInfo(commId, rsp.mutable_root_info(), devId));
+    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_GET_ROOT);
+    auto *rootInfo = batchRootInfo ? batchRootInfo : rsp.mutable_host_info()->mutable_root_info();
+    if (rootInfo->internal().empty()) {
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PGetRootInfo(commId, rootInfo));
+    }
 
     // Initialize communicator connection (accept client).
     // Fixme: error handling
-    auto traceId = Trace::Instance().GetTraceID();
-    communicatorThreadPool_->Execute([rootInfo = rsp.root_info(), commId = commId, traceId, devId]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_ptr<RemoteH2DContext> p2pComm;
-        LOG_IF_ERROR(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, rootInfo, P2P_SENDER, p2pComm, devId),
-                     "P2PCommInitRootInfo failed.");
-    });
+    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_COMM_INIT);
+    std::shared_ptr<RemoteH2DContext> p2pComm;
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, *rootInfo, P2P_SENDER, p2pComm, devId,
+                                                                      communicatorThreadPool_));
 
     // Send segment info to client
+    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_FILL_SEG);
+    auto *segmentPb = rsp.mutable_host_info()->mutable_remote_host_segment();
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(
-        localSegSize, shmUnit->GetOffset() + metadataSize, localSegAddress, *rsp.mutable_remote_host_segment(), devId));
+        localSegSize, shmUnit->GetOffset() + metadataSize, localSegAddress, *segmentPb, devId));
 
     // Send offset info to client
-    auto *dataInfoPb = rsp.mutable_data_info();
+    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_FILL_DATA);
+    auto *dataInfoPb = rsp.mutable_host_info()->mutable_data_info();
     uint64_t *dataPtr = reinterpret_cast<uint64_t *>(static_cast<uint8_t *>(shmUnit->GetPointer()) + metadataSize);
-
-    // Get number of data sizes
-    uint64_t sz = *dataPtr;
-
-    // Get the first offset
-    dataPtr++;
-    uint64_t firstOffset = *dataPtr;
-    dataInfoPb->set_offset(firstOffset);
-
-    // Calculate sizes of data
-    for (uint64_t i = 0; i < sz; i++) {
-        uint64_t offsetX = *dataPtr;
-        dataPtr++;
-        uint64_t offsetY = *dataPtr;
-        dataInfoPb->add_sizes(offsetY - offsetX);
-    }
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillDataInfo(dataPtr, *dataInfoPb));
 #endif
     return Status::OK();
 }
@@ -437,7 +441,8 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
                                                       std::vector<uint64_t> &keys,
-                                                      std::shared_ptr<AggregateMemory> batchPtr)
+                                                      std::shared_ptr<AggregateMemory> batchPtr,
+                                                      RemoteH2DRootInfoPb *batchRootInfo)
 {
     (void)keys;
     (void)blocking;
@@ -488,21 +493,22 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                              objectKey, entry->GetDataSize(), expectedDataSize));
     }
     PerfPoint point(PerfKey::WORKER_LOAD_OBJECT_DATA);
+    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_READ_KEY);
     ReadObjectKV objKv(ReadKey(objectKey, offset, size), entry);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objKv.CheckReadOffset(), "Read offset verify failed");
     if (entry->IsSpilled() && entry->GetShmUnit() == nullptr) {  // At this step, the local memory may already exist.
-        PerfPoint p(PerfKey::WORKER_REMOTE_GET_PAYLOAD_FROM_DISK);
+        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD_FROM_DISK);
         RETURN_IF_NOT_OK(
             WorkerOcSpill::Instance()->Get(objectKey, outPayload, objKv.GetReadSize(), objKv.GetReadOffset()));
-        p.Record();
     } else {
+        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD_SHM_UNIT);
         ShmGuard shmGuard(entry->GetShmUnit(), entry->GetDataSize(), entry->GetMetadataSize());
         if (WorkerOcServiceCrudCommonApi::ShmEnable()) {
             RETURN_IF_NOT_OK(shmGuard.TryRLatch());
         }
         INJECT_POINT("worker.LoadObjectData.AddPayload");
 
-        PerfPoint p(PerfKey::WORKER_REMOTE_GET_PAYLOAD);
+        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD);
 
         auto shmUnit = entry->GetShmUnit();
         const uint64_t localObjectAddress = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
@@ -546,19 +552,20 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
 
         // For compatibility, only trigger RH2D if this client request both supports and enables RH2D.
         if (IsRemoteH2DEnabled() && !req.comm_id().empty()) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(EstablishConnAndFillSeg(req.comm_id(), localSegAddress, localSegSize,
-                                                                     shmUnit, entry->GetMetadataSize(), rsp),
-                                             "");
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                EstablishConnAndFillSeg(req.comm_id(), localSegAddress, localSegSize, shmUnit, entry->GetMetadataSize(),
+                                        rsp, batchRootInfo),
+                "");
             rsp.set_data_source(datasystem::DataTransferSource::DATA_DELAY_TRANSFER);
         }
 
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
-        if (!IsFastTransportEnabled() || !blocking) {
+        if ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty())) {
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
         }
     }
 
-    PerfPoint rspPoint(PerfKey::WORKER_REMOTE_GET_RESP);
+    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_RESP);
     rsp.mutable_error()->set_error_code(StatusCode::K_OK);  // No size change
     rsp.set_data_size(static_cast<int64_t>(entry->GetDataSize()));
     rsp.set_create_time(static_cast<int64_t>(entry->GetCreateTime()));

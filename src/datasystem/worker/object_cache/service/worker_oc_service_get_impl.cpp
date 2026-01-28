@@ -1104,13 +1104,11 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     }
 
     if (IsRemoteH2DEnabled() && (rspPb.data_source() == DataTransferSource::DATA_DELAY_TRANSFER)
-        && rspPb.has_remote_host_segment() && rspPb.has_root_info()) {
+        && rspPb.has_host_info()) {
         // Return the remote host segment info back to client, so client can import the segment.
         // Also the root info for communicator connection, and the offsets for get scattered.
-        auto hostInfo = std::make_shared<RemoteH2DHostInfo>();
-        hostInfo->segmentInfo = std::move(rspPb.remote_host_segment());
-        hostInfo->rootInfo = std::move(rspPb.root_info());
-        hostInfo->dataInfo = std::move(rspPb.data_info());
+        auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
+        *hostInfo = std::move(rspPb.host_info());
         objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
     }
 

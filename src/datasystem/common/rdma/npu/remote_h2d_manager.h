@@ -32,17 +32,13 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/util/thread_pool.h"
 
 namespace datasystem {
-struct RemoteH2DHostInfo {
-    RemoteHostSegmentPb segmentInfo;
-    RemoteH2DRootInfoPb rootInfo;
-    RemoteH2DDataInfoPb dataInfo;
-};
 
 struct HostSegment {
     std::byte *data;
@@ -126,10 +122,9 @@ public:
      * @brief Get the root info for communicator connection.
      * @param[in] key The client uuid for the connection.
      * @param[out] p2pRootInfo The p2p root info for communicator connection.
-     * @param[in] devId Specify the device id to execute on.
      * @return Status of the call.
      */
-    Status P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo, int32_t devId);
+    Status P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo);
 
     /**
      * @brief Fill the segment info for device side import purposes.
@@ -144,6 +139,14 @@ public:
                            int32_t devId);
 
     /**
+     * @brief Fill the data info for device side import purposes.
+     * @param[in] dataPtr data info starting address
+     * @param[out] dataIntoPb The data info protobuf to be filled.
+     * @return Status of the call.
+     */
+    Status FillDataInfo(uint64_t *dataPtr, RemoteH2DDataInfoPb &dataInfoPb);
+
+    /**
      * @brief Establish communicator connection, in blocking manner.
      * @param[in] key The key for communicator map, it is the host root info for client side, and is client uuid for
      * remote host side.
@@ -151,10 +154,12 @@ public:
      * @param[in] kind The p2p connection direction.
      * @param[out] p2pComm The p2p comm and stream for actual data operation if applicable.
      * @param[in] devId Optional. Specify the device id to execute on.
+     * @param[in] threadPool Optional. Thread pool to handle async connection.
      * @return Status of the call.
      */
     Status P2PCommInitRootInfo(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
-                               std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId = -1);
+                               std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId = -1,
+                               std::shared_ptr<ThreadPool> threadPool = nullptr);
 
     /**
      * @brief Register host side memory (shared memory) to NPU device as segment.
@@ -194,6 +199,8 @@ public:
 
 private:
     RemoteH2DManager();
+    Status HandleConnection(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
+                            std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId);
 
     // Root info string to p2p communicator mapping.
     mutable std::shared_timed_mutex communicatorMutex_;

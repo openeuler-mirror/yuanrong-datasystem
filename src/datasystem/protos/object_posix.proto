@@ -148,6 +148,12 @@ message MultiPublishRspPb {
   ErrorInfoPb last_rc = 2;
 }
 
+message RemoteH2DHostInfoPb {
+  RemoteHostSegmentPb remote_host_segment = 1;
+  RemoteH2DRootInfoPb root_info = 2;
+  RemoteH2DDataInfoPb data_info = 3;
+}
+
 message GetReqPb {
   int64 sub_timeout = 1;
   repeated string object_keys = 2;
@@ -182,9 +188,7 @@ message GetRspPb {
     string shm_id = 12;
     uint32 cache_type = 13;
     uint32 object_index = 14;
-    RemoteHostSegmentPb remote_host_segment = 15;
-    RemoteH2DRootInfoPb root_info = 16;
-    RemoteH2DDataInfoPb data_info = 17;
+    RemoteH2DHostInfoPb host_info = 15;
   }
   message PayloadInfoPb {
   	string object_key = 1;

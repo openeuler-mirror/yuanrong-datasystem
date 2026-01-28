@@ -719,10 +719,11 @@ static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobL
     // 1. Initialize communicator connection.
     // Note that client uses worker side root info as the key.
     PerfPoint point(PerfKey::CLIENT_IMPORT_SEG_AND_READ);
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx());
     P2pKind kind = P2P_RECEIVER;
     std::shared_ptr<RemoteH2DContext> p2pComm;
     // Buffers are grouped by data source, so root info should be the same for these objects.
-    auto &rootInfo = existBufferList[0]->GetRemoteHostInfo()->rootInfo;
+    const auto &rootInfo = existBufferList[0]->GetRemoteHostInfo()->root_info();
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PCommInitRootInfo(rootInfo.internal(), rootInfo, kind, p2pComm));
 
     // 2. Import the remote host segment.
@@ -736,9 +737,9 @@ static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobL
     // Construct P2pScatterEntries
     for (size_t i = 0; i < existBufferList.size(); i++) {
         auto buffer = existBufferList[i];
-        auto remoteHostInfo = buffer->GetRemoteHostInfo();
-        auto &seg = remoteHostInfo->segmentInfo;
-        auto &hostDataInfo = remoteHostInfo->dataInfo;
+        auto *remoteHostInfo = buffer->GetRemoteHostInfo();
+        auto &seg = remoteHostInfo->remote_host_segment();
+        auto &hostDataInfo = remoteHostInfo->data_info();
         auto &blobs = devBlobList[i]->blobs;
         RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ImportHostSegment(seg));
 
@@ -803,7 +804,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
                 localSourceBufferList.emplace_back(buffer);
                 continue;
             }
-            std::string rootInternal = buffer->GetRemoteHostInfo()->rootInfo.internal();
+            const std::string &rootInternal = buffer->GetRemoteHostInfo()->root_info().internal();
             auto iter = rootInfoToIndexMapping.find(rootInternal);
             if (iter == rootInfoToIndexMapping.end()) {
                 iter = rootInfoToIndexMapping.emplace(rootInternal, remoteSourceBufferList.size()).first;
@@ -1580,7 +1581,7 @@ Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t of
 std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
     bool isSeal, uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
-    std::shared_ptr<client::IMmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo)
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo)
 {
     auto bufferInfo = std::make_shared<ObjectBufferInfo>();
     bufferInfo->objectKey = objectKey;
@@ -1676,7 +1677,7 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
                 continue;
             }
             // Special case for Remote H2D scenario.
-            if (info.has_remote_host_segment()) {
+            if (info.has_host_info()) {
                 status = SetRemoteHostObjectBuffer(objectKey, info, version, bufferPtr);
             } else if (readParams.empty()) {
                 status = SetShmObjectBuffer(objectKey, info, version, bufferPtr);
@@ -1708,10 +1709,8 @@ Status ObjectClientImpl::SetRemoteHostObjectBuffer(const std::string &objectKey,
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());
     param.cacheType = CacheType(info.cache_type());
-    auto hostInfo = std::make_shared<RemoteH2DHostInfo>();
-    hostInfo->segmentInfo = std::move(info.remote_host_segment());
-    hostInfo->rootInfo = std::move(info.root_info());
-    hostInfo->dataInfo = std::move(info.data_info());
+    auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
+    *hostInfo = std::move(info.host_info());
     auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, info.data_size(), info.metadata_size(), param,
                                            info.is_seal(), version, {}, nullptr, nullptr, hostInfo);
     return Buffer::CreateBuffer(bufferInfo, shared_from_this(), buffer);

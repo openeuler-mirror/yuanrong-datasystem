@@ -125,7 +125,7 @@ void ObjCacheShmUnit::SetAddress(const std::string &newAddress)
 }
 
 void ObjCacheShmUnit::SetRemoteHostInfo(const std::string &clientCommId,
-                                        const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo)
+                                        const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo)
 {
     if (IsRemoteH2DEnabled()) {
         RemoteH2DHostInfoMap::accessor accessor;
