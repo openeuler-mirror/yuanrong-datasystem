@@ -323,12 +323,14 @@ Status GetLocalTransportInstanceId(std::string &instanceId)
     RETURN_STATUS(K_URMA_ERROR, "Disabled fast transport, cannot get local instance id");
 }
 
-Status ConstructHandshakePb(UrmaHandshakeReqPb &req)
+Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req)
 {
+    (void)senderAddr;
     (void)req;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(req);
+        uint32_t jfrIndex = UrmaManager::Instance().GetJfrIndex(senderAddr);
+        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(req, jfrIndex);
         RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(req));
     }
 #endif

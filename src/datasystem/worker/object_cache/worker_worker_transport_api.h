@@ -63,7 +63,7 @@ private:
 
 class WorkerLocalWorkerTransApi : public WorkerWorkerTransportApi {
 public:
-    WorkerLocalWorkerTransApi(WorkerWorkerTransportServiceImpl *service);
+    WorkerLocalWorkerTransApi(HostPort localHost, WorkerWorkerTransportServiceImpl *service);
 
     ~WorkerLocalWorkerTransApi() override = default;
 
@@ -72,6 +72,7 @@ public:
     Status ExchangeUrmaConnectInfo() override;
 
 private:
+    HostPort localHost_;
     WorkerWorkerTransportServiceImpl *service_;
 };
 

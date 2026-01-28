@@ -218,10 +218,11 @@ Status GetLocalTransportInstanceId(std::string &instanceId);
 
 /**
  * @brief Construct local transport request info.
+ * @param[in] sendAddr The sender address.
  * @param[out] req The handshake request.
  * @return Status of the call.
  */
-Status ConstructHandshakePb(UrmaHandshakeReqPb &req);
+Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req);
 
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H

@@ -70,7 +70,8 @@ Status WorkerWorkerTransportApi::ExecOnceParrallelExchange()
     return result;
 }
 
-WorkerLocalWorkerTransApi::WorkerLocalWorkerTransApi(WorkerWorkerTransportServiceImpl *service) : service_(service)
+WorkerLocalWorkerTransApi::WorkerLocalWorkerTransApi(HostPort localHost, WorkerWorkerTransportServiceImpl *service)
+    : localHost_(localHost), service_(service)
 {
 }
 
@@ -84,7 +85,8 @@ Status WorkerLocalWorkerTransApi::ExchangeUrmaConnectInfo()
 {
     UrmaHandshakeReqPb req;
     UrmaHandshakeRspPb rsp;
-    RETURN_IF_NOT_OK(ConstructHandshakePb(req));
+    std::string localHost = localHost_.ToString();
+    RETURN_IF_NOT_OK(ConstructHandshakePb(localHost, req));
     return service_->ExchangeUrmaConnectInfo(req, rsp);
 }
 
@@ -114,7 +116,8 @@ Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo()
 
     UrmaHandshakeReqPb req;
     UrmaHandshakeRspPb rsp;
-    RETURN_IF_NOT_OK(ConstructHandshakePb(req));
+    std::string senderAddStr = hostPort_.ToString();
+    RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req));
     RETURN_IF_NOT_OK(rpcSession_->ExchangeUrmaConnectInfo(opts, req, rsp));
     return Status::OK();
 }
