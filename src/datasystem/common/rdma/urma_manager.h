@@ -33,6 +33,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -42,19 +43,6 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-template <typename T>
-using custom_unique_ptr = std::unique_ptr<T, std::function<void(T *)>>;
-
-template <typename T>
-custom_unique_ptr<T> MakeCustomUnique(T *p, std::function<void(T *)> custom_delete)
-{
-    if (p) {
-        return custom_unique_ptr<T>(p, custom_delete);
-    } else {
-        LOG(WARNING) << "Input pointer is null";
-        return nullptr;
-    }
-}
 
 #define MAX_POLL_JFC_TRY_CNT 10
 class Segment {
@@ -137,66 +125,6 @@ public:
 };
 
 using TbbRemoteDeviceMap = tbb::concurrent_hash_map<std::string, RemoteDevice>;
-
-class Event {
-public:
-    /**
-     * @brief Create a new Event object.
-     */
-    explicit Event(uint64_t requestId) : requestId_(requestId), ready_(false)
-    {
-    }
-
-    /**
-     * @brief Wait on event until timeout or someone notify
-     * @param[in] timeout time in milliseconds to wait
-     * @return Status of the call.
-     */
-    Status wait_for(std::chrono::milliseconds timeout)
-    {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        bool gotNotification = cv.wait_for(lock, timeout, [this] { return ready_; });
-        if (!gotNotification && !ready_) {
-            // Return timeout
-            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
-                                    FormatString("timedout waiting for request: %d", requestId_));
-        }
-        return Status::OK();
-    }
-
-    /**
-     * @brief Notify all threads that are waiting for the event
-     */
-    void notify_all()
-    {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        ready_ = true;
-        cv.notify_all();
-    }
-
-    /**
-     * @brief Sets the event status as failed
-     */
-    void set_failed()
-    {
-        failed_ = true;
-    }
-
-    /**
-     * @brief Checks the event status
-     */
-    bool is_failed()
-    {
-        return failed_;
-    }
-
-private:
-    std::condition_variable cv;
-    mutable std::mutex eventMutex_;
-    uint64_t requestId_;
-    bool ready_{ false };
-    bool failed_{ false };
-};
 
 using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
 using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<Event>>;

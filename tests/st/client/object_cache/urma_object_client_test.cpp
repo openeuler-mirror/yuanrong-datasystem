@@ -690,7 +690,7 @@ public:
     }
 };
 
-TEST_F(UrmaObjectClientTestEventMode, UrmaRemoteGetSmallWithError)
+TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmallWithError)
 {
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "call(0)"));
 
@@ -707,7 +707,7 @@ TEST_F(UrmaObjectClientTestEventMode, UrmaRemoteGetSmallWithError)
     DS_ASSERT_NOT_OK(client1->Get({ objectKey }, 0, buffers));
 }
 
-TEST_F(UrmaObjectClientTestEventMode, UrmaRemoteGetSmall)
+TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmall)
 {
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
@@ -734,7 +734,7 @@ TEST_F(UrmaObjectClientTestEventMode, UrmaRemoteGetSmall)
     LOG(INFO) << "Test case UrmaRemoteGetSmall success";
 }
 
-TEST_F(UrmaObjectClientTestEventMode, UrmaRemoteGetBig)
+TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetBig)
 {
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;

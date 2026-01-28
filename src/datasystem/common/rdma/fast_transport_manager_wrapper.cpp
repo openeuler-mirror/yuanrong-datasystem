@@ -288,8 +288,10 @@ Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
     (void)req;
     (void)rsp;
 #ifdef USE_URMA
-    LOG(INFO) << "[FastTransportWrapper] Doing URMA connect info exchange";
-    RETURN_IF_NOT_OK(UrmaManager::Instance().ExchangeJfr(req, rsp));
+    if (UrmaManager::IsUrmaEnabled()) {
+        LOG(INFO) << "[FastTransportWrapper] Doing URMA connect info exchange";
+        RETURN_IF_NOT_OK(UrmaManager::Instance().ExchangeJfr(req, rsp));
+    }
 #endif
     return Status::OK();
 }
@@ -299,9 +301,13 @@ Status CheckTransportConnectionStable(const std::string &hostAddress, const std:
     (void)hostAddress;
     (void)instanceId;
 #ifdef USE_URMA
-    RETURN_IF_NOT_OK(UrmaManager::Instance().CheckUrmaConnectionStable(hostAddress, instanceId));
+    if (UrmaManager::IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(UrmaManager::Instance().CheckUrmaConnectionStable(hostAddress, instanceId));
+    }
 #elif defined(USE_RDMA)
-    RETURN_IF_NOT_OK(UcpManager::Instance().CheckUcpConnectionStable(hostAddress, instanceId));
+    if (UcpManager::IsUcpEnabled()) {
+        RETURN_IF_NOT_OK(UcpManager::Instance().CheckUcpConnectionStable(hostAddress, instanceId));
+    }
 #endif
     return Status::OK();
 }
