@@ -20,6 +20,7 @@ import os
 import shutil
 import stat
 import subprocess
+import fnmatch
 
 from pathlib import Path
 from setuptools import find_namespace_packages, setup
@@ -149,7 +150,7 @@ def delete_unuse_so(directory: Path):
     for item in directory.iterdir():
         if item.is_file():
             # skip ucx so
-            if item.name.startswith("libuc"):
+            if fnmatch.fnmatch(item.name, 'libuc*.so.0'):
                 continue
             if item.name not in all_dependencies_for_datasystem:
                 item.unlink()
