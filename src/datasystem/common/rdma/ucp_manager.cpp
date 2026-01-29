@@ -84,11 +84,10 @@ Status UcpManager::UcpCreateContext()
     ucs_status_t configRet = ucp_config_read(nullptr, nullptr, &config);
     if (configRet != UCS_OK) {
         RETURN_STATUS_LOG_ERROR(
-            K_RDMA_ERROR,
-            FormatString(
-                "Failed to read UCX config, ret = %d. Possible causes: RDMA driver or UCX dependencies are missing or "
-                "incomplete. Set UCX_LOG_FILE to capture detailed UCX logs.",
-                configRet));
+            K_RDMA_ERROR, FormatString("Failed to read UCX config, ret = %d. Possible causes: "
+                                       "RDMA driver or UCX dependencies are missing or "
+                                       "incomplete. Set UCX_LOG_FILE and UCX_LOG_LEVEL to capture detailed UCX logs.",
+                                       configRet));
     }
     ucp_params_t params;
     memset_s(&params, sizeof(params), 0, sizeof(params));
@@ -102,7 +101,11 @@ Status UcpManager::UcpCreateContext()
     ucs_status_t contextRet = ucp_init(&params, config, &ucpContext_);
     ucp_config_release(config);
     if (contextRet != UCS_OK) {
-        RETURN_STATUS_LOG_ERROR(K_RDMA_ERROR, FormatString("Failed to ucp create context, ret = %d", contextRet));
+        RETURN_STATUS_LOG_ERROR(
+            K_RDMA_ERROR, FormatString("Failed to ucp create context, ret = %d. Possible causes: "
+                                       "RDMA driver or UCX dependencies are missing or "
+                                       "incomplete. Set UCX_LOG_FILE and UCX_LOG_LEVEL to capture detailed UCX logs.",
+                                       contextRet));
     }
     LOG(INFO) << "ucp create context success";
     return Status::OK();
