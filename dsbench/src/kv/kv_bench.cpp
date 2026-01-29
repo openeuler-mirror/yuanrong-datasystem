@@ -95,8 +95,8 @@ void KVBench::GenerateSetKeys(std::vector<std::string> &keys)
 
 void KVBench::GenerateGetOrDelKeys(std::vector<std::string> &keys)
 {
-    keys.reserve(args_.keyNum * (args_.workerNum + 1));
-    for (int sid = 0; sid <= args_.workerNum; sid++) {
+    keys.reserve(args_.keyNum * args_.workerNum);
+    for (int sid = 0; sid < args_.workerNum; sid++) {
         for (size_t index = 0; index < args_.keyNum; index++) {
             std::stringstream ss;
             ss << args_.keyPrefix;
@@ -125,11 +125,8 @@ std::string KVBench::GetBenchCost()
         }
     }
     std::stringstream ss;
-    ss << args_.action;
-    ss << "-" << args_.threadNum;
-    ss << "-" << args_.keyNum;
-    ss << "-" << args_.keySize;
-    ss << "-" << args_.batchNum;
+    ss << args_.action << "-" << args_.threadNum << "-" << args_.keyNum;
+    ss << "-" << args_.keySize << "-" << args_.batchNum;
     std::sort(costVec.begin(), costVec.end());
     if (costVec.empty()) {
         ss << ":empty cost";
@@ -149,8 +146,17 @@ std::string KVBench::GetBenchCost()
     const size_t PERCENTILE_100 = 100;
 
     double totalTimeCost = std::accumulate(costVec.begin(), costVec.end(), 0.0);  // MicroSecond
-    uint64_t totalKeyNum = args_.keyNum * args_.threadNum;
-    uint64_t totalValueSize = args_.keyNum * args_.threadNum * valueSize;  // bytes
+    uint64_t totalKeyNum;
+    uint64_t totalValueSize;
+    if (args_.action == "set") {
+        // For set operations, total keys = keyNum (distributed across threads)
+        totalKeyNum = args_.keyNum;
+        totalValueSize = args_.keyNum * valueSize;  // bytes
+    } else {
+        // For get and del operations, total keys = keyNum * workerNum (distributed across threads)
+        totalKeyNum = args_.keyNum * args_.workerNum;
+        totalValueSize = args_.keyNum * args_.workerNum * valueSize;  // bytes
+    }
 
     double threadCostSum = std::accumulate(perThreadCost_.begin(), perThreadCost_.end(), 0.0);
     double timeCostPerThread =

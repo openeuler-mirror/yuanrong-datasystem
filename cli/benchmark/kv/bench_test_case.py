@@ -197,9 +197,7 @@ class KVBenchTestCase(BenchTestCase):
         for worker_address in self.bench_args.args.get_worker_addresses.split(","):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "get"
-            command_args["worker_num"] = (
-                len(self.bench_args.args.set_worker_addresses.split(",")) - 1
-            )
+            command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))
             command_args["worker_address"] = worker_address
             self.add_task_from_command_args(command_args)
 
@@ -208,9 +206,7 @@ class KVBenchTestCase(BenchTestCase):
         for worker_address in self.bench_args.args.get_worker_addresses.split(","):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "del"
-            command_args["worker_num"] = (
-                len(self.bench_args.args.set_worker_addresses.split(",")) - 1
-            )
+            command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))
             command_args["worker_address"] = worker_address
             self.add_task_from_command_args(command_args)
             # only run on the first worker from get_worker_addresses
