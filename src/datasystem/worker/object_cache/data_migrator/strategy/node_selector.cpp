@@ -21,7 +21,6 @@
 
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 
@@ -44,20 +43,20 @@ NodeSelector::~NodeSelector()
     Shutdown();
 }
 
-void NodeSelector::Init(std::string localAddress, EtcdClusterManager *etcdCM,
+void NodeSelector::Init(const std::string &localAddress, EtcdClusterManager *etcdCM,
                         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager)
 {
-    if (running_.load()) {
+    if (!etcdCM || !apiManager) {
+        LOG(WARNING) << "The etcdCM_ or apiManager_ is empty, can not set running and start worker thread";
+        return;
+    }
+    if (running_.exchange(true)) {
         LOG(WARNING) << "NodeSelector already initialized";
         return;
     }
     localAddress_ = localAddress;
     etcdCM_ = etcdCM;
     apiManager_ = std::move(apiManager);
-    if (!etcdCM_ || !apiManager_) {
-        LOG(WARNING) << "The etcdCM_ or apiManager_ is empty, can not set running and start worker thread";
-        return;
-    }
     running_.store(true);
 
     workerThread_ = Thread(&NodeSelector::WorkerThread, this);
@@ -67,12 +66,12 @@ void NodeSelector::Init(std::string localAddress, EtcdClusterManager *etcdCM,
 
 void NodeSelector::Shutdown()
 {
-    if (!running_.load()) {
+    if (!running_.exchange(false)) {
         return;
     }
 
     {
-        std::unique_lock<std::mutex> lock(taskMutex_);
+        std::lock_guard<std::mutex> lock(taskMutex_);
         running_.store(false);
     }
     taskCv_.notify_all();

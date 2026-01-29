@@ -39,7 +39,7 @@ ResourceManager::ResourceManager()
 ResourceManager::~ResourceManager()
 {
     {
-        std::unique_lock<std::mutex> lock(taskMutex_);
+        std::lock_guard<std::mutex> lock(taskMutex_);
         running_.store(false);
     }
     taskCv_.notify_all();

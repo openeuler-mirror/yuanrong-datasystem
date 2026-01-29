@@ -49,7 +49,7 @@ public:
      * @param[in] etcdCM The pointer to etcd cluster manager.
      * @param[in] apiManager The manager of worker master api.
      */
-    void Init(std::string localAddress, EtcdClusterManager *etcdCM,
+    void Init(const std::string &localAddress, EtcdClusterManager *etcdCM,
               std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager);
 
     /**
@@ -80,37 +80,14 @@ public:
      * @return If the sum available memory from all workers is larger than the needMemory, return true, else false.
      */
     bool HasEnoughAvailableMemory(size_t needMemory);
-
+protected:
+    NodeSelector();
+    ~NodeSelector();
     /**
      * @brief Collect cluster info, report self memory info and get all workers info.
      * @return Status of this call.
      */
     Status CollectClusterInfo();
-#ifdef WITH_TESTS
-public:
-#else
-private:
-#endif
-    NodeSelector();
-    ~NodeSelector();
-
-    NodeSelector(const NodeSelector &) = delete;
-    NodeSelector(NodeSelector &&) = delete;
-    NodeSelector &operator=(const NodeSelector &) = delete;
-    NodeSelector &operator=(NodeSelector &&) = delete;
-
-    /**
-     * @brief The worker thread.
-     */
-    void WorkerThread();
-
-    /**
-     * @brief Get standby worker.
-     * @param[in] excludeNodes The nodes don't be selected.
-     * @param[out] outNode The selected node.
-     * @return Status of this call.
-     */
-    Status GetStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode);
 
     /**
      * @brief Report resource.
@@ -129,18 +106,36 @@ private:
      */
     Status GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi);
 
+    /**
+     * @brief Get standby worker.
+     * @param[in] excludeNodes The nodes don't be selected.
+     * @param[out] outNode The selected node.
+     * @return Status of this call.
+     */
+    Status GetStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode);
+
+    mutable std::shared_timed_mutex  nodeInfosMutex_;
+    std::vector<NodeInfo> rankList_;
+    size_t totalSize_ = 0;
+private:
+    NodeSelector(const NodeSelector &) = delete;
+    NodeSelector(NodeSelector &&) = delete;
+    NodeSelector &operator=(const NodeSelector &) = delete;
+    NodeSelector &operator=(NodeSelector &&) = delete;
+
+    /**
+     * @brief The worker thread.
+     */
+    void WorkerThread();
+
     std::string localAddress_;
     EtcdClusterManager *etcdCM_{ nullptr };
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_{ nullptr };
-
-    std::vector<NodeInfo> rankList_;
-    size_t totalSize_ = 0;
 
     std::atomic<bool> running_;
     Thread workerThread_;
     std::mutex taskMutex_;
     std::condition_variable taskCv_;
-    mutable std::shared_timed_mutex  nodeInfosMutex_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

@@ -38,7 +38,7 @@ struct NodeInfo {
     {
         // If isReady is false, it's less than the nodeInfo which isReady is true;
         if (isReady != other.isReady) {
-            return isReady == false;
+            return !isReady;
         }
         return availableMemory < other.availableMemory;
     }

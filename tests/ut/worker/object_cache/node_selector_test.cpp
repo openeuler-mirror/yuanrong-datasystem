@@ -35,9 +35,32 @@ using namespace datasystem::object_cache;
 using namespace datasystem::worker;
 using namespace datasystem::master;
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_uint32(node_dead_timeout_s); // resourceManager used
+DS_DECLARE_uint32(node_dead_timeout_s);
 namespace datasystem {
 namespace ut {
+class NodeSelectorHelper : public NodeSelector {
+public:
+    static NodeSelectorHelper &Instance()
+    {
+        static NodeSelectorHelper instance;
+        return instance;
+    }
+    using NodeSelector::Init;
+    using NodeSelector::Shutdown;
+    using NodeSelector::SelectNode;
+    using NodeSelector::GetAvailableMemory;
+    using NodeSelector::HasEnoughAvailableMemory;
+
+    // Make the protected method public
+    using NodeSelector::CollectClusterInfo;
+    using NodeSelector::ReportResource;
+    using NodeSelector::GetWorkerMasterApi;
+    using NodeSelector::GetStandbyWorker;
+    using NodeSelector::nodeInfosMutex_;
+    using NodeSelector::rankList_;
+    using NodeSelector::totalSize_;
+};
+
 class NodeSelectorTest : public CommonTest {
 public:
     NodeSelectorTest() = default;
@@ -53,15 +76,21 @@ public:
         MockGetWorkerMasterApi();
         std::vector<NodeInfo> nodes;
         MockReportResource(nodes);
-        etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
-        etcdStore_->Init();
-        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get());
-        NodeSelector::Instance().Init(localAddr_.ToString(), etcdCM_, nullptr);
+        InitNodeSelector();
     }
 
     void TearDown() override
     {
         CommonTest::TearDown();
+    }
+
+    void InitNodeSelector()
+    {
+        auto etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
+        etcdStore_->Init();
+        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get());
+        apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
+        NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_, apiManager_);
     }
 
     void MockHashRingGetStandbyWorkerByAddr(const std::queue<std::string> &queues)
@@ -89,7 +118,7 @@ public:
 
     void MockReportResource(const std::vector<NodeInfo> &nodes)
     {
-        BINEXPECT_CALL(&NodeSelector::ReportResource, (_, _, _))
+        BINEXPECT_CALL(&NodeSelectorHelper::ReportResource, (_, _, _))
             .WillRepeatedly(
                 Invoke([this, nodes](const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                     master::ResourceReportReqPb &req, master::ResourceReportRspPb &rsp) {
@@ -109,7 +138,7 @@ public:
 
     void MockGetWorkerMasterApi()
     {
-        BINEXPECT_CALL(&NodeSelector::GetWorkerMasterApi, (_))
+        BINEXPECT_CALL(&NodeSelectorHelper::GetWorkerMasterApi, (_))
             .WillRepeatedly(
                 Invoke([this](std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) {
                     (void)workerMasterApi;
@@ -118,31 +147,44 @@ public:
                 }));
     }
 
-    void MockCollectClusterInfo(const std::vector<NodeInfo> nodes)
+    void MockCollectClusterInfo(const std::vector<NodeInfo> &nodes)
     {
         MockGetWorkerMasterApi();
         MockReportResource(nodes);
-        NodeSelector::Instance().CollectClusterInfo();
+        NodeSelectorHelper::Instance().CollectClusterInfo();
     }
 
     Status CallGetStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode)
     {
-        return NodeSelector::Instance().GetStandbyWorker(excludeNodes, outNode);
+        return NodeSelectorHelper::Instance().GetStandbyWorker(excludeNodes, outNode);
     }
 
     std::vector<NodeInfo> GetNodeSelectorRankList()
     {
-        return NodeSelector::Instance().rankList_;
+        std::shared_lock<std::shared_timed_mutex> lock(NodeSelectorHelper::Instance().nodeInfosMutex_);
+        return NodeSelectorHelper::Instance().rankList_;
     }
 
+    size_t GetNodeSelectorTotalSize()
+    {
+        std::shared_lock<std::shared_timed_mutex> lock(NodeSelectorHelper::Instance().nodeInfosMutex_);
+        LOG(INFO) << "The total size is " << NodeSelectorHelper::Instance().totalSize_;
+        return NodeSelectorHelper::Instance().totalSize_;
+    }
+
+    std::string GetLocalAddrSring()
+    {
+        return localAddr_.ToString();
+    }
+private:
     HostPort localAddr_;
     std::unique_ptr<EtcdStore> etcdStore_;
     EtcdClusterManager *etcdCM_;
+    std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_ { nullptr };
 };
 
-TEST_F(NodeSelectorTest, TestCollectClusterInfo)
+void GetNodeInfosHelper(std::vector<NodeInfo> &nodes, std::vector<NodeInfo> &sortedNodes)
 {
-    std::vector<NodeInfo> nodes;
     NodeInfo node0("127.0.0.1:1111", 10 * 1024 * 1024, true);
     NodeInfo node1("127.0.0.1:1112", 20 * 1024 * 1024, true);
     NodeInfo node2("127.0.0.1:1113", 30 * 1024 * 1024, false);
@@ -156,13 +198,19 @@ TEST_F(NodeSelectorTest, TestCollectClusterInfo)
     nodes.emplace_back(node4);
     nodes.emplace_back(node5);
 
+    sortedNodes.emplace_back(node5);
+    sortedNodes.emplace_back(node4);
+    sortedNodes.emplace_back(node3);
+    sortedNodes.emplace_back(node1);
+    sortedNodes.emplace_back(node0);
+    sortedNodes.emplace_back(node2);
+}
+
+TEST_F(NodeSelectorTest, TestCollectClusterInfo)
+{
+    std::vector<NodeInfo> nodes;
     std::vector<NodeInfo> expectNodes;
-    expectNodes.emplace_back(node5);
-    expectNodes.emplace_back(node4);
-    expectNodes.emplace_back(node3);
-    expectNodes.emplace_back(node1);
-    expectNodes.emplace_back(node0);
-    expectNodes.emplace_back(node2);
+    GetNodeInfosHelper(nodes, expectNodes);
     MockCollectClusterInfo(nodes);
     auto rankList = GetNodeSelectorRankList();
     bool isSorted = std::is_sorted(rankList.begin(), rankList.end(),
@@ -175,26 +223,84 @@ TEST_F(NodeSelectorTest, TestCollectClusterInfo)
     }
 }
 
-TEST_F(NodeSelectorTest, TestSelectNode)
+TEST_F(NodeSelectorTest, TestGetAvailableMemory)
 {
-    // Case 1: rankList_ is empty, return the standby worker.
     std::vector<NodeInfo> nodes;
+    std::vector<NodeInfo> sortedNodes;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    (void)sortedNodes;
+    MockCollectClusterInfo(nodes);
+    ASSERT_TRUE(NodeSelectorHelper::Instance().GetAvailableMemory("notExistKey") == 0);
+    for (const auto &node : nodes) {
+        if (node.isReady) {
+            ASSERT_TRUE(NodeSelectorHelper::Instance()
+                .GetAvailableMemory(node.nodeId) == node.availableMemory);
+        } else {
+            ASSERT_TRUE(NodeSelectorHelper::Instance().GetAvailableMemory(node.nodeId) == 0);
+        }
+    }
+}
+
+TEST_F(NodeSelectorTest, TestHasEnoughMemory)
+{
+    bool hasEnough = NodeSelectorHelper::Instance().HasEnoughAvailableMemory(0);
+    ASSERT_FALSE(hasEnough); // If no reousrce info, return false even the needSize is zero;
+    std::vector<NodeInfo> nodes;
+    std::vector<NodeInfo> sortedNodes;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    MockCollectClusterInfo(nodes);
+    uint64_t expectedTotalSize = 0;
+    for (const auto &node : nodes) {
+        if (node.isReady) {
+            expectedTotalSize += node.availableMemory;
+        }
+    }
+    ASSERT_TRUE(GetNodeSelectorTotalSize() == expectedTotalSize);
+    hasEnough = NodeSelectorHelper::Instance().HasEnoughAvailableMemory(expectedTotalSize);
+    ASSERT_FALSE(hasEnough);
+    hasEnough = NodeSelectorHelper::Instance().HasEnoughAvailableMemory(expectedTotalSize + 1);
+    ASSERT_FALSE(hasEnough);
+    hasEnough = NodeSelectorHelper::Instance().HasEnoughAvailableMemory(expectedTotalSize - 1);
+    ASSERT_TRUE(hasEnough);
+
+    std::vector<NodeInfo> newNodes;
+    NodeInfo node0("127.0.0.3:1111", 100 * 1024 * 1024, true);
+    NodeInfo node1("127.0.0.3:1112", 200 * 1024 * 1024, true);
+    newNodes.emplace_back(node0);
+    newNodes.emplace_back(node1);
+    MockCollectClusterInfo(newNodes);
+    ASSERT_TRUE(GetNodeSelectorTotalSize() == node0.availableMemory + node1.availableMemory);
+    hasEnough = NodeSelectorHelper::Instance().HasEnoughAvailableMemory(node0.availableMemory + 1);
+    ASSERT_TRUE(hasEnough);
+}
+
+TEST_F(NodeSelectorTest, TestSelectNodeStandbyWorker)
+{
+    // Case: rankList_ is empty, return the standby worker.
+    std::vector<NodeInfo> nodes;
+    std::unordered_set<std::string> excludeNodes;
+    std::string preferNode;
+    size_t needSize = 1024;
+    std::string outNode;
     MockCollectClusterInfo(nodes);
     std::queue<std::string> standbyWorkers;
     std::string standbyWorker = "workerAddress0";
     standbyWorkers.push(standbyWorker);
     MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    excludeNodes.emplace(GetLocalAddrSring());
+    auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
+    DS_ASSERT_OK(rc);
+    ASSERT_TRUE(outNode == standbyWorker);
+}
 
+TEST_F(NodeSelectorTest, TestSelectNodeNoSpace)
+{
+    // The maximum remaining capacity in rankList_ is less than 1MB, return K_NO_SPACE
+    std::vector<NodeInfo> nodes;
     std::unordered_set<std::string> excludeNodes;
-    excludeNodes.emplace(localAddr_.ToString());
     std::string preferNode;
     size_t needSize = 1024;
     std::string outNode;
-    auto rc = NodeSelector::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
-    DS_ASSERT_OK(rc);
-    ASSERT_TRUE(outNode == standbyWorker);
-
-    // Case 2: The maximum remaining capacity in rankList_ is less than 1MB, return K_NO_SPACE
     std::string workerAddress0 = "127.0.0.1:1110";
     int64_t availableMemory0 = 10 * 1024;
     std::string workerAddress1 = "127.0.0.1:1111";
@@ -203,45 +309,83 @@ TEST_F(NodeSelectorTest, TestSelectNode)
     nodes.emplace_back(NodeInfo(workerAddress1, availableMemory1, true));
     outNode.clear();
     MockCollectClusterInfo(nodes);
-    rc = NodeSelector::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
-    ASSERT_TRUE(rc.GetCode() == K_NO_SPACE);
 
-    // Case 3: prefer node
-    std::string workerAddress2 = "127.0.0.1:1112";
+    auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
+    ASSERT_TRUE(rc.GetCode() == K_NO_SPACE);
+}
+
+TEST_F(NodeSelectorTest, TestSelectNodePreferNode)
+{
+    std::vector<NodeInfo> nodes;
+    std::vector<NodeInfo> sortedNodes;
+    std::unordered_set<std::string> excludeNodes;
+    std::string preferNode;
+    size_t needSize = 1024;
+    std::string outNode;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    (void)sortedNodes;
+    std::string workerAddress1 = "127.0.0.2:1111";
+    int64_t availableMemory1 = 10 * 1024 * 1024;
+    nodes.emplace_back(NodeInfo(workerAddress1, availableMemory1, true));
+    std::string workerAddress2 = "127.0.0.2:1112";
     int64_t availableMemory2 = 10 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(workerAddress2, availableMemory2, true));
     preferNode = workerAddress1;
     MockCollectClusterInfo(nodes);
     outNode.clear();
-    rc = NodeSelector::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
+    auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
     DS_ASSERT_OK(rc);
     ASSERT_TRUE(outNode == preferNode);
+}
 
-    // Case 4: Select the one of the max 5;
+TEST_F(NodeSelectorTest, TestSelectNodeOneOfMaxN)
+{
+    // Select the one of the max 5;
+    std::vector<NodeInfo> nodes;
+    std::unordered_set<std::string> excludeNodes;
+    std::string preferNode;
+    size_t needSize = 1024;
+    std::string outNode;
+    std::vector<NodeInfo> sortedNodes;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    (void)sortedNodes;
     std::string workerAddress3 = "127.0.0.1:1113";
-    int64_t availableMemory3 = 30 * 1024 * 1024;
+    int64_t availableMemory3 = 300 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(workerAddress3, availableMemory3, true));
     std::string workerAddress4 = "127.0.0.1:1114";
-    int64_t availableMemory4 = 40 * 1024 * 1024;
+    int64_t availableMemory4 = 400 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(workerAddress4, availableMemory4, true));
     std::string workerAddress5 = "127.0.0.1:1115";
-    int64_t availableMemory5 = 50 * 1024 * 1024;
+    int64_t availableMemory5 = 500 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(workerAddress5, availableMemory5, true));
     std::string workerAddress6 = "127.0.0.1:1116";
-    int64_t availableMemory6 = 60 * 1024 * 1024;
+    int64_t availableMemory6 = 600 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(workerAddress6, availableMemory6, true));
     std::string workerAddress7 = "127.0.0.1:1117";
-    int64_t availableMemory7 = 70 * 1024 * 1024;
+    int64_t availableMemory7 = 700 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(workerAddress7, availableMemory7, true));
     MockCollectClusterInfo(nodes);
     preferNode.clear();
     outNode.clear();
-    rc = NodeSelector::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
+    auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
     DS_ASSERT_OK(rc);
     ASSERT_TRUE(outNode == workerAddress3 || outNode == workerAddress4 || outNode == workerAddress5 ||
                 outNode == workerAddress6 || outNode == workerAddress7);
+}
 
-    // Case 5: Test isReady
+TEST_F(NodeSelectorTest, TestSelectNodeIsReady)
+{
+    std::vector<NodeInfo> nodes;
+    std::unordered_set<std::string> excludeNodes;
+    std::string preferNode;
+    size_t needSize = 200 * 1024 * 1024;
+    std::string outNode;
+    std::vector<NodeInfo> sortedNodes;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    (void)sortedNodes;
+    std::string workerAddress1 = "127.0.0.2:1111";
+    int64_t availableMemory1 = 300 * 1024 * 1024;
+    nodes.emplace_back(NodeInfo(workerAddress1, availableMemory1, true));
     std::string unreadyAddress3 = "127.0.0.2:1113";
     int64_t unreadyAM3 = 300 * 1024 * 1024;
     nodes.emplace_back(NodeInfo(unreadyAddress3, unreadyAM3, false));
@@ -260,20 +404,80 @@ TEST_F(NodeSelectorTest, TestSelectNode)
     MockCollectClusterInfo(nodes);
     preferNode.clear();
     outNode.clear();
-    rc = NodeSelector::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
+    auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
     DS_ASSERT_OK(rc);
-    ASSERT_TRUE(outNode == workerAddress3 || outNode == workerAddress4 || outNode == workerAddress5 ||
-                outNode == workerAddress6 || outNode == workerAddress7);
-
-    // Case 7: There is no nodes that available memory is larger than the needSize,
-    // it will return the max availableMemory node which is ready and not in exclude nodes
-    needSize = 1000 * 1024 * 1024;
-    rc = NodeSelector::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
-    DS_ASSERT_OK(rc);
-    ASSERT_TRUE(outNode == workerAddress7);
+    ASSERT_TRUE(outNode == workerAddress1);
 }
 
-TEST_F(NodeSelectorTest, TestGetStandbyWorker)
+TEST_F(NodeSelectorTest, TestSelectNodeNoSingleNodeEnough)
+{
+    std::vector<NodeInfo> nodes;
+    std::unordered_set<std::string> excludeNodes;
+    std::string preferNode;
+    std::string outNode;
+    std::vector<NodeInfo> sortedNodes;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    auto maxSize = sortedNodes[0].availableMemory;
+    size_t needSize = maxSize + 1024;
+    MockCollectClusterInfo(nodes);
+    auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
+    DS_ASSERT_OK(rc);
+    ASSERT_TRUE(outNode == sortedNodes[0].nodeId);
+
+}
+
+TEST_F(NodeSelectorTest, TestGetStandbyWorkerFirstStandby)
+{
+    // Case: The exclude nodes is empty, can get the first next worker address
+    std::unordered_set<std::string> excludeNodes;
+    std::string outNode;
+    std::queue<std::string> standbyWorkers;
+    std::string workerAddress0 = "workerAddress0";
+    std::string workerAddress1 = "workerAddress1";
+    standbyWorkers.push(workerAddress0);
+    standbyWorkers.push(workerAddress1);
+    standbyWorkers.emplace(GetLocalAddrSring());
+    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    DS_ASSERT_OK(CallGetStandbyWorker(excludeNodes, outNode));
+    ASSERT_TRUE(outNode == workerAddress0);
+}
+
+TEST_F(NodeSelectorTest, TestGetStandbyWorkerFirstNotInExclude)
+{
+    std::unordered_set<std::string> excludeNodes;
+    std::string outNode;
+    std::queue<std::string> standbyWorkers;
+    std::string workerAddress0 = "workerAddress0";
+    std::string workerAddress1 = "workerAddress1";
+    standbyWorkers.push(workerAddress0);
+    standbyWorkers.push(workerAddress1);
+    excludeNodes.emplace(workerAddress0);
+    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    DS_ASSERT_OK(CallGetStandbyWorker(excludeNodes, outNode));
+    ASSERT_TRUE(outNode == workerAddress1);
+}
+
+TEST_F(NodeSelectorTest, TestGetStandbyWorkerAllInExlcude)
+{
+    std::unordered_set<std::string> excludeNodes;
+    std::string outNode;
+    std::queue<std::string> standbyWorkers;
+    std::string workerAddress0 = "workerAddress0";
+    std::string workerAddress1 = "workerAddress1";
+    std::string workerAddress2 = "workerAddress2";
+    standbyWorkers.push(workerAddress0);
+    standbyWorkers.push(workerAddress1);
+    standbyWorkers.push(workerAddress2);
+    standbyWorkers.emplace(GetLocalAddrSring());
+    excludeNodes.emplace(workerAddress0);
+    excludeNodes.emplace(workerAddress1);
+    excludeNodes.emplace(workerAddress2);
+    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    ASSERT_TRUE(CallGetStandbyWorker(excludeNodes, outNode).GetCode() == K_NOT_FOUND);
+    ASSERT_TRUE(outNode.empty());
+}
+
+TEST_F(NodeSelectorTest, TestGetStandbyWorkerPreFiveInExclude)
 {
     std::unordered_set<std::string> excludeNodes;
     std::string outNode;
@@ -284,54 +488,18 @@ TEST_F(NodeSelectorTest, TestGetStandbyWorker)
     std::string workerAddress3 = "workerAddress3";
     std::string workerAddress4 = "workerAddress4";
     std::string workerAddress5 = "workerAddress5";
-    // Case 1: The exclude nodes is empty, can get the first next worker address
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
-    standbyWorkers.push(workerAddress2);
-    standbyWorkers.emplace(localAddr_.ToString());
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
-    DS_ASSERT_OK(CallGetStandbyWorker(excludeNodes, outNode));
-    ASSERT_TRUE(outNode == workerAddress0);
-
-    // Case 2: The exclude is not empty and it size is less than 5,
-    // can get the first worker that not in the exclude nodes
-    excludeNodes.emplace(workerAddress0);
-    excludeNodes.emplace(workerAddress1);
-    standbyWorkers = {};
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
-    standbyWorkers.push(workerAddress2);
-    standbyWorkers.emplace(localAddr_.ToString());
-    outNode.clear();
-    DS_ASSERT_OK(CallGetStandbyWorker(excludeNodes, outNode));
-    ASSERT_TRUE(outNode == workerAddress2);
-
-    // Case 3: Except local address, all workers are in exclude nodes
-    // can not fount the outNode and the error code is K_NOT_FOUND
-    excludeNodes.emplace(workerAddress2);
-    standbyWorkers = {};
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
-    standbyWorkers.push(workerAddress2);
-    standbyWorkers.emplace(localAddr_.ToString());
-    outNode.clear();
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
-    ASSERT_TRUE(CallGetStandbyWorker(excludeNodes, outNode).GetCode() == K_NOT_FOUND);
-    ASSERT_TRUE(outNode.empty());
-
-    // Case 4: The pre 5 next worker is all in the out nodes, it reached the max query counts
-    // can not found the standby worker and the error code is K_NOT_FOUND
-    excludeNodes.emplace(workerAddress3);
-    excludeNodes.emplace(workerAddress4);
-    standbyWorkers = {};
     standbyWorkers.push(workerAddress0);
     standbyWorkers.push(workerAddress1);
     standbyWorkers.push(workerAddress2);
     standbyWorkers.push(workerAddress3);
     standbyWorkers.push(workerAddress4);
     standbyWorkers.push(workerAddress5);
-    standbyWorkers.emplace(localAddr_.ToString());
-    outNode.clear();
+    standbyWorkers.emplace(GetLocalAddrSring());
+    excludeNodes.emplace(workerAddress0);
+    excludeNodes.emplace(workerAddress1);
+    excludeNodes.emplace(workerAddress2);
+    excludeNodes.emplace(workerAddress3);
+    excludeNodes.emplace(workerAddress4);
     MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
     ASSERT_TRUE(CallGetStandbyWorker(excludeNodes, outNode).GetCode() == K_NOT_FOUND);
     ASSERT_TRUE(outNode.empty());
