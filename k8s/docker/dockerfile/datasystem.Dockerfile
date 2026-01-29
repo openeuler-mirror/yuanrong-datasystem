@@ -32,7 +32,7 @@ RUN sed -i '/^metalink=/d' /etc/yum.repos.d/*.repo
 
 RUN dnf clean all && \
     dnf makecache && \
-    dnf install -y shadow-utils && \
+    dnf install -y shadow-utils rdma-core && \
     dnf clean all
 
 RUN mkdir -p ${DATASYSTEM_ROOT} && \
