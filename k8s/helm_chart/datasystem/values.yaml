@@ -378,8 +378,6 @@ global:
     enableP2pTransfer: false
     # Enable worker->worker OC batch get, default false.
     enableWorkerWorkerBatchGet: false
-    # Option to turn on Remote H2D, default false.
-    enableRemoteH2D: "false"
     # The data threshold to transfer obj data between client and worker via shm, unit is KB.
     ocShmTransferThresholdKB: 500
     # Option to turn on urma for OC worker to worker data transfer, default false.
