@@ -266,6 +266,10 @@ void P2PSubscribe::P2PAckGet(std::shared_ptr<P2PGetRequest> &p2pGetRequest)
     const auto &objectKey = bufferInfo->devObjKey;
     auto &srcClientId = p2pGetRequest->GetSrcClientId();
     auto srcDeviceId = p2pGetRequest->GetSrcDeviceId();
+    if (bufferInfo->cacheLocation) {
+        AddSubscribe(bufferInfo, p2pGetRequest->GetBlobsStorage());
+        (void)devMemUnitTable_.insert(std::make_pair(objectKey, p2pGetRequest->GetMemUnit()));
+    }
     VLOG(1) << FormatString("Object key %s completed the receiving procedure", objectKey);
     LOG_IF_ERROR(p2pGetRequest->SetPromiseValue(Status::OK()), "promise set value failed.");
     AckRecvFinishReqPb req;
@@ -418,7 +422,6 @@ void P2PSubscribe::ProcessP2PRecv(
                 for (const auto &p2pGetRequest : requests) {
                     PerfPoint::RecordElapsed(PerfKey::CLIENT_P2P_SUB_SUBMIT_KEY_SIZE, p2pGetRequest->GetTotalSize());
                     const auto &objectKey = p2pGetRequest->GetObjectKey();
-                    const auto &bufferInfo = p2pGetRequest->GetBufferInfo();
                     auto blobStorage = p2pGetRequest->GetBlobsStorage();
                     LOG(INFO) << FormatString("Start submit recv task for object key: %s, to comm: %s", objectKey,
                                               comm->GetCommId());
@@ -433,10 +436,6 @@ void P2PSubscribe::ProcessP2PRecv(
                             rc.GetMsg());
                         LOG_IF_ERROR(p2pGetRequest->SetPromiseValue(rc), "promise set value failed.");
                         continue;
-                    }
-                    if (bufferInfo->cacheLocation) {
-                        AddSubscribe(bufferInfo, blobStorage);
-                        (void)devMemUnitTable_.insert(std::make_pair(objectKey, p2pGetRequest->GetMemUnit()));
                     }
                     p2pGetRequest->SetSrcClientId(srcClientId);
                     p2pGetRequest->SetSrcDeviceId(srcDeviceId);

@@ -2250,5 +2250,67 @@ TEST_F(DevObjectHeteroTest, TestInvalidSrcOffset)
     DS_ASSERT_TRUE(WaitForChildFork(subChild1), 0);
     DS_ASSERT_TRUE(WaitForChildFork(subChild2), 0);
 }
+
+TEST_F(DevObjectHeteroTest, TestDevMGetLocalCopyAfterRecv)
+{
+    size_t numOfObjs = 1;
+    size_t blksPerObj = 1;
+    size_t blkSz = 64;
+    int srcDevice = 0;
+    int dstDevice = 1;
+    std::vector<std::string> keys = { "test_dev_mget_local_copy_key" };
+
+    auto devMsetChild = ForkForTest([&]() {
+        std::vector<DeviceBlobList> setBlobList;
+        std::vector<DeviceBlobList> unusedGetBlobList;
+        InitAcl(srcDevice);
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, unusedGetBlobList, setBlobList, srcDevice);
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(0, client);
+        std::vector<std::string> failedList;
+        DS_ASSERT_OK(client->DevMSet(keys, setBlobList, failedList));
+        DS_ASSERT_TRUE(failedList.empty(), true);
+        // Wait for the first DevMGet to complete
+        std::this_thread::sleep_for(std::chrono::seconds(SHORT_WAIT_TIME));
+    });
+
+    auto devMgetChild = ForkForTest([&]() {
+        InitAcl(dstDevice);
+        std::vector<DeviceBlobList> firstGetBlobList;
+        std::vector<DeviceBlobList> unusedSetBlobList1;
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, firstGetBlobList, unusedSetBlobList1, dstDevice);
+        std::vector<DeviceBlobList> secondGetBlobList;
+        std::vector<DeviceBlobList> unusedSetBlobList2;
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, secondGetBlobList, unusedSetBlobList2, dstDevice);
+
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(1, client);
+        std::vector<std::string> failedList;
+
+        // First DevMGet: normal request from sender
+        DS_ASSERT_OK(client->DevMGet(keys, firstGetBlobList, failedList, RPC_TIMEOUT));
+        DS_ASSERT_TRUE(failedList.empty(), true);
+        auto expectContent = std::string(blkSz, 'b');
+        for (auto &devBlobList : firstGetBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+
+        // Second DevMGet: should use local d2d copy
+        failedList.clear();
+        DS_ASSERT_OK(client->DevMGet(keys, secondGetBlobList, failedList, RPC_TIMEOUT));
+        DS_ASSERT_TRUE(failedList.empty(), true);
+        // Verify data consistency with DevMSet
+        for (auto &devBlobList : secondGetBlobList) {
+            for (auto &blob : devBlobList.blobs) {
+                CheckDevPtrContent(blob.pointer, blkSz, expectContent);
+            }
+        }
+    });
+
+    DS_ASSERT_TRUE(WaitForChildFork(devMsetChild), 0);
+    DS_ASSERT_TRUE(WaitForChildFork(devMgetChild), 0);
+}
 }  // namespace st
 }  // namespace datasystem
