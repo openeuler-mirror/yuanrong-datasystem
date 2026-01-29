@@ -33,6 +33,7 @@
 #include "datasystem/object_client.h"
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/emb_client.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -99,11 +100,13 @@ public:
     }
 
     void InitTestEmbClient(uint32_t workerIndex, std::shared_ptr<EmbClient> &client, InitParams params = {}, 
-                        int32_t timeoutMs = 60000, bool enableCrossNode = false, bool enableExclusive = false)
+                            const std::string etcdServer = "", const std::string localPath = "", 
+                            int32_t timeoutMs = 60000, bool enableCrossNode = false, bool enableExclusive = false)
+    {
        ConnectOptions connectOptions;
         InitConnectOpt(workerIndex, connectOptions, timeoutMs, enableCrossNode, enableExclusive);
         client = std::make_shared<EmbClient>(connectOptions);
-        DS_ASSERT_OK(client->Init(params));
+        DS_ASSERT_OK(client->Init(params, etcdServer, localPath));
         if (client == nullptr) {
             LOG(ERROR) << "Failed to initialize EmbClient: client is nullptr. TableIndex: ";
         } else {
