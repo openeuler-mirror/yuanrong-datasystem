@@ -54,7 +54,7 @@ InitParams::InitParams(const emb_cache::TableMetaInfo& info)
 EmbClient::EmbClient(const ConnectOptions &connectOptions)
 {
     kvClientImpl_ = std::make_shared<KVClient>(connectOptions);
-    embClientImpl_ = std::make_unique<emb_cache::EmbClientImpl>(connectOptions, kvClientImpl_);
+    embClientImpl_ = std::make_unique<emb_cache::EmbClientImpl>(connectOptions);
 }
 
 EmbClient::~EmbClient()
@@ -78,15 +78,22 @@ Status EmbClient::ShutDown()
     return Status::OK();
 }
 
-Status EmbClient::Init(const InitParams &params)
+Status EmbClient::Init(const InitParams &params, const std::string &etcdserver, const std::string &localPath)
 {
+    // 初始化kvClientImpl_、embClientImpl_、tableIndex_
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    bool needRollbackState;
+    
     auto rc = kvClientImpl_->Init();
     RETURN_IF_NOT_OK(rc);
     
-    std::shared_ptr<EmbClient> self = shared_from_this();
+    // 这里的Init本质上是根据params来创建一个tableMeta，这部分创建meta的逻辑写在了embClientImpl_->Init()，所以需要先创建一个embClientImpl_
+    // embClientImpl_ = datasystem::emb_cache::EmbClientImpl::GetInstance();
+    std::shared_ptr<EmbClient> self = shared_from_this(); //指向client本身
+    // @todo:这里还要检查是否创建embClientImpl_成功
     static std::once_flag initFlag;
-    embClientImpl_->Init(params, self);
+    embClientImpl_->Init(params, self, etcdserver, kvClientImpl_, localPath);
+
     tableKey_ = params.tableKey;
 
     return Status::OK();

@@ -25,6 +25,7 @@ set(cpprestsdk_CMAKE_OPTIONS
     -DCMAKE_CXX_STANDARD=17
     -DCMAKE_SKIP_RPATH:BOOL=TRUE
     -DBUILD_TESTS:BOOL=OFF
+    -DBUILD_SHARED_LIBS:BOOL=OFF
     -DOPENSSL_INCLUDE_DIR:Path=${OPENSSL_INCLUDE_DIR}
     -DCPPREST_EXCLUDE_WEBSOCKETS=ON
     -DBUILD_SAMPLES:BOOL=OFF)
@@ -40,7 +41,8 @@ add_thirdparty_lib(cpprestsdk
     CONF_OPTIONS ${cpprestsdk_CMAKE_OPTIONS}
     CXX_FLAGS ${cpprestsdk_CXX_FLAGS})
  
-# 查找并包含 cpprestsdkfind_package(cpprestsdk REQUIRED PATHS ${cpprestsdk_ROOT} CONFIG)
+# 查找并包含 cpprestsdk
+find_package(cpprestsdk REQUIRED PATHS ${cpprestsdk_ROOT} CONFIG)
  
 get_property(cpprestsdk_INCLUDE_DIR TARGET cpprestsdk::cpprest PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 include_directories(SYSTEM ${cpprestsdk_INCLUDE_DIR})

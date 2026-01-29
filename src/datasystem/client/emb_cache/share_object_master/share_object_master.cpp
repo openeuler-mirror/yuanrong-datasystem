@@ -10,7 +10,7 @@ datasystem::Status ShareObjectMaster::Init(const std::vector<std::string>& bucke
                     ShareObjectApiManager::CreateApi(bucketkey, kvClient_, dimSize));
       }
       return Status::OK();
-    }
+}
  
 datasystem::Status ShareObjectMaster::Publish(const std::string& bucketkey,
                                               std::vector<uint64_t>& keys,
@@ -42,6 +42,7 @@ datasystem::Status ShareObjectMaster::enqueue(const std::vector<std::string> &em
                                               const std::vector<std::string> &embValueFilesPath) {
     for (int i = 0; i < embKeyFilesPath.size(); i++) {
         std::string msgValue = embKeyFilesPath[i] + ":" + embValueFilesPath[i];
+        // TODO mwj UUID?
         RETURN_IF_NOT_OK(etcdQueue->push(std::to_string(i), msgValue));
     }
     // 发布eof消息
@@ -49,7 +50,7 @@ datasystem::Status ShareObjectMaster::enqueue(const std::vector<std::string> &em
     return datasystem::Status::OK();
 }
 
-std::unique_ptr<Message> ShareObjectMaster::dequeue() {
+std::unique_ptr<EtcdMPMCQueue::Message> ShareObjectMaster::dequeue() {
     return etcdQueue->pop();
 }
 }

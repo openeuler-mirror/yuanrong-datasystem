@@ -57,7 +57,7 @@ public:
         // opts.numRedis = 1;
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
-        opts.workerGflagParams = "-shared_memory_size_mb=3000 -v=2 -oc_shm_transfer_threshold_kb=0";
+        opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=2 -oc_shm_transfer_threshold_kb=0";
     }
 
     void GenerateKeyValues(std::vector<uint64_t> &keys, std::vector<std::string> &vals, int num, int valSize)
@@ -107,8 +107,8 @@ TEST_F(EmbClientLoadTest, TestInsert)
     params.tableIndex = 1;
     params.tableName = "table";
     params.dimSize = 16;
-    params.tableCapacity = 30;
-    params.bucketNum = 10;
+    params.tableCapacity = 500;
+    params.bucketNum = 3;
     params.bucketCapacity = 10;
 
     // ConnectOptions connectOptions;
@@ -157,7 +157,7 @@ TEST_F(EmbClientLoadTest, TestFindFromAnother)
     params.tableName = "table";
     params.dimSize = 16;
     params.tableCapacity = 300;
-    params.bucketNum = 10;
+    params.bucketNum = 3;
     params.bucketCapacity = 10;
 
     // ConnectOptions connectOptions;
@@ -173,7 +173,6 @@ TEST_F(EmbClientLoadTest, TestFindFromAnother)
     etcdAddress1 = addrs1.first.ToString();
     etcdAddress2 = addrs2.first.ToString();
     InitTestEmbClient(0, client1, params, etcdAddress1, "");
-    InitTestEmbClient(1, client2, params, etcdAddress2, "");
     std::vector<uint64_t> keys;
     std::vector<std::string> vals;
     std::vector<StringView> values;
@@ -187,6 +186,7 @@ TEST_F(EmbClientLoadTest, TestFindFromAnother)
     std::vector<StringView> buffer;
     DS_ASSERT_OK(client1->BuildIndex());
     
+    InitTestEmbClient(1, client2, params, etcdAddress2, "");
     DS_ASSERT_OK(client2->Find(keys, buffer));
     ASSERT_EQ(buffer.size(), keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {

@@ -40,8 +40,7 @@ list(APPEND CLIENT_SRCS
         emb_cache/share_object/share_vector_object.cpp
         emb_cache/share_object/share_map_object.cpp
         emb_cache/share_object_master/etcd_queue.cpp
-        emb_cache/share_object_master/share_object_master.cpp
-        emb_cache/share_object_master/share_object_api.cpp)
+        emb_cache/share_object_master/share_object_master.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}

@@ -88,12 +88,12 @@ class EmbClient:
             raise RuntimeError(status.to_string())
         return values
 
-    def BuildIndex(self):
+    def buildIndex(self):
         status = self._client.BuildIndex()
         if status.is_error():
             raise RuntimeError(status.to_string())
  
-    def Load(self, key_paths: List[str], value_paths: List[str], file_format: str):
+    def load(self, key_paths: List[str], value_paths: List[str], file_format: str):
         status = self._client.Load(key_paths, value_paths, file_format)
         if status.is_error():
             raise RuntimeError(status.to_string())

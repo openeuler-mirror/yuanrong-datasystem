@@ -30,6 +30,7 @@
 #include "hash_function/xxhash.h"
 #include "hash_function/city.h"
 #include "hash_function/MurmurHash3.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include <filesystem>
 
 namespace datasystem {
@@ -222,6 +223,7 @@ Status EmbClientImpl::BuildIndex()
 // Status EmbClientImpl::Find(const std::vector<uint32_t> &keys, Optional<Buffer> &buffer, const std::string tableKey)
 Status EmbClientImpl::Find(const std::vector<uint64_t> &keys, std::vector<StringView> &buffer)
 {
+    PerfPoint point(PerfKey::EMBCLIENT_IMPL_KEY_TO_BUCKET);
     // 映射关系 key -> bucketKey -> map -> value
 
     // 1.将keys按照所处的bucket分组，构造bucketKeytoKeys这个map，分组是为了一个bucket只需要查询一次map，而不是一个key查询一次
@@ -247,6 +249,7 @@ Status EmbClientImpl::Find(const std::vector<uint64_t> &keys, std::vector<String
     futs.reserve(bucketNum);
     std::vector<std::vector<StringView>> queryBuffers;
     queryBuffers.resize(bucketNum);
+    point.RecordAndReset(PerfKey::EMBCLIENT_IMPL_FIND_ASYNC);
 
     for (size_t bucketIdx = 0; bucketIdx < bucketNum; bucketIdx++) {
         if (bucketGroupsKey[bucketIdx].empty()) {
@@ -261,6 +264,7 @@ Status EmbClientImpl::Find(const std::vector<uint64_t> &keys, std::vector<String
         RETURN_IF_NOT_OK(fut.get());
     }
 
+    point.RecordAndReset(PerfKey::EMBCLIENT_IMPL_SORT_RESULT);
     const auto& nKeys = keys.size();
     buffer.resize(nKeys);
 
@@ -271,6 +275,7 @@ Status EmbClientImpl::Find(const std::vector<uint64_t> &keys, std::vector<String
             buffer[order] = queryBuffers[i][j];
         }
     }
+    point.Record();
     
     return Status::OK();
     
@@ -291,16 +296,17 @@ Status EmbClientImpl::Load(const std::string &tableKey, const std::vector<std::s
     // 1.这里改成pair<keyfile, valuefile>,下面这行改成master_.enqueue(tableKey, {embKeyFilesPath, embValueFilesPath});
     RETURN_IF_NOT_OK(master_->enqueue(embKeyFilesPath, embValueFilesPath));
 
+    // 轮询
     while (true) {
         auto msg = master_->dequeue();
         if (msg == nullptr) {
             break;
         }
-
-        std::string combinedPath = msg.value;
+        
+        std::string combinedPath = msg->value;
         size_t pos = combinedPath.find(':');
-        getKeyFilesPath = combinedPath.substr(0, pos);
-        getValueFilesPath = combinedPath.substr(pos + 1);}}
+        auto getKeyFilesPath = combinedPath.substr(0, pos);
+        auto getValueFilesPath = combinedPath.substr(pos + 1);
 
         auto downloader = DownloaderFactory::createDownloader(getKeyFilesPath);
         auto keyFutrue = downloader->download(getKeyFilesPath, master_->localPath_);

@@ -58,7 +58,7 @@ set(etcd_cpp_apiv3_CMAKE_OPTIONS
     -DCPPREST_INCLUDE_DIR:PATH=${cpprestsdk_INCLUDE_DIR}
     -DCPPREST_LIB=${CPPREST_LIB}
     -DCMAKE_SKIP_RPATH:BOOL=TRUE
-    -DBUILD_SHARED_LIBS:BOOL=etcd_cpp_apiv3_CMAKE_OPTIONS
+    -DBUILD_SHARED_LIBS:BOOL=OFF
     -Dutf8_range_DIR:PATH=${utf8_range_PKG_PATH}
     -Dabsl_DIR:PATH=${absl_PKG_PATH}
     -Dc-ares_DIR:PATH=${c-ares_PKG_PATH}
@@ -68,13 +68,17 @@ set(etcd_cpp_apiv3_CMAKE_OPTIONS
  
 set(etcd_cpp_apiv3_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} -fPIE -pie -fPIC")
  
-add_thirdparty_lib(etcd_cpp_apiv3_CMAKE_OPTIONS
+set(etcd_cpp_apiv3_PATCHES 
+    ${CMAKE_SOURCE_DIR}/third_party/patches/etcdapiv3/etcdapiv3.patch)
+
+add_thirdparty_lib(etcd_cpp_apiv3
     URL ${etcd_cpp_apiv3_URLS}
     SHA256 ${etcd_cpp_apiv3_SHA256S}
     FAKE_SHA256 ${etcd_cpp_apiv3_FAKE_SHA256}
     VERSION ${etcd_cpp_apiv3_VERSION}
     CONF_OPTIONS ${etcd_cpp_apiv3_CMAKE_OPTIONS}
-    CXX_FLAGS ${etcd_cpp_apiv3_CXX_FLAGS})
+    CXX_FLAGS ${etcd_cpp_apiv3_CXX_FLAGS}
+    PATCHES ${etcd_cpp_apiv3_PATCHES})
  
 # 查找并包含 etcd-cpp-apiv3
 find_package(etcd-cpp-api REQUIRED PATHS ${etcd_cpp_apiv3_ROOT} CONFIG)

@@ -28,6 +28,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/emb_client.h"
 #include "datasystem/pybind_api/pybind_register.h"
 
 using datasystem::ConnectOptions;
@@ -451,5 +452,91 @@ PybindDefineRegisterer g_pybind_define_f_SetParam("SetParam", PRIORITY_LOW, [](c
         .def_readwrite("ttl_second", &SetParam::ttlSecond)
         .def_readwrite("existence", &SetParam::existence)
         .def_readwrite("cache_type", &SetParam::cacheType);
+});
+
+PybindDefineRegisterer g_pybind_define_f_EmbClient("EmbClient", PRIORITY_LOW, [](const py::module *m) {
+    py::class_<EmbClient, std::shared_ptr<EmbClient>>(*m, "EmbClient")
+        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
+                         const std::string &clientPublicKey, const std::string &clientPrivateKey,
+                         const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
+                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         bool enableExclusiveConnection) {
+            ConnectOptions connectOpts{ .host = host,
+                                        .port = port,
+                                        .connectTimeoutMs = connectTimeoutMs,
+                                        .requestTimeoutMs = reqTimeoutMs,
+                                        .token = token,
+                                        .clientPublicKey = clientPublicKey,
+                                        .clientPrivateKey = clientPrivateKey,
+                                        .serverPublicKey = serverPublicKey,
+                                        .accessKey = accessKey,
+                                        .secretKey = secretKey,
+                                        .tenantId = tenantId,
+                                        .enableCrossNodeConnection = enableCrossNodeConnection,
+                                        .enableExclusiveConnection = enableExclusiveConnection };
+            return std::make_unique<EmbClient>(connectOpts);
+        }))
+        .def("ShutDown",
+             [](EmbClient &client) {
+                return client.ShutDown();
+        })
+        .def("Init",
+             [](EmbClient &client, const std::string& tableKey, const int tableIndex,
+                const std::string &tableName, const uint64_t dimSize,
+                const uint64_t tableCapacity, const uint64_t bucketNum,
+                int hashFunction, const uint64_t bucketCapacity, 
+                const std::string &etcdserver, const std::string &localPath) {
+                InitParams params;
+                params.tableKey = tableKey;
+                params.tableIndex = tableIndex;
+                params.tableName = tableName;
+                params.dimSize = dimSize;
+                params.tableCapacity = tableCapacity;
+                params.bucketNum = bucketNum;
+                params.hashFunction = static_cast<HashFunction>(hashFunction);
+                params.bucketCapacity = bucketCapacity;
+                return client.Init(params, etcdserver, localPath);
+        })
+        .def("Insert",
+            [](EmbClient &client,
+               const std::vector<uint64_t> &keys,
+               const std::vector<py::buffer> &vals) {
+                std::vector<StringView> values;
+                 for (const auto &val : vals) {
+                     py::buffer_info info(val.request());
+                     StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
+                     values.emplace_back(strView);
+                 }
+
+               return client.Insert(keys, values);
+        })
+        .def("Find",
+            [](EmbClient &client,
+               const std::vector<uint64_t> &keys) {
+                std::vector<StringView> buffers;
+                PerfPoint point(PerfKey::EMBCLIENT_CPP);
+                Status status = client.Find(keys, buffers);
+                point.RecordAndReset(PerfKey::EMBCLIENT_CPP_PREPARE_RET_PY);
+                py::list vals;
+
+                for (const StringView& buffer: buffers) {
+                    py::bytes val(buffer.data(), buffer.size());
+                    vals.append(std::move(val));
+                }
+                point.Record();
+                return std::make_pair(status, std::move(vals));
+        })
+        .def("BuildIndex",
+            [](EmbClient &client) {
+               return client.BuildIndex();
+        })
+        .def("Load",
+            [](EmbClient &client,
+            const std::vector<std::string> &key_paths,
+            const std::vector<std::string> &value_paths,
+            const std::string &file_format) {
+                return client.Load(key_paths, value_paths, file_format);
+            }
+        );
 });
 }  // namespace datasystem
