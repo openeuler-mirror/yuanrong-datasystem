@@ -131,7 +131,7 @@ class KVCommand(BenchmarkBaseCommand):
             else:
                 node_info = self._get_remote_node_info(original_address)
             row = (
-                f"{node_info['IP']:<{col_widths['ip']}}"
+                f"{ip:<{col_widths['ip']}}"
                 f"{node_info['Version']:<{col_widths['version']}}"
                 f"{node_info['Commit ID']:>{col_widths['commit_id']}}"
                 f"{node_info['Total Memory']:>{col_widths['total_mem']}}"

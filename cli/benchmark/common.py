@@ -160,11 +160,12 @@ class BenchmarkBaseCommand(CliBaseCommand, ABC):
         """Creates and returns BenchArgs from parsed command-line arguments."""
         name = f"bench_{args.command}"
         start_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+        cwd = os.getcwd()
         return BenchArgs(
             name=name,
             start_time=start_time,
-            cwd=os.getcwd(),
-            log_dir=f"result_{name}_{start_time}",
+            cwd=cwd,
+            log_dir=os.path.join(cwd, f"result_{name}_{start_time}"),
             result_csv_file=f"bench_result_{name}_{start_time}.csv",
             args=args,
         )
