@@ -584,7 +584,7 @@ TEST_F(MigrateDataHandlerSpillTest, TestReleaseFailEnqueueTask)
     BINEXPECT_CALL(&AsyncResourceReleaser::Release, (_, _))
         .Times(AtLeast(static_cast<int>(count)))
         .WillRepeatedly(Return(Status(K_TRY_AGAIN, "release failed")));
-    DS_ASSERT_OK(inject::Set("AsyncResourceReleaser.WorkerThread.delay", "call(300)"));
+    DS_ASSERT_OK(inject::Set("AsyncResourceReleaser.WorkerThread.delay", "1*call(300)"));
 
     MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
     auto result = handler.MigrateDataToRemote();
@@ -595,7 +595,7 @@ TEST_F(MigrateDataHandlerSpillTest, TestReleaseFailEnqueueTask)
 
     // After migrate returns, release stubs so async retries can erase objects.
     RELEASE_STUBS
-    std::this_thread::sleep_for(std::chrono::milliseconds(400)); // sleep 400 ms to let async queue process.
+    std::this_thread::sleep_for(std::chrono::milliseconds(600)); // sleep 600 ms to let async queue process.
     for (const auto &key : objectKeys) {
         DS_ASSERT_NOT_OK(objectTable_->Contains(key));
     }
