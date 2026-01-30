@@ -65,6 +65,14 @@ public:
     virtual Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) = 0;
 
     /**
+     * @brief Report the worker's memory left info and get all workers memory left infos in the cluster.
+     * @param[in] request The rpc req protobuf.
+     * @param[out] response The rpc rsp protobuf.
+     * @return Status of the call.
+     */
+    virtual Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) = 0;
+
+    /**
      * @brief Create multiple objects' meta in cache and rocksdb.
      * @param[in] request The rpc request protobuf.
      * @param[out] response The rpc response protobuf.
@@ -396,6 +404,7 @@ public:
     ~WorkerRemoteMasterOCApi() override = default;
     Status Init() override;
     Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) override;
+    Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) override;
     Status CreateMultiMeta(master::CreateMultiMetaReqPb &request, master::CreateMultiMetaRspPb &response,
                            bool retry = true) override;
     Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
@@ -473,6 +482,7 @@ public:
     ~WorkerLocalMasterOCApi() override = default;
     Status Init() override;
     Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) override;
+    Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) override;
     Status CreateMultiMeta(master::CreateMultiMetaReqPb &request, master::CreateMultiMetaRspPb &response,
                            bool retry = true) override;
     Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,

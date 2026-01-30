@@ -665,6 +665,25 @@ message ExpireRspPb {
   bool meta_is_moving = 5;
 }
 
+message WorkerStat {
+  string address = 1;
+  uint64 available_memory = 2;
+  bool is_ready = 3;
+}
+
+message ResourceReportReqPb {
+  WorkerStat stat = 1;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ResourceReportRspPb {
+  repeated WorkerStat stats = 1;
+}
+
 service MasterOCService {
   rpc CreateMeta (CreateMetaReqPb) returns (CreateMetaRspPb) {}
   rpc CreateCopyMeta (CreateCopyMetaReqPb) returns (CreateCopyMetaRspPb) {}
@@ -698,6 +717,7 @@ service MasterOCService {
   rpc ReleaseGRefs(ReleaseGRefsReqPb) returns (ReleaseGRefsRspPb) {}
   rpc ReleaseGRefsOfRemoteClientId(ReleaseGRefsReqPb) returns (ReleaseGRefsRspPb) {}
   rpc CreateMultiMeta(CreateMultiMetaReqPb) returns (CreateMultiMetaRspPb) {}
+  rpc ReportResource(ResourceReportReqPb) returns (ResourceReportRspPb) {}
 
 
   // Heterogeneous Memory Object RPCs.

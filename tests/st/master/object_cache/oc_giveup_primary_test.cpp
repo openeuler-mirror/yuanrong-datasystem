@@ -147,7 +147,7 @@ public:
         RETURN_IF_NOT_OK(replicaManager_->AddOrSwitchTo(param.currWorkerId, ReplicaType::Primary));
         etcdCM_->SetWorkerReady();
         objCacheMasterSvc_ =
-            std::make_unique<MasterOCServiceImpl>(masterAddr_, nullptr, akSkManager_, replicaManager_.get());
+            std::make_unique<MasterOCServiceImpl>(masterAddr_, nullptr, akSkManager_, replicaManager_.get(), nullptr);
         objCacheMasterSvc_->SetClusterManager(etcdCM_.get());
         RETURN_IF_NOT_OK(objCacheMasterSvc_->Init());
         RETURN_IF_NOT_OK(datasystem::inject::Set("master.cache_invalid_failed", "return(K_OK)"));

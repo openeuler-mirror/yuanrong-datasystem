@@ -39,6 +39,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -163,6 +164,7 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     Action nextAction;
     std::string info;
     bool hasL2Cache = IsObjectExistInL2Cache(entry);
+    size_t needSpillSize = pendingSpillSize + entry->GetDataSize();
     if (!entry->stateInfo.IsPrimaryCopy()) {
         info = "not primary copy";
         nextAction = Action::DELETE;
@@ -180,11 +182,10 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     } else if (entry->IsSpilled()) {
         info = "already spilled";
         nextAction = Action::FREE_MEMORY;
-    } else if (FLAGS_spill_to_remote_worker) {
+    } else if (FLAGS_spill_to_remote_worker && NodeSelector::Instance().HasEnoughAvailableMemory(needSpillSize)) {
         info = "object could be migrated";
         nextAction = Action::MIGRATE;
     } else if (WorkerOcSpill::Instance()->IsEnabled()) {
-        size_t needSpillSize = pendingSpillSize + entry->GetDataSize();
         const double ratio = 0.95;
         bool spaceFull = WorkerOcSpill::Instance()->IsSpaceExceed(ratio, needSpillSize);
         info =
@@ -372,7 +373,7 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
     }
     if (trace->action == Action::MIGRATE) {
         if (GetSpillTaskId().empty()) {
-            evictSpillTaskId = GetBytesUuid();
+            evictSpillTaskId = GetStringUuid();
         }
         auto it = spillTasks.find(GetSpillTaskId());
         if (it == spillTasks.end()) {

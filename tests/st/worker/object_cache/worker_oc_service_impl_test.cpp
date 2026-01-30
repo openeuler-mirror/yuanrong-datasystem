@@ -197,7 +197,7 @@ public:
         etcdCM_ = std::make_unique<EtcdClusterManager>(localAddress_, metaAddress, etcdStore_.get(), nullptr);
         replicaManager_ = std::make_unique<ReplicaManager>();
         objCacheMasterSvc_ = std::make_unique<datasystem::master::MasterOCServiceImpl>(
-            localAddress_, nullptr, akSkManager_, replicaManager_.get());
+            localAddress_, nullptr, akSkManager_, replicaManager_.get(), nullptr);
         workerOcServiceImpl = std::make_unique<datasystem::object_cache::WorkerOCServiceImpl>(
             localAddress_, metaAddress, objectTable, akSkManager_, evictionManager, nullptr, etcdStore_.get(),
             objCacheMasterSvc_.get());

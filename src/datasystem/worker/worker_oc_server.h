@@ -444,6 +444,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::ReplicaManager> replicaManager_{ nullptr };
+    std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
     std::unique_ptr<datasystem::EtcdClusterManager> etcdCM_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.

@@ -29,6 +29,7 @@
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/replica_manager.h"
+#include "datasystem/master/resource_manager.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
@@ -44,7 +45,8 @@ public:
      * @brief Construct MasterOCServiceImpl.
      */
     MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
-                        std::shared_ptr<AkSkManager> akSkManager, ReplicaManager *replicaManager);
+                        std::shared_ptr<AkSkManager> akSkManager, ReplicaManager *replicaManager,
+                        master::ResourceManager *resourceManager);
 
     /**
      * @brief Deconstruct MasterOCServiceImpl.
@@ -329,6 +331,14 @@ public:
     Status MigrateMetadata(const MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp) override;
 
     /**
+    * @brief Report the memory info.
+    * @param[in] req The rpc req protobuf.
+    * @param[out] rsp The rpc rsp protobuf.
+    * @return K_OK on success; the error code otherwise.
+    */
+    Status ReportResource(const ResourceReportReqPb &req, ResourceReportRspPb &rsp) override;
+
+    /**
      * @brief Create multi meta.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.
@@ -462,6 +472,7 @@ private:
     EtcdStore *etcdStore_;
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;
     ReplicaManager *replicaManager_;
+    ResourceManager *resourceManager_;
 };
 }  // namespace master
 }  // namespace datasystem

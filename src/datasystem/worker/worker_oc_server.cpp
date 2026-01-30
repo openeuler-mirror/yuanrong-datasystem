@@ -464,7 +464,8 @@ void WorkerOCServer::CreateMasterServices()
     if (EnableOCService()) {
         // create MasterOCServiceImpl
         objCacheMasterSvc_ =
-            std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_, replicaManager_.get());
+            std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
+                                                  replicaManager_.get(), resourceManager_.get());
         objCacheMasterSvc_->SetClusterManager(etcdCM_.get());
     }
     if (EnableSCService()) {
@@ -808,6 +809,7 @@ Status WorkerOCServer::Init()
     }
 
     replicaManager_ = std::make_unique<ReplicaManager>();
+    resourceManager_ = std::make_unique<master::ResourceManager>();
 
     // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
     CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_address.empty(), K_RUNTIME_ERROR,

@@ -137,6 +137,30 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
           StatusCode::K_RPC_UNAVAILABLE });
 }
 
+Status WorkerRemoteMasterOCApi::ReportResource(master::ResourceReportReqPb &request,
+                                               master::ResourceReportRspPb &response)
+{
+    reqTimeoutDuration.Init();
+    RpcOptions opts;
+    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    Status status = RetryOnErrorRepent(
+        timeoutMs,
+        [this, &opts, &request, &response](int32_t) {
+            int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     FormatString("Request timeout (%ld ms).", -remainingTime));
+            opts.SetTimeout(remainingTime);
+            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
+            Timer timer;
+            return rpcSession_->ReportResource(opts, request, response);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE });
+
+    return status;
+}
+
 Status WorkerRemoteMasterOCApi::CreateMultiMeta(master::CreateMultiMetaReqPb &request,
                                                 master::CreateMultiMetaRspPb &response, bool retry)
 {
@@ -917,6 +941,13 @@ Status WorkerLocalMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mast
     return RetryOnErrorRepent(
         timeoutMs, [this, &request, &response](int32_t) { return masterOC_->CreateMeta(request, response); },
         []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+}
+
+Status WorkerLocalMasterOCApi::ReportResource(master::ResourceReportReqPb &request,
+                                              master::ResourceReportRspPb &response)
+{
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
+    return masterOC_->ReportResource(request, response);
 }
 
 Status WorkerLocalMasterOCApi::CreateMultiMeta(master::CreateMultiMetaReqPb &request,

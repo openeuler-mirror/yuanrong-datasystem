@@ -45,12 +45,14 @@ static constexpr int ASYNC_MAX_THREAD_NUM = 4;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
                                          std::shared_ptr<AkSkManager> akSkManager,
-                                         ReplicaManager *replicaManager)
+                                         ReplicaManager *replicaManager,
+                                         ResourceManager *resourceManager)
     : MasterOCService(serverAddress),
       masterAddress_(std::move(serverAddress)),
       persistenceApi_(persistApi),
       akSkManager_(akSkManager),
-      replicaManager_(replicaManager)
+      replicaManager_(replicaManager),
+      resourceManager_(resourceManager)
 {
 }
 
@@ -713,6 +715,17 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     }
     masterOperationTimeCost.Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of master MigrateMetadata %s", masterOperationTimeCost.GetInfo());
+    return Status::OK();
+}
+
+Status MasterOCServiceImpl::ReportResource(const ResourceReportReqPb &req, ResourceReportRspPb &rsp)
+{
+    masterOperationTimeCost.Clear();
+    Timer timer;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(resourceManager_->ReportResource(req, rsp));
+    masterOperationTimeCost.Append("Total ReportResource", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master ReportResource %s", masterOperationTimeCost.GetInfo());
     return Status::OK();
 }
 
