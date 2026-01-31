@@ -33,6 +33,7 @@ public:
     SpillNodeSelector(EtcdClusterManager *etcdCM, HostPort &localAddress)
         : etcdCM_(etcdCM), localAddress_(localAddress)
     {
+        excludedNodes_.insert(localAddress_.ToString());
     }
 
     ~SpillNodeSelector() = default;

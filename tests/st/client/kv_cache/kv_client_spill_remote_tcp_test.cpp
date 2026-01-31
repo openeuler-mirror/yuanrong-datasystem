@@ -20,10 +20,12 @@
 
 #include <gtest/gtest.h>
 
-#include "client/object_cache/oc_client_common.h"
+#include "client/kv_cache/kv_client_common.h"
 #include "cluster/external_cluster.h"
 #include "common.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/master/object_cache/store/object_meta_store.h"
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(log_dir);
@@ -31,7 +33,7 @@ DS_DECLARE_string(log_dir);
 namespace datasystem {
 namespace st {
 
-class KVClientSpillRemoteTcpTest : public OCClientCommon {
+class KVClientSpillRemoteTcpTest : public KVClientCommon {
 public:
     KVClientSpillRemoteTcpTest() = default;
     ~KVClientSpillRemoteTcpTest() = default;
@@ -40,7 +42,9 @@ public:
     {
         opts.numWorkers = 3;  // 3 workers to test spill to remote worker
         opts.numEtcd = 1;
+        opts.numOBS = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=64 -log_monitor=true -spill_to_remote_worker=true";
+        opts.injectActions = "NodeSelector.setInterval:call(200);ResourceManager.setInterval:call(200)";
     }
 
     void SetUp() override
@@ -48,6 +52,7 @@ public:
         ExternalClusterTest::SetUp();
         InitTestKVClient(0, client_);
         InitTestKVClient(1, client1_);
+        InitTestEtcdInstance();
     }
 
     void TearDown() override
@@ -219,6 +224,45 @@ TEST_F(KVClientSpillRemoteTcpTest, RemoteConcurrentSetGetDelDuringMigration)
 
     // 4. Concurrent Set/Get/Del on hot keys remotely.
     RunConcurrentSetGetDel(client1_, hotKeys, hotVals);
+}
+
+TEST_F(KVClientSpillRemoteTcpTest, NodeSelectorTest)
+{
+    // Create 8 objects on worker1, below high water mark but close
+    const int objectNumWorker1 = 8;
+    std::string value = GenRandomString(valueSize_);
+    for (int i = 0; i < objectNumWorker1; ++i) {
+        std::string key = "object1_" + std::to_string(i);
+        DS_ASSERT_OK(client1_->Set(key, value));
+    }
+    usleep(500 * MS_PER_SECOND);  // sleep 500ms to ensure workers report resource info
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.MigrateData.setMaxRetryCount", "call(1)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "DataMigrator.AllowLocalWorker", "call()"));
+    // Create 10 objects on worker0 to trigger eviction
+    const int objectNumWorker0 = 10;
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    std::string migrateKey = client_->Set(value, param);
+    for (int i = 1; i < objectNumWorker0; ++i) {
+        client_->Set(value);
+    }
+    sleep(2);  // sleep 2s to wait for migration complete
+
+    // Check that spilled objects migrate to worker2 (more free memory)
+    std::stringstream table;
+    table << ETCD_META_TABLE_PREFIX << ETCD_WORKER_SUFFIX << "/";
+    // Construct etcd key
+    auto splitKey = Split(migrateKey, ";");
+    ASSERT_EQ(splitKey.size(), 2);  // generated key is 2 parts
+    auto etcdKey = table.str() + master::Hash2Str(MurmurHash3_32(splitKey[1])) + "/" + migrateKey;
+
+    RangeSearchResult res;
+    DS_ASSERT_OK(db_->RawGet(etcdKey, res));
+    datasystem::ObjectMetaPb meta;
+    ASSERT_TRUE(meta.ParseFromString(res.value));
+    HostPort worker2Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr)); // worker index is 2
+    ASSERT_EQ(meta.primary_address(), worker2Addr.ToString());
 }
 
 class KVClientSpillRemoteTcpDfxTest : public OCClientCommon {

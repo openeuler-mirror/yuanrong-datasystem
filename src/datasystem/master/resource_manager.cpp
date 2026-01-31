@@ -23,6 +23,7 @@
 #include <chrono>
 #include <mutex>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/timer.h"
 
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -79,6 +80,8 @@ void ResourceManager::WorkerThread()
 {
     int switchNumber = 0;
     int switchClearRatio = 3;
+    int64_t intervalMs = WORKER_THREAD_INTERVAL_MS;
+    INJECT_POINT_NO_RETURN("ResourceManager.setInterval", [&intervalMs](int64_t interval) { intervalMs = interval; });
     while (running_) {
         // Clear once every switchClearRatio switches
         if (++switchNumber % switchClearRatio == 0) {
@@ -89,8 +92,7 @@ void ResourceManager::WorkerThread()
         if (!running_.load()) {
             break;
         }
-        (void)taskCv_.wait_for(lock, std::chrono::milliseconds(WORKER_THREAD_INTERVAL_MS),
-                               [this]() { return !running_.load(); });
+        (void)taskCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this]() { return !running_.load(); });
     }
 }
 

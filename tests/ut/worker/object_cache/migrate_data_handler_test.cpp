@@ -41,6 +41,7 @@
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -509,6 +510,9 @@ public:
         strategy_ = std::make_shared<SpillNodeSelector>(nullptr, hostPort_);
         type_ = MigrateType::SPILL;
         AsyncResourceReleaser::Instance().Init(objectTable_);
+
+        BINEXPECT_CALL(&object_cache::NodeSelector::GetAvailableMemory, (_))
+            .WillRepeatedly(Return(1024UL * 1024UL * 1024UL));
     }
 };
 

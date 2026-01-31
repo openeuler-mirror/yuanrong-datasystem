@@ -19,6 +19,7 @@
  */
 
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 
 #include "datasystem/common/inject/inject_point.h"
 
@@ -28,27 +29,13 @@ namespace object_cache {
 Status SpillNodeSelector::SelectNode(const std::string &originAddr, const std::string &preferNode, size_t needSize,
                                      std::string &outNode)
 {
-    (void)needSize;
+    (void)originAddr;
 
-    if (!preferNode.empty()) {
-        outNode = preferNode;
-        return Status::OK();
-    }
-    Status status = etcdCM_->GetStandbyWorkerByAddr(originAddr, outNode);
-    if (status.IsError()) {
-        LOG(ERROR) << FormatString("[Migrate Data] Failed to get [%s]'s next addr: %s", originAddr, status.ToString());
-        outNode = originAddr;
-        return status;
-    }
-    if (outNode == localAddress_.ToString()) {
-        std::string errMsg = FormatString("[Migrate Data] Skip, [%s]'s next addr is ourselves", originAddr);
-        LOG(INFO) << errMsg;
-        RETURN_STATUS(K_DUPLICATED, errMsg);
-    }
+    Status status = NodeSelector::Instance().SelectNode(excludedNodes_, preferNode, needSize, outNode);
 
     INJECT_POINT_NO_RETURN("SpillNodeSelector.SelectNode.force",
                            [&outNode](std::string node) { outNode = std::move(node); });
-    return Status::OK();
+    return status;
 }
 
 }  // namespace object_cache

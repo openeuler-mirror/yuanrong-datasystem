@@ -185,6 +185,8 @@ bool NodeSelector::HasEnoughAvailableMemory(size_t needMemory)
 void NodeSelector::WorkerThread()
 {
     LOG(INFO) << "Start worker thread to periodically collect cluster info";
+    int64_t intervalMs = REPORT_RESOURCE_INTERVAL_TIME_MS;
+    INJECT_POINT_NO_RETURN("NodeSelector.setInterval", [&intervalMs](int interval) { intervalMs = interval; });
     while (running_) {
         auto rc = CollectClusterInfo();
         if (rc.IsError()) {
@@ -194,8 +196,7 @@ void NodeSelector::WorkerThread()
         if (!running_.load()) {
             break;
         }
-        (void)taskCv_.wait_for(lock, std::chrono::milliseconds(REPORT_RESOURCE_INTERVAL_TIME_MS),
-                               [this]() { return !running_.load(); });
+        (void)taskCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this]() { return !running_.load(); });
     }
 }
 

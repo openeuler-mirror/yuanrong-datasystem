@@ -106,13 +106,14 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
         (void)objKeysGrpByMaster.emplace(info, objectKeys);
         return Status::OK();
     });
+    std::string standbyWorker;
+    (void)etcdCM_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
     for (const auto &[addr, objectKeys] : objKeysGrpByMaster) {
         auto workerAddr = addr.GetAddress();
-        if (workerAddr == localAddress_) {
-            std::string standbyWorker;
-            if (etcdCM_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker).IsOk()) {
-                LOG_IF_ERROR(workerAddr.ParseString(standbyWorker), "[Migrate Data] Parse worker address failed");
-            }
+        if (workerAddr == localAddress_ && !standbyWorker.empty()) {
+            LOG_IF_ERROR(workerAddr.ParseString(standbyWorker), "[Migrate Data] Parse worker address failed");
+            INJECT_POINT_NO_RETURN("DataMigrator.AllowLocalWorker",
+                                   [this, &workerAddr]() { workerAddr = localAddress_; });
         }
         futures.emplace_back(MigrateDataByNode(workerAddr, objectKeys, GetStrategyByType()));
     }

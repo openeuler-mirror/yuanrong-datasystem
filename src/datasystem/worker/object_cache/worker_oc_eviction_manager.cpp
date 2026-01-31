@@ -346,6 +346,10 @@ Status WorkerOcEvictionManager::MigrateData(const std::string &taskId,
                    std::back_inserter(objectKeys),
                    [](const auto &pair) { return pair.first; });
     int maxRetryCount = 5;
+    INJECT_POINT("worker.MigrateData.setMaxRetryCount", [&maxRetryCount](int cnt) {
+        maxRetryCount = cnt;
+        return Status::OK();
+    });
     DataMigrator migrator(MigrateType::SPILL, etcdCM_, localAddress_, akSkManager_, objectTable_,
                           taskId, maxRetryCount);
     migrator.Init();
