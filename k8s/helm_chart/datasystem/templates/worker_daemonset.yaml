@@ -356,7 +356,7 @@ spec:
           - name: UCX_LOG_LEVEL
             value: "{{ $.Values.global.log.ucxLogLevel }}"
           - name: UCX_LOG_FILE
-            value: "{{ $.Values.global.log.logDir }}/worker/ucx.log"
+            value: "/home/yuanrong/datasystem/logs/worker/ucx.log"
           {{- end }}
           {{- if $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
           - name: TOKEN_ROTATION_CONFIG
