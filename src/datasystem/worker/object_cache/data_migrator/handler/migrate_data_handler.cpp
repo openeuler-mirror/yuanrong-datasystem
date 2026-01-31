@@ -23,6 +23,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -162,30 +163,28 @@ std::string MigrateDataHandler::ResultToString(const MigrateResult &result)
 Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
 {
     if (ShouldUseFastTransport()) {
-        // AdjustMaxBatchSize for UB
-        return Status::OK();
-    }
-    MigrateDataReqPb req;
-    req.set_type(type_);
-    MigrateDataRspPb rsp;
-    Status s = MigrateDataToRemoteRetry(remoteApi_, req, {}, rsp);
+        maxBatchSize_ = NodeSelector::Instance().GetAvailableMemory(remoteApi_->Address());
+    } else {
+        MigrateDataReqPb req;
+        req.set_type(type_);
+        MigrateDataRspPb rsp;
+        Status s = MigrateDataToRemoteRetry(remoteApi_, req, {}, rsp);
 
-    if (!strategy_->CheckCondition(rsp, type)) {
-        RETURN_STATUS(StatusCode::K_NO_SPACE,
-                      "[Migrate Data] migrateDataStrategy.CheckCondition failed due to insufficient space");
-    }
+        if (!strategy_->CheckCondition(rsp, type)) {
+            RETURN_STATUS(StatusCode::K_NO_SPACE,
+                          "[Migrate Data] migrateDataStrategy.CheckCondition failed due to insufficient space");
+        }
 
-    if (s.IsOk()) {
-        RETURN_IF_NOT_OK(TryUpdateRate(rsp.limit_rate()));
-        type == CacheType::MEMORY ? AdjustMaxBatchSize(rsp.remain_bytes())
-                                  : AdjustMaxBatchSize(rsp.disk_remain_bytes());
-    }
-
-    if (s.IsError()) {
-        LOG(WARNING) << FormatString("[Migrate Data] Spy on remote node %s remain bytes but meets error: %s",
-                                     remoteApi_->Address(), s.ToString());
-        if (s.GetCode() == StatusCode::K_NOT_READY) {
-            RETURN_STATUS(StatusCode::K_NOT_READY, "[Migrate Data] Remote node cannot accept data");
+        if (s.IsOk()) {
+            RETURN_IF_NOT_OK(TryUpdateRate(rsp.limit_rate()));
+            type == CacheType::MEMORY ? AdjustMaxBatchSize(rsp.remain_bytes())
+                                      : AdjustMaxBatchSize(rsp.disk_remain_bytes());
+        } else {
+            LOG(WARNING) << FormatString("[Migrate Data] Spy on remote node %s remain bytes but meets error: %s",
+                                         remoteApi_->Address(), s.ToString());
+            if (s.GetCode() == StatusCode::K_NOT_READY) {
+                RETURN_STATUS(StatusCode::K_NOT_READY, "[Migrate Data] Remote node cannot accept data");
+            }
         }
     }
 

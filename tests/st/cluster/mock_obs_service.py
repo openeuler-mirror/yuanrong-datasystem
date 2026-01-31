@@ -61,6 +61,7 @@ class MockOBSHandler(BaseHTTPRequestHandler):
 
             self.send_response(200)
             self.send_header('ETag', '"fake-etag-for-mock-obs"')
+            self.send_header('Content-Length', '0')
             self.end_headers()
             return
         except Exception as e:
@@ -114,6 +115,7 @@ class MockOBSHandler(BaseHTTPRequestHandler):
         if obj_path.exists():
             obj_path.unlink()
         self.send_response(204)
+        self.send_header('Content-Length', '0')
         self.end_headers()
         return
 
