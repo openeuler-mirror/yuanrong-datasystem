@@ -162,8 +162,11 @@ public:
 
     void SetD2HPolicyByHugeTlb(bool enableHugeTlb)
     {
-        if (enableHugeTlb) {
+        if (enableHugeTlb && config.policyD2H == MemcopyPolicy::FFTS) {
             config.policyD2H = MemcopyPolicy::HUGE_FFTS;
+            config.hostMemSize = 0;
+        }
+        if (enableHugeTlb && config.policyH2D == MemcopyPolicy::FFTS) {
             config.policyH2D = MemcopyPolicy::HUGE_FFTS;
             config.hostMemSize = 0;
         }

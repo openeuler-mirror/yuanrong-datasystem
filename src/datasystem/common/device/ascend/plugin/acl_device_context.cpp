@@ -189,6 +189,12 @@ int DSAclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count,
     return aclrtMemcpyAsync(dst, destMax, src, count, kind, stream);
 }
 
+int DSAclrtMemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                       aclrtMemcpyBatchAttr *attrs, size_t *attrsIndexes, size_t numAttrs, size_t *failIndex)
+{
+    return aclrtMemcpyBatch(dsts, destMax, srcs, sizes, numBatches, attrs, attrsIndexes, numAttrs, failIndex);
+}
+
 int DSAclrtResetDevice(int32_t deviceId)
 {
     return aclrtResetDevice(deviceId);

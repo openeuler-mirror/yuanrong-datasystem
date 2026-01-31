@@ -29,6 +29,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/flags/flags.h"
 
+DS_DEFINE_uint32(memory_alignment, 512, "Alignment for jemalloc");
+
 namespace datasystem {
 namespace memory {
 ::AllocHook *Jemalloc::alloc_ = nullptr;
@@ -129,7 +131,7 @@ Status Jemalloc::Allocate(unsigned arenaInd, uint64_t &bytes, void *&pointer)
 
 unsigned int Jemalloc::GetAllocxFlags(unsigned int arenaInd)
 {
-    const auto alignBits = 64;
+    auto alignBits = FLAGS_memory_alignment;
     return MALLOCX_ARENA(arenaInd) | MALLOCX_TCACHE_NONE | MALLOCX_ALIGN(alignBits);
 }
 

@@ -630,6 +630,8 @@ public:
      */
     virtual Status P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entries, uint32_t batchSize,
                                                     void *comm, void *stream) = 0;
+    virtual Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                               MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex) = 0;
 };
 }  // namespace datasystem
 

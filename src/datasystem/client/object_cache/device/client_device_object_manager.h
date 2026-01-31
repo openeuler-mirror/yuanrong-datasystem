@@ -57,7 +57,7 @@ public:
      */
     Status AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList, std::vector<size_t> &destMaxList,
                           std::vector<void *> &srcList, std::vector<size_t> &countList, MemcpyKind kind,
-                          size_t batchSize);
+                          size_t batchSize, size_t startIndex);
     Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
                              const std::vector<BufferView> &deviceBuffers,
                              const std::vector<BufferMetaInfo> &metaInfos);

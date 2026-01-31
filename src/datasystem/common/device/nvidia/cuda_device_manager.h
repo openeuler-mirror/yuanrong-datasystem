@@ -77,6 +77,8 @@ public:
     Status MemCopyD2D(void *dst, size_t dstMaxSize, const void *src, size_t srcSize) override;
     Status MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count,
                        MemcpyKind kind, void *stream) override;
+    Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches, MemcpyKind kind,
+                       uint32_t deviceIdx, size_t *failIndex) override;
 
     // ==================== Stream Management ====================
     Status CreateStream(void **stream) override;

@@ -185,6 +185,20 @@ Status CudaDeviceManager::MemcpyAsync(void *dst, size_t dstMaxSize, const void *
     return Status(K_NOT_SUPPORTED, K_NOT_SUPPORTED_MSG);
 }
 
+Status CudaDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                                      MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex)
+{
+    (void)dsts;
+    (void)destMax;
+    (void)srcs;
+    (void)sizes;
+    (void)kind;
+    (void)numBatches;
+    (void)kind;
+    (void)deviceIdx;
+    (void)failIndex;
+    return Status(K_NOT_SUPPORTED, K_NOT_SUPPORTED_MSG);
+};
 // ==================== Stream Management ====================
 
 Status CudaDeviceManager::CreateStream(void **stream)

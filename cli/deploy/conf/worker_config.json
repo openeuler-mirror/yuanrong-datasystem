@@ -23,6 +23,10 @@
         "value": "100",
         "description": "Upper limit of the shared memory in percentage can be used by SC, must be within (0, 100]"
     },
+    "memory_alignment": {
+        "value": "512",
+        "description": "The alignment size which jemalloc use to allocate memory."
+    },
     "heartbeat_interval_ms": {
         "value": "1000",
         "description": "Time interval between worker and etcd heartbeats."

@@ -22,6 +22,7 @@
 #define DATASYSTEM_COMMON_DEVICE_ACL_DEVICE_MANAGER_H
 
 #include <dlfcn.h>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -319,6 +320,10 @@ public:
 
     virtual Status aclrtFreeHost(void *devPtr);
 
+    virtual Status aclrtMemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                                    aclrtMemcpyBatchAttr *attrs, size_t *attrsIndexes, size_t numAttrs,
+                                    size_t *failIndex);
+
     /**
      * @brief Get P2P root info.
      *
@@ -426,6 +431,8 @@ public:
     // Memory Copy
     Status MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count,
                        MemcpyKind kind, void *stream) override;
+    Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches, MemcpyKind kind,
+                       uint32_t deviceIdx, size_t *failIndex) override;
 
     // Stream Management
     Status CreateStream(void **stream) override;
@@ -539,6 +546,8 @@ private:
     REG_METHOD(DSAclrtGetDeviceCount, int, uint32_t *);
     REG_METHOD(DSAclrtQueryDeviceStatus, int, uint32_t, int32_t *);
     REG_METHOD(DSAclrtMemcpyAsync, int, void *, size_t, const void *, size_t, aclrtMemcpyKind, aclrtStream);
+    REG_METHOD(DSAclrtMemcpyBatch, int, void **, size_t *, void **, size_t *, size_t, aclrtMemcpyBatchAttr *, size_t *,
+               size_t, size_t *);
     REG_METHOD(DSAclrtResetDevice, int, int32_t);
     REG_METHOD(DSAclrtMalloc, int, void **, size_t, aclrtMemMallocPolicy);
     REG_METHOD(DSAclrtFree, int, void *);
