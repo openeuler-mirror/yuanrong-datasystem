@@ -87,9 +87,9 @@ Tensor接口
    * - :doc:`yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d <yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d>`
      - 根据 key 获取缓存在数据系统的 PagedAttention 的层级 Tensor。
    * - :doc:`yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h <yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h>`
-     - 将 PagedAttention 的层级 Tensor 异步写入 Host 中。
+     - 将 PagedAttention 的层级 Tensor 异步写入 host 中。
    * - :doc:`yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d <yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d>`
-     - 从 Host 中获取 PagedAttention 的层级 Tensor 并写入 Device 中。
+     - 从 host 中获取 PagedAttention 的层级 Tensor 并写入 device 中。
 
 
 异构对象接口
