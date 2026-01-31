@@ -17,6 +17,13 @@
 #ifndef DATASYSTEM_COMMON_RDMA_RDMA_UTIL_H
 #define DATASYSTEM_COMMON_RDMA_RDMA_UTIL_H
 
+#include <chrono>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
+
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -26,6 +33,61 @@ DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
+
+template <typename T>
+using custom_unique_ptr = std::unique_ptr<T, std::function<void(T *)>>;
+
+template <typename T>
+inline custom_unique_ptr<T> MakeCustomUnique(T *p, std::function<void(T *)> custom_delete)
+{
+    if (p) {
+        return custom_unique_ptr<T>(p, custom_delete);
+    }
+
+    LOG(WARNING) << "Input pointer is null";
+    return nullptr;
+}
+
+class Event {
+public:
+    explicit Event(uint64_t requestId) : requestId_(requestId) {}
+    ~Event() = default;
+
+    Status WaitFor(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(eventMutex_);
+        bool gotNotification = cv_.wait_for(lock, timeout, [this] { return ready_; });
+        if (!gotNotification && !ready_) {
+            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
+                                    FormatString("timedout waiting for request: %d", requestId_));
+        }
+        return Status::OK();
+    }
+
+    void NotifyAll()
+    {
+        std::unique_lock<std::mutex> lock(eventMutex_);
+        ready_ = true;
+        cv_.notify_all();
+    }
+
+    void SetFailed()
+    {
+        failed_ = true;
+    }
+
+    bool IsFailed()
+    {
+        return failed_;
+    }
+
+private:
+    std::condition_variable cv_;
+    mutable std::mutex eventMutex_;
+    uint64_t requestId_;
+    bool ready_{ false };
+    bool failed_{ false };
+};
 
 struct LocalSgeInfo {
     uint64_t segAddr;       // local seg address

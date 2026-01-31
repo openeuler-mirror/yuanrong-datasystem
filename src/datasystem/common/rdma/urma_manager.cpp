@@ -561,11 +561,11 @@ Status UrmaManager::CheckAndNotify()
         // Get the event for request Id
         if (GetEvent(requestId, event).IsOk()) {
             if (failedRequests_.count(requestId)) {
-                event->set_failed();
+                event->SetFailed();
                 failedRequests_.erase(requestId);
             }
             // Notify everyone who are waiting on the event
-            event->notify_all();
+            event->NotifyAll();
             // delete the event and
             VLOG(1) << "[UrmaEventHandler] Notifying the request id: " << requestId;
             // remove request id from finishedRequests_ set
@@ -624,9 +624,9 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 
     VLOG(1) << "[UrmaEventHandler] Started waiting for the request id: " << requestId;
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
-    RETURN_IF_NOT_OK(event->wait_for(std::chrono::milliseconds(timeoutMs)));
+    RETURN_IF_NOT_OK(event->WaitFor(std::chrono::milliseconds(timeoutMs)));
     waitPoint.Record();
-    if (event->is_failed()) {
+    if (event->IsFailed()) {
         return Status(K_URMA_ERROR, FormatString("Polling failed with an error for requestId: %d", requestId));
     }
     VLOG(1) << "[UrmaEventHandler] Done waiting for the request id: " << requestId;

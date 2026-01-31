@@ -21,6 +21,7 @@
 
 #include "datasystem/common/rdma/ucp_endpoint.h"
 
+#include <mutex>
 #include <chrono>
 #include <thread>
 
