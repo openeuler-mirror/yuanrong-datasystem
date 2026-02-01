@@ -287,6 +287,7 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
                                                          const std::vector<std::string> &nestedObjectKeys,
                                                          std::vector<RpcMessage> &payloads, std::future<Status> &future)
 {
+    INJECT_POINT("worker.PublishObjectWithLock.begin");
     std::shared_ptr<SafeObjType> entry;
     bool isInsert;
     Timer timer;
