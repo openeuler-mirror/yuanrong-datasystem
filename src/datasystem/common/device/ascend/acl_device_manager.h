@@ -410,6 +410,8 @@ public:
     virtual Status DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
     virtual Status DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchSize, P2PComm comm,
                                                       aclrtStream stream);
+    virtual Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                               MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex) override;
 
     // ==================== DeviceManagerBase Interface Implementation ====================
     // Lifecycle Management
@@ -429,10 +431,8 @@ public:
     Status FreeHost(void *hostPtr) override;
 
     // Memory Copy
-    Status MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count,
-                       MemcpyKind kind, void *stream) override;
-    Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches, MemcpyKind kind,
-                       uint32_t deviceIdx, size_t *failIndex) override;
+    Status MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count, MemcpyKind kind,
+                       void *stream) override;
 
     // Stream Management
     Status CreateStream(void **stream) override;
