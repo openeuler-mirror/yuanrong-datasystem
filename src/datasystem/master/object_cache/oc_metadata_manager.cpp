@@ -1246,7 +1246,14 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
                 getMetaInfo(accessor, info);
                 TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
-                if (FLAGS_enable_data_replication) {
+                // If we enable data replication, we only set the not exist location as UNACK state because of the
+                // following reason:
+                // 1. If the location exists and its status is ACK, this issue likely stems from concurrent query
+                // requests. Since the location is already in a ready state, any modification attempt will result in an
+                // error.
+                // 2. If location exist and it's state is UNACK, we no need to modify it.
+                if (FLAGS_enable_data_replication
+                    && accessor->second.locations.find(address) == accessor->second.locations.end()) {
                     accessor->second.locations[address] = AckState::UNACK;
                     RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
                 }
