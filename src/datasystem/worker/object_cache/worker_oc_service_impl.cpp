@@ -532,7 +532,7 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
             return Status::OK();
         }
     }
-    
+
     LOG(INFO) << "RemoveWriteBackIdsLocation begin, WriteBackIds size: " << voluntaryScaleDownClearIds_.size();
     std::vector<std::string> clearIds;
     {
@@ -1463,8 +1463,6 @@ Status WorkerOCServiceImpl::RecoveryClient(const ClientKey &clientId, const std:
 
 Status WorkerOCServiceImpl::DeleteObject(const std::string &objectKey, uint64_t version)
 {
-    LOG(INFO) << FormatString("[ObjectKey %s] DeleteObject begin%s.", objectKey,
-                              (version > 0 ? ", version " + std::to_string(version) : ""));
     std::shared_ptr<SafeObjType> entry;
     RETURN_IF_NOT_OK(objectTable_->Get(objectKey, entry));
     ObjectKV objectKV(objectKey, *entry);

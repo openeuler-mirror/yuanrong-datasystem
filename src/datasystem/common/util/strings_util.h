@@ -64,6 +64,21 @@ inline std::streampos GetSize(std::iostream *ss)
 }
 
 /**
+ * @brief Output stream operator for std::pair to enable writing pair to stringstream.
+ * @tparam T1 Type of the first element.
+ * @tparam T2 Type of the second element.
+ * @param os The output stream.
+ * @param pair The pair to output.
+ * @return The output stream.
+ */
+template <typename T1, typename T2>
+std::ostream &operator<<(std::ostream &os, const std::pair<T1, T2> &pair)
+{
+    os << "(" << pair.first << ", " << pair.second << ")";
+    return os;
+}
+
+/**
  * @brief Print vector.
  * @param[in] vec Vector to print.
  * @return Return string.

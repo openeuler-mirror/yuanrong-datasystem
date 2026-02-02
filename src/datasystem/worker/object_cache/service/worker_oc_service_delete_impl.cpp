@@ -55,7 +55,9 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, D
     reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
     posixPoint.Record(rc.GetCode(), std::to_string(deletedSize), reqParam, rc.GetMsg());
     workerOperationTimeCost.Append("Total DeleteAllCopy", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of DeleteAllCopy %s", workerOperationTimeCost.GetInfo());
+    LOG(INFO) << "DeleteAllCopy finish with request size: " << req.object_keys_size()
+              << ", failed size: " << resp.fail_object_keys_size() << ", the operation cost "
+              << workerOperationTimeCost.GetInfo();
     return rc;
 }
 
@@ -73,7 +75,6 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
         uint64_t version = req.versions(i);
         Status rc = DeleteObjectFromNotification(objectKey, version, isAsync);
         if (rc.IsOk()) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Delete success.", objectKey);
             continue;
         }
         if (rc.GetCode() == K_NOT_FOUND) {
@@ -96,7 +97,6 @@ Status WorkerOcServiceDeleteImpl::DeleteObjectFromNotification(const std::string
                                                                bool async)
 {
     INJECT_POINT("worker.DeleteObjectWithTryLock.before");
-    LOG(INFO) << FormatString("[ObjectKey %s] DeleteObject begin.", objectKey);
     bool insert = false;
     std::shared_ptr<SafeObjType> entry;
     // If entry insert failed, it would not be locked.
@@ -211,8 +211,6 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyWithLock(const std::vector<std::s
             deletedSize += dataSize;
         }
     }
-    LOG(INFO) << "Object numbers in DeleteAllCopy request: " << objectKeys.size()
-              << ", failDelete: " << failedObjectKeys.size();
     return lastErr;
 }
 

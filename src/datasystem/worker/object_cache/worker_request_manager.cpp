@@ -528,6 +528,8 @@ void WorkerRequestManager::DeleteObjects(const std::map<std::string, uint64_t> &
         LOG(ERROR) << "WorkerRequestManager deleteFunc not set.";
         return;
     }
+
+    LOG(INFO) << "Start to delete objects " << VectorToString(objects);
     for (const auto &kv : objects) {
         // If two client get the same objectKey in the same time, may call delete object twice, and the second
         // call will
