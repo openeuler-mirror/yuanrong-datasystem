@@ -52,7 +52,7 @@ typedef void *KVClient_p;  // The main type/handle for interacting with the kv c
  * @param[in] tenantId The tenant ID.
  * @param[in] cTenantIdLen The length of cTenantId
  * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
- * @return Return the pointer of StateClient.
+ * @return Return the pointer of KVClient.
  */
 KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
                           size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
@@ -77,18 +77,18 @@ struct StatusC SCConnectWorker(KVClient_p clientPtr);
  * @param[in] cSecretKeyLen The secret key length.
  * @return status of the call
  */
-struct StatusC SCUpdateAkSk(KVClient_p clientPtr, const char *cAccessKey, size_t cAccessKeyLen,
-                            const char *cSecretKey, size_t cSecretKeyLen);
+struct StatusC SCUpdateAkSk(KVClient_p clientPtr, const char *cAccessKey, size_t cAccessKeyLen, const char *cSecretKey,
+                            size_t cSecretKeyLen);
 
 /**
  * @brief Frees the kv client and releases all associated resources with this handle
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  */
 void SCFreeClient(KVClient_p clientPtr);
 
 /**
  * @brief Sets a value for the given key
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[in] cKey The key used for setting the value
  * @param[in] keyLen The length of key to set
  * @param[in] cVal The value to set
@@ -122,7 +122,7 @@ struct StatusC SCSetValue(KVClient_p clientPtr, char **cKey, size_t *keyLen, con
 
 /**
  * @brief Gets a value for the given key.
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[in] cKey The key used to identify the value to get
  * @param[in] keyLen The length of key to get
  * @param[in] ctimeoutms The timeout of the get operation.
@@ -136,7 +136,7 @@ struct StatusC SCGet(KVClient_p clientPtr, const char *cKey, const size_t keyLen
 
 /**
  * @brief Gets values for the given keys
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[in] cKeys Array of Keys to get values
  * @param[in] keysLen The length of keys to get
  * @param[in] keysNum Number of Keys
@@ -154,7 +154,7 @@ struct StatusC SCGetArray(KVClient_p clientPtr, const char **cKeys, const size_t
 
 /**
  * @brief Deletes a key and its associated values
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[in] cKey The key to delete
  * @param[in] keyLen The length of key
  * @return status of the call
@@ -163,7 +163,7 @@ struct StatusC SCDel(KVClient_p clientPtr, const char *cKey, const size_t keyLen
 
 /**
  * @brief Gets values for the given keys
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[in] cKeys Array of Keys to delete
  * @param[in] numObjs Number of Keys
  * @param[out] cFailedKeys The failed delete keys.
@@ -175,7 +175,7 @@ struct StatusC SCDelArray(KVClient_p clientPtr, const char **cKeys, uint64_t num
 
 /**
  * @brief Generate a key with worker_uuid.
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[out] key The key with worker_uuid, i.
  * @return size_t The length of the key, if the key fails to be generated, 0 is returned.
  */
