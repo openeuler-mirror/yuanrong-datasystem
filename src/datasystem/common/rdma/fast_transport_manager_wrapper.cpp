@@ -296,6 +296,21 @@ Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
     return Status::OK();
 }
 
+Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize,
+                    const std::vector<LocalSgeInfo> &objInfos, bool blocking, std::vector<uint64_t> &eventKeys)
+{
+    (void)ucpInfo;
+    (void)metaDataSize;
+    (void)objInfos;
+    (void)blocking;
+    (void)eventKeys;
+#ifdef USE_RDMA
+    LOG(INFO) << "[FastTransportWrapper] Doing Ucp Gather Put Payload";
+    RETURN_IF_NOT_OK(UcpManager::Instance().UcpGatherPut(ucpInfo, metaDataSize, objInfos, blocking, eventKeys));
+#endif
+    return Status::OK();
+}
+
 Status CheckTransportConnectionStable(const std::string &hostAddress, const std::string &instanceId)
 {
     (void)hostAddress;

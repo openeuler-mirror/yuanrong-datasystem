@@ -240,6 +240,60 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
     return Status::OK();
 }
 
+Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize,
+                                const std::vector<LocalSgeInfo> &objInfos, bool blocking,
+                                std::vector<uint64_t> &eventKeys)
+{
+    eventKeys.clear();
+    PerfPoint point(PerfKey::RDMA_GATHER_WRITE);
+    const std::string &remoteWorkerAddr = ucpInfo.remote_worker_addr();
+    const std::string remoteIpAddr =
+        ucpInfo.remote_ip_addr().host() + ":" + std::to_string(ucpInfo.remote_ip_addr().port());
+    const uint64_t remoteBase = ucpInfo.remote_buf();
+    uint64_t totalWriteSize = 0;
+    for (const auto &ele : objInfos) {
+        // srcBase represents the start of local payload
+        const uint64_t srcBase = ele.sgeAddr + ele.metaDataSize + ele.readOffset;
+
+        // dstBase represents the remote memory address where the RDMA write starts.
+        // remoteBase refers to the remote payload region (metadata header already
+        // skipped). We back up by `metaDataSize` so the write includes the
+        // object's metadata header together with the payload; `totalWriteSize`
+        // then advances the append position for subsequent SGEs.
+        uint64_t dstBase = remoteBase + totalWriteSize - metaDataSize;
+        uint64_t writtenSize = 0;
+        uint64_t remainSize = ele.writeSize;
+        while (remainSize > 0) {
+            const uint64_t writeSize = std::min(remainSize, MAX_MSG_SIZE);
+            const uint64_t key = requestId_.fetch_add(1);
+            Status status =
+                workerPool_->Write(ucpInfo.rkey(), dstBase + writtenSize, remoteWorkerAddr, remoteIpAddr,
+                                   srcBase + writtenSize, writeSize, key);
+            if (!status.IsOk()) {
+                std::string detailed_msg =
+                    FormatString("Failed to ucp gather write object with key = %zu. Underlying error: %s", key,
+                                 status.ToString().c_str());
+                RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, detailed_msg);
+            }
+            eventKeys.emplace_back(key);
+            std::shared_ptr<Event> event;
+            RETURN_IF_NOT_OK(CreateEvent(key, event));
+
+            remainSize -= writeSize;
+            writtenSize += writeSize;
+        }
+        totalWriteSize += ele.writeSize;
+    }
+    point.Record();
+    if (blocking) {
+        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto errorHandler = [](Status &status) { return status; };
+        RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
+        eventKeys.clear();
+    }
+    return Status::OK();
+}
+
 Status UcpManager::CheckUcpConnectionStable(const std::string &hostAddress, const std::string &instanceId)
 {
     TbbInstanceMap::const_accessor constAccessor;

@@ -278,17 +278,22 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
     std::vector<RpcMessage> subPayload;
     auto startPos = info.batchStartIndex[subIndex];
     auto *subReq = req.mutable_requests(startPos);
-    auto &urmaInfo = subReq->urma_info();
-    std::vector<LocalSgeInfo> localSgeInfoList;
-    RemoteSegInfo remoteSegInfo{
-        .segAddr = urmaInfo.seg_va(),
-        .segOffset = urmaInfo.seg_data_offset() - ocClientWorkerSvc_->GetMetadataSize(),
-        .host = urmaInfo.request_address().host(),
-        .port = urmaInfo.request_address().port(),
-    };
-    if (IsUrmaEnabled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, subKeys),
-                                         "Failed in aggregate memory urma write");
+    if (IsUrmaEnabled() && subReq->has_urma_info()) {
+        auto &urmaInfo = subReq->urma_info();
+        RemoteSegInfo remoteSegInfo{
+            .segAddr = urmaInfo.seg_va(),
+            .segOffset = urmaInfo.seg_data_offset() - ocClientWorkerSvc_->GetMetadataSize(),
+            .host = urmaInfo.request_address().host(),
+            .port = urmaInfo.request_address().port(),
+        };
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, subKeys),
+            "Failed in aggregate memory urma write");
+    } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            UcpGatherPut(subReq->ucp_info(), ocClientWorkerSvc_->GetMetadataSize(), aggregatedMem->localSgeInfos,
+                         false, subKeys),
+            "Failed in aggregate memory ucp gather put");
     }
     ParallelRes &loc = parallelRes[subIndex];
     loc.kps.emplace(startPos, std::make_pair(std::move(subKeys), std::move(subPayload)));

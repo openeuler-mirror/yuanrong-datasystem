@@ -110,7 +110,7 @@ TEST_F(RdmaObjectClientTest, RdmaPutGetDeleteShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
-TEST_F(RdmaObjectClientTest, DISABLED_RdmaReconnectTest)
+TEST_F(RdmaObjectClientTest, RdmaReconnectTest)
 {
     std::shared_ptr<KVClient> client1;
     std::shared_ptr<KVClient> client2;
@@ -218,7 +218,7 @@ TEST_F(RdmaObjectClientTest, TestBatchRemoteGet1)
     }
 }
 
-TEST_F(RdmaObjectClientTest, DISABLED_TestBatchRemoteGet2)
+TEST_F(RdmaObjectClientTest, TestBatchRemoteGet2)
 {
     // Test specifically batch get for 8KB * 1024, so it needs multiple batches when allocating in RDMA case.
     std::shared_ptr<KVClient> client1;
@@ -256,7 +256,7 @@ TEST_F(RdmaObjectClientTest, DISABLED_TestBatchRemoteGet2)
     }
 }
 
-TEST_F(RdmaObjectClientTest, DISABLED_TestBatchRemoteGet3)
+TEST_F(RdmaObjectClientTest, TestBatchRemoteGet3)
 {
     // Test that with big objects (>= 1M), the logic batches all the other small objects,
     // and allocates memory separate for the big objects.
