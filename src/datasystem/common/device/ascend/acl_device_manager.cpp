@@ -1027,6 +1027,9 @@ Status AclDeviceManager::P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entrie
 Status AclDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
                                      MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex)
 {
+    if (kind != MemcpyKind::HOST_TO_DEVICE && kind != MemcpyKind::DEVICE_TO_HOST) {
+        return Status(K_INVALID, "MemcpyBatch support kind(DEVICE_TO_HOST, HOST_TO_DEVICE) only!");
+    }
     std::vector<aclrtMemcpyBatchAttr> attrs(numBatches);
     std::vector<size_t> attrsIds(numBatches);
     size_t idx = 0;
@@ -1041,7 +1044,8 @@ Status AclDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, 
         }
         attrsIds[i] = idx++;
     }
-    PerfPoint p(kind == MemcpyKind::HOST_TO_DEVICE ? PerfKey::SUBMIT_H2D_MEMCPY : PerfKey::SUBMIT_D2H_MEMCPY);
+    PerfPoint p(kind == MemcpyKind::HOST_TO_DEVICE ? PerfKey::SUBMIT_H2D_BATCH_MEMCPY
+                                                   : PerfKey::SUBMIT_D2H_BATCH_MEMCPY);
     return aclrtMemcpyBatch(dsts, destMax, srcs, sizes, numBatches, attrs.data(), attrsIds.data(), attrs.size(),
                             failIndex);
 }

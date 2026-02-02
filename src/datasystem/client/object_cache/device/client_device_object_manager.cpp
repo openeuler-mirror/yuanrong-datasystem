@@ -297,7 +297,7 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
             return swapOutPool_->AclMemcpyBatchD2H(deviceId, helper.dstBuffers, helper.srcBuffers, helper.bufferMetas);
         } else {
-            PerfPoint p(PerfKey::TOTAL_SUBMIT_D2H_MEMCPY);
+            PerfPoint p(PerfKey::TOTAL_SUBMIT_D2H_BATCH_MEMCPY);
             return doMemCpy(copyKind, helper, deviceId);
         }
     }
@@ -306,7 +306,7 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         PrintGetPerfInfo(helper);
         return swapInPool_->AclMemcpyBatchH2D(deviceId, helper.srcBuffers, helper.dstBuffers, helper.bufferMetas);
     } else {
-        PerfPoint p(PerfKey::TOTAL_SUBMIT_H2D_MEMCPY);
+        PerfPoint p(PerfKey::TOTAL_SUBMIT_H2D_BATCH_MEMCPY);
         return doMemCpy(copyKind, helper, deviceId);
     }
 }
@@ -397,9 +397,13 @@ Status AsyncAclMemCopyPool::AclMemcpyBatch(uint32_t deviceIdx, std::vector<void 
                                            size_t startIndex)
 {
     size_t failedIdx = 0;
-    return devInterImpl_->MemcpyBatch(dstList.data() + startIndex, destMaxList.data() + startIndex,
-                                      srcList.data() + startIndex, countList.data() + startIndex, batchSize, kind,
-                                      deviceIdx, &failedIdx);
+    auto ret = devInterImpl_->MemcpyBatch(dstList.data() + startIndex, destMaxList.data() + startIndex,
+                                          srcList.data() + startIndex, countList.data() + startIndex, batchSize, kind,
+                                          deviceIdx, &failedIdx);
+    if (ret.IsError()) {
+        LOG(ERROR) << FormatString("AclMemcpyBatch return error , failed index:%lu", failedIdx);
+    }
+    return ret;
 }
 
 AsyncAclMemCopyPool::~AsyncAclMemCopyPool()

@@ -308,15 +308,15 @@ int DSAclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count,
 
 /**
  * @brief  Batched memory copy between Host and Device.
- * @param dsts          [IN]  Array of destination address pointers.
- * @param destMax       [IN]  Array of maximum lengths for each destination memory region, in bytes.
- * @param srcs          [IN]  Array of source address pointers.
- * @param sizes         [IN]  Array of copy sizes for each batch, in bytes.
- * @param numBatches    [IN]  Number of batches; length of `dsts`, `srcs`, and `sizes` arrays.
- * @param attrs         [IN]  Array of memory copy attributes.
- * @param attrsIndexes  [IN]  Array of attribute indexes specifying the range of batches each attribute applies to.
- * @param numAttrs      [IN]  Length of `attrs` and `attrsIndexes` arrays.
- * @param failIndex     [OUT] Index of the batch where an error occurred (only supports validation of memory attributes
+ * @param[in]  dsts           Array of destination address pointers.
+ * @param[in]  destMax        Array of maximum lengths for each destination memory region, in bytes.
+ * @param[in]  srcs           Array of source address pointers.
+ * @param[in]  sizes          Array of copy sizes for each batch, in bytes.
+ * @param[in]  numBatches     Number of batches; length of `dsts`, `srcs`, and `sizes` arrays.
+ * @param[in]  attrs          Array of memory copy attributes.
+ * @param[in]  attrsIndexes   Array of attribute indexes specifying the range of batches each attribute applies to.
+ * @param[in]  numAttrs       Length of `attrs` and `attrsIndexes` arrays.
+ * @param[out] failIndex      Index of the batch where an error occurred (only supports validation of memory attributes
  * and copy direction). If the error is not associated with a specific batch, this will be set to `SIZE_MAX`.
  *
  * @retval ACL_SUCCESS The function is successfully executed.

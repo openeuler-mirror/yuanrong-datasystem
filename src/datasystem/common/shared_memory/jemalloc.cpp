@@ -19,6 +19,7 @@
  *              memory allocate and free.
  */
 #include "datasystem/common/shared_memory/jemalloc.h"
+#include "datasystem/common/util/validator.h"
 
 #define JEMALLOC_NO_DEMANGLE
 #include <jemalloc/jemalloc.h>
@@ -29,7 +30,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/flags/flags.h"
 
-DS_DEFINE_uint32(memory_alignment, 512, "Alignment for jemalloc");
+DS_DEFINE_uint32(memory_alignment, 64, "Alignment for jemalloc");
+DS_DEFINE_validator(memory_alignment, &Validator::ValidateMemoryAlignment);
 
 namespace datasystem {
 namespace memory {

@@ -24,8 +24,8 @@
         "description": "Upper limit of the shared memory in percentage can be used by SC, must be within (0, 100]"
     },
     "memory_alignment": {
-        "value": "512",
-        "description": "The alignment size which jemalloc use to allocate memory."
+        "value": "64",
+        "description": "The memory alignment size used by jemalloc for all memory allocations (in bytes). Larger alignment can improve performance but may increase memory consumption due to fragmentation."
     },
     "heartbeat_interval_ms": {
         "value": "1000",
