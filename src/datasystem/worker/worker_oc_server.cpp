@@ -1146,6 +1146,7 @@ void WorkerOCServer::WaitClientsExit()
 
     SetUnhealthy();
     allClientsExited_ = true;
+    checkAsyncTasksDoneCv_.notify_all();
 }
 
 Status WorkerOCServer::PreShutDown()
@@ -1182,6 +1183,12 @@ Status WorkerOCServer::PreShutDown()
 
     {
         std::unique_lock<std::mutex> lock(checkAsyncTasksDoneMutex_);
+        auto shouldExit = [this, scaleIn]() {
+            if (!scaleIn) {
+                return checkAsyncTasksDone_.load();
+            }
+            return checkAsyncTasksDone_.load() && allClientsExited_.load() && etcdCM_->CheckVoluntaryScaleDown();
+        };
         while (!waitFlag) {
             if (scaleIn) {
                 const int logEveryN = 5;
@@ -1205,8 +1212,7 @@ Status WorkerOCServer::PreShutDown()
             }
             (void)Trace::Instance().SetTraceNewID(traceId, true);
             if (!waitFlag) {
-                (void)checkAsyncTasksDoneCv_.wait_for(lock, std::chrono::seconds(1),
-                                                      [this] { return checkAsyncTasksDone_.load(); });
+                (void)checkAsyncTasksDoneCv_.wait_for(lock, std::chrono::seconds(1), shouldExit);
             }
         }
     }
