@@ -122,6 +122,7 @@ public:
     UrmaJfrInfo urmaInfo_;
     std::vector<custom_unique_ptr<urma_target_jetty_t>> importJfrs_;
     std::unique_ptr<SegmentMap> remoteSegments_;
+    size_t jfsIndex_;
 };
 
 using TbbRemoteDeviceMap = tbb::concurrent_hash_map<std::string, RemoteDevice>;
@@ -562,6 +563,7 @@ private:
     urma_import_seg_flag_t importSegmentFlag_;
     UrmaJfrInfo localUrmaInfo_;
     std::atomic<uint32_t> localJfrIndex_{ 0 };
+    std::atomic<uint32_t> localJfsIndex_{ 0 };
     TbbJfrMap urmaSenderRelationtable_;
 
     // protect for segment maps.

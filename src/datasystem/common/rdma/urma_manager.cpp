@@ -739,6 +739,8 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
         device.Clear();
     }
     device.urmaInfo_ = urmaInfo;
+    auto jfsIndex = localJfsIndex_.fetch_add(1) % FLAGS_urma_connection_size;
+    device.jfsIndex_ = jfsIndex;
 
     // Now we import a new jfr
     urma_rjfr_t remoteJfr;
@@ -765,13 +767,16 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
             return Status(K_RUNTIME_ERROR, FormatString("Failed to import jfr, %s", urmaInfo.ToString()));
         }
         PerfPoint point1b(PerfKey::URMA_ADVISE_JFR);
-        if (urma_advise_jfr(urmaJfsVec_[i].get(), tjfr) != URMA_SUCCESS) {
+        auto jfs = urmaJfsVec_[jfsIndex].get();
+        if (urma_advise_jfr(jfs, tjfr) != URMA_SUCCESS) {
             (void)urma_unimport_jfr(tjfr);
             tbbRemoteDeviceMap_.erase(accessor);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to advise jfr"));
         }
         point1b.Record();
         tjfrs.emplace_back(tjfr);
+        // only import one jfr
+        break;
     }
     LOG_IF(WARNING, timer.ElapsedSecond() > 1) << "ImportRemoteJfr exceed 1s!";
     device.SetJfrs(tjfrs);
@@ -827,6 +832,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     PerfPoint point2(PerfKey::URMA_IMPORT_REMOTE_SEGMENT);
     SegmentMap::ConstAccessor remoteSegAccessor;
     auto &device = constAccessor->second;
+    auto jfsIndex = device.jfsIndex_;
     RETURN_IF_NOT_OK(device.GetRemoteSeg(segVa, remoteSegAccessor));
     point2.Record();
 
@@ -846,14 +852,10 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     while (remainSize > 0) {
         const uint64_t writeSize = std::min(remainSize, (uint64_t)urmaDeviceAttribute_.dev_cap.max_write_size);
         const uint64_t key = requestId_.fetch_add(1);
-        urma_jfs_t *urmaJfs = urmaJfsVec_[key % FLAGS_urma_connection_size].get();
+        urma_jfs_t *urmaJfs = urmaJfsVec_[jfsIndex].get();
         const auto &remoteJfrs = device.importJfrs_;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!remoteJfrs.empty(), K_RUNTIME_ERROR, "Write got empty remote jfrs.");
-        const uint64_t jfrIndex = key % remoteJfrs.size();
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            jfrIndex < remoteJfrs.size(), K_RUNTIME_ERROR,
-            FormatString("Got invalid urma index with %d, jfrs size is %d", jfrIndex, remoteJfrs.size()));
-        urma_target_jetty_t *importJfr = remoteJfrs[jfrIndex].get();
+        urma_target_jetty_t *importJfr = remoteJfrs[0].get();
         PerfPoint point4a(PerfKey::URMA_WRITE);
         urma_status_t ret = urma_write(
             urmaJfs, importJfr, remoteSegAccessor.entry->data.segment_.get(),
