@@ -412,6 +412,7 @@ global:
 | global.performance.enableThp | bool | `false` | Control this process by enabling transparent huge pages, default is disabled. Enabling Transparent Huge Pages (THP) can enhance performance and reduce page table overhead, but it may also lead to increased memory usage, leading to worker being terminated by the OOM Killer |
 | global.performance.arenaPerTenant | int | `16` | The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for the first time, but each arena will use one more fd, value range: [1, 32] |
 | global.performance.memoryReclamationTimeSecond | int | `600` | The memory reclamation time after free |
+| global.performance.memoryAlignment | int | `64` | The memory alignment size used by jemalloc for all memory allocations (in bytes). Larger alignment can improve performance but may increase memory consumption due to fragmentation. |
 | global.performance.asyncDelete | bool | `false` | Set whether to delete object asynchronously. If set to true, master will notify workers to delete objects asynchronously. Client doesn't need to wait for all workers to delete objects. |
 | global.performance.enableP2pTransfer | bool | `false` | Heterogeneous object transfer protocol Enables p2p transfer |
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | Enable worker->worker OC batch get, default false |

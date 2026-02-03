@@ -421,6 +421,7 @@ global:
 | global.performance.enableThp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
 | global.performance.arenaPerTenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
 | global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
+| global.performance.memoryAlignment | int | `64` | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |

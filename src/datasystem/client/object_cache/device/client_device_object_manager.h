@@ -39,39 +39,6 @@
 namespace datasystem {
 namespace object_cache {
 class ObjectClientImpl;
-struct DeviceBatchCopyHelper;
-class AsyncAclMemCopyPool {
-public:
-    AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr);
-
-    /**
-     * @brief Perform a batch memory copy operation on the NPU.
-     *
-     * @param[in] copyKind   Type of memory copy.
-     * @param[in] helper     Helper object that holds the batch copy tasks.
-     * @param[in] deviceId   Target device ID.
-     * @return Status K_OK on success; an error code otherwise.
-     */
-    Status AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId);
-    Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                             const std::vector<BufferView> &deviceBuffers,
-                             const std::vector<BufferMetaInfo> &metaInfos);
-
-    Status AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                             const std::vector<BufferView> &deviceBuffers,
-                             const std::vector<BufferMetaInfo> &metaInfos);
-
-    ~AsyncAclMemCopyPool();
-
-private:
-    std::unique_ptr<ThreadPool> copyPool_;
-    std::unique_ptr<ThreadPool> h2hCopyPool_;
-    std::unique_ptr<ThreadPool> fftsCopyPool_;
-    std::vector<void *> copyStreams_;
-    int32_t deviceNow_ = -1;
-    DeviceManagerBase *devInterImpl_;
-    AclResourceManager *aclResourceMgr_;
-};
 
 struct DeviceBatchCopyHelper {
     bool is64BitAligned(void *ptr)
@@ -158,6 +125,38 @@ struct DeviceBatchCopyHelper {
     std::vector<BufferView> srcBuffers;
     std::vector<BufferView> dstBuffers;
     std::vector<BufferMetaInfo> bufferMetas;
+};
+class AsyncAclMemCopyPool {
+public:
+    AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr);
+
+    /**
+     * @brief Perform a batch memory copy operation on the NPU.
+     *
+     * @param[in] copyKind   Type of memory copy.
+     * @param[in] helper     Helper object that holds the batch copy tasks.
+     * @param[in] deviceId   Target device ID.
+     * @return Status K_OK on success; an error code otherwise.
+     */
+    Status AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId);
+    Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
+                             const std::vector<BufferView> &deviceBuffers,
+                             const std::vector<BufferMetaInfo> &metaInfos);
+
+    Status AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
+                             const std::vector<BufferView> &deviceBuffers,
+                             const std::vector<BufferMetaInfo> &metaInfos);
+
+    ~AsyncAclMemCopyPool();
+
+private:
+    std::unique_ptr<ThreadPool> copyPool_;
+    std::unique_ptr<ThreadPool> h2hCopyPool_;
+    std::unique_ptr<ThreadPool> fftsCopyPool_;
+    std::vector<void *> copyStreams_;
+    int32_t deviceNow_ = -1;
+    DeviceManagerBase *devInterImpl_;
+    AclResourceManager *aclResourceMgr_;
 };
 
 class ClientDeviceObjectManager {
