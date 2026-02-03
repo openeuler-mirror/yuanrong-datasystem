@@ -194,6 +194,18 @@ Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObject
                      std::vector<uint64_t> &keys);
 
 /**
+ * @brief Trigger UcpManager logic to import segment and write payload, without memcopy.
+ * @param[in] ucpInfo Protobuf contains remote worker UCP info.
+ * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of object).
+ * @param[in] objInfos The local source address info of data.
+ * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish.
+ * @param[out] eventKeys The new request id to wait for if not blocking.
+ * @return Status of the call.
+ */
+Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize,
+                    const std::vector<LocalSgeInfo> &objInfos, bool blocking, std::vector<uint64_t> &eventKeys);
+
+/**
  * @brief Trigger UcpManager logic to import segment and write payload.
  * @param[in] req Urma handshake request.
  * @param[out] rsp Urma handshake response.
