@@ -48,7 +48,7 @@ func getWorkerForTest() (common.ConnectArguments, common.Status) {
 }
 
 // A helper function so that the testcase can create state cache client.
-func CreateClientForTest() (*StateClient, common.Status) {
+func CreateClientForTest() (*KVClient, common.Status) {
 	var connectParameters common.ConnectArguments
 	var s common.Status
 	const UnknowError int = 10 // same as C++ K_UNKNOWN_ERROR=10
@@ -72,7 +72,7 @@ func CreateClientForTest() (*StateClient, common.Status) {
 
 // A unit test for testing the connection api
 func TestSet(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -92,7 +92,7 @@ func TestSet(t *testing.T) {
 
 // A unit test for testing the set api
 func TestSetWriteMode(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -167,7 +167,7 @@ func TestSetWriteMode(t *testing.T) {
 }
 
 func TestSetTtlObject(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -200,7 +200,7 @@ func TestSetTtlObject(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -234,7 +234,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestGetValWithCutOffCharacter(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -272,7 +272,7 @@ func TestGetValWithCutOffCharacter(t *testing.T) {
 }
 
 func TestDelSuccess(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -297,7 +297,7 @@ func TestDelSuccess(t *testing.T) {
 }
 
 func TestDelArraySuccess(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -337,7 +337,7 @@ func TestDelArraySuccess(t *testing.T) {
 }
 
 func TestGetArraySuccess(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -375,7 +375,7 @@ func TestGetArraySuccess(t *testing.T) {
 }
 
 func TestGetArrayWithCutOffCharacter(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -413,7 +413,7 @@ func TestGetArrayWithCutOffCharacter(t *testing.T) {
 }
 
 func TestDelArrayFail(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -443,7 +443,7 @@ func TestDelArrayFail(t *testing.T) {
 }
 
 func TestGetArrayFail(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 	const TimeoutMs uint32 = 5 // Waiting 5ms for the result return if not ready.
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -472,7 +472,7 @@ func TestGetArrayFail(t *testing.T) {
 }
 
 func TestSetWithoutKey(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -504,7 +504,7 @@ func TestSetWithoutKey(t *testing.T) {
 }
 
 func TestGenerateKey(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -520,7 +520,7 @@ func TestGenerateKey(t *testing.T) {
 }
 
 func TestUseClientAfterFree(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {
@@ -537,7 +537,7 @@ func TestUseClientAfterFree(t *testing.T) {
 }
 
 func TestNXSet(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 	if theClient, s = CreateClientForTest(); theClient == nil {
 		t.Fatalf(s.ToString())
@@ -572,7 +572,7 @@ func TestNXSet(t *testing.T) {
 }
 
 func TestNONESet(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 	if theClient, s = CreateClientForTest(); theClient == nil {
 		t.Fatalf(s.ToString())
@@ -615,7 +615,7 @@ func TestNONESet(t *testing.T) {
 }
 
 func TestSetTenantId(t *testing.T) {
-	var theClient *StateClient
+	var theClient *KVClient
 	var s common.Status
 
 	if theClient, s = CreateClientForTest(); theClient == nil {

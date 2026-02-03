@@ -38,11 +38,11 @@ import (
 	"clients/common"
 )
 
-// StateClient is the main handle object that allows you to make calls into the client API's.
+// KVClient is the main handle object that allows you to make calls into the client API's.
 // Create it with the call to CreateClient(), and then all subsequent api calls will flow through this handle.
-type StateClient struct {
+type KVClient struct {
 	client C.KVClient_p
-	// lock Protect the StateClient
+	// lock Protect the KVClient
 	mutex *sync.RWMutex
 }
 
@@ -90,23 +90,23 @@ func clearAndFree(pointer *C.char, size C.ulong) {
 	C.free(unsafe.Pointer(pointer))
 }
 
-func checkNullPtr(ptr *StateClient) common.Status {
+func checkNullPtr(ptr *KVClient) common.Status {
 	if ptr == nil {
-		return common.CreateStatus(common.UnexpectedError, "The ptr of StateClient is nil")
+		return common.CreateStatus(common.UnexpectedError, "The ptr of KVClient is nil")
 	}
 	if ptr.client == nil {
-		return common.CreateStatus(common.UnexpectedError, "The StateClient.client is nil")
+		return common.CreateStatus(common.UnexpectedError, "The KVClient.client is nil")
 	}
 	if ptr.mutex == nil {
-		return common.CreateStatus(common.UnexpectedError, "The StateClient.mutex is nil")
+		return common.CreateStatus(common.UnexpectedError, "The KVClient.mutex is nil")
 	}
 	return common.CreateStatus(common.Ok, "")
 }
 
-// CreateClient function creates the StateClient and associates it with a given worker host and port numbers.
+// CreateClient function creates the KVClient and associates it with a given worker host and port numbers.
 // After creation, a connection to the worker is NOT established yet.  To connect, see the Connect() call.
 // To disconnect and/or release the resources from this client, use the Free() call.
-func CreateClient(param common.ConnectArguments) StateClient {
+func CreateClient(param common.ConnectArguments) KVClient {
 	cWorkerHost := C.CString(param.Host)
 	defer C.free(unsafe.Pointer(cWorkerHost))
 	cWorkerPort := C.int(param.Port)
@@ -143,7 +143,7 @@ func CreateClient(param common.ConnectArguments) StateClient {
 	cEnableCrossNodeConnection := C.CString(strconv.FormatBool(param.EnableCrossNodeConnection))
 	defer C.free(unsafe.Pointer(cEnableCrossNodeConnection))
 
-	var ret StateClient
+	var ret KVClient
 	ret.client = C.KVCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, cWorkerToken, cWorkerTokenLen,
 		cClientPublicKey, cClientPublicKeyLen, cClientPrivateKey, cClientPrivateKeyLen, cServerPublicKey, cServerPublicKeyLen,
 		cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen, cEnableCrossNodeConnection)
@@ -152,7 +152,7 @@ func CreateClient(param common.ConnectArguments) StateClient {
 }
 
 // Init function connects the client to the worker.
-func (t *StateClient) Init() common.Status {
+func (t *KVClient) Init() common.Status {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return rc
@@ -168,7 +168,7 @@ func (t *StateClient) Init() common.Status {
 }
 
 // UpdateAkSk function update aksk for the object client with given accessKey and secretKey, return error if failed.
-func (t *StateClient) UpdateAkSk(accessKey string, secretKey []byte) common.Status {
+func (t *KVClient) UpdateAkSk(accessKey string, secretKey []byte) common.Status {
 	cAccessKey := C.CString(accessKey)
 	cAccessKeyLen := C.ulong(len(accessKey))
 	defer C.free(unsafe.Pointer(cAccessKey))
@@ -186,7 +186,7 @@ func (t *StateClient) UpdateAkSk(accessKey string, secretKey []byte) common.Stat
 }
 
 // DestroyClient function frees all resources of the client and terminates a connection if it was connected
-func (t *StateClient) DestroyClient() {
+func (t *KVClient) DestroyClient() {
 	rc := checkNullPtr(t)
 	if int(rc.Code) == common.Ok {
 		t.mutex.Lock()
@@ -226,7 +226,7 @@ func getWriteMode(writeMode WriteModeEnum) (*C.char, error) {
 }
 
 // Set function sets a string of data (value) into the worker.  The data is uniquely identified by key.
-func (t *StateClient) Set(key string, value string, param SetParam) common.Status {
+func (t *KVClient) Set(key string, value string, param SetParam) common.Status {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return rc
@@ -266,7 +266,7 @@ func (t *StateClient) Set(key string, value string, param SetParam) common.Statu
 
 // SetValue function sets a string of data (value) into the worker.  Return the key of object,
 // if set error, return empty string.
-func (t *StateClient) SetValue(value string, param SetParam) (string, common.Status) {
+func (t *KVClient) SetValue(value string, param SetParam) (string, common.Status) {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return "", rc
@@ -315,7 +315,7 @@ func (t *StateClient) SetValue(value string, param SetParam) (string, common.Sta
 }
 
 // Get function takes key identifier as input and fetches the string of data for that key and returns it.
-func (t *StateClient) Get(key string, timeoutms ...uint32) (string, common.Status) {
+func (t *KVClient) Get(key string, timeoutms ...uint32) (string, common.Status) {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return "", rc
@@ -349,7 +349,7 @@ func (t *StateClient) Get(key string, timeoutms ...uint32) (string, common.Statu
 }
 
 // Del function deletes the key and its data.
-func (t *StateClient) Del(key string) common.Status {
+func (t *KVClient) Del(key string) common.Status {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return rc
@@ -371,7 +371,7 @@ func (t *StateClient) Del(key string) common.Status {
 // GetArray function is similar to Get(), except that it takes an array of keys to get, and returns and array of string
 // values for those keys.  The array index of the input key corresponds to the array index of the output value string.
 // If a key is not found -> error is returned and output value string for the key set to an empty string(length 0)
-func (t *StateClient) GetArray(keys []string, timeoutms ...uint32) ([]string, common.Status) {
+func (t *KVClient) GetArray(keys []string, timeoutms ...uint32) ([]string, common.Status) {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return nil, rc
@@ -426,7 +426,7 @@ func (t *StateClient) GetArray(keys []string, timeoutms ...uint32) ([]string, co
 
 // DelArray function is similar to Del(), except that it takes an array of keys
 // to delete as an argument instead of a single key.
-func (t *StateClient) DelArray(keys []string) ([]string, common.Status) {
+func (t *KVClient) DelArray(keys []string) ([]string, common.Status) {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return nil, rc
@@ -473,7 +473,7 @@ func (t *StateClient) DelArray(keys []string) ([]string, common.Status) {
 
 // GenerateKey function is generating a unique key for SET.
 // If the key fails to be generated, an empty string is returned.
-func (t *StateClient) GenerateKey() string {
+func (t *KVClient) GenerateKey() string {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return ""

@@ -134,7 +134,7 @@ StatusC InitSetParam(const std::string &writeMode, uint32_t ttlSecond, const std
 StatusC InitCreateParam(const std::string &consistencyType, datasystem::object_cache::FullParam &createParam);
 
 /**
- * @brief Creates and returns a handle for a Stateclient/ObjectClient.
+ * @brief Creates and returns a handle for a KVClient/ObjectClient.
  * @param[in] cWorkerHost A c string that contains the hostname for the worker
  * @param[in] workerPort The port number of the worker
  * @param[in] timeOut Timeout in milliseconds and the range is [0, INT32_MAX].
@@ -151,7 +151,7 @@ StatusC InitCreateParam(const std::string &consistencyType, datasystem::object_c
  * @param[in] tenantId The tenant ID.
  * @param[in] cTenantIdLen The length of cTenantId
  * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
- * @return Return the pointer of StateClient/ObjectClient.
+ * @return Return the pointer of KVClient/ObjectClient.
  */
 void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
                          size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
@@ -162,14 +162,14 @@ void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const in
 
 /**
  * @brief Executes the initialization of the connection to the worker
- * @param[in] clientPtr The pointer of StateClient/ObjectClient to connect worker.
+ * @param[in] clientPtr The pointer of KVClient/ObjectClient to connect worker.
  * @return status of the call
  */
 struct StatusC ConnectWorker(void *clientPtr);
 
 /**
- * @brief Frees the StateClient/ObjectClient and releases all associated resources with this handle
- * @param[in] clientPtr The pointer of StateClient/ObjectClient.
+ * @brief Frees the KVClient/ObjectClient and releases all associated resources with this handle
+ * @param[in] clientPtr The pointer of KVClient/ObjectClient.
  */
 void FreeClient(void *clientPtr);
 
@@ -184,7 +184,7 @@ std::vector<std::string> GetObjKeysVector(const char **cObjKeys, const size_t *c
 
 /**
  * @brief Execute get array operation.
- * @param[in] clientPtr The pointer of StateClient.
+ * @param[in] clientPtr The pointer of KVClient.
  * @param[in] cObjKeys Array of ObjKeys to get values
  * @param[in] cObjKeysLen Length of each objectKey.
  * @param[in] numObjs Number of Keys

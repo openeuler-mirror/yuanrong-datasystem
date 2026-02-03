@@ -28,7 +28,7 @@ import (
 	"clients/test/util"
 )
 
-func setValue(theClient kv.StateClient, key string, value string) {
+func setValue(theClient kv.KVClient, key string, value string) {
 	// Set a value
 	fmt.Printf("Set data: %s for key: %s\n", value, key)
 	var setParam = kv.SetParam{}
@@ -40,7 +40,7 @@ func setValue(theClient kv.StateClient, key string, value string) {
 	fmt.Printf("Set successfully\n")
 }
 
-func getValue(theClient kv.StateClient, key string) string {
+func getValue(theClient kv.KVClient, key string) string {
 	// Get the value
 	var resultValue string
 	fmt.Printf("Fetch the value for key: %s\n", key)
@@ -52,7 +52,7 @@ func getValue(theClient kv.StateClient, key string) string {
 	return resultValue
 }
 
-func delValue(theClient kv.StateClient, key string) {
+func delValue(theClient kv.KVClient, key string) {
 	// Delete the key
 	fmt.Printf("Delete the key: %s\n", key)
 	s := theClient.Del(key)
@@ -62,7 +62,7 @@ func delValue(theClient kv.StateClient, key string) {
 	fmt.Printf("Delete success\n")
 }
 
-func getValues(theClient kv.StateClient, keys []string) {
+func getValues(theClient kv.KVClient, keys []string) {
 	output, s := theClient.GetArray(keys, 0)
 	if s.IsError() {
 		fmt.Println(s)
@@ -76,7 +76,7 @@ func getValues(theClient kv.StateClient, keys []string) {
 	}
 }
 
-func delValues(theClient kv.StateClient, keys []string) {
+func delValues(theClient kv.KVClient, keys []string) {
 	// Deleting multiple keys
 	outputD, s := theClient.DelArray(keys)
 	if s.IsError() {
