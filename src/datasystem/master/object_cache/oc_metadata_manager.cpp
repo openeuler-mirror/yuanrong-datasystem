@@ -1224,9 +1224,9 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
     uint64_t payloadSize = 0;
     std::vector<QueryMetaInfoPb> infos;
     infos.reserve(objectKeys.size());
-    auto func = [this, &address, &payloadSize, &payloads](const std::string &objectKey,
-                                                          std::vector<QueryMetaInfoPb> &infos,
-                                                          std::vector<std::string> &notExistObjectKeys) {
+    auto func = [this, &address, &payloadSize, &payloads, &req](const std::string &objectKey,
+                                                                std::vector<QueryMetaInfoPb> &infos,
+                                                                std::vector<std::string> &notExistObjectKeys) {
         auto getMetaInfo = [&](auto &accessor, QueryMetaInfoPb &info) {
             info.mutable_meta()->CopyFrom(accessor->second.meta);
             info.mutable_meta()->set_object_key(objectKey);
@@ -1252,8 +1252,12 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
                 // requests. Since the location is already in a ready state, any modification attempt will result in an
                 // error.
                 // 2. If location exist and it's state is UNACK, we no need to modify it.
+                // 3. If the key type is hash and the req is from another worker, no need to keep worker address to
+                // location.
+                auto isHashKeyCrossAz = req.is_from_other_az() && !HasWorkerId(objectKey);
                 if (FLAGS_enable_data_replication
-                    && accessor->second.locations.find(address) == accessor->second.locations.end()) {
+                    && accessor->second.locations.find(address) == accessor->second.locations.end()
+                    && !isHashKeyCrossAz) {
                     accessor->second.locations[address] = AckState::UNACK;
                     RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
                 }
