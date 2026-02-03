@@ -14,7 +14,7 @@ yr.datasystem.hetero_client.HeteroClient.async_mget_h2d
     参数：
         - **keys** (list) - host 的 key 列表。约束：传入的object key的数量 `<=10000`。
         - **data_blob_list** (list) - :class:`yr.datasystem.hetero_client.DeviceBlobList` 列表。
-        - **sub_timeout_ms** (int) - 超时时间，当在指定时间内无法获取完成，则抛出异常。
+        - **sub_timeout_ms** (int) - 超时时间，以毫秒为单位，当在指定时间内无法获取完成，则抛出异常。
 
     返回：
         - **Future** (Future) - 可通过该Future对象查询异步请求执行结果。

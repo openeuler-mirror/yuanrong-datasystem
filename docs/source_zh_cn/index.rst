@@ -35,7 +35,7 @@ openYuanrong datasystem 架构
 
 openYuanrong datasystem 由三个部分组成：
 
-- **多语言SDK**：提供 Python/C++ 语言接口，封装 heterogeneous object 、KV 以及 object 接口，支撑业务实现数据快速读写。提供两种类型接口：
+- **多语言SDK**：提供 Python/C++ 语言接口，封装 heterogeneous object 、KV 以及 Object 接口，支撑业务实现数据快速读写。提供两种类型接口：
 
   - **heterogeneous object**：基于 NPU 卡的 HBM 内存抽象异构对象接口，实现昇腾 NPU 卡间数据高速直通传输。同时提供 H2D/D2H 高速迁移接口，实现数据快速在 DRAM/HBM 之间传输。
   - **KV**：基于共享内存实现免拷贝的 KV 接口，实现高性能数据缓存，支持通过对接外部组件提供数据可靠性语义。
