@@ -1028,7 +1028,9 @@ Status AclDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, 
                                      MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex)
 {
     if (kind != MemcpyKind::HOST_TO_DEVICE && kind != MemcpyKind::DEVICE_TO_HOST) {
-        return Status(K_INVALID, "MemcpyBatch support kind(DEVICE_TO_HOST, HOST_TO_DEVICE) only!");
+        return Status(K_INVALID,
+                      FormatString("MemcpyBatch support kind(DEVICE_TO_HOST, HOST_TO_DEVICE) only, current is %u!",
+                                   static_cast<uint32_t>(kind)));
     }
     std::vector<aclrtMemcpyBatchAttr> attrs(numBatches);
     std::vector<size_t> attrsIds(numBatches);
@@ -1044,8 +1046,7 @@ Status AclDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, 
         }
         attrsIds[i] = idx++;
     }
-    PerfPoint p(kind == MemcpyKind::HOST_TO_DEVICE ? PerfKey::SUBMIT_H2D_BATCH_MEMCPY
-                                                   : PerfKey::SUBMIT_D2H_BATCH_MEMCPY);
+    PerfPoint p(kind == MemcpyKind::HOST_TO_DEVICE ? PerfKey::H2D_BATCH_MEMCPY : PerfKey::D2H_BATCH_MEMCPY);
     return aclrtMemcpyBatch(dsts, destMax, srcs, sizes, numBatches, attrs.data(), attrsIds.data(), attrs.size(),
                             failIndex);
 }

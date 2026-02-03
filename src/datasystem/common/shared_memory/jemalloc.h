@@ -28,6 +28,7 @@
 #include "jemalloc/jemalloc.h"
 
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/validator.h"
 
 typedef struct extent_hooks_s extent_hooks_t;
 

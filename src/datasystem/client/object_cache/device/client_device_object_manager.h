@@ -39,25 +39,20 @@
 namespace datasystem {
 namespace object_cache {
 class ObjectClientImpl;
-
+struct DeviceBatchCopyHelper;
 class AsyncAclMemCopyPool {
 public:
     AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr);
 
     /**
-     * @brief Npu memory copy in batch.
-     * @param[in] deviceIdx The device id.
-     * @param[in] dstList The list of pointer in destination.
-     * @param[in] destMaxList The list of memory size in destination.
-     * @param[in] srcList The list of pointer in source.
-     * @param[in] countList The list of memory size in source.
-     * @param[in] kind The memory copy kind.
-     * @param[in] batchSize The size of batch.
-     * @return Status K_OK on success; the error code otherwise.
+     * @brief Perform a batch memory copy operation on the NPU.
+     *
+     * @param[in] copyKind   Type of memory copy.
+     * @param[in] helper     Helper object that holds the batch copy tasks.
+     * @param[in] deviceId   Target device ID.
+     * @return Status K_OK on success; an error code otherwise.
      */
-    Status AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList, std::vector<size_t> &destMaxList,
-                          std::vector<void *> &srcList, std::vector<size_t> &countList, MemcpyKind kind,
-                          size_t batchSize, size_t startIndex);
+    Status AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId);
     Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
                              const std::vector<BufferView> &deviceBuffers,
                              const std::vector<BufferMetaInfo> &metaInfos);
@@ -65,6 +60,7 @@ public:
     Status AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
                              const std::vector<BufferView> &deviceBuffers,
                              const std::vector<BufferMetaInfo> &metaInfos);
+
     ~AsyncAclMemCopyPool();
 
 private:

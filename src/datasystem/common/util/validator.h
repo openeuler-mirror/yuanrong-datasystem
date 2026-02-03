@@ -1017,10 +1017,12 @@ public:
     static bool ValidateMemoryAlignment(const char *flagName, uint32_t value)
     {
         auto maxAlignment = 512U;
-        if (value > 0U && value <= maxAlignment) {
+        auto divisor = 2;
+        auto isEven = (value % divisor) == 0;
+        if (value > 0U && value <= maxAlignment && isEven) {
             return true;
         }
-        LOG(ERROR) << FormatString("The value of %s(%u) should be uint32 in (0 , %u].", flagName, value, maxAlignment);
+        LOG(ERROR) << FormatString("The value of %s(%u) should be even in (0 , %u].", flagName, value, maxAlignment);
         return false;
     }
 };

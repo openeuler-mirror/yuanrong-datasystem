@@ -19,7 +19,6 @@
  *              memory allocate and free.
  */
 #include "datasystem/common/shared_memory/jemalloc.h"
-#include "datasystem/common/util/validator.h"
 
 #define JEMALLOC_NO_DEMANGLE
 #include <jemalloc/jemalloc.h>

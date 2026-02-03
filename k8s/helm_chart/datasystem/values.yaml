@@ -369,7 +369,9 @@ global:
     arenaPerTenant: 16
     # The memory reclamation time after free, default is 600 seconds.
     memoryReclamationTimeSecond: 600
-
+    # The memory alignment size used by jemalloc for all memory allocations (in bytes). 
+    # Larger alignment can improve performance but may increase memory consumption due to fragmentation.
+    memoryAlignment: 64
     # Set whether to delete object asynchronously. If set to true, master will notify workers to delete objects asynchronously.
     # Client doesn't need to wait for all workers to delete objects.
     # The default value is false.

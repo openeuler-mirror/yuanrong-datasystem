@@ -278,27 +278,13 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         aclResourceMgr_.SetPolicyDirect();
         return Status::OK();
     });
-    auto doMemCpy = [this](MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t &deviceId) {
-        size_t leftNum = helper.batchSize;
-        size_t startIndex = 0;
-        while (leftNum > 0) {
-            auto maxBatchSize = 4096UL;
-            auto batchNum = std::min(leftNum, maxBatchSize);
-            RETURN_IF_NOT_OK(swapInPool_->AclMemcpyBatch(deviceId, helper.dstList, helper.dataSizeList, helper.srcList,
-                                                         helper.dataSizeList, copyKind, batchNum, startIndex));
-
-            leftNum -= batchNum;
-            startIndex += batchNum;
-        }
-        return Status::OK();
-    };
     if (copyKind == MemcpyKind::DEVICE_TO_HOST) {
         auto policy = aclResourceMgr_.GetD2HPolicy();
         if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
             return swapOutPool_->AclMemcpyBatchD2H(deviceId, helper.dstBuffers, helper.srcBuffers, helper.bufferMetas);
         } else {
-            PerfPoint p(PerfKey::TOTAL_SUBMIT_D2H_BATCH_MEMCPY);
-            return doMemCpy(copyKind, helper, deviceId);
+            PerfPoint p(PerfKey::TOTAL_D2H_BATCH_MEMCPY);
+            return swapOutPool_->AclMemcpyBatch(copyKind, helper, deviceId);
         }
     }
     auto policy = aclResourceMgr_.GetH2DPolicy();
@@ -306,8 +292,8 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         PrintGetPerfInfo(helper);
         return swapInPool_->AclMemcpyBatchH2D(deviceId, helper.srcBuffers, helper.dstBuffers, helper.bufferMetas);
     } else {
-        PerfPoint p(PerfKey::TOTAL_SUBMIT_H2D_BATCH_MEMCPY);
-        return doMemCpy(copyKind, helper, deviceId);
+        PerfPoint p(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
+        return swapOutPool_->AclMemcpyBatch(copyKind, helper, deviceId);
     }
 }
 
@@ -391,20 +377,27 @@ Status AsyncAclMemCopyPool::AclMemcpyBatchH2D(uint32_t deviceId, const std::vect
     return copier.ExecuteMemcpy(deviceBuffers, hostBuffers);
 }
 
-Status AsyncAclMemCopyPool::AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList,
-                                           std::vector<size_t> &destMaxList, std::vector<void *> &srcList,
-                                           std::vector<size_t> &countList, MemcpyKind kind, size_t batchSize,
-                                           size_t startIndex)
+Status AsyncAclMemCopyPool::AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId)
 {
-    size_t failedIdx = 0;
-    auto ret = devInterImpl_->MemcpyBatch(dstList.data() + startIndex, destMaxList.data() + startIndex,
-                                          srcList.data() + startIndex, countList.data() + startIndex, batchSize, kind,
-                                          deviceIdx, &failedIdx);
-    if (ret.IsError()) {
-        LOG(ERROR) << FormatString("AclMemcpyBatch return error , failed index:%lu", failedIdx);
+    size_t leftNum = helper.batchSize;
+    size_t startIndex = 0;
+    while (leftNum > 0) {
+        auto maxBatchSize = 4096UL;
+        auto batchNum = std::min(leftNum, maxBatchSize);
+        size_t failedIdx = 0;
+        auto res =
+            devInterImpl_->MemcpyBatch(helper.dstList.data() + startIndex, helper.dataSizeList.data() + startIndex,
+                                       helper.srcList.data() + startIndex, helper.dataSizeList.data() + startIndex,
+                                       batchNum, copyKind, deviceId, &failedIdx);
+        if (res.IsError()) {
+            LOG(ERROR) << FormatString("AclMemcpyBatch return error , failed index:%lu", failedIdx) << "," << res;
+            return res;
+        }
+        leftNum -= batchNum;
+        startIndex += batchNum;
     }
-    return ret;
-}
+    return Status::OK();
+};
 
 AsyncAclMemCopyPool::~AsyncAclMemCopyPool()
 {
