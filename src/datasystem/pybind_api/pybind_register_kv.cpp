@@ -528,7 +528,8 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def("HealthCheck",
              [](ObjectClientImpl &client) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-                 Status healthState = client.HealthCheck();
+                 ServerState state;
+                 Status healthState = client.HealthCheck(state);
                  return healthState;
              });
 });
