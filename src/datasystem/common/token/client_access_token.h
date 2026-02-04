@@ -15,10 +15,10 @@
  */
 
 /**
- * Description: agc cloudstorage access token request
+ * Description: Client access token request
  */
-#ifndef DATASYSTEM_COMMON_CLOUDSTORAGE_AGC_OAUTH_TOKEN_REQ_H
-#define DATASYSTEM_COMMON_CLOUDSTORAGE_AGC_OAUTH_TOKEN_REQ_H
+#ifndef DATASYSTEM_COMMON_TOKEN_CLIENT_ACCESS_TOKEN_H
+#define DATASYSTEM_COMMON_TOKEN_CLIENT_ACCESS_TOKEN_H
 
 #include "datasystem/common/util/timer.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -69,4 +69,4 @@ private:
 };
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_CLOUDSTORAGE_AGC_OAUTH_TOKEN_REQ_H
+#endif // DATASYSTEM_COMMON_TOKEN_CLIENT_ACCESS_TOKEN_H

@@ -51,7 +51,7 @@ public class KVClientTest {
         cluster = new Cluster(workerNums, redisNums);
         cluster.init(KVClientTest.class.getSimpleName());
         String paras = " -authorization_enable=true -system_access_key=" + systemAccessKey + " -system_secret_key="
-                + systemSecretKey; // + " -iam_kit=agc_oauth" + " -tenant_agc_oauth_url=https://agc.com";
+                + systemSecretKey; // + " -iam_kit=token_oauth" + " -tenant_token_url=https://auth.server.com";
         cluster.setWorkerGflagParams(paras);
         cluster.startAll();
     }

@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/agc/client_access_token.h"
+#include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
