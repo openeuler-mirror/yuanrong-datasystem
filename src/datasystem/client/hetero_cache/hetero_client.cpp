@@ -275,9 +275,7 @@ Status HeteroClient::DevMGet(const std::vector<std::string> &keys, std::vector<D
 Status HeteroClient::HealthCheck(ServerState &state)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_HEALTHCHECK);
     auto rc = impl_->HealthCheck(state);
-    accessPoint.Record(rc.GetCode(), "0", {}, rc.GetMsg());
     return rc;
 }
 
