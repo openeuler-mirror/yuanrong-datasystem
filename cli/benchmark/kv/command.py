@@ -17,13 +17,11 @@ from typing import Any, Union
 
 from yr.datasystem.cli.benchmark.common import (
     BenchmarkBaseCommand,
-    BenchOutputHandler,
     BenchSuite,
 )
 from yr.datasystem.cli.benchmark.executor import executor
 from yr.datasystem.cli.benchmark.kv import validator
 from yr.datasystem.cli.benchmark.kv.bench_suite_builder import KVBenchSuiteBuilder
-from yr.datasystem.cli.benchmark.kv.bench_test_case import KVBenchOutputHandler
 from yr.datasystem.cli.benchmark.task import BenchArgs, BenchCommandOutput
 
 from yr.datasystem.cli.benchmark.system_info import SystemInfoCollector
@@ -32,14 +30,12 @@ from yr.datasystem.cli.benchmark.system_info import SystemInfoCollector
 class KVCommand(BenchmarkBaseCommand):
     name = "kv"
     description = "KV Performance Benchmarking"
-    handler: Union[BenchOutputHandler, None]
 
     def __init__(self):
         """
         Initializes the Command instance.
         """
         super().__init__()
-        self.handler = None
         self.mode = None
         self.args = None
 
@@ -165,8 +161,7 @@ class KVCommand(BenchmarkBaseCommand):
 
     def build_suite(self, bench_args: BenchArgs) -> BenchSuite:
         """Builds a benchmark suite for KV tests."""
-        self.handler = KVBenchOutputHandler(bench_args)
-        builder = KVBenchSuiteBuilder(bench_args, self.handler)
+        builder = KVBenchSuiteBuilder(bench_args)
         return builder.build()
 
     def _add_test_config_arguments(self, parser: argparse.ArgumentParser):

@@ -31,9 +31,13 @@ class BenchOutputHandler(ABC):
         super().__init__()
         self.bench_args = bench_args
 
+    def before_execute(self, task: BenchTask) -> None:
+        """Called before the task is executed."""
+        pass
+
     @abstractmethod
-    def handle(self, task: BenchTask) -> None:
-        """Processes a single benchmark task and handles its output."""
+    def after_execute(self, task: BenchTask) -> None:
+        """Called after the task is executed to handle its output."""
         pass
 
 
@@ -68,8 +72,7 @@ class BenchTestCase:
     def run(self):
         """Iterate through all tasks, execute each one, and then handle its output."""
         for task in self.tasks:
-            task.run()
-            self.handler.handle(task)
+            task.run(self.handler)
 
 
 class BenchSuite:
