@@ -20,7 +20,7 @@
 #include <atomic>
 #include <memory>
 
-#include "datasystem/common/device/ascend/comm_wrapper_base.h"
+#include "datasystem/common/device/comm_wrapper_base.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
 
@@ -54,7 +54,7 @@ public:
      * @param[in] rootInfo The root info.
      * @return Status of the call.
      */
-    Status InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) override;
+    Status InitCommunicator(CommRootInfo &rootInfo, const CommDirection direction, bool isSameNode) override;
     /**
      * @brief P2P send the data to the receiving side.
      * @param[in] blobs The list of the blob info.
@@ -62,7 +62,7 @@ public:
      * @return Status of the call
      */
 
-    Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+    Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
                    aclrtStream stream) override;
 
     /**
@@ -72,14 +72,14 @@ public:
      * @param[in] stream The stream of acl context.
      * @return Status of the call
      */
-    Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+    Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
                    aclrtStream stream) override;
 
     /**
      * @brief Queries whether an error occurs in the communication domain.
      * @return The status of Hccl invocation.
      */
-    Status HcclGetCommAsyncError() override;
+    Status GetCommAsyncError() override;
 
     /**
      * @brief Warm up the hccl communicator wrapper in the send side.
@@ -92,7 +92,7 @@ public:
      * @param[in] eventType The p2p event type: SEND or RECV
      * @return The status of call.
      */
-    Status WarmUpComm(HcclCommDirection eventType) override;
+    Status WarmUpComm(CommDirection eventType) override;
 
     /**
      * @brief Creating hccl rootinfo.

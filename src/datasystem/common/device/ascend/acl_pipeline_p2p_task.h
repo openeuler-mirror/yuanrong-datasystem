@@ -25,7 +25,7 @@
 
 #include <map>
 
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
 #include "datasystem/utils/status.h"
 
@@ -36,7 +36,7 @@ struct P2PSendTask {
     std::vector<Blob> srcBuffers;
     size_t totalSize;
     std::shared_ptr<CommWrapperBase> comm;
-    std::shared_ptr<AclRtEventWrapper> event;
+    std::shared_ptr<DeviceRtEventWrapper> event;
     Blob transBuffer;
     uint64_t seq{ 0 };
 };
@@ -104,7 +104,7 @@ struct P2PRecvTask {
     std::vector<Blob> destBuffers;
     size_t totalSize;
     std::shared_ptr<CommWrapperBase> comm;
-    std::shared_ptr<AclRtEventWrapper> event;
+    std::shared_ptr<DeviceRtEventWrapper> event;
     Blob transBuffer;
     uint64_t seq{ 0 };
 };

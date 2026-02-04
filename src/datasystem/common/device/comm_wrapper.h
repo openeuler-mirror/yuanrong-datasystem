@@ -14,56 +14,62 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_COMMON_DEVICE_P2PHCCL_COMM_WRAPPER_H
-#define DATASYSTEM_COMMON_DEVICE_P2PHCCL_COMM_WRAPPER_H
+#ifndef DATASYSTEM_COMMON_DEVICE_COMM_WRAPPER_H
+#define DATASYSTEM_COMMON_DEVICE_COMM_WRAPPER_H
 
 #include <atomic>
 #include <memory>
 
 #include "datasystem/common/device/comm_wrapper_base.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
 
 namespace datasystem {
-class P2PHcclCommWrapper : public CommWrapperBase {
-public:
-    explicit P2PHcclCommWrapper(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                                std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr);
 
-    ~P2PHcclCommWrapper();
+constexpr uint32_t P2P_RANK_NUM = 2;
+constexpr uint32_t P2P_SEND_RANK = 0;
+constexpr uint32_t P2P_RECV_RANK = 1;
+
+class CommWrapper : public CommWrapperBase {
+public:
+    explicit CommWrapper(const std::string &commId, int localDeviceId, int remoteDeviceId,
+                         std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr);
+
+    ~CommWrapper();
 
     void ShutDown() override;
 
     /**
-     * @brief Init hccl communicator. Special implementation based on this communication domain class.
+     * @brief Init communicator. Special implementation based on this communication domain class.
+     * @param[in] numRanks The number of ranks.
      * @param[in] rootInfo The root info.
-     * @param[in] kind The rank in local. The direction of transmission, internally defined type of p2phccl.
+     * @param[in] rank The rank in local.
      * @return Status of the call.
      */
-    Status InitP2PComm(const CommRootInfo *rootInfo, P2pKindBase kind, bool isSameNode);
+    Status InitComm(int numRanks, CommRootInfo &rootInfo, int rank);
 
     /**
-     * @brief Init hccl communicator.
-     * @param[in] rootInfo The root info.
+     * @brief Init communicator.
      * @param[in] direction own transmission direction.
+     * @param[in] rootInfo The root info.
      * @return Status of the call.
      */
     Status InitCommunicator(CommRootInfo &rootInfo, const CommDirection direction, bool isSameNode) override;
-
     /**
      * @brief P2P send the data to the receiving side.
-     * @param[in] blobs[in] The list of the blob info.
-     * @param[in] comm[in] The hccl communicator.
-     * @param[in] stream[in] The stream of acl context.
+     * @param[in] blobs The list of the blob info.
+     * @param[in] event The DeviceRtEvent wrapper.
      * @return Status of the call
      */
+
     Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
                    aclrtStream stream) override;
 
     /**
      * @brief P2P recv the data from the sending side.
      * @param[in] blobs The list of the blob info.
-     * @param[in] comm The hccl communicator.
-     * @param[in] streamThe stream of acl context.
+     * @param[in] event The DeviceRtEvent wrapper.
+     * @param[in] stream The stream of runtime context.
      * @return Status of the call
      */
     Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
@@ -71,14 +77,14 @@ public:
 
     /**
      * @brief Queries whether an error occurs in the communication domain.
-     * @return The status of Hccl invocation.
+     * @return The status of invocation.
      */
     Status GetCommAsyncError() override;
 
     /**
-     * @brief Warm up the hccl communicator wrapper in the send side.
-     * Attention! The HCCL interface has limitations.
-     * Suppose thread A creates communicator a1, but does not call the hccl send/recv interfaces.
+     * @brief Warm up the communicator wrapper in the send side.
+     * Attention! The communication interface has limitations.
+     * Suppose thread A creates communicator a1, but does not call the send/recv interfaces.
      * Thread B also creates communicator b1 and calls the send/recv interface,
      * then communicator a1 will not work properly.
      * So we need to call send/recv immediately after creating the communicator to establish a socket,
@@ -89,11 +95,19 @@ public:
     Status WarmUpComm(CommDirection eventType) override;
 
     /**
-     * @brief Creating hccl rootinfo.
+     * @brief Creating communicator rootinfo.
      * @param[in] rootInfo Transfer a blank rootinfo, create a reference, and transfer a value.
      * @return Status of the call.
      */
     Status CreateRootInfo(CommRootInfo &rootInfo) override;
+
+private:
+    /**
+     * @brief Check if the communication domain pointer is null.
+     * @param[in] comm The communicator ptr.
+     * @return Status of the call
+     */
+    Status CheckCommPtr(const void *ptr);
 };
 }  // namespace datasystem
 #endif

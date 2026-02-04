@@ -16,7 +16,7 @@
  */
 
 #include "datasystem/hetero/future.h"
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -27,7 +27,7 @@ namespace datasystem {
 // Max wait timeout is 30 minutes.
 constexpr uint64_t MAX_FUTURE_WAIT_TIMEOUT_MS = 1'800'000;
 
-Future::Future(std::shared_future<Status> future, std::shared_ptr<AclRtEventWrapper> event,
+Future::Future(std::shared_future<Status> future, std::shared_ptr<DeviceRtEventWrapper> event,
                const std::string &objectKey)
     : future_(future), event_(std::move(event)), objectKey_(objectKey)
 {
@@ -61,12 +61,13 @@ Status Future::Get(uint64_t subTimeoutMs)
         return Status::OK();
     }
 
+    auto event = std::static_pointer_cast<DeviceRtEventWrapper>(event_);
     auto remainingTime = timeoutDuration.CalcRealRemainingTime();
     // Wait with timeout if remainingTime > 0
     if (remainingTime > 0) {
-        return event_->SynchronizeEvent(remainingTime);
+        return event->SynchronizeEvent(remainingTime);
     }
-    if (event_->QueryEventStatus().IsError()) {
+    if (event->QueryEventStatus().IsError()) {
         RETURN_STATUS_LOG_ERROR(
             K_FUTURE_TIMEOUT,
             FormatString("The %s get is timeout, npu event is not sync ok, please try again.", futureName));

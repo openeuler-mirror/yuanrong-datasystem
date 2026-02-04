@@ -14,22 +14,22 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/device/ascend/hccl_comm_wrapper.h"
+#include "datasystem/common/device/comm_wrapper.h"
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-HcclCommWrapper::HcclCommWrapper(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                                 std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr)
+CommWrapper::CommWrapper(const std::string &commId, int localDeviceId, int remoteDeviceId,
+                         std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr)
     : CommWrapperBase(commId, localDeviceId, remoteDeviceId, threadControl, aclResourceMgr)
 {
 }
 
-void HcclCommWrapper::ShutDown()
+void CommWrapper::ShutDown()
 {
-    if ((hcclCommState_ != HcclCommState::DESTROY)) {
-        hcclCommState_ = HcclCommState::DESTROY;
+    if ((commState_ != CommState::DESTROY)) {
+        commState_ = CommState::DESTROY;
         std::lock_guard<std::mutex> lock(mutex_);
         if (hasShutDown_) {
             return;
@@ -40,119 +40,121 @@ void HcclCommWrapper::ShutDown()
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
                 LOG_IF_ERROR(
                     deviceImpl_->SynchronizeStreamWithTimeout(resource->PrimaryStream(), SYNC_STREAM_WAIT_TIMEOUT_MS),
-                    "Timed out waiting for all tasks in Stream to complete, check that HcclRecv is not called");
+                    "Timed out waiting for all tasks in Stream to complete, check that Recv is not called");
                 resource->Release();
                 deviceImpl_->CommDestroy(GetRef());
-                LOG(INFO) << "Destroy HcclComm ok, commId: " << commId_;
+                LOG(INFO) << "Destroy Comm ok, commId: " << commId_;
             });
         }
-        (void)hcclThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
+        (void)commThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
         hasShutDown_ = true;
         pool_.reset();
-        hcclThreadControl_.reset();
+        commThreadControl_.reset();
     }
 }
 
-HcclCommWrapper::~HcclCommWrapper()
+CommWrapper::~CommWrapper()
 {
     ShutDown();
 }
 
-Status HcclCommWrapper::InitHcclComm(int numRanks, CommRootInfo &rootInfo, int rank)
+Status CommWrapper::InitComm(int numRanks, CommRootInfo &rootInfo, int rank)
 {
-    LOG(INFO) << "InitHcclComm";
+    LOG(INFO) << "InitComm";
     commConnectTimestamp_ = std::chrono::steady_clock::now();
-    hcclCommState_ = HcclCommState::CREATING;
+    commState_ = CommState::CREATING;
     auto rc = deviceImpl_->CommInitRootInfo(numRanks, &rootInfo,
                                             rank, reinterpret_cast<void**>(&GetRef()));
-    LOG_IF_ERROR(rc, "HcclCommInitRootInfo failed.");
+    LOG_IF_ERROR(rc, "CommInitRootInfo failed.");
     SetStatus(rc);
     return rc;
 }
 
-Status HcclCommWrapper::P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
-                                aclrtStream stream)
+Status CommWrapper::P2PSend(const std::vector<Blob> &blobs,
+                            const std::shared_ptr<DeviceRtEventWrapper> &event,
+                            aclrtStream stream)
 {
-    LOG(INFO) << "hccl start to send " << (!blobs.empty() ? std::to_string(blobs[0].size) : "")
+    LOG(INFO) << "comm start to send " << (!blobs.empty() ? std::to_string(blobs[0].size) : "")
               << ", info num: " << blobs.size();
     (void)event;
     auto &comm = GetRef();
-    RETURN_IF_NOT_OK(CheckHcclCommPtr(comm));
+    RETURN_IF_NOT_OK(CheckCommPtr(comm));
     for (size_t i = 0; i < blobs.size(); i++) {
         RETURN_IF_NOT_OK(deviceImpl_->CommSend(blobs[i].pointer, blobs[i].size, CommDataType::INT8,
                                                P2P_RECV_RANK, comm, stream));
     }
-    VLOG(1) << "Send hccl ok";
+    VLOG(1) << "Send comm ok";
     return Status::OK();
 }
 
-Status HcclCommWrapper::HcclGetCommAsyncError()
+Status CommWrapper::GetCommAsyncError()
 {
     // Don't check if comm is creating.
-    if (hcclCommState_ == HcclCommState::CREATING || hcclCommState_ == HcclCommState::UNCREATE) {
-          return Status::OK();
+    if (commState_ == CommState::CREATING || commState_ == CommState::UNCREATE) {
+        return Status::OK();
     }
     auto &comm = GetRef();
     return deviceImpl_->CommGetAsyncError(comm);
 }
 
-Status HcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
-                                aclrtStream stream)
+Status CommWrapper::P2PRecv(const std::vector<Blob> &blobs,
+                            const std::shared_ptr<DeviceRtEventWrapper> &event,
+                            aclrtStream stream)
 {
-    LOG(INFO) << "hccl receiving " << (!blobs.empty() ?  std::to_string(blobs[0].size) : "")
+    LOG(INFO) << "comm receiving " << (!blobs.empty() ?  std::to_string(blobs[0].size) : "")
               << ", info num: " << blobs.size();
     (void)event;
     auto &comm = GetRef();
-    RETURN_IF_NOT_OK(CheckHcclCommPtr(comm));
+    RETURN_IF_NOT_OK(CheckCommPtr(comm));
     for (size_t i = 0; i < blobs.size(); i++) {
         RETURN_IF_NOT_OK(deviceImpl_->CommRecv(blobs[i].pointer, blobs[i].size, CommDataType::INT8,
             P2P_SEND_RANK, comm, stream));
     }
 
-    VLOG(1) << "Recv hccl ok";
+    VLOG(1) << "Recv comm ok";
     return Status::OK();
 }
 
-Status HcclCommWrapper::InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode)
+Status CommWrapper::InitCommunicator(CommRootInfo &rootInfo, const CommDirection direction, bool isSameNode)
 {
     (void)isSameNode;
     InitPipeline(direction);
-    if (direction == HcclCommDirection::SEND) {
-        return InitHcclComm(P2P_RANK_NUM, rootInfo, P2P_SEND_RANK);
+    if (direction == CommDirection::SEND) {
+        return InitComm(P2P_RANK_NUM, rootInfo, P2P_SEND_RANK);
     }
-    return InitHcclComm(P2P_RANK_NUM, rootInfo, P2P_RECV_RANK);
+    return InitComm(P2P_RANK_NUM, rootInfo, P2P_RECV_RANK);
 }
 
-Status HcclCommWrapper::WarmUpComm(HcclCommDirection eventType)
+Status CommWrapper::WarmUpComm(CommDirection eventType)
 {
     void *devPtr = nullptr;
     RETURN_IF_NOT_OK(deviceImpl_->MallocDeviceMemory(sizeof(char), devPtr));
     Raii raii([this, &devPtr]() { deviceImpl_->FreeDeviceMemory(devPtr); });
-    std::shared_ptr<AclRtEventWrapper> event;
-    if (eventType == HcclCommDirection::SEND) {
+    std::shared_ptr<DeviceRtEventWrapper> event;
+    if (eventType == CommDirection::SEND) {
         RETURN_IF_NOT_OK(
             deviceImpl_->CommSend(devPtr, WARM_UP_DATA_COUNT, CommDataType::INT8, P2P_RECV_RANK, Get(), GetStream()));
-    } else if (eventType == HcclCommDirection::RECV) {
+    } else if (eventType == CommDirection::RECV) {
         RETURN_IF_NOT_OK(
             deviceImpl_->CommRecv(devPtr, WARM_UP_DATA_COUNT, CommDataType::INT8, P2P_SEND_RANK, Get(), GetStream()));
     }
     RETURN_IF_NOT_OK(deviceImpl_->SynchronizeStream(GetStream()));
-    LOG(INFO) << "communicator hccl warmup ok";
+    LOG(INFO) << "communicator warmup ok";
     return Status::OK();
 }
 
-Status HcclCommWrapper::CreateRootInfo(CommRootInfo &rootInfo)
+Status CommWrapper::CreateRootInfo(CommRootInfo &rootInfo)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(deviceImpl_->CommGetRootInfo(&rootInfo), "GetRootInfo failed.");
     return Status::OK();
 }
 
-Status HcclCommWrapper::CheckHcclCommPtr(const void *ptr)
+Status CommWrapper::CheckCommPtr(const void *ptr)
 {
     if (ptr == nullptr) {
         auto errorStatus = GetDetailStatus();
         return {K_RUNTIME_ERROR,
-            FormatString("HcclComm is nullptr, create HCCL communication domain failed. Detail:%s", errorStatus)};
+            FormatString("Comm is nullptr, create communication domain failed. Detail:%s", errorStatus)};
     }
     return Status::OK();
 }

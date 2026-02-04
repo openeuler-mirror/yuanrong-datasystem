@@ -297,7 +297,7 @@ private:
     DeviceManagerBase *devInterImpl_;
     ObjectClientImpl *objClientImpl_;
     AclResourceManager aclResourceMgr_;
-    std::shared_ptr<HcclCommFactory> commFactory_;
+    std::shared_ptr<CommFactory> commFactory_;
     tbb::concurrent_hash_map<int, std::shared_ptr<P2PSubscribe>> subscribeTable_;
     tbb::concurrent_hash_map<std::string, DeviceMemoryUnit> memUnitTable_;
     int32_t clientDevOJTimeoutMs_;

@@ -36,11 +36,11 @@
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/client_worker_api.h"
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
-#include "datasystem/client/object_cache/device/hccl_comm_factory.h"
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/client/object_cache/device/comm_factory.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
 #include "datasystem/common/device/ascend/cann_types.h"
-#include "datasystem/common/device/ascend/hccl_comm_wrapper.h"
+#include "datasystem/common/device/comm_wrapper.h"
 #include "datasystem/common/util/queue/blocking_queue.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -88,9 +88,9 @@ public:
 
     /**
      * @brief Get the aclRtEvent.
-     * @return The shared_ptr of AclRtEventWrapper
+     * @return The shared_ptr of DeviceRtEventWrapper
      */
-    const std::shared_ptr<AclRtEventWrapper> &GetEvent();
+    const std::shared_ptr<DeviceRtEventWrapper> &GetEvent();
 
     /**
      * @brief Destroy an event.
@@ -113,7 +113,7 @@ private:
     std::mutex mutex_;
     std::shared_ptr<StatusPromise> promise_;
     // Store event to record when send/recv finish, and pass event to the future that promise create.
-    std::shared_ptr<AclRtEventWrapper> event_ = nullptr;
+    std::shared_ptr<DeviceRtEventWrapper> event_ = nullptr;
     std::string objectKey_;
 };
 
@@ -265,7 +265,7 @@ struct P2PGroupKey {
 class P2PSubscribe : public ClientDeviceCurd {
 public:
     P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
-                 std::shared_ptr<HcclCommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs = 5000);
+                 std::shared_ptr<CommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs = 600);
 
     ~P2PSubscribe();
 
@@ -439,7 +439,7 @@ private:
     std::atomic<bool> interruptFlag_{ false };
     int32_t deviceId_;
     std::unique_ptr<ThreadPool> threadPool_;
-    std::shared_ptr<HcclCommFactory> commFactory_;
+    std::shared_ptr<CommFactory> commFactory_;
 
     TbbP2PPutRequestTable objKey2PutReqTable_;
     TbbDevMemUnitTable devMemUnitTable_;

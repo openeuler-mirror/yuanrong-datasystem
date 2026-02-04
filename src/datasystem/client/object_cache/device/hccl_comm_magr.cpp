@@ -16,7 +16,7 @@
 
 #include "datasystem/client/object_cache/device/hccl_comm_magr.h"
 
-#include "datasystem/client/object_cache/device/hccl_comm_factory.h"
+#include "datasystem/client/object_cache/device/comm_factory.h"
 
 namespace datasystem {
 

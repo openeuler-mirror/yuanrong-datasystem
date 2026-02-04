@@ -27,6 +27,8 @@
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/ascend/callback_thread.h"
 #include "datasystem/common/device/ascend/ffts_dispatcher.h"
+#include "datasystem/common/device/device_config.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/inject/inject_point.h"
 
@@ -61,23 +63,26 @@ public:
     AclPipelineResource &operator=(const AclPipelineResource &) = delete;
     Status Init(uint32_t devId)
     {
-        bool skip = false;
-        INJECT_POINT("NO_USE_FFTS", [this, devId, &skip]() {
-            auto aclApi = acl::AclDeviceManager::Instance();
-            deviceId = devId;
-            for (size_t taskIndex = 0; taskIndex < TASK_PHASE_COUNT; taskIndex++) {
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclApi->RtCreateStream(&stream[taskIndex]), "RtCreateStream failed");
-            }
-            skip = true;
+        deviceImpl_ = DeviceManagerFactory::GetDeviceManager();
+        deviceId = devId;
+        bool skipFfts = USE_GPU;
+        INJECT_POINT("NO_USE_FFTS", [&skipFfts]() {
+            skipFfts = true;
             return Status::OK();
         });
-        if (skip) {
+
+        // Create streams using abstract device interface (works for both NPU and GPU)
+        for (size_t taskIndex = 0; taskIndex < TASK_PHASE_COUNT; taskIndex++) {
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(deviceImpl_->CreateStream(&stream[taskIndex]), "CreateStream failed");
+        }
+
+        if (skipFfts) {
             return Status::OK();
         }
+
+        // NPU-specific FFTS initialization (not available on GPU)
         auto aclApi = acl::AclDeviceManager::Instance();
-        deviceId = devId;
         for (size_t taskIndex = 0; taskIndex < TASK_PHASE_COUNT; taskIndex++) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclApi->RtCreateStream(&stream[taskIndex]), "RtCreateStream failed");
             for (size_t pipelineIndex = 0; pipelineIndex < TASK_PIPELINE; pipelineIndex++) {
                 RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclApi->RtNotifyCreate(deviceId, &notifier[taskIndex][pipelineIndex]),
                                                  "RtNotifyCreate failed");
@@ -106,21 +111,24 @@ public:
     }
     void Release()
     {
-        bool skip = false;
-        INJECT_POINT("NO_USE_FFTS", [this, &skip]() {
-            auto aclApi = acl::AclDeviceManager::Instance();
+        // GPU mode or NO_USE_FFTS injection: only destroy streams, skip FFTS/Notify cleanup
+        bool skipFfts = USE_GPU;
+        INJECT_POINT("NO_USE_FFTS", [&skipFfts]() {
+            skipFfts = true;
+        });
+
+        if (skipFfts) {
             for (size_t taskIndex = 0; taskIndex < TASK_PHASE_COUNT; taskIndex++) {
                 if (stream[taskIndex] != nullptr) {
-                    LOG_IF_ERROR(aclApi->RtDestroyStream(stream[taskIndex]), "RtDestroyStream failed");
+                    LOG_IF_ERROR(deviceImpl_->DestroyStream(stream[taskIndex]), "DestroyStream failed");
                 }
             }
-            skip = true;
-        });
-        if (skip) {
             return;
         }
-        LOG(INFO) << "Release AclPipelineResource";
+
+        // NPU-specific FFTS cleanup (not available on GPU)
         auto aclApi = acl::AclDeviceManager::Instance();
+        LOG(INFO) << "Release AclPipelineResource";
         if (callbackThread) {
             LOG_IF_ERROR(callbackThread->UnSubscribeStream(PrimaryStream()), "UnSubscribeStream failed");
         }
@@ -144,6 +152,17 @@ public:
 
     Status NotifyStart()
     {
+        // GPU mode or NO_USE_FFTS injection: skip RtNotifyRecord (NPU-specific API)
+        bool skipFfts = USE_GPU;
+        INJECT_POINT("NO_USE_FFTS", [&skipFfts]() {
+            skipFfts = true;
+            return Status::OK();
+        });
+        if (skipFfts) {
+            return Status::OK();
+        }
+
+        // NPU-specific: record notify signals for FFTS pipeline synchronization
         auto aclApi = acl::AclDeviceManager::Instance();
         for (size_t i = 0; i < TASK_PIPELINE; i++) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(aclApi->RtNotifyRecord(notifier[TASK_PHASE_COUNT - 1][i], stream[0]),
@@ -153,6 +172,7 @@ public:
     }
 
     uint32_t deviceId;
+    DeviceManagerBase *deviceImpl_{ nullptr };  // Abstract device manager for stream operations
     aclrtStream stream[TASK_PHASE_COUNT];
     rtNotify_t notifier[TASK_PHASE_COUNT][TASK_PIPELINE];
     std::unique_ptr<ffts::FftsDispatcher> fftsDispatcher;
@@ -169,6 +189,8 @@ public:
     Status Init(std::shared_ptr<AclPipelineResource<TASK_PIPELINE, TASK_PHASE_COUNT>> resource)
     {
         RETURN_RUNTIME_ERROR_IF_NULL(resource);
+        deviceImpl_ = DeviceManagerFactory::GetDeviceManager();
+        // Keep aclApi_ for NPU-specific FFTS operations (RtNotifyWait/RtNotifyRecord)
         aclApi_ = acl::AclDeviceManager::Instance();
         resource_ = resource;
         return Status::OK();
@@ -272,7 +294,8 @@ protected:
 
     friend Derived;
     uint32_t deviceId_;
-    acl::AclDeviceManager *aclApi_;
+    DeviceManagerBase *deviceImpl_;  // Abstract device manager for stream operations
+    acl::AclDeviceManager *aclApi_;  // NPU-specific API for FFTS operations
     std::shared_ptr<AclPipelineResource<TASK_PIPELINE, TASK_PHASE_COUNT>> resource_;
     std::mutex mutex_;
     std::condition_variable cv_;

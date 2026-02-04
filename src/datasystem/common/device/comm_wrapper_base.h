@@ -21,7 +21,7 @@
 #include "datasystem/client/object_cache/device/hccl_comm_magr.h"
 #include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
 #include "datasystem/common/device/ascend/acl_pipeline_task.h"
-#include "datasystem/common/device/ascend/acl_pointer_wrapper.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/device_manager_base.h"
@@ -32,11 +32,11 @@ namespace datasystem {
 // This constant is used to configure the waiting time for destroying Steam when the RunP2PSendLoop and RunP2PRecvLoop
 // threads exit, preventing long-time blocking caused by unfinished tasks in Stream.
 const int32_t SYNC_STREAM_WAIT_TIMEOUT_MS = 10000;
-enum class HcclCommState { UNCREATE, CREATING, VALID, INVALID, DESTROY };
-enum class HcclCommDirection { SEND, RECV };
+enum class CommState { UNCREATE, CREATING, VALID, INVALID, DESTROY };
+enum class CommDirection { SEND, RECV };
 constexpr int WARM_UP_DATA_COUNT = 1;
 
-class CommWrapperBase : public AclPointerWrapper {
+class CommWrapperBase : public DevicePointerWrapper {
 public:
     explicit CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
                              std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr);
@@ -103,7 +103,7 @@ public:
      * @brief Get the lifetime state of hcclcomm.
      * @return The lifetime state of hcclcomm.
      */
-    HcclCommState GetCommStatus() const;
+    CommState GetCommStatus() const;
 
     /**
      * @brief Get the local device id.
@@ -121,7 +121,7 @@ public:
      * @brief Sets the specific fault cause.
      * @param[in] result The status of Hccl invocation
      */
-    void SetHcclDetailState(Status result);
+    void SetDetailStatus(const Status &result);
 
     /**
      * @brief Check HcclComm health.
@@ -148,7 +148,8 @@ public:
      * @param[in] stream[in] The stream of acl context.
      * @return Status of the call
      */
-    virtual Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+    virtual Status P2PSend(const std::vector<Blob> &blobs,
+                           const std::shared_ptr<DeviceRtEventWrapper> &event,
                            aclrtStream stream) = 0;
 
     /**
@@ -158,14 +159,15 @@ public:
      * @param[in] stream The stream of acl context.
      * @return Status of the call
      */
-    virtual Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+    virtual Status P2PRecv(const std::vector<Blob> &blobs,
+                           const std::shared_ptr<DeviceRtEventWrapper> &event,
                            aclrtStream stream) = 0;
 
     /**
      * @brief Queries whether an error occurs in the communication domain.
      * @return The status of Hccl invocation
      */
-    virtual Status HcclGetCommAsyncError() = 0;
+    virtual Status GetCommAsyncError() = 0;
 
     /**
      * @brief Init hccl communicator.
@@ -173,7 +175,7 @@ public:
      * @param[in] direction own transmission direction.
      * @return Status of the call.
      */
-    virtual Status InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode) = 0;
+    virtual Status InitCommunicator(CommRootInfo &rootInfo, const CommDirection direction, bool isSameNode) = 0;
 
     /**
      * @brief Warm up the hccl communicator wrapper in the send side.
@@ -186,7 +188,7 @@ public:
      * @param[in] eventType The p2p event type: SEND or RECV
      * @return The status of call.
      */
-    virtual Status WarmUpComm(HcclCommDirection eventType) = 0;
+    virtual Status WarmUpComm(CommDirection eventType) = 0;
 
     /**
      * @brief Creating hccl rootinfo.
@@ -200,7 +202,7 @@ public:
         return resource_;
     }
 
-    Status InitPipeline(HcclCommDirection direction);
+    Status InitPipeline(CommDirection direction);
     Status SubmitPipelineTask(acl::P2PSendTask task);
     Status SubmitPipelineTask(acl::P2PRecvTask task);
 
@@ -226,10 +228,10 @@ private:
     int remoteDeviceIdx_;
     std::shared_ptr<ThreadPool> pool_;
     std::chrono::steady_clock::time_point commConnectTimestamp_;
-    std::atomic<HcclCommState> hcclCommState_;
-    Status hcclDetailState_;
-    mutable std::mutex hcclDetailStateMutex_; // protect hcclDetailState_
-    std::shared_ptr<HcclCommMagr> hcclThreadControl_;
+    std::atomic<CommState> commState_;
+    Status commDetailState_;
+    mutable std::mutex commDetailStateMutex_; // protect commDetailState_
+    std::shared_ptr<HcclCommMagr> commThreadControl_;
     int bindThreadId_;
     std::mutex mutex_;
     bool hasShutDown_ = false;
@@ -238,9 +240,8 @@ private:
     std::mutex callbackMutex_;  // Mutex ensuring callbacks are executed in the order they were added
     std::vector<std::function<void()>> readyCallbacks_;
 
-    friend class HcclCommWrapper;
+    friend class CommWrapper;
     friend class P2PHcclCommWrapper;
 };
-
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_DEVICE_COMM_WRAPPER_BASE_H

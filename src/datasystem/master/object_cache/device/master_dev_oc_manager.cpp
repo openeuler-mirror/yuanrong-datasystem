@@ -342,7 +342,7 @@ Status MasterDevOcManager::SendRootInfoImpl(const SendRootInfoReqPb &req, SendRo
     // Extract request parameters
     auto srcClientId = req.src_client_id();
     auto dstClientId = req.dst_client_id();
-    auto hcclPeerId = GetHcclPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
+    auto hcclPeerId = GetPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
     auto rootInfo = std::string(std::begin(req.root_info()), std::end(req.root_info()));
 
     auto dataSender = ConcatClientAndDeviceId(req.src_client_id(), req.src_device_id());
@@ -391,7 +391,7 @@ Status MasterDevOcManager::ProcessRecvRootInfoRequest(
 {
     auto srcClientId = req.src_client_id();
     auto dstClientId = req.dst_client_id();
-    auto hcclPeerId = GetHcclPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
+    auto hcclPeerId = GetPeerId(req.src_client_id(), req.src_device_id(), req.dst_client_id(), req.dst_device_id());
     auto request =
         std::make_shared<RecvRootInfoRequest>(std::vector<std::string>{ hcclPeerId }, serverApi,
                                               ClientKey::Intern(req.dst_client_id()), req.dst_device_id(), req);

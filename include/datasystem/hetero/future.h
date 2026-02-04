@@ -24,11 +24,12 @@
 
 #include <future>
 #include <memory>
+#include <string>
 
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-class AclRtEventWrapper;
+class DeviceRtEventWrapper;
 class __attribute((visibility("default"))) Future {
 public:
     /**
@@ -42,10 +43,11 @@ public:
 
 private:
     friend class PromiseWithEvent;
-    Future(std::shared_future<Status> future, std::shared_ptr<AclRtEventWrapper> event, const std::string &objectKey);
+    Future(std::shared_future<Status> future, std::shared_ptr<DeviceRtEventWrapper> event,
+           const std::string &objectKey);
 
     std::shared_future<Status> future_;
-    std::shared_ptr<AclRtEventWrapper> event_;
+    std::shared_ptr<DeviceRtEventWrapper> event_;  // Type-erased DeviceRtEventWrapper
     std::string objectKey_;
 };
 }  // namespace datasystem

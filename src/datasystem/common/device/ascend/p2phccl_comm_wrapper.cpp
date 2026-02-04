@@ -33,8 +33,8 @@ P2PHcclCommWrapper::~P2PHcclCommWrapper()
 
 void P2PHcclCommWrapper::ShutDown()
 {
-    if ((hcclCommState_ != HcclCommState::DESTROY)) {
-        hcclCommState_ = HcclCommState::DESTROY;
+    if ((commState_ != CommState::DESTROY)) {
+        commState_ = CommState::DESTROY;
         if (pool_) {
             try {
                 pool_->Execute([this, resource = resource_]() {
@@ -50,7 +50,7 @@ void P2PHcclCommWrapper::ShutDown()
                 LOG(ERROR) << e.what();
             }
         }
-        (void)hcclThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
+        (void)commThreadControl_->RemoveThreadPoolCommRecord(bindThreadId_, commId_);
     }
 }
 
@@ -58,7 +58,7 @@ Status P2PHcclCommWrapper::InitP2PComm(const CommRootInfo *rootInfo, P2pKindBase
 {
     LOG(INFO) << "InitP2PComm";
     commConnectTimestamp_ = std::chrono::steady_clock::now();
-    hcclCommState_ = HcclCommState::CREATING;
+    commState_ = CommState::CREATING;
     Status rc;
     if (isSameNode) {
         LOG(INFO) << "InitP2PComm HCCS dir: " << static_cast<int>(kind);
@@ -75,7 +75,8 @@ Status P2PHcclCommWrapper::InitP2PComm(const CommRootInfo *rootInfo, P2pKindBase
     return rc;
 }
 
-Status P2PHcclCommWrapper::P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+Status P2PHcclCommWrapper::P2PSend(const std::vector<Blob> &blobs,
+                                   const std::shared_ptr<DeviceRtEventWrapper> &event,
                                    aclrtStream stream)
 {
     LOG(INFO) << "p2phccl start to send " << (blobs.size() > 0 ?  std::to_string(blobs[0].size) : "")
@@ -100,7 +101,7 @@ Status P2PHcclCommWrapper::P2PSend(const std::vector<Blob> &blobs, const std::sh
     return Status::OK();
 }
 
-Status P2PHcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<AclRtEventWrapper> &event,
+Status P2PHcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
                                    aclrtStream stream)
 {
     LOG(INFO) << "p2phccl receiving " << (blobs.size() > 0 ?  std::to_string(blobs[0].size) : "")
@@ -131,34 +132,34 @@ Status P2PHcclCommWrapper::P2PRecv(const std::vector<Blob> &blobs, const std::sh
     return Status::OK();
 }
 
-Status P2PHcclCommWrapper::HcclGetCommAsyncError()
+Status P2PHcclCommWrapper::GetCommAsyncError()
 {
     // Don't check if comm is creating.
-    if (hcclCommState_ == HcclCommState::CREATING || hcclCommState_ == HcclCommState::UNCREATE) {
-      return Status::OK();
+    if (commState_ == CommState::CREATING || commState_ == CommState::UNCREATE) {
+        return Status::OK();
     }
     auto &comm = GetRef();
     return deviceImpl_->P2PGetCommAsyncError(comm);
 }
 
-Status P2PHcclCommWrapper::InitCommunicator(CommRootInfo &rootInfo, const HcclCommDirection direction, bool isSameNode)
+Status P2PHcclCommWrapper::InitCommunicator(CommRootInfo &rootInfo, const CommDirection direction, bool isSameNode)
 {
     InitPipeline(direction);
-    if (direction == HcclCommDirection::SEND) {
+    if (direction == CommDirection::SEND) {
         return InitP2PComm(&rootInfo, P2pKindBase::SENDER, isSameNode);
     }
     return InitP2PComm(&rootInfo, P2pKindBase::RECEIVER, isSameNode);
 }
 
-Status P2PHcclCommWrapper::WarmUpComm(HcclCommDirection eventType)
+Status P2PHcclCommWrapper::WarmUpComm(CommDirection eventType)
 {
     void *devPtr = nullptr;
     RETURN_IF_NOT_OK(deviceImpl_->MallocDeviceMemory(sizeof(char), devPtr));
     Raii raii([this, &devPtr]() { deviceImpl_->FreeDeviceMemory(devPtr); });
-    std::shared_ptr<AclRtEventWrapper> event;
-    if (eventType == HcclCommDirection::SEND) {
+    std::shared_ptr<DeviceRtEventWrapper> event;
+    if (eventType == CommDirection::SEND) {
         RETURN_IF_NOT_OK(deviceImpl_->P2PSend(devPtr, WARM_UP_DATA_COUNT, CommDataType::INT8, Get(), GetStream()));
-    } else if (eventType == HcclCommDirection::RECV) {
+    } else if (eventType == CommDirection::RECV) {
         RETURN_IF_NOT_OK(deviceImpl_->P2PRecv(devPtr, WARM_UP_DATA_COUNT, CommDataType::INT8, Get(), GetStream()));
     }
     RETURN_IF_NOT_OK(deviceImpl_->SynchronizeStream(GetStream()));
