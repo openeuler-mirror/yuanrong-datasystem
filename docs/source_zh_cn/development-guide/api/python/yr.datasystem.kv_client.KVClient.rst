@@ -56,6 +56,8 @@ yr.datasystem.kv_client.KVClient
          - 查看 key 在数据系统中是否存在。
        * - :doc:`expire <yr.datasystem.kv_client.KVClient.expire>`
          - 为一组键设置过期生命周期，返回函数操作状态及设置失败的键列表。
+       * - :doc:`health_check <yr.datasystem.kv_client.KVClient.health_check>`
+         - 检查连接的 Worker 是否健康。
        
 .. toctree::
     :maxdepth: 1
