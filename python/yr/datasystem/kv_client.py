@@ -671,3 +671,13 @@ class KVClient:
         if status.is_error():
             raise RuntimeError(status.to_string())
         return failed_keys
+
+    def health_check(self) -> bool:
+        """
+        Check the health status of the worker service.
+
+        Returns:
+            bool: True if the worker is healthy; False otherwise.
+        """
+        status = self._client.HealthCheck()
+        return status.is_ok()
