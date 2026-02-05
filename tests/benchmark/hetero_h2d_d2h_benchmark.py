@@ -102,11 +102,7 @@ config_map = {
     '1process_1key_256blob_512KB': {'num_processes': 1, 'key_num': 1, 'blob_nums': [256], 'blob_sizes': [512 * 1024],
                                'iterations': 80, 'thread_number': 1},
     '1process_1key_512blob_256KB': {'num_processes': 1, 'key_num': 1, 'blob_nums': [512], 'blob_sizes': [256 * 1024],
-                               'iterations': 80, 'thread_number': 1},
-
-    # Multiple blob size tests
-    'memfabric_benchmark': {'num_processes': 1, 'key_num': 32, 'blob_nums': [61, 61],
-                                'blob_sizes': [128 * 1024, 16 * 1024], 'iterations': 40, 'thread_number': 1}
+                               'iterations': 80, 'thread_number': 1}
 }
 
 mode = "all"
