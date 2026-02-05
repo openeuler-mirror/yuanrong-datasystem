@@ -43,7 +43,7 @@ constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;
 constexpr int32_t OBJECT_KEYS_MAX_SIZE_LIMIT = 10000;
 constexpr int32_t NODE_TIMEOUT_LIMIT = 5;
 constexpr int32_t MS_PER_SECOND = 1000;
-
+constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
 static std::string ENCRYPT_KIT_PLAINTEXT = "plaintext";
 
 using namespace datasystem;
@@ -133,7 +133,7 @@ public:
      */
     static bool ValidateHostIPv4(const char *flagName, const std::string &value)
     {
-        in_addr  addr{};
+        in_addr addr{};
         if (inet_pton(AF_INET, value.c_str(), &addr) == 1) {
             return true;
         }
@@ -222,11 +222,11 @@ public:
         if (re2::RE2::FullMatch(value, re) || value.empty()) {
             return true;
         }
-        LOG(INFO) << FormatString("Value of %s flag is %s. Illegal [IPv6]:port or IPv4:Port address format.",
-                                  flagName, value);
+        LOG(INFO) << FormatString("Value of %s flag is %s. Illegal [IPv6]:port or IPv4:Port address format.", flagName,
+                                  value);
         return false;
     }
-    
+
     /**
      * @brief Validate a string is a valid IPv6 address with port as the format [ipv6_format]:port.
      * @param[in] flagName IP address with port flag.
@@ -299,8 +299,8 @@ public:
         if (value == "obs" || value == "sfs" || value == "none") {
             return true;
         }
-        LOG(ERROR) << datasystem::FormatString(
-            "The value of %s flag is %s, which must be 'sfs'/'none.", flagName, value);
+        LOG(ERROR) << datasystem::FormatString("The value of %s flag is %s, which must be 'sfs'/'none.", flagName,
+                                               value);
         return false;
     }
 
@@ -381,8 +381,8 @@ public:
         static const RE2 re("^\\/$|(^\\/[^\\/\\0]+|^\\.\\.?|^\\~|[^/\\0]+)(\\/[^\\/\\0]+)*\\/?$");
 
         // Allow value size 0 due to certain circumstances that indicate default path or function disabled.
-        if ((ValidateStringLenPathMax(flagName, value)
-             && re2::RE2::FullMatch(value, re) && ValidateEligibleChar(flagName, value) && IsSafePath(value))
+        if ((ValidateStringLenPathMax(flagName, value) && re2::RE2::FullMatch(value, re)
+             && ValidateEligibleChar(flagName, value) && IsSafePath(value))
             || value.size() == 0) {
             return true;
         }
@@ -554,8 +554,8 @@ public:
         if (value == "none" || value == "yuanrong_iam") {
             return true;
         } else {
-            LOG(ERROR) << FormatString("The value of %s flags is %s, which must be in [none, yuanrong_iam]",
-                                       IAMKit, value);
+            LOG(ERROR) << FormatString("The value of %s flags is %s, which must be in [none, yuanrong_iam]", IAMKit,
+                                       value);
             return false;
         }
     }
@@ -859,7 +859,7 @@ public:
         return false;
     }
 
-    template<typename T>
+    template <typename T>
     static bool IsUuid(const T &value)
     {
         static const re2::RE2 re("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
@@ -879,6 +879,16 @@ public:
 
         LOG(ERROR) << "The encrypt kit is only support plaintext";
         return false;
+    }
+
+    static bool ValidateUrmaConnection(const char *flagName, uint32_t connectSize)
+    {
+        // jetty limited size 64K jfr/jfs
+        if (connectSize > URMA_CONNECTION_LIMIT) {
+            LOG(ERROR) << FormatString("the %s : %ld is large then %ld", flagName, connectSize, URMA_CONNECTION_LIMIT);
+            return false;
+        }
+        return true;
     }
 
     static bool IsBatchSizeUnderLimit(size_t objectSize)
@@ -1003,8 +1013,7 @@ public:
         if (value == "none" || value == "sync" || value == "async") {
             return true;
         }
-        LOG(ERROR) << FormatString(
-            "The value of %s flag is %s, which must be 'none'/'sync'/'async'.", flagName, value);
+        LOG(ERROR) << FormatString("The value of %s flag is %s, which must be 'none'/'sync'/'async'.", flagName, value);
         return false;
     }
 };
