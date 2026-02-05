@@ -891,7 +891,6 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MSET_D2H);
     std::shared_ptr<AccessRecorder> accessPoint = std::make_shared<AccessRecorder>(accessRecorderKey);
-    UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
 
     std::promise<AsyncResult> promise;
     AsyncResult result;
@@ -929,6 +928,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::MSet(const std::vector<std::st
         return future;
     }
 
+    UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
     // Submit asynchronous task
     auto traceID = Trace::Instance().GetTraceID();
     future = asyncSetRPCPool_->Submit([this, traceID, objectKeys, devBlobList, setParam, accessPoint]() mutable {
