@@ -168,11 +168,10 @@ TEST_F(HeteroD2HTest, Perf)
 TEST_F(HeteroD2HTest, TestNoExist)
 {
     std::vector<uint64_t> keyNums{ 450, 500 };
-    std::vector<std::vector<double>> costs(keyNums.size());
     std::shared_ptr<HeteroClient> client;
     InitAcl(0);
     InitTestHeteroClient(0, client);
-    auto testIdx = 0u, blkSz = 1024u, blksPerObj = 1u;
+    auto blkSz = 1024u, blksPerObj = 1u;
     for (auto numOfObjs : keyNums) {
         LOG(INFO) << FormatString("start test MSetD2H Test ##### %lu KB", numOfObjs);
         std::vector<std::string> inObjectKeys, failedKeys;
@@ -184,8 +183,7 @@ TEST_F(HeteroD2HTest, TestNoExist)
         DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
         DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
         DS_ASSERT_TRUE(failedKeys.empty(), true);
-        DS_ASSERT_OK(IsSameContent(devGetBlobList, devGetBlobList, 'b'));
-        testIdx++;
+        DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }
 }
 
@@ -196,7 +194,7 @@ TEST_F(HeteroD2HTest, TestAllExist)
     std::shared_ptr<HeteroClient> client;
     InitAcl(0);
     InitTestHeteroClient(0, client);
-    auto testIdx = 0u, blkSz = 1024u, blksPerObj = 1u;
+    auto blkSz = 1024u, blksPerObj = 1u;
     for (auto numOfObjs : keyNums) {
         LOG(INFO) << FormatString("start test MSetD2H Test ##### %lu KB", numOfObjs);
         std::vector<std::string> inObjectKeys, failedKeys;
@@ -205,23 +203,53 @@ TEST_F(HeteroD2HTest, TestAllExist)
             inObjectKeys.emplace_back(FormatString("key_%s", j));
         }
         PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, 0);
-        DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-        DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
-        DS_ASSERT_TRUE(failedKeys.empty(), true);
-        DS_ASSERT_OK(IsSameContent(devGetBlobList, devGetBlobList, 'b'));
-        testIdx++;
+
+        if (numOfObjs == 450) {
+            // First iteration: set 450 keys with 'b' data
+            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
+            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+            DS_ASSERT_TRUE(failedKeys.empty(), true);
+            DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
+        } else {
+            // Second iteration: try to set 500 keys with 'c' data
+            // Change device memory to 'c'
+            for (auto &blobList : devSetBlobList) {
+                for (auto &blob : blobList.blobs) {
+                    auto data = std::string(blob.size, 'c');
+                    DS_ASSERT_OK(
+                        AclDeviceManager::Instance()->MemCopyH2D(blob.pointer, blob.size, data.data(), blob.size));
+                }
+            }
+
+            // MSetD2H semantics: if key exists, it will NOT update
+            // Keys 0-449 already exist from first iteration (stay 'b')
+            // Keys 450-499 are new and will be set with 'c'
+            DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
+
+            // Verify the results
+            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+            DS_ASSERT_TRUE(failedKeys.empty(), true);
+
+            // Keys 0-449 should still be 'b' (from first iteration, not updated)
+            std::vector<DeviceBlobList> firstPartGet(devGetBlobList.begin(), devGetBlobList.begin() + 450);
+            std::vector<DeviceBlobList> firstPartSet(devSetBlobList.begin(), devSetBlobList.begin() + 450);
+            DS_ASSERT_OK(IsSameContent(firstPartGet, firstPartSet, 'b'));
+
+            // Keys 450-499 should be 'c' (newly set in this iteration)
+            std::vector<DeviceBlobList> secondPartGet(devGetBlobList.begin() + 450, devGetBlobList.end());
+            std::vector<DeviceBlobList> secondPartSet(devSetBlobList.begin() + 450, devSetBlobList.end());
+            DS_ASSERT_OK(IsSameContent(secondPartGet, secondPartSet, 'c'));
+        }
     }
 }
 
 TEST_F(HeteroD2HTest, TestPartExist)
 {
     std::vector<uint64_t> keyNums{ 450, 500 };
-    std::vector<std::vector<double>> costs(keyNums.size());
     std::shared_ptr<HeteroClient> client;
     InitAcl(0);
     InitTestHeteroClient(0, client);
-    auto testIdx = 0u, blkSz = 1024u, blksPerObj = 1u;
+    auto blkSz = 1024u, blksPerObj = 1u;
     for (auto numOfObjs : keyNums) {
         LOG(INFO) << FormatString("start test MSetD2H Test ##### %lu KB", numOfObjs);
         std::vector<std::string> inObjectKeys, failedKeys, partKeys;
@@ -239,8 +267,7 @@ TEST_F(HeteroD2HTest, TestPartExist)
         DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
         DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
         DS_ASSERT_TRUE(failedKeys.empty(), true);
-        DS_ASSERT_OK(IsSameContent(devGetBlobList, devGetBlobList, 'b'));
-        testIdx++;
+        DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }
 }
 

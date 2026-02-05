@@ -173,6 +173,10 @@ void ClientWorkerRemoteApi::PostMultiCreate(bool skipCheckExistence, const Multi
                                             PerfPoint &point, uint32_t &version, std::vector<bool> &exists)
 {
     auto checkUseShm = [this, &rsp, &skipCheckExistence]() {
+        // Don't use shared memory transfer if client doesn't support it
+        if (!shmEnabled_) {
+            return false;
+        }
         if (skipCheckExistence) {
             return shmEnabled_;
         }

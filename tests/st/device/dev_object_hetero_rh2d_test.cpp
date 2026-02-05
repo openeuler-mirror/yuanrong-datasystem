@@ -134,9 +134,9 @@ class DevObjectHeteroRH2DNoNpuTest : public DevObjectHeteroRH2DTest {
         opts.workerGflagParams =
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
             "-client_dead_timeout_s=15";
-            opts.enableDistributedMaster = "false";
-            opts.numEtcd = 1;
-            FLAGS_v = 0;
+        opts.enableDistributedMaster = "false";
+        opts.numEtcd = 1;
+        FLAGS_v = 0;
     }
 };
 
@@ -413,6 +413,138 @@ TEST_F(DevObjectHeteroRH2DNoNpuTest, DISABLED_RemoteH2DTestNoNpu)
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
 
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
+{
+    // Test that MSetD2H does not update data when key already exists.
+    // Scenario: First set succeeds, subsequent sets with same key do not update.
+    InitAcl(deviceId_);
+
+    const size_t numOfObjs = 2;
+    const size_t blksPerObj = 1;
+    const size_t blkSz = 1024 * sizeof(float);  // 1024 floats
+
+    std::shared_ptr<DsClient> client0;
+    std::shared_ptr<DsClient> client1;
+    InitTestDsClientForRemoteH2D(0, client0);
+    InitTestDsClientForRemoteH2D(1, client1);
+
+    // Generate object keys
+    std::vector<std::string> objectKeys;
+    for (size_t i = 0; i < numOfObjs; i++) {
+        objectKeys.emplace_back(GetStringUuid());
+    }
+
+    // ========== Phase 1: Initial MSetD2H with 'a' data ==========
+    std::vector<DeviceBlobList> setBlobList1;
+    std::vector<std::vector<std::string>> verifyList1;
+    for (size_t i = 0; i < numOfObjs; i++) {
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceId_;
+        std::vector<std::string> blobInfos;
+
+        for (size_t j = 0; j < blksPerObj; j++) {
+            // Fill with 'a' character
+            std::string dataStr(blkSz, 'a');
+            void *devPtr = nullptr;
+            AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
+            AclDeviceManager::Instance()->MemCopyH2D(devPtr, blkSz, dataStr.data(), blkSz);
+            Blob blob{ devPtr, blkSz };
+            blobList.blobs.emplace_back(std::move(blob));
+            blobInfos.emplace_back(std::move(dataStr));
+        }
+        setBlobList1.emplace_back(blobList);
+        verifyList1.emplace_back(blobInfos);
+    }
+
+    // Set data with client0
+    DS_ASSERT_OK(client0->Hetero()->MSetD2H(objectKeys, setBlobList1));
+    LOG(INFO) << "First MSetD2H completed with client0";
+
+    // ========== Phase 2: MGetH2D from client1 to verify initial data ==========
+    std::vector<DeviceBlobList> getBlobList1;
+    for (size_t i = 0; i < numOfObjs; i++) {
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceId_;
+        for (size_t j = 0; j < blksPerObj; j++) {
+            void *devPtr = nullptr;
+            AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
+            Blob blob{ devPtr, blkSz };
+            blobList.blobs.emplace_back(std::move(blob));
+        }
+        getBlobList1.emplace_back(blobList);
+    }
+
+    std::vector<std::string> failedList;
+    DS_ASSERT_OK(client1->Hetero()->MGetH2D(objectKeys, getBlobList1, failedList, DEFAULT_GET_TIMEOUT));
+    ASSERT_TRUE(failedList.empty());
+    LOG(INFO) << "First MGetH2D completed with client1";
+
+    // Verify data is 'a'
+    for (size_t i = 0; i < numOfObjs; i++) {
+        for (size_t j = 0; j < blksPerObj; j++) {
+            CheckDevPtrContent(getBlobList1[i].blobs[j].pointer, getBlobList1[i].blobs[j].size, verifyList1[i][j]);
+        }
+    }
+    LOG(INFO) << "Verified initial data contains 'a'";
+
+    // ========== Phase 3: Try to update with 'b' data using client1 ==========
+    std::vector<DeviceBlobList> setBlobList2;
+    std::vector<std::vector<std::string>> verifyList2;
+    for (size_t i = 0; i < numOfObjs; i++) {
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceId_;
+        std::vector<std::string> blobInfos;
+
+        for (size_t j = 0; j < blksPerObj; j++) {
+            // Fill with 'b' character
+            std::string dataStr(blkSz, 'b');
+            void *devPtr = nullptr;
+            AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
+            AclDeviceManager::Instance()->MemCopyH2D(devPtr, blkSz, dataStr.data(), blkSz);
+            Blob blob{ devPtr, blkSz };
+            blobList.blobs.emplace_back(std::move(blob));
+            blobInfos.emplace_back(std::move(dataStr));
+        }
+        setBlobList2.emplace_back(blobList);
+        verifyList2.emplace_back(blobInfos);
+    }
+
+    // Try to set data again with client1 (should not update)
+    DS_ASSERT_OK(client1->Hetero()->MSetD2H(objectKeys, setBlobList2));
+    LOG(INFO) << "Second MSetD2H completed with client1 (should not update)";
+
+    // ========== Phase 4: MGetH2D again to verify data is still 'a' ==========
+    std::vector<DeviceBlobList> getBlobList2;
+    for (size_t i = 0; i < numOfObjs; i++) {
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceId_;
+        for (size_t j = 0; j < blksPerObj; j++) {
+            void *devPtr = nullptr;
+            AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
+            Blob blob{ devPtr, blkSz };
+            blobList.blobs.emplace_back(std::move(blob));
+        }
+        getBlobList2.emplace_back(blobList);
+    }
+
+    failedList.clear();
+    DS_ASSERT_OK(client1->Hetero()->MGetH2D(objectKeys, getBlobList2, failedList, DEFAULT_GET_TIMEOUT));
+    ASSERT_TRUE(failedList.empty());
+    LOG(INFO) << "Second MGetH2D completed with client1";
+
+    // Verify data is still 'a', not 'b'
+    for (size_t i = 0; i < numOfObjs; i++) {
+        for (size_t j = 0; j < blksPerObj; j++) {
+            CheckDevPtrContent(getBlobList2[i].blobs[j].pointer, getBlobList2[i].blobs[j].size, verifyList1[i][j]);
+        }
+    }
+    LOG(INFO) << "Verified data is still 'a' after second MSetD2H (no update occurred)";
+
+    // Cleanup
+    DS_ASSERT_OK(client0->Hetero()->Delete(objectKeys, failedList));
+    ASSERT_TRUE(failedList.empty());
+}
+
 TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
 {
     // Test that Remote H2D supports multiple threads.
@@ -434,7 +566,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
     }
     std::shared_ptr<DsClient> setClient;
     InitTestDsClientForRemoteH2D(0, setClient);
-    
+
     for (int i = 0; i < threadNum; i++) {
         for (int j = 0ul; j < objPerThread; j++) {
             inObjectIds[i].emplace_back(GetStringUuid());
