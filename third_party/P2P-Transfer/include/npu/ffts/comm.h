@@ -10,14 +10,13 @@
 
 #include <stdint.h>
 #include "hccl/hccl.h"
-#include "hccl/hccl_common.h"
 #include "version/hccl_version.h"
 
 using RdmaHandle = void *;
 using SocketHandle = void *;
 using FdHandle = void *;
 
-#if HCCL_VERSION < ((9 * 100000000) + (4 * 1000000))
+#if HCCL_VERSION < ((9 * 100000000) + (4 * 1000000)) && HCCL_VERSION_NUM < ((8 * 10000000) + (5 * 100000))
 enum class HcclCMDType {
     HCCL_CMD_INVALID = 0,
     HCCL_CMD_BROADCAST = 1,
@@ -34,16 +33,18 @@ enum class HcclCMDType {
 };
 #endif
 
-#define unlikely(x)     x
+#define unlikely(x) x
 
-#define LOG_PRINT(module, logType, szFormat, ...) do {                        \
-    if (unlikely(CheckLogLevel(module, logType) == 1)) { \
+#define LOG_PRINT(module, logType, szFormat, ...)            \
+    do {                                                     \
+        if (unlikely(CheckLogLevel(module, logType) == 1)) { \
+            fprintf(stderr, "error\n");                      \
+        }                                                    \
+    } while (0)
+
+#define MODULE_ERROR(format, ...)   \
+    do {                            \
         fprintf(stderr, "error\n"); \
-    } \
-} while (0)
+    } while (0)
 
-#define MODULE_ERROR(format, ...) do { \
-    fprintf(stderr, "error\n"); \
-} while (0)
-
-#endif // P2P_COMM_H
+#endif  // P2P_COMM_H

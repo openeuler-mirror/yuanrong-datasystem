@@ -28,7 +28,7 @@
 #include "p2p.h"
 #include "runtime/dev.h"
 #include "npu/RdmaDev.h"
-#include "hccl/adapter_rts_common.h"
+#include "external/adapter_rts_common.h"
 
 // Later make all configurable
 constexpr uint32_t P2P_NUM_PINGPONG_BUFF = 2;

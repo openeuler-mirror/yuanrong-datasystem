@@ -57,7 +57,7 @@ RdmaDev::RdmaDev(uint32_t phyId, union hccp_ip_addr ipv4Addr)
 RdmaDev::~RdmaDev()
 {
     if (status == RdmaDevStatus::RDEV_INITIALIZED) {
-        RaRdevDeinit(rdmaHandle, EVENTID);
+        RaRdevDeinitWrapper(rdmaHandle, EVENTID);
     }
 }
 
@@ -71,7 +71,7 @@ Status RdmaDev::init()
     roceInitInfo.mode = NETWORK_OFFLINE;
     roceInitInfo.notify_type = EVENTID;
 
-    CHECK_STATUS(RaRdevInitV2(roceInitInfo, roceDevInfo, &rdmaHandle));
+    CHECK_STATUS(RaRdevInitV2Wrapper(roceInitInfo, roceDevInfo, &rdmaHandle));
     status = RdmaDevStatus::RDEV_INITIALIZED;
 
     return Status::Success();
@@ -115,7 +115,7 @@ Status RdmaDev::registerGlobalMemoryRegion(void *ddrPtr, void *devPtr, uint64_t 
         mrInfo.addr = devPtr;
         mrInfo.size = size;
         mrInfo.access = access;
-        CHECK_STATUS(RaGlobalMrReg(rdmaHandle, &mrInfo, &mrHandle));
+        CHECK_STATUS(RaGlobalMrRegWrapper(rdmaHandle, &mrInfo, &mrHandle));
         registeredMrs[ddrPtr] = { size, devPtr, mrHandle, ddrPtr, mrInfo.rkey };
     }
 
@@ -161,7 +161,7 @@ Status RdmaDev::unRegisterGlobalMemoryRegion(void *addr)
 
         void *mrHandle = it->second.mrHandle;
 
-        CHECK_STATUS(RaGlobalMrDeReg(rdmaHandle, mrHandle));
+        CHECK_STATUS(RaGlobalMrDeRegWrapper(rdmaHandle, mrHandle));
     }
 
     return Status::Success();

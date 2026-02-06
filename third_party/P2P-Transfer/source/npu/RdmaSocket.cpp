@@ -9,17 +9,17 @@
 RdmaSocket::~RdmaSocket()
 {
     if (status == RdmaSocketStatus::SOCKET_LISTENING) {
-        STATUS_ERROR(RaSocketListenStop(&roceConn, 1));
+        STATUS_ERROR(RaSocketListenStopWrapper(&roceConn, 1));
     }
 
     if (status >= RdmaSocketStatus::SOCKET_LISTENING) {
         for (int i = 0; i < whiteList.size(); i++) {
-            RaSocketWhiteListDel(roceSocketHandle, &whiteList[i], 1);
+            RaSocketWhiteListDelWrapper(roceSocketHandle, &whiteList[i], 1);
         }
     }
 
     if (status >= RdmaSocketStatus::SOCKET_INITIALIZED) {
-        ra_socket_deinit(roceSocketHandle);
+        RA_SOCKET_DEINIT(roceSocketHandle);
     }
 }
 
@@ -29,7 +29,7 @@ Status RdmaSocket::init()
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma agent is already initialized");
     }
 
-    ACL_CHECK_STATUS(ra_socket_init(NETWORK_OFFLINE, roceDevInfo, &roceSocketHandle));
+    ACL_CHECK_STATUS(RA_SOCKET_INIT(NETWORK_OFFLINE, roceDevInfo, &roceSocketHandle));
     status = RdmaSocketStatus::SOCKET_INITIALIZED;
 
     return Status::Success();
@@ -46,7 +46,7 @@ Status RdmaSocket::listenFirstAvailable(unsigned int startPort, unsigned int end
 
     Status res;
     while (true) {
-        res = RaSocketListenStart(&roceConn, 1);
+        res = RaSocketListenStartWrapper(&roceConn, 1);
         if (res.IsSuccess()) {
             break;
         } else if (res.Code() == ErrorCode::ERR_SOCK_EADDRINUSE) {
@@ -88,7 +88,7 @@ Status RdmaSocket::connect(union hccp_ip_addr remoteIp, unsigned int remotePort,
     connectInfo.remote_ip = remoteIp;
     connectInfo.port = remotePort;
     snprintf(connectInfo.tag, sizeof(connectInfo.tag), "%s", tag.c_str());
-    CHECK_STATUS(RaSocketBatchConnect(&connectInfo, 1));
+    CHECK_STATUS(RaSocketBatchConnectWrapper(&connectInfo, 1));
     status = RdmaSocketStatus::SOCKET_CONNECTING;
 
     socketInfo.remote_ip = remoteIp;
@@ -107,7 +107,7 @@ Status RdmaSocket::getSocketStatus(RdmaSocketStatus *socketStatus)
     if (status == RdmaSocketStatus::SOCKET_CONNECTING || status == RdmaSocketStatus::SOCKET_WHITELISTED) {
         uint32_t numConnected = 0;
 
-        CHECK_STATUS(RaGetSockets(socketRole, &socketInfo, 1, &numConnected));
+        CHECK_STATUS(RaGetSocketsWrapper(socketRole, &socketInfo, 1, &numConnected));
         if (numConnected == 1) {
             status = RdmaSocketStatus::SOCKET_CONNECTED;
         }
@@ -160,7 +160,7 @@ Status RdmaSocket::close()
     closeInfo.socket_handle = socketInfo.socket_handle;
     closeInfo.fd_handle = socketInfo.fd_handle;
 
-    CHECK_STATUS(RaSocketBatchClose(&closeInfo, 1));
+    CHECK_STATUS(RaSocketBatchCloseWrapper(&closeInfo, 1));
     return Status::Success();
 }
 
@@ -183,7 +183,7 @@ Status RdmaSocket::addWhitelist(union hccp_ip_addr remoteIp, std::string tag)
     snprintf(whiteListEntry.tag, sizeof(whiteListEntry.tag), "%s", tag.c_str());
 
     whiteListEntry.conn_limit = kConnectionLimit;
-    CHECK_STATUS(RaSocketWhiteListAdd(roceSocketHandle, &whiteListEntry, kNumEntries));
+    CHECK_STATUS(RaSocketWhiteListAddWrapper(roceSocketHandle, &whiteListEntry, kNumEntries));
     whiteList.push_back(whiteListEntry);
 
     socketInfo.remote_ip = remoteIp;

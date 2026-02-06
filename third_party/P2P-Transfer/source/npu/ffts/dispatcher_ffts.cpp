@@ -12,9 +12,29 @@
 #include "securec.h"
 #include <algorithm>
 #include <mutex>
-#include "hccl/log.h"
+
+#define CHK_RET(call)                                                                                 \
+    do {                                                                                              \
+        HcclResult ret = (call);                                                                      \
+        if (ret != HCCL_SUCCESS) {                                                                    \
+            std::cerr << "hcclRet " << ret << " at " << __FUNCTION__ << ":" << __LINE__ << std::endl; \
+            return ret;                                                                               \
+        }                                                                                             \
+    } while (0)
+
+#define CHK_PTR_NULL(ptr)                                                                                    \
+    do {                                                                                                     \
+        if (ptr == nullptr) {                                                                                \
+            std::cerr << "ptr [" << #ptr << "] is NULL at " << __FUNCTION__ << ":" << __LINE__ << std::endl; \
+            return HCCL_E_PTR;                                                                               \
+        }                                                                                                    \
+    } while (0)
 
 namespace p2p {
+constexpr uint32_t RT_INFO_TYPE_PHY_CHIP_ID = 18;
+constexpr uint32_t INVALID_UINT = 0xFFFFFFFF;
+constexpr uint64_t INVALID_S64 = 0xFFFFFFFFFFFFFFFF;
+
 HcclResult hrtFftsPlusTaskLaunchWithFlag(rtFftsPlusTaskInfo_t *fftsPlusTaskInfo, rtStream_t stm, uint32_t flag)
 {
     CHK_PTR_NULL(fftsPlusTaskInfo);
@@ -43,7 +63,7 @@ HcclResult hrtGetDeviceInfo(uint32_t deviceId, int32_t moduleType, int32_t infoT
 
 #define RT_INFO_TYPE_PHY_CHIP_ID 18
 #define CHIP_VERSION_MAX_LEN 32
- 
+
 HcclResult hrtGetRdmaDoorbellAddr(int32_t devLogID, int64_t chipID, uint32_t dbIndex, uint64_t &dbAddr,
                                   DeviceType deviceType)
 {
@@ -186,13 +206,13 @@ HcclResult DispatcherFFTS::LaunchFftsTask(rtStream_t stm, uint16_t readyContextN
     }
 
     if (fftsCtxsPtr->ctxNum > HCCL_FFTS_CAPACITY) {
-        HCCL_ERROR("CtxNum[%u] exceeds the limit of FFTS+ graph.", fftsCtxsPtr->ctxNum);
+        std::cerr << "CtxNum[" << fftsCtxsPtr->ctxNum << "] exceeds the limit of FFTS+ graph." << std::endl;
         return HCCL_E_NOT_SUPPORT;
     }
 
     if (fftsCtxsPtr->refreshIndex != fftsCtxsPtr->ctxNum) {
-        HCCL_ERROR("ffts context num is invaild, expected:%u, actual:%u.", fftsCtxsPtr->ctxNum,
-                   fftsCtxsPtr->refreshIndex);
+        std::cerr << "ffts context num is invaild, expected:" << fftsCtxsPtr->ctxNum
+                  << ", actual:" << fftsCtxsPtr->refreshIndex << "." << std::endl;
         return HCCL_E_PARA;
     }
 

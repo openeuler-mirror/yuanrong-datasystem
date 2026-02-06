@@ -22,13 +22,13 @@
 
 constexpr int64_t LINK_TIMEOUT_S = 120;
 
-Status RaInit(struct ra_init_config *config)
+Status RaInitWrapper(struct ra_init_config *config)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_init(config);
+        ret = RA_INIT(config);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -44,13 +44,13 @@ Status RaInit(struct ra_init_config *config)
     return Status::Success();
 }
 
-Status RaDeinit(struct ra_init_config *config)
+Status RaDeinitWrapper(struct ra_init_config *config)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_deinit(config);
+        ret = RA_DEINIT(config);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -66,13 +66,13 @@ Status RaDeinit(struct ra_init_config *config)
     return Status::Success();
 }
 
-Status RaSocketListenStart(struct socket_listen_info_t conn[], uint32_t num)
+Status RaSocketListenStartWrapper(struct socket_listen_info_t conn[], uint32_t num)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_socket_listen_start(conn, num);
+        ret = RA_SOCKET_LISTEN_START(conn, num);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -91,13 +91,13 @@ Status RaSocketListenStart(struct socket_listen_info_t conn[], uint32_t num)
     return Status::Success();
 }
 
-Status RaSocketListenStop(struct socket_listen_info_t conn[], uint32_t num)
+Status RaSocketListenStopWrapper(struct socket_listen_info_t conn[], uint32_t num)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_socket_listen_stop(conn, num);
+        ret = RA_SOCKET_LISTEN_STOP(conn, num);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -114,31 +114,31 @@ Status RaSocketListenStop(struct socket_listen_info_t conn[], uint32_t num)
     return Status::Success();
 }
 
-Status RaRdevInitV2(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle)
+Status RaRdevInitV2Wrapper(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle)
 {
-    ACL_CHECK_STATUS(ra_rdev_init_v2(init_info, rdev_info, rdma_handle));
+    ACL_CHECK_STATUS(RA_RDEV_INIT_V2(init_info, rdev_info, rdma_handle));
     return Status::Success();
 }
 
-Status RaRdevDeinit(void *rdma_handle, unsigned int notify_type)
+Status RaRdevDeinitWrapper(void *rdma_handle, unsigned int notify_type)
 {
-    ACL_CHECK_STATUS(ra_rdev_deinit(rdma_handle, notify_type));
+    ACL_CHECK_STATUS(RA_RDEV_DEINIT(rdma_handle, notify_type));
     return Status::Success();
 }
 
-Status RaGetSockets(uint32_t role, struct socket_info_t conn[], uint32_t num, uint32_t *connected_num)
+Status RaGetSocketsWrapper(uint32_t role, struct socket_info_t conn[], uint32_t num, uint32_t *connected_num)
 {
-    ACL_CHECK_STATUS(ra_get_sockets(role, conn, num, connected_num));
+    ACL_CHECK_STATUS(RA_GET_SOCKETS(role, conn, num, connected_num));
     return Status::Success();
 }
 
-Status RaSocketBatchConnect(struct socket_connect_info_t conn[], uint32_t num)
+Status RaSocketBatchConnectWrapper(struct socket_connect_info_t conn[], uint32_t num)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_socket_batch_connect(conn, num);
+        ret = RA_SOCKET_BATCH_CONNECT(conn, num);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -155,13 +155,13 @@ Status RaSocketBatchConnect(struct socket_connect_info_t conn[], uint32_t num)
     return Status::Success();
 }
 
-Status RaSocketBatchClose(struct socket_close_info_t conn[], unsigned int num)
+Status RaSocketBatchCloseWrapper(struct socket_close_info_t conn[], unsigned int num)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_socket_batch_close(conn, num);
+        ret = RA_SOCKET_BATCH_CLOSE(conn, num);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -178,79 +178,79 @@ Status RaSocketBatchClose(struct socket_close_info_t conn[], unsigned int num)
     return Status::Success();
 }
 
-Status RaSocketWhiteListAdd(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num)
+Status RaSocketWhiteListAddWrapper(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num)
 {
-    ACL_CHECK_STATUS(ra_socket_white_list_add(socket_handle, white_list, num));
+    ACL_CHECK_STATUS(RA_SOCKET_WHITE_LIST_ADD(socket_handle, white_list, num));
     return Status::Success();
 }
 
-Status RaSocketWhiteListDel(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num)
+Status RaSocketWhiteListDelWrapper(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num)
 {
-    ACL_CHECK_STATUS(ra_socket_white_list_del(socket_handle, white_list, num));
+    ACL_CHECK_STATUS(RA_SOCKET_WHITE_LIST_DEL(socket_handle, white_list, num));
     return Status::Success();
 }
 
-Status RaQpCreateWithAttrs(void *rdev_handle, struct qp_ext_attrs *ext_attrs, void **qp_handle)
+Status RaQpCreateWithAttrsWrapper(void *rdev_handle, struct qp_ext_attrs *ext_attrs, void **qp_handle)
 {
-    ACL_CHECK_STATUS(ra_qp_create_with_attrs(rdev_handle, ext_attrs, qp_handle));
+    ACL_CHECK_STATUS(RA_QP_CREATE_WITH_ATTRS(rdev_handle, ext_attrs, qp_handle));
     return Status::Success();
 }
 
-Status RaQpDestroy(void *qp_handle)
+Status RaQpDestroyWrapper(void *qp_handle)
 {
-    ACL_CHECK_STATUS(ra_qp_destroy(qp_handle));
+    ACL_CHECK_STATUS(RA_QP_DESTROY(qp_handle));
     return Status::Success();
 }
 
-Status RaSetQpAttrQos(void *qp_handle, struct qos_attr *attr)
+Status RaSetQpAttrQosWrapper(void *qp_handle, struct qos_attr *attr)
 {
-    ACL_CHECK_STATUS(ra_set_qp_attr_qos(qp_handle, attr));
+    ACL_CHECK_STATUS(RA_SET_QP_ATTR_QOS(qp_handle, attr));
     return Status::Success();
 }
 
-Status RaSetQpAttrTimeout(void *qp_handle, uint32_t *timeout)
+Status RaSetQpAttrTimeoutWrapper(void *qp_handle, uint32_t *timeout)
 {
-    ACL_CHECK_STATUS(ra_set_qp_attr_timeout(qp_handle, timeout));
+    ACL_CHECK_STATUS(RA_SET_QP_ATTR_TIMEOUT(qp_handle, timeout));
     return Status::Success();
 }
 
-Status RaSetQpAttrRetryCnt(void *qp_handle, uint32_t *retry_cnt)
+Status RaSetQpAttrRetryCntWrapper(void *qp_handle, uint32_t *retry_cnt)
 {
-    ACL_CHECK_STATUS(ra_set_qp_attr_retry_cnt(qp_handle, retry_cnt));
+    ACL_CHECK_STATUS(RA_SET_QP_ATTR_RETRY_CNT(qp_handle, retry_cnt));
     return Status::Success();
 }
 
-Status RaMrReg(void *qp_handle, struct mr_info *info)
+Status RaMrRegWrapper(void *qp_handle, struct mr_info *info)
 {
-    ACL_CHECK_STATUS(ra_mr_reg(qp_handle, info));
+    ACL_CHECK_STATUS(RA_MR_REG(qp_handle, info));
     return Status::Success();
 }
 
-Status RaMrDeReg(void *qp_handle, struct mr_info *info)
+Status RaMrDeRegWrapper(void *qp_handle, struct mr_info *info)
 {
-    ACL_CHECK_STATUS(ra_mr_dereg(qp_handle, info));
+    ACL_CHECK_STATUS(RA_MR_DEREG(qp_handle, info));
     return Status::Success();
 }
 
-Status RaGlobalMrReg(void *rdma_handle, struct mr_info *info, void **mr_handle)
+Status RaGlobalMrRegWrapper(void *rdma_handle, struct mr_info *info, void **mr_handle)
 {
-    ACL_CHECK_STATUS(ra_register_mr(rdma_handle, info, mr_handle));
+    ACL_CHECK_STATUS(RA_REGISTER_MR(rdma_handle, info, mr_handle));
     return Status::Success();
 }
 
-Status RaGlobalMrDeReg(void *rdma_handle, void *mr_handle)
+Status RaGlobalMrDeRegWrapper(void *rdma_handle, void *mr_handle)
 {
-    ACL_CHECK_STATUS(ra_deregister_mr(rdma_handle, mr_handle));
+    ACL_CHECK_STATUS(RA_DEREGISTER_MR(rdma_handle, mr_handle));
     return Status::Success();
 }
 
-Status RaQpConnectAsync(void *qp_handle, const void *fd_handle)
+Status RaQpConnectAsyncWrapper(void *qp_handle, const void *fd_handle)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_qp_connect_async(qp_handle, fd_handle);
+        ret = RA_QP_CONNECT_ASYNC(qp_handle, fd_handle);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -267,26 +267,26 @@ Status RaQpConnectAsync(void *qp_handle, const void *fd_handle)
     return Status::Success();
 }
 
-Status RaGetQpStatus(void *qp_handle, ra_qp_status *status)
+Status RaGetQpStatusWrapper(void *qp_handle, ra_qp_status *status)
 {
-    ACL_CHECK_STATUS(ra_get_qp_status(qp_handle, status));
+    ACL_CHECK_STATUS(RA_GET_QP_STATUS(qp_handle, status));
     return Status::Success();
 }
 
-Status RaSendWrlistExt(void *qp_handle, struct send_wrlist_data_ext wr[], struct send_wr_rsp op_rsp[],
+Status RaSendWrlistExtWrapper(void *qp_handle, struct send_wrlist_data_ext wr[], struct send_wr_rsp op_rsp[],
                        uint32_t send_num, uint32_t *complete_num)
 {
-    ACL_CHECK_STATUS(ra_send_wrlist_ext(qp_handle, wr, op_rsp, send_num, complete_num));
+    ACL_CHECK_STATUS(RA_SEND_WRLIST_EXT(qp_handle, wr, op_rsp, send_num, complete_num));
     return Status::Success();
 }
 
-Status RaGetNotifyBaseAddr(void *rdev_handle, unsigned long long *va, unsigned long long *size)
+Status RaGetNotifyBaseAddrWrapper(void *rdev_handle, unsigned long long *va, unsigned long long *size)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_get_notify_base_addr(rdev_handle, va, size);
+        ret = RA_GET_NOTIFY_BASE_ADDR(rdev_handle, va, size);
         if (!ret) {
             break;
         } else if (ret == SOCK_EAGAIN) {
@@ -303,13 +303,13 @@ Status RaGetNotifyBaseAddr(void *rdev_handle, unsigned long long *va, unsigned l
     return Status::Success();
 }
 
-Status RaSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
+Status RaSendWrWrapper(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_send_wr(qp_handle, wr, op_rsp);
+        ret = RA_SEND_WR(qp_handle, wr, op_rsp);
         if (!ret) {
             break;
         } else if ((ret == SOCK_ENOENT) || (ret == SOCK_EAGAIN)
@@ -328,13 +328,13 @@ Status RaSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
     return Status::Success();
 }
 
-Status RaTypicalSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
+Status RaTypicalSendWrWrapper(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
 {
     int32_t ret = 0;
     auto startTime = std::chrono::steady_clock::now();
     auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
     while (true) {
-        ret = ra_typical_send_wr(qp_handle, wr, op_rsp);
+        ret = RA_TYPICAL_SEND_WR(qp_handle, wr, op_rsp);
         if (!ret) {
             break;
         } else if ((ret == SOCK_ENOENT) || (ret == SOCK_EAGAIN)
@@ -353,14 +353,14 @@ Status RaTypicalSendWr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *
     return Status::Success();
 }
 
-Status RaGetIfaddrs(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num)
+Status RaGetIfaddrsWrapper(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num)
 {
-    ACL_CHECK_STATUS(ra_get_ifaddrs(config, interface_infos, num));
+    ACL_CHECK_STATUS(RA_GET_IFADDRS(config, interface_infos, num));
     return Status::Success();
 }
 
-Status RaGetIfNum(struct ra_get_ifattr *config, unsigned int *num)
+Status RaGetIfNumWrapper(struct ra_get_ifattr *config, unsigned int *num)
 {
-    ACL_CHECK_STATUS(ra_get_ifnum(config, num));
+    ACL_CHECK_STATUS(RA_GET_IFNUM(config, num));
     return Status::Success();
 }

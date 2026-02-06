@@ -10,11 +10,11 @@
 RdmaQp::~RdmaQp()
 {
     for (auto it = registeredMrs.begin(); it != registeredMrs.end(); ++it) {
-        RaMrDeReg(qpHandle, &it->second);
+        RaMrDeRegWrapper(qpHandle, &it->second);
     }
 
     if (status >= RdmaQpStatus::QP_INITIALIZED) {
-        RaQpDestroy(qpHandle);
+        RaQpDestroyWrapper(qpHandle);
     }
 }
 
@@ -44,23 +44,23 @@ Status RdmaQp::create(void *rdmaHandle)
     const uint32_t kMaxSendWr = 32768;
     qpAttrs.qp_attr.cap.max_send_wr = kMaxSendWr;
 
-    CHECK_STATUS(RaQpCreateWithAttrs(rdmaHandle, &qpAttrs, &qpHandle));
+    CHECK_STATUS(RaQpCreateWithAttrsWrapper(rdmaHandle, &qpAttrs, &qpHandle));
 
     unsigned long long notifyBaseSize;
-    CHECK_STATUS(RaGetNotifyBaseAddr(rdmaHandle, &notifyBaseVa, &notifyBaseSize));
+    CHECK_STATUS(RaGetNotifyBaseAddrWrapper(rdmaHandle, &notifyBaseVa, &notifyBaseSize));
 
     struct qos_attr qosAttr {};
     const unsigned char kTrafficClass = 132;
     qosAttr.tc = kTrafficClass;
     const unsigned char kServiceLevel = 4;
     qosAttr.sl = kServiceLevel;
-    CHECK_STATUS(RaSetQpAttrQos(qpHandle, &qosAttr));
+    CHECK_STATUS(RaSetQpAttrQosWrapper(qpHandle, &qosAttr));
 
     uint32_t timeOut = 20;
-    CHECK_STATUS(RaSetQpAttrTimeout(qpHandle, &timeOut));
+    CHECK_STATUS(RaSetQpAttrTimeoutWrapper(qpHandle, &timeOut));
 
     uint32_t retryCount = 7;
-    CHECK_STATUS(RaSetQpAttrRetryCnt(qpHandle, &retryCount));
+    CHECK_STATUS(RaSetQpAttrRetryCntWrapper(qpHandle, &retryCount));
 
     status = RdmaQpStatus::QP_INITIALIZED;
 
@@ -77,7 +77,7 @@ Status RdmaQp::registerMemoryRegion(void *addr, uint32_t size)
     inMrInfo.addr = addr;
     inMrInfo.size = size;
     inMrInfo.access = RA_ACCESS_LOCAL_WRITE | RA_ACCESS_REMOTE_WRITE | RA_ACCESS_REMOTE_READ;
-    CHECK_STATUS(RaMrReg(qpHandle, &inMrInfo));
+    CHECK_STATUS(RaMrRegWrapper(qpHandle, &inMrInfo));
 
     registeredMrs[addr] = inMrInfo;
 
@@ -102,7 +102,7 @@ Status RdmaQp::connect(void *socketFdHandle)
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not initialized");
     }
 
-    CHECK_STATUS(RaQpConnectAsync(qpHandle, socketFdHandle));
+    CHECK_STATUS(RaQpConnectAsyncWrapper(qpHandle, socketFdHandle));
 
     status = RdmaQpStatus::QP_CONNECTING;
 
@@ -115,7 +115,7 @@ Status RdmaQp::getStatus(ra_qp_status *qpStatus)
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma qp is not initialized");
     }
 
-    CHECK_STATUS(RaGetQpStatus(qpHandle, qpStatus));
+    CHECK_STATUS(RaGetQpStatusWrapper(qpHandle, qpStatus));
 
     if (*qpStatus == RA_QP_STATUS_CONNECTED) {
         status = RdmaQpStatus::QP_CONNECTED;
@@ -201,7 +201,7 @@ Status RdmaQp::dispatchRdmaOpFfts(p2p::DispatcherFFTS *dispatcher, uint64_t srcA
 
     struct send_wr_rsp notWrRsp {};
 
-    CHECK_STATUS(RaSendWr(qpHandle, &notWr, &notWrRsp));
+    CHECK_STATUS(RaSendWrWrapper(qpHandle, &notWr, &notWrRsp));
 
     dispatcher->RdmaSend(notWrRsp.db.db_index, notWrRsp.db.db_info, notWr, rdmaTaskId);
     return Status::Success();
@@ -227,7 +227,7 @@ Status RdmaQp::execRdmaOp(uint64_t srcAddr, uint64_t dstAddr, uint32_t length, u
 
     struct send_wr_rsp notWrRsp {};
 
-    CHECK_STATUS(RaSendWr(qpHandle, &notWr, &notWrRsp));
+    CHECK_STATUS(RaSendWrWrapper(qpHandle, &notWr, &notWrRsp));
     ACL_CHECK_STATUS(rtRDMADBSend(notWrRsp.db.db_index, notWrRsp.db.db_info, stm));
 
     return Status::Success();
@@ -256,7 +256,7 @@ Status RdmaQp::dispatchTypicalRdmaOpFfts(p2p::DispatcherFFTS *dispatcher, uint64
 
     struct send_wr_rsp notWrRsp {};
 
-    CHECK_STATUS(RaTypicalSendWr(qpHandle, &notWr, &notWrRsp));
+    CHECK_STATUS(RaTypicalSendWrWrapper(qpHandle, &notWr, &notWrRsp));
 
     dispatcher->RdmaSend(notWrRsp.db.db_index, notWrRsp.db.db_info, notWr, rdmaTaskId);
     return Status::Success();
@@ -284,7 +284,7 @@ Status RdmaQp::execTypicalRdmaOp(uint64_t srcAddr, uint64_t dstAddr, uint32_t le
 
     struct send_wr_rsp notWrRsp {};
 
-    CHECK_STATUS(RaTypicalSendWr(qpHandle, &notWr, &notWrRsp));
+    CHECK_STATUS(RaTypicalSendWrWrapper(qpHandle, &notWr, &notWrRsp));
     ACL_CHECK_STATUS(rtRDMADBSend(notWrRsp.db.db_index, notWrRsp.db.db_info, stm));
 
     return Status::Success();
@@ -319,7 +319,7 @@ Status RdmaQp::execRdmaOps(std::vector<uint64_t> srcAddrs, std::vector<uint64_t>
 
     struct send_wr_rsp wrRsps[numWrites] = {};
     uint32_t completeNum = 0;
-    CHECK_STATUS(RaSendWrlistExt(qpHandle, wrs, wrRsps, numWrites, &completeNum));
+    CHECK_STATUS(RaSendWrlistExtWrapper(qpHandle, wrs, wrRsps, numWrites, &completeNum));
     if (completeNum != numWrites) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "Not all writes were submitted successfully");
     }
@@ -360,7 +360,7 @@ Status RdmaQp::dispatchRdmaOpsFfts(p2p::DispatcherFFTS *dispatcher, std::vector<
 
     struct send_wr_rsp wrRsps[numWrites] = {};
     uint32_t completeNum = 0;
-    CHECK_STATUS(RaSendWrlistExt(qpHandle, wrs, wrRsps, numWrites, &completeNum));
+    CHECK_STATUS(RaSendWrlistExtWrapper(qpHandle, wrs, wrRsps, numWrites, &completeNum));
     if (completeNum != numWrites) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "Not all writes were submitted successfully");
     }
