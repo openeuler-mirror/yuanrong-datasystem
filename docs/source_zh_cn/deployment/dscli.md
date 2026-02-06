@@ -851,6 +851,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | shared_disk_arena_per_tenant | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
 | shared_disk_directory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | shared_disk_size_mb | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
+| memory_alignment | int | `64` | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
 
 #### AK/SK相关配置
 

@@ -32,6 +32,7 @@
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -282,8 +283,8 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
             return swapOutPool_->AclMemcpyBatchD2H(deviceId, helper.dstBuffers, helper.srcBuffers, helper.bufferMetas);
         } else {
-            return swapOutPool_->AclMemcpyBatch(deviceId, helper.dstList, helper.dataSizeList, helper.srcList,
-                                                helper.dataSizeList, copyKind, helper.batchSize);
+            PerfPoint p(PerfKey::TOTAL_D2H_BATCH_MEMCPY);
+            return swapOutPool_->AclMemcpyBatch(copyKind, helper, deviceId);
         }
     }
     auto policy = aclResourceMgr_.GetH2DPolicy();
@@ -291,8 +292,8 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
         PrintGetPerfInfo(helper);
         return swapInPool_->AclMemcpyBatchH2D(deviceId, helper.srcBuffers, helper.dstBuffers, helper.bufferMetas);
     } else {
-        return swapInPool_->AclMemcpyBatch(deviceId, helper.dstList, helper.dataSizeList, helper.srcList,
-                                           helper.dataSizeList, copyKind, helper.batchSize);
+        PerfPoint p(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
+        return swapOutPool_->AclMemcpyBatch(copyKind, helper, deviceId);
     }
 }
 
@@ -376,28 +377,27 @@ Status AsyncAclMemCopyPool::AclMemcpyBatchH2D(uint32_t deviceId, const std::vect
     return copier.ExecuteMemcpy(deviceBuffers, hostBuffers);
 }
 
-Status AsyncAclMemCopyPool::AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList,
-                                           std::vector<size_t> &destMaxList, std::vector<void *> &srcList,
-                                           std::vector<size_t> &countList, MemcpyKind kind, size_t batchSize)
+Status AsyncAclMemCopyPool::AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId)
 {
-    auto fut =
-        copyPool_->Submit([this, deviceIdx, &dstList, &destMaxList, &srcList, &countList, kind, batchSize]() -> Status {
-            if (deviceNow_ != static_cast<int32_t>(deviceIdx)) {
-                RETURN_IF_NOT_OK(devInterImpl_->SetDevice(deviceIdx));
-                deviceNow_ = deviceIdx;
-            }
-            if (copyStreams_[0] == nullptr) {
-                RETURN_IF_NOT_OK(devInterImpl_->CreateStream(&copyStreams_[0]));
-            }
-            Status ret;
-            for (auto i = 0ul; i < batchSize; i++) {
-                RETURN_IF_NOT_OK(devInterImpl_->MemcpyAsync(dstList[i], destMaxList[i], srcList[i], countList[i],
-                                                            kind, copyStreams_[0]));
-            }
-            return devInterImpl_->SynchronizeStream(copyStreams_[0]);
-        });
-    return fut.get();
-}
+    size_t leftNum = helper.batchSize;
+    size_t startIndex = 0;
+    while (leftNum > 0) {
+        auto maxBatchSize = 4096UL;
+        auto batchNum = std::min(leftNum, maxBatchSize);
+        size_t failedIdx = 0;
+        auto res =
+            devInterImpl_->MemcpyBatch(helper.dstList.data() + startIndex, helper.dataSizeList.data() + startIndex,
+                                       helper.srcList.data() + startIndex, helper.dataSizeList.data() + startIndex,
+                                       batchNum, copyKind, deviceId, &failedIdx);
+        if (res.IsError()) {
+            LOG(ERROR) << FormatString("AclMemcpyBatch return error , failed index:%lu", failedIdx) << "," << res;
+            return res;
+        }
+        leftNum -= batchNum;
+        startIndex += batchNum;
+    }
+    return Status::OK();
+};
 
 AsyncAclMemCopyPool::~AsyncAclMemCopyPool()
 {

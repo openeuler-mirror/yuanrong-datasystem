@@ -28,6 +28,7 @@
 #include <unordered_set>
 
 #include "datasystem/common/ak_sk/hasher.h"
+#include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/dlutils.h"
@@ -161,6 +162,7 @@ void AclDeviceManager::DlsymFuncObj()
     DLSYM_FUNC_OBJ(DSAclrtSetDevice, pluginHandle_);
     DLSYM_FUNC_OBJ(DSAclFinalize, pluginHandle_);
     DLSYM_FUNC_OBJ(DSAclrtMemcpyAsync, pluginHandle_);
+    DLSYM_FUNC_OBJ(DSAclrtMemcpyBatch, pluginHandle_);
     DLSYM_FUNC_OBJ(DSAclrtResetDevice, pluginHandle_);
     DLSYM_FUNC_OBJ(DSAclrtMalloc, pluginHandle_);
     DLSYM_FUNC_OBJ(DSAclrtFree, pluginHandle_);
@@ -462,6 +464,16 @@ Status AclDeviceManager::aclrtMemcpyAsync(void *dst, size_t destMax, const void 
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSAclrtMemcpyAsyncFunc_);
     RETURN_ACL_RESULT(DSAclrtMemcpyAsyncFunc_(dst, destMax, src, count, kind, stream));
+}
+
+Status AclDeviceManager::aclrtMemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                                          aclrtMemcpyBatchAttr *attrs, size_t *attrsIndexes, size_t numAttrs,
+                                          size_t *failIndex)
+{
+    RETURN_IF_NOT_OK(CheckPluginOk());
+    RETURN_RUNTIME_ERROR_IF_NULL(DSAclrtMemcpyBatchFunc_);
+    RETURN_ACL_RESULT(
+        DSAclrtMemcpyBatchFunc_(dsts, destMax, srcs, sizes, numBatches, attrs, attrsIndexes, numAttrs, failIndex));
 }
 
 Status AclDeviceManager::aclrtResetDevice(int32_t deviceId)
@@ -1010,6 +1022,33 @@ Status AclDeviceManager::P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entrie
     }
     return DSP2PScatterBatchFromRemoteHostMem(nativeEntries.data(), batchSize,
                                               static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+}
+
+Status AclDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                                     MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex)
+{
+    if (kind != MemcpyKind::HOST_TO_DEVICE && kind != MemcpyKind::DEVICE_TO_HOST) {
+        return Status(K_INVALID,
+                      FormatString("MemcpyBatch support kind(DEVICE_TO_HOST, HOST_TO_DEVICE) only, current is %u!",
+                                   static_cast<uint32_t>(kind)));
+    }
+    std::vector<aclrtMemcpyBatchAttr> attrs(numBatches);
+    std::vector<size_t> attrsIds(numBatches);
+    size_t idx = 0;
+    for (size_t i = 0; i < numBatches; ++i) {
+        auto deviceLoc =
+            aclrtMemLocation{ static_cast<uint32_t>(deviceIdx), aclrtMemLocationType::ACL_MEM_LOCATION_TYPE_DEVICE };
+        auto hostLoc = aclrtMemLocation{ 0, aclrtMemLocationType::ACL_MEM_LOCATION_TYPE_HOST };
+        if (kind == MemcpyKind::DEVICE_TO_HOST) {
+            attrs[i] = aclrtMemcpyBatchAttr{ hostLoc, deviceLoc, {} };
+        } else {
+            attrs[i] = aclrtMemcpyBatchAttr{ deviceLoc, hostLoc, {} };
+        }
+        attrsIds[i] = idx++;
+    }
+    PerfPoint p(kind == MemcpyKind::HOST_TO_DEVICE ? PerfKey::H2D_BATCH_MEMCPY : PerfKey::D2H_BATCH_MEMCPY);
+    return aclrtMemcpyBatch(dsts, destMax, srcs, sizes, numBatches, attrs.data(), attrsIds.data(), attrs.size(),
+                            failIndex);
 }
 }  // namespace acl
 }  // namespace datasystem

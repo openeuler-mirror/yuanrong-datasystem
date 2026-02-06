@@ -1016,5 +1016,23 @@ public:
         LOG(ERROR) << FormatString("The value of %s flag is %s, which must be 'none'/'sync'/'async'.", flagName, value);
         return false;
     }
+
+    /**
+     * @brief Validate memory alignment.
+     * @param[in] flagName The flag name.
+     * @param[in] value The value to be checked.
+     * @return True if valid.
+     */
+    static bool ValidateMemoryAlignment(const char *flagName, uint32_t value)
+    {
+        auto maxAlignment = 512U;
+        auto divisor = 2;
+        auto isEven = (value % divisor) == 0;
+        if (value > 0U && value <= maxAlignment && isEven) {
+            return true;
+        }
+        LOG(ERROR) << FormatString("The value of %s(%u) should be even in (0 , %u].", flagName, value, maxAlignment);
+        return false;
+    }
 };
 #endif  // DATASYSTEM_COMMON_UTIL_FLAG_VALIDATOR_H

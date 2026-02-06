@@ -25,6 +25,7 @@
 
 #include "common.h"
 #include "../common/binmock/binmock.h"
+#include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/device/ascend/cann_types.h"
@@ -32,6 +33,7 @@
 #include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 constexpr uint32_t MK_P2P_RANK_NUM = 2;
@@ -369,6 +371,20 @@ public:
         return MemCopyMock(dst, dstMaxSize, src, srcSize);
     }
 
+    Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches, MemcpyKind kind,
+                       uint32_t deviceIdx, size_t *failIndex) override
+    {
+        (void)deviceIdx;
+        (void)failIndex;
+        for (auto i = 0U; i < numBatches; i++) {
+            if (kind == MemcpyKind::HOST_TO_DEVICE) {
+                RETURN_IF_NOT_OK(MemCopyH2D(dsts[i], destMax[i], srcs[i], sizes[i]));
+            } else {
+                RETURN_IF_NOT_OK(MemCopyD2H(dsts[i], destMax[i], srcs[i], sizes[i]));
+            }
+        }
+        return Status::OK();
+    };
     Status FreeDeviceMemory(void *deviceData) override
     {
         free(deviceData);

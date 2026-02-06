@@ -118,6 +118,22 @@ typedef enum aclrtMemMallocPolicy {
     ACL_MEM_TYPE_HIGH_BAND_WIDTH = 0x1000,
 } aclrtMemMallocPolicy;
 
+typedef enum aclrtMemLocationType {
+    ACL_MEM_LOCATION_TYPE_HOST = 0,
+    ACL_MEM_LOCATION_TYPE_DEVICE,
+} aclrtMemLocationType;
+
+typedef struct aclrtMemLocation {
+    uint32_t id;
+    aclrtMemLocationType type;
+} aclrtMemLocation;
+
+typedef struct {
+    aclrtMemLocation dstLoc;
+    aclrtMemLocation srcLoc;
+    uint8_t rsv[16];
+} aclrtMemcpyBatchAttr;
+
 const uint32_t HCCL_ROOT_INFO_BYTES = 4108;  // 4108: root info length
 /**
  * @brief HCCL root info

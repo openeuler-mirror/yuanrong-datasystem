@@ -121,6 +121,7 @@ DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(cross_cluster_get_data_from_worker);
 DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(enable_distributed_master);
+DS_DECLARE_uint32(memory_alignment);
 
 using namespace datasystem::master;
 using namespace datasystem::worker;
@@ -1566,7 +1567,7 @@ void WorkerOCServiceImpl::InitMetaSize()
     metadataSize_ = FLAGS_max_client_num == 0 ? 0 : FLAGS_max_client_num / alignment + 1;
     metadataSize_ += sizeof(uint32_t) + sizeof(char);
     auto alignCeiling = [](uintptr_t addr, uintptr_t alignment) { return (addr + alignment - 1) & ~(alignment - 1); };
-    metadataSize_ = alignCeiling(metadataSize_, 0x40);
+    metadataSize_ = alignCeiling(metadataSize_, FLAGS_memory_alignment);
 }
 
 size_t WorkerOCServiceImpl::GetMetadataSize() const

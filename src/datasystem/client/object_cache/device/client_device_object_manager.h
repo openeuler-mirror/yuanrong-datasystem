@@ -40,43 +40,6 @@ namespace datasystem {
 namespace object_cache {
 class ObjectClientImpl;
 
-class AsyncAclMemCopyPool {
-public:
-    AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr);
-
-    /**
-     * @brief Npu memory copy in batch.
-     * @param[in] deviceIdx The device id.
-     * @param[in] dstList The list of pointer in destination.
-     * @param[in] destMaxList The list of memory size in destination.
-     * @param[in] srcList The list of pointer in source.
-     * @param[in] countList The list of memory size in source.
-     * @param[in] kind The memory copy kind.
-     * @param[in] batchSize The size of batch.
-     * @return Status K_OK on success; the error code otherwise.
-     */
-    Status AclMemcpyBatch(uint32_t deviceIdx, std::vector<void *> &dstList, std::vector<size_t> &destMaxList,
-                          std::vector<void *> &srcList, std::vector<size_t> &countList, MemcpyKind kind,
-                          size_t batchSize);
-    Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                             const std::vector<BufferView> &deviceBuffers,
-                             const std::vector<BufferMetaInfo> &metaInfos);
-
-    Status AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                             const std::vector<BufferView> &deviceBuffers,
-                             const std::vector<BufferMetaInfo> &metaInfos);
-    ~AsyncAclMemCopyPool();
-
-private:
-    std::unique_ptr<ThreadPool> copyPool_;
-    std::unique_ptr<ThreadPool> h2hCopyPool_;
-    std::unique_ptr<ThreadPool> fftsCopyPool_;
-    std::vector<void *> copyStreams_;
-    int32_t deviceNow_ = -1;
-    DeviceManagerBase *devInterImpl_;
-    AclResourceManager *aclResourceMgr_;
-};
-
 struct DeviceBatchCopyHelper {
     bool is64BitAligned(void *ptr)
     {
@@ -162,6 +125,38 @@ struct DeviceBatchCopyHelper {
     std::vector<BufferView> srcBuffers;
     std::vector<BufferView> dstBuffers;
     std::vector<BufferMetaInfo> bufferMetas;
+};
+class AsyncAclMemCopyPool {
+public:
+    AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr);
+
+    /**
+     * @brief Perform a batch memory copy operation on the NPU.
+     *
+     * @param[in] copyKind   Type of memory copy.
+     * @param[in] helper     Helper object that holds the batch copy tasks.
+     * @param[in] deviceId   Target device ID.
+     * @return Status K_OK on success; an error code otherwise.
+     */
+    Status AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId);
+    Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
+                             const std::vector<BufferView> &deviceBuffers,
+                             const std::vector<BufferMetaInfo> &metaInfos);
+
+    Status AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
+                             const std::vector<BufferView> &deviceBuffers,
+                             const std::vector<BufferMetaInfo> &metaInfos);
+
+    ~AsyncAclMemCopyPool();
+
+private:
+    std::unique_ptr<ThreadPool> copyPool_;
+    std::unique_ptr<ThreadPool> h2hCopyPool_;
+    std::unique_ptr<ThreadPool> fftsCopyPool_;
+    std::vector<void *> copyStreams_;
+    int32_t deviceNow_ = -1;
+    DeviceManagerBase *devInterImpl_;
+    AclResourceManager *aclResourceMgr_;
 };
 
 class ClientDeviceObjectManager {

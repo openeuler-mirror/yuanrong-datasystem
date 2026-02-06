@@ -307,6 +307,26 @@ int DSAclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count,
                        aclrtStream stream);
 
 /**
+ * @brief  Batched memory copy between Host and Device.
+ * @param[in]  dsts           Array of destination address pointers.
+ * @param[in]  destMax        Array of maximum lengths for each destination memory region, in bytes.
+ * @param[in]  srcs           Array of source address pointers.
+ * @param[in]  sizes          Array of copy sizes for each batch, in bytes.
+ * @param[in]  numBatches     Number of batches; length of `dsts`, `srcs`, and `sizes` arrays.
+ * @param[in]  attrs          Array of memory copy attributes.
+ * @param[in]  attrsIndexes   Array of attribute indexes specifying the range of batches each attribute applies to.
+ * @param[in]  numAttrs       Length of `attrs` and `attrsIndexes` arrays.
+ * @param[out] failIndex      Index of the batch where an error occurred (only supports validation of memory attributes
+ * and copy direction). If the error is not associated with a specific batch, this will be set to `SIZE_MAX`.
+ *
+ * @retval ACL_SUCCESS The function is successfully executed.
+ * @retval OtherValues Failure.
+ */
+
+int DSAclrtMemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
+                       aclrtMemcpyBatchAttr *attrs, size_t *attrsIndexes, size_t numAttrs, size_t *failIndex);
+
+/**
  * @brief Reset the current operating Device and free resources on the device,
  * including the default context, the default stream,
  * and all streams created under the default context,
