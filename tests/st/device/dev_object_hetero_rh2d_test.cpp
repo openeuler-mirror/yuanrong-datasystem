@@ -413,5 +413,81 @@ TEST_F(DevObjectHeteroRH2DNoNpuTest, DISABLED_RemoteH2DTestNoNpu)
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
 
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
+{
+    // Test that Remote H2D supports multiple threads.
+    InitAcl(deviceId_);
+
+    const int objPerThread = 40;
+    const int threadNum = 4;
+    const size_t blkSz = 28800;
+    const size_t blksPerObj = 1;
+    std::vector<std::thread> threads;
+    std::vector<std::vector<std::string>> inObjectIds(threadNum);
+    std::vector<std::vector<std::string>> verifyList;
+    std::vector<std::string> inObjectIdsConcat;
+    for (uint32_t i = 0; i < threadNum * objPerThread; i++) {
+        verifyList.emplace_back();
+        for (uint32_t j = 0; j < blksPerObj; j++) {
+            verifyList[i].emplace_back(RandomData().GetRandomString(blkSz));
+        }
+    }
+    std::shared_ptr<DsClient> setClient;
+    InitTestDsClientForRemoteH2D(0, setClient);
+    
+    for (int i = 0; i < threadNum; i++) {
+        for (int j = 0ul; j < objPerThread; j++) {
+            inObjectIds[i].emplace_back(GetStringUuid());
+        }
+        inObjectIdsConcat.insert(inObjectIdsConcat.end(), inObjectIds[i].begin(), inObjectIds[i].end());
+        threads.emplace_back([&, threadId = i]() {
+            DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtSetDevice(deviceId_));
+            std::vector<DeviceBlobList> setBlobList;
+            for (auto i = threadId * objPerThread; i < threadId * objPerThread + objPerThread; i++) {
+                DeviceBlobList blobList;
+                blobList.deviceIdx = deviceId_;
+                for (uint32_t j = 0; j < blksPerObj; j++) {
+                    void *devPtr = nullptr;
+                    AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
+                    AclDeviceManager::Instance()->MemCopyH2D(devPtr, blkSz, verifyList[i][j].data(), blkSz);
+                    blobList.blobs.emplace_back(Blob{ devPtr, blkSz });
+                }
+                setBlobList.emplace_back(blobList);
+            }
+            DS_ASSERT_OK(setClient->Hetero()->MSetD2H(inObjectIds[threadId], setBlobList));
+        });
+    }
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    threads.clear();
+
+    std::shared_ptr<DsClient> getClient;
+    InitTestDsClientForRemoteH2D(1, getClient);
+    for (int i = 0; i < threadNum; i++) {
+        threads.emplace_back([&, threadId = i]() {
+            DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtSetDevice(deviceId_));
+            std::vector<DeviceBlobList> setBlobListUseless;
+            std::vector<DeviceBlobList> getBlobList;
+            PrePareDevData(inObjectIdsConcat.size(), blksPerObj, blkSz, setBlobListUseless, getBlobList, deviceId_);
+
+            std::vector<std::string> failedList;
+            DS_ASSERT_OK(getClient->Hetero()->MGetH2D(inObjectIdsConcat, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+            ASSERT_TRUE(failedList.empty());
+            for (size_t j = 0; j < inObjectIdsConcat.size(); j++) {
+                for (size_t k = 0; k < blksPerObj; k++) {
+                    LOG(INFO) << "Thread " << threadId << ": Check object " << j << ", blob " << k;
+                    CheckDevPtrContent(getBlobList[j].blobs[k].pointer, getBlobList[j].blobs[k].size, verifyList[j][k]);
+                }
+            }
+            LOG(INFO) << "MGet done for thread " << threadId;
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+}
+
 }  // namespace st
 }  // namespace datasystem

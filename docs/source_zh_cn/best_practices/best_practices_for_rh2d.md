@@ -352,7 +352,7 @@ python hetero_h2d_d2h_benchmark.py -i 192.168.0.2 -p 31501 --get-only --no-warmu
 > | 1process_1thread_32key_1024KB      | 1 client 进程 32 keys * 28 blobs * 1024KB                      |
 > | 1process_8thread_32key_72KB        | 1 client 进程 32 keys * 61 blobs * 72KB (8 threads)            |
 > | 1process_8thread_32key_144KB       | 1 client 进程 32 keys * 61 blobs * 144KB (8 threads)           |
-> | 1process_4thread_32key_1024KB      | 1 client 进程 32 keys * 28 blobs * 1024KB (4 threads)          |
+> | 1process_8thread_32key_1024KB      | 1 client 进程 32 keys * 28 blobs * 1024KB (8 threads)          |
 > | 8process_1thread_1key_72KB         | 8 client 进程 1 key * 61 blobs * 72KB                          |
 > | 8process_1thread_1key_144KB        | 8 client 进程 1 key * 61 blobs * 144KB                         |
 > | 8process_1thread_1key_1024KB       | 8 client 进程 1 key * 28 blobs * 1024KB                        |

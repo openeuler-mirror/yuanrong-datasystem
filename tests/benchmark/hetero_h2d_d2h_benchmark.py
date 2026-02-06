@@ -44,6 +44,7 @@ DEFAULT_WORKER_IP = "127.0.0.1"
 DEFAULT_WORKER_PORT = 31699
 
 DEVICE_START_INDEX = 3
+TOTAL_NPU_COUNT = 8
 
 timestamp_sec = int(time.time())
 RESULT_FILENAME = f"perf_result_{timestamp_sec}.csv"
@@ -68,11 +69,11 @@ config_map = {
 
     # Single process, multiple thread, 32 key tests
     '1process_8thread_32key_72KB': {'num_processes': 1, 'key_num': 32, 'blob_nums': [61], 'blob_sizes': [72 * 1024],
-                               'iterations': 5, 'thread_number': 8},
+                               'iterations': 10, 'thread_number': 8},
     '1process_8thread_32key_144KB': {'num_processes': 1, 'key_num': 32, 'blob_nums': [61], 'blob_sizes': [144 * 1024],
-                                'iterations': 2, 'thread_number': 8},
-    '1process_4thread_32key_1024KB': {'num_processes': 1, 'key_num': 32, 'blob_nums': [28], 'blob_sizes': [1024 * 1024],
-                                'iterations': 1, 'thread_number': 4},
+                                'iterations': 5, 'thread_number': 8},
+    '1process_8thread_32key_1024KB': {'num_processes': 1, 'key_num': 32, 'blob_nums': [28], 'blob_sizes': [1024 * 1024],
+                                'iterations': 1, 'thread_number': 8},
 
     # Eight processes, single thread, 1 key tests
     '8process_1thread_1key_72KB': {'num_processes': 8, 'key_num': 1, 'blob_nums': [61], 'blob_sizes': [72 * 1024],
@@ -456,8 +457,8 @@ def run_benchmark(
         p = mp.Process(
             target=worker_process,
             args=(
-                i + args.deviceid, key_num, blob_nums, blob_sizes, iterations, thread_number, result_queue, barrier,
-                lock)
+                ((i + args.deviceid) % TOTAL_NPU_COUNT), key_num, blob_nums, blob_sizes, iterations, thread_number,
+                result_queue, barrier, lock)
         )
         p.start()
         processes.append(p)
