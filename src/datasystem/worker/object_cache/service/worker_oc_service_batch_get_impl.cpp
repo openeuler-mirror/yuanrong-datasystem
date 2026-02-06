@@ -582,11 +582,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
         }
     });
     // Construct and send request for batch remote get.
-    Timer endToEndTimer;
-    Status rc =
-        BatchGetObjectFromRemoteWorker(address, infos, request, successIds, needRetryIds, failedIds, failedMetas);
-    LOG(INFO) << FormatString("object get from remote finish, use %f millisecond.", endToEndTimer.ElapsedMilliSecond());
-    return rc;
+    return BatchGetObjectFromRemoteWorker(address, infos, request, successIds, needRetryIds, failedIds, failedMetas);
 }
 
 Status WorkerOcServiceGetImpl::AggregateAllocateHelper(std::list<GetObjectInfo> &infos,

@@ -48,6 +48,16 @@ DS_DECLARE_uint64(oc_worker_aggregate_single_max);
 DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
+inline std::ostream &operator<<(std::ostream &os, const GetObjectRemoteReqPb &req)
+{
+    os << "(";
+    os << req.object_key() << ",";
+    os << req.request_id() << ",";
+    os << req.read_offset() << ",";
+    os << req.read_size();
+    os << ")";
+    return os;
+}
 namespace object_cache {
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager,
@@ -115,6 +125,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
                                                   std::vector<RpcMessage> &payload)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] offset[%ld] size[%ld]", req.object_key(),
+                              req.request_id(), req.read_offset(), req.read_size());
     std::vector<uint64_t> dummyKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, dummyKeys));
     return Status::OK();
@@ -307,8 +319,6 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
 {
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
-    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] offset[%ld] size[%ld]", objectKey, requestId,
-                              req.read_offset(), req.read_size());
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
@@ -398,9 +408,8 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     });
 
     // Send segment info to client
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(localSegSize, shmUnit->GetOffset() + metadataSize,
-                                                                  localSegAddress, *rsp.mutable_remote_host_segment(),
-                                                                  devId));
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(
+        localSegSize, shmUnit->GetOffset() + metadataSize, localSegAddress, *rsp.mutable_remote_host_segment(), devId));
 
     // Send offset info to client
     auto *dataInfoPb = rsp.mutable_data_info();
@@ -542,7 +551,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                              "");
             rsp.set_data_source(datasystem::DataTransferSource::DATA_DELAY_TRANSFER);
         }
-        
+
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
         if (!IsFastTransportEnabled() || !blocking) {
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
@@ -627,6 +636,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
     std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
+    LOG(INFO) << "BatchGetObjectRemote request (objectKey, reqeustId, readOffset, readSize): "
+              << VectorToString(req.requests());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     auto *signleReq = req.mutable_requests(0);
     *(signleReq->mutable_urma_instance_id()) = req.urma_instance_id();
@@ -707,7 +718,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
-    LOG(INFO) << FormatString("pull success");
+    VLOG(1) << FormatString("pull success");
     point.Record();
     return Status::OK();
 }

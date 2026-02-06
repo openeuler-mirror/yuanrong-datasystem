@@ -191,7 +191,8 @@ Status MasterWorkerOCServiceImpl::ClearData(const ClearDataReqPb &req, ClearData
 Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << "Processing DeleteNotification request, objectKeys: " << VectorToString(req.object_keys());
+    LOG(INFO) << "Processing DeleteNotification request with async:" << req.is_async()
+              << ", objectKeys: " << VectorToString(req.object_keys());
     if (req.is_async()) {
         auto traceID = Trace::Instance().GetTraceID();
         ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID] {
@@ -207,7 +208,7 @@ Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &re
                                          "woker DeleteCopyNotification failed");
     }
     INJECT_POINT("MasterWorkerOCServiceImpl.DeleteNotification.retry");
-    LOG(INFO) << "DeleteNotification done";
+    VLOG(1) << "DeleteNotification done";
     return Status::OK();
 }
 

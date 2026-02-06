@@ -718,7 +718,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
             oss << " {" << id.first << ": {" << id.second.first << ": " << id.second.second << "}}";
             (void)ocMetadataManager_->RemoveMetaLocation(id.first, address);
         }
-        LOG(INFO) << FormatString("Start to remove meta location for objects[%s]", oss.str());
+        VLOG(1) << FormatString("Start to remove meta location for objects[%s]", oss.str());
         replicas2Obj.erase(address);
     }
     return lastErr;

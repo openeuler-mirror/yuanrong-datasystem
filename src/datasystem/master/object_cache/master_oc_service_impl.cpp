@@ -157,7 +157,6 @@ Status MasterOCServiceImpl::CreateMultiMeta(const CreateMultiMetaReqPb &req, Cre
     if (status.IsError()) {
         LOG(ERROR) << FormatString("CreateMultiMeta objects failed with error: %s", status.ToString());
     } else {
-        LOG(INFO) << "CreateMultiMeta finished";
         VLOG(1) << FormatString("Master %s CreateMultiMeta rsp: %s", GetLocalAddr().ToString(),
                                 LogHelper::IgnoreSensitive(rsp));
     }

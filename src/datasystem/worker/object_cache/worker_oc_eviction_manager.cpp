@@ -128,7 +128,7 @@ void WorkerOcEvictionManager::Add(const std::string &objectKey)
 
 void WorkerOcEvictionManager::Erase(const std::string &objectKey)
 {
-    LOG(INFO) << FormatString("[ObjectKey %s] EvictionManager erase start.", objectKey);
+    VLOG(DEBUG_LOG_LEVEL) << FormatString("[ObjectKey %s] EvictionManager erase start.", objectKey);
     // If the data does not exist, it means that the deletion was successful, so there is no need to return a Status.
     (void)memEvictionList_.Erase(objectKey);
 }
