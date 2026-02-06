@@ -648,3 +648,14 @@ class TestKVClientMethods(unittest.TestCase):
         self.assertEqual(failed_key, [])
         time.sleep(2)
         self.assertEqual(client1.exist([key1, key2]), [True, False])
+
+    def test_health_check(self):
+        """
+        Feature: check health status of the datasystem worker.
+        """
+        Context.set_trace_id("test_health_check")
+        
+        client = KVClient(self.host, self.port)
+        self.assertFalse(client.health_check().is_ok())
+        client.init()
+        self.assertTrue(client.health_check().is_ok())

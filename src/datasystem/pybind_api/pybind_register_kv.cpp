@@ -524,7 +524,14 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
             std::vector<std::string> failedKeys;
             Status rc = client.Expire(keys, ttlSecond, failedKeys);
             return std::make_pair(rc, std::move(failedKeys));
-        });
+        })
+        .def("HealthCheck",
+             [](ObjectClientImpl &client) {
+                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 ServerState state;
+                 Status healthState = client.HealthCheck(state);
+                 return healthState;
+             });
 });
 
 PybindDefineRegisterer g_pybind_define_f_ReadParam("ReadParam", PRIORITY_LOW, [](const py::module *m) {
