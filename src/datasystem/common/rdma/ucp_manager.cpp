@@ -53,7 +53,6 @@ UcpManager::UcpManager() : localSegmentMap_(std::make_unique<UcpSegmentMap>()), 
 
 UcpManager::~UcpManager()
 {
-    Stop();
     VLOG(RPC_LOG_LEVEL) << "UcpManager::~UcpManager()";
     workerPool_.reset();
     localSegmentMap_.reset();
@@ -72,8 +71,6 @@ Status UcpManager::Init()
     }
     RETURN_IF_NOT_OK(UcpCreateContext());
     RETURN_IF_NOT_OK(UcpCreateWorkerPool());
-    serverStop_ = false;
-    serverEventThread_ = std::make_unique<std::thread>(&UcpManager::ServerEventHandleThreadMain, this);
     return Status::OK();
 }
 
@@ -202,6 +199,7 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
                                  bool blocking, std::vector<uint64_t> &keys)
 {
     // Note that the returned keys only contain the new key(s).
+    LOG(INFO) << "UcpManager::UcpPutPayload()";
     keys.clear();
     const std::string &remoteWorkerAddr = ucpInfo.remote_worker_addr();
     const uint64_t &remoteBuf = ucpInfo.remote_buf();
@@ -216,6 +214,8 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
         const uint64_t key = requestId_.fetch_add(1);
         const uint64_t src = localObjectAddress + metaDataSize + readOffset + writtenSize;
         const uint64_t dst = remoteBuf + readOffset + writtenSize;
+        std::shared_ptr<Event> event;
+        RETURN_IF_NOT_OK(CreateEvent(key, event));
         Status status = workerPool_->Write(rkey, dst, remoteWorkerAddr, remoteIpAddr, src, writeSize, key);
         if (!status.IsOk()) {
             std::string detailed_msg = FormatString("Failed to ucp write object with key = %zu. Underlying error: %s",
@@ -226,9 +226,6 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
 
         remainSize -= writeSize;
         writtenSize += writeSize;
-
-        std::shared_ptr<Event> event;
-        RETURN_IF_NOT_OK(CreateEvent(key, event));
     }
     point.Record();
     if (blocking) {
@@ -266,6 +263,8 @@ Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDat
         while (remainSize > 0) {
             const uint64_t writeSize = std::min(remainSize, MAX_MSG_SIZE);
             const uint64_t key = requestId_.fetch_add(1);
+            std::shared_ptr<Event> event;
+            RETURN_IF_NOT_OK(CreateEvent(key, event));
             Status status =
                 workerPool_->Write(ucpInfo.rkey(), dstBase + writtenSize, remoteWorkerAddr, remoteIpAddr,
                                    srcBase + writtenSize, writeSize, key);
@@ -276,8 +275,6 @@ Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDat
                 RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, detailed_msg);
             }
             eventKeys.emplace_back(key);
-            std::shared_ptr<Event> event;
-            RETURN_IF_NOT_OK(CreateEvent(key, event));
 
             remainSize -= writeSize;
             writtenSize += writeSize;
@@ -311,17 +308,27 @@ Status UcpManager::CheckUcpConnectionStable(const std::string &hostAddress, cons
     }
     return Status::OK();
 }
-
 void UcpManager::InsertSuccessfulEvent(uint64_t requestId)
 {
-    std::lock_guard<std::mutex> lock(finishedRequestsMutex_);
-    finishedRequests_.insert(requestId);
+    std::shared_ptr<Event> event;
+    if (GetEvent(requestId, event).IsOk()) {
+        event->NotifyAll();
+        VLOG(1) << "[UcpEventHandler] Notifying successful request id: " << requestId;
+    } else {
+        LOG(ERROR) << "UcpManager::InsertSuccessfulEvent " << requestId << " not found in event map";
+    }
 }
 
 void UcpManager::InsertFailedEvent(uint64_t requestId)
 {
-    std::lock_guard<std::mutex> lock(failedRequestsMutex_);
-    failedRequests_.insert(requestId);
+    std::shared_ptr<Event> event;
+    if (GetEvent(requestId, event).IsOk()) {
+        event->SetFailed();
+        event->NotifyAll();
+        VLOG(1) << "[UcpEventHandler] Notifying failed request id: " << requestId;
+    } else {
+        LOG(ERROR) << "UcpManager::InsertFailedEvent " << requestId << " not found in event map";
+    }
 }
 
 Status UcpManager::RemoveEndpoint(const HostPort &remoteAddress)
@@ -365,64 +372,6 @@ Status UcpManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     return Status::OK();
 }
 
-Status UcpManager::ServerEventHandleThreadMain()
-{
-    // Run this method until serverStop is called.
-    while (!serverStop_.load()) {
-        // notify threads waiting on any finishedRequests
-        CheckAndNotify();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return Status::OK();
-}
-
-Status UcpManager::Stop()
-{
-    serverStop_ = true;
-    if (serverEventThread_ && serverEventThread_->joinable()) {
-        LOG(INFO) << "Waiting for Event thread to exit";
-        serverEventThread_->join();
-        serverEventThread_.reset();
-    }
-    return Status::OK();
-}
-
-Status UcpManager::CheckAndNotify()
-{
-    // if no finished requests, no need to notify
-    if (finishedRequests_.empty()) {
-        return Status::OK();
-    }
-    std::unordered_set<uint64_t> requestsToProcess;
-    {
-        std::lock_guard<std::mutex> lock(finishedRequestsMutex_);
-        requestsToProcess.swap(finishedRequests_);
-    }
-    // Iterate through the finishedRequests_ set and notify request threads
-    for (auto requestId : requestsToProcess) {
-        std::shared_ptr<Event> event;
-        // Get the event for request Id
-        if (GetEvent(requestId, event).IsOk()) {
-            bool shouldSetFailed = false;
-            {
-                std::lock_guard<std::mutex> lock(failedRequestsMutex_);
-                shouldSetFailed = failedRequests_.count(requestId);
-                if (shouldSetFailed) {
-                    failedRequests_.erase(requestId);
-                }
-            }
-            if (shouldSetFailed) {
-                event->SetFailed();
-            }
-            // Notify everyone who are waiting on the event
-            event->NotifyAll();
-            // delete the event and
-            VLOG(1) << "[UcpEventHandler] Notifying the request id: " << requestId;
-        }
-    }
-    return Status::OK();
-}
-
 Status UcpManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
     std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
@@ -437,6 +386,7 @@ Status UcpManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 
 Status UcpManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
+    LOG(INFO) << "UcpManager::CreateEvent()";
     std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
     EventMap::Accessor accessor;
     auto res = eventMap_->Insert(accessor, requestId);
