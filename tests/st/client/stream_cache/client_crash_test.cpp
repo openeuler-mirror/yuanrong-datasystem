@@ -610,6 +610,9 @@ TEST_F(ClientCrashTest, DISABLED_TestProducerCrash4)
 
 TEST_F(ClientCrashTest, TestProducerCrash5)
 {
+    int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    
     HostPort workerAddress1;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddress1));
     HostPort workerAddress2;

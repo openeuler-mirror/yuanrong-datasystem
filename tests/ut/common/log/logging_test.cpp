@@ -521,6 +521,7 @@ TEST_F(LoggingTest, TestWriteLogWhenChangeEnv)
 TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
 {
     int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     FLAGS_logbufsecs = 0;
     (void)setenv("DATASYSTEM_MIN_LOG_LEVEL", "1", replace);
     Logging::GetInstance()->Start("ds_llt", true);
@@ -620,6 +621,8 @@ TEST_F(LoggingTest, TestAlsoLogToStderr)
 
 TEST_F(LoggingTest, TestStderrThreshold)
 {
+    int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     testing::internal::CaptureStderr();
 
     FLAGS_stderrthreshold = 1;  // LogSeverity::WARNING = 1
