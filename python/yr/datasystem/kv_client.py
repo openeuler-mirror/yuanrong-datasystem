@@ -672,12 +672,18 @@ class KVClient:
             raise RuntimeError(status.to_string())
         return failed_keys
 
-    def health_check(self) -> bool:
+    def health_check(self) -> "Status":
         """
         Check the health status of the worker service.
 
         Returns:
-            bool: True if the worker is healthy; False otherwise.
+            Status: health status of the datasystem worker.
+        
+        Examples:
+            >>> from yr.datasystem.kv_client import KVClient
+            >>> client = KVClient('127.0.0.1', 18482)
+            >>> client.init()
+            >>> client.health_check().is_ok()
+            True
         """
-        status = self._client.HealthCheck()
-        return status.is_ok()
+        return self._client.HealthCheck()
