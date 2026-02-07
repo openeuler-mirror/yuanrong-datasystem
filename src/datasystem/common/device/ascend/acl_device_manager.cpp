@@ -530,7 +530,7 @@ Status AclDeviceManager::aclrtQueryDeviceStatus(uint32_t deviceId)
             K_INVALID,
             FormatString(
                 "Got Error/ABNORMAL device, deviceId: %d. Detail: acl api failed with error code %d, deviceStatus: %d",
-                deviceId, aclRet, deviceStatus));
+                static_cast<int32_t>(deviceId), aclRet, deviceStatus));
     }
     return Status::OK();
 }
