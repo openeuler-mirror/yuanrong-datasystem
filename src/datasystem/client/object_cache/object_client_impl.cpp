@@ -1110,11 +1110,18 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     point.Record();
     // If failed with create, need to rollback.
     auto version = 0u;
+    // This variable is the output from MultiCreate, indicates whether shared memory was actually used
     auto useShmTransfer = false;
-    if (workerApi_[LOCAL_WORKER]->shmEnabled_ && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_) {
+    // Pre-condition check for whether we should attempt shared memory
+    bool canUseShm = workerApi_[LOCAL_WORKER]->shmEnabled_ && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_;
+
+    if (canUseShm || !skipCheckExistence) {
+        // Call MultiCreate if: 1) using shared memory, OR 2) need to check existence
+        // When shmEnabled_ is false but we need to check existence, MultiCreate will use RPC to check
         RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
                                                                exists, useShmTransfer));
     } else {
+        // Only skip existence check when explicitly requested AND not using shared memory
         exists.resize(objectKeyList.size(), false);
     }
     if (!useShmTransfer) {
