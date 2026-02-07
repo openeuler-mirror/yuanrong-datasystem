@@ -1452,7 +1452,7 @@ bool OCMetadataManager::IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std:
     INJECT_POINT("OCMetadataManager.IsPrimaryCopyWithCopy", []() { return false; });
     bool allCopyIsExitingNode = true;
     for (const auto &loc : meta.locations) {
-        if (loc.first != address && !etcdCM_->IsPreLeaving(loc.first)) {
+        if (loc.first != address && loc.second == AckState::ACK && !etcdCM_->IsPreLeaving(loc.first)) {
             allCopyIsExitingNode = false;
             break;
         }
@@ -4517,6 +4517,13 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
             continue;
         }
 
+        if (accessor->second.meta.version() == version
+            && accessor->second.meta.primary_address() == req.new_primary_addr()) {
+                LOG(INFO) << FormatString(
+                    "[ObjectKey %s] The object has been changed to this primary, set success directly", objectKey);
+                rsp.add_success_ids(objectKey);
+                continue;
+            }
         if (accessor->second.meta.version() != version
             || accessor->second.meta.primary_address() != req.origin_primary_addr()) {
             LOG(WARNING) << FormatString(

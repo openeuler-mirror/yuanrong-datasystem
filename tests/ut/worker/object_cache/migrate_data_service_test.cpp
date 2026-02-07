@@ -219,9 +219,10 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
     CreateObjects("Exist_", 1, existCount, newerVersion, true, false, req);
 
     LockedEntryMap lockedEntries;
+    LockedEntryMap needModifyPrimary;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
-    impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);
+    impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
     ASSERT_EQ(lockedEntries.size(), newCreateCount + existCount);
     ASSERT_EQ(successIds.size(), expireCount);
     ASSERT_EQ(failedIds.size(), lockFailCount);
@@ -245,9 +246,10 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjectsFailed)
     CreateObjects("Exist_", 1, existCount, newerVersion, true, false, req);
 
     LockedEntryMap lockedEntries;
+    LockedEntryMap needModifyPrimary;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
-    impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds);
+    impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
 }
 
 TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)

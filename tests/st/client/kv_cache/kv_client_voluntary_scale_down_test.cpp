@@ -751,6 +751,40 @@ TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryWorkersOneByOne)
     }
 }
 
+TEST_F(KVClientVoluntaryScaleDownTest, RemoteGetSuccessWhenScaleDown)
+{
+    int objectCnt = 50;
+    int objectCnt1 = 10;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 3, "CreateMultiCopyMeta.skip", "60*return()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 3, "CreateCopyMeta.skip", "60*return()"));
+    std::vector<std::string> objectKey(objectCnt);
+    std::vector<std::string> objectKey1(objectCnt1);
+    std::vector<std::string> data(objectCnt);
+    std::vector<std::string> data1(objectCnt1);
+    SetNormalObject(client0_, 0, objectKey, data, WriteMode::NONE_L2_CACHE);
+    SetUuidObject(client0_, 0, objectKey1, data1, WriteMode::NONE_L2_CACHE);
+    for (int i = 0; i < objectCnt; ++i) {
+        std::string getValue;
+        DS_ASSERT_OK(client3_->Get(objectKey[i], getValue));
+    }
+    for (int i = 0; i < objectCnt1; ++i) {
+        std::string getValue;
+        DS_ASSERT_OK(client3_->Get(objectKey1[i], getValue));
+    }
+    VoluntaryScaleDownInject(0);
+    sleep(2); // wait 2s for voluntary worker 1
+    for (int i = 0; i < objectCnt; ++i) {
+        std::string getValue;
+        auto rc = client2_->Get(objectKey[i], getValue);
+        DS_ASSERT_OK(rc);
+    }
+    for (int i = 0; i < objectCnt1; ++i) {
+        std::string getValue;
+        auto rc = client2_->Get(objectKey1[i], getValue);
+        DS_ASSERT_OK(rc);
+    }
+}
+
 TEST_F(KVClientVoluntaryScaleDownTest, DISABLED_MasterAsyncTaskRecover)
 {
     int objectCnt = 15;
@@ -1437,6 +1471,49 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL2_VoluntaryScaleWorkerScale
     t2.join();
     sleep(20);                          // wait for the task retry for 20 seconds
     AssertAllNodesJoinIntoHashRing(1);  // The number of worker is 2
+}
+
+TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL2_VoluntaryScaleDownScaleupGet)
+{
+    StartWorkerAndWaitReady({ 0, 1, 2 });
+    InitTestKVClient(0, client0_, 2000);  // Init client0 to worker 0 with 2000ms timeout
+    InitTestKVClient(1, client1_, 2000);  // Init client1 to worker 1 with 2000ms timeout
+    InitTestKVClient(2, client2_, 2000);  // Init client2 to worker 2 with 2000ms timeout
+    std::string value = GenRandomString(140);
+    int keyNum = 2000;
+    SetParam param{.writeMode = WriteMode::NONE_L2_CACHE};
+    std::list<std::string> listStr;
+    std::list<std::string>::iterator it;
+    std::string valueGet;
+    // w1 set
+    for (int i = 0; i < keyNum; i++) {
+        auto key = client1_->Set(value, param);
+        listStr.push_back(key);
+    }
+    // w1 scale down
+    VoluntaryScaleDownInject(1);
+    // w0 get
+    for (it = listStr.begin(); it != listStr.end(); it++) {
+        DS_ASSERT_OK(client0_->Get(*it, valueGet));
+        ASSERT_EQ(value, valueGet);
+    }
+    // w2 scale down
+    VoluntaryScaleDownInject(2);
+    // w0 get
+    for (it = listStr.begin(); it != listStr.end(); it++) {
+        DS_ASSERT_OK(client0_->Get(*it, valueGet));
+        ASSERT_EQ(value, valueGet);
+    }
+    // scale up w3
+    StartWorkerAndWaitReady({ 3 });
+    sleep(2);
+    InitTestKVClient(3, client3_, 2000);
+    // w3 get
+    for (it = listStr.begin(); it != listStr.end(); it++) {
+        LOG(INFO) << "Start validate w3 get";
+        DS_ASSERT_OK(client3_->Get(*it, valueGet));
+        ASSERT_EQ(value, valueGet);
+    }
 }
 
 TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_VoluntaryScaleDownLocationNotFound)
