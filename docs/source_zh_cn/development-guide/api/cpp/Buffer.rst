@@ -59,7 +59,7 @@ Buffer
 
         获取键值对 ``Buffer`` 的大小。
 
-        返回： 
+        返回：
             ``Buffer`` 的数据大小（以字节为单位）。
 
     .. cpp:function:: Status WLatch(uint64_t timeoutSec = 60)
@@ -140,12 +140,11 @@ Buffer
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示操作成功，否则返回其他错误码。
 
-    .. cpp:function:: RemoteH2DHostInfo *GetRemoteHostInfo()
+    .. cpp:function:: RemoteH2DHostInfoPb *GetRemoteHostInfo()
 
         获取远程主机信息。
 
         返回：
             用于 RemoteH2D 目的的远程主机信息指针。
 
-        
- 
+

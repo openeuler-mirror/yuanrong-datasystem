@@ -859,7 +859,7 @@ private:
         bool isSeal, uint32_t version, const ShmKey &shmId = {},
         const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr,
-        std::shared_ptr<RemoteH2DHostInfo> remoteHostInfo = nullptr);
+        std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr);
 
     /**
      * @brief Make the buffer invalid.

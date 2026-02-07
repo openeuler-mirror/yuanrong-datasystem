@@ -145,7 +145,7 @@ public:
      * @param[in] remoteH2DHostInfo The remote H2D host info, containing segment info, roor info and data info.
      */
     void SetRemoteHostInfo(const std::string &clientCommId,
-                           const std::shared_ptr<RemoteH2DHostInfo> &remoteH2DHostInfo) override;
+                           const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo) override;
 
     /**
      * @brief Get the remote host info.

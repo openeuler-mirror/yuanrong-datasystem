@@ -54,9 +54,7 @@ message GetObjectRemoteRspPb {
   uint32 life_state = 4;
   DataTransferSource data_source = 5;
   ErrorInfoPb error = 6;
-  RemoteHostSegmentPb remote_host_segment = 7;
-  RemoteH2DRootInfoPb root_info = 8;
-  RemoteH2DDataInfoPb data_info = 9;
+  RemoteH2DHostInfoPb host_info = 7;
 }
 
 message BatchGetObjectRemoteReqPb {
@@ -72,6 +70,7 @@ message BatchGetObjectRemoteReqPb {
 
 message BatchGetObjectRemoteRspPb {
   repeated GetObjectRemoteRspPb responses = 1;
+  RemoteH2DRootInfoPb root_info = 2;
 }
 
 message CheckEtcdStateReqPb {

@@ -27,6 +27,7 @@
 
 #include <re2/re2.h>
 
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/format.h"
@@ -74,7 +75,7 @@ void RemoteH2DManager::SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t d
 
 bool RemoteH2DManager::IsRemoteH2DEnabled()
 {
-    if (!FLAGS_remote_h2d_device_ids.empty()) {
+    if (!enableRemoteH2D_ && !FLAGS_remote_h2d_device_ids.empty()) {
         enableRemoteH2D_ = true;
     }
     return enableRemoteH2D_;
@@ -83,6 +84,8 @@ bool RemoteH2DManager::IsRemoteH2DEnabled()
 Status RemoteH2DManager::SetDeviceIdx(std::optional<int32_t> specifiedDevId)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+
+    PerfPoint point(PerfKey::P2P_SET_DEV_IDX);
     int32_t devId;
 
     // Assume one process works with only one device index.
@@ -160,95 +163,126 @@ Status RemoteH2DManager::GetWorkerDeviceIds(std::vector<int32_t> *devIds)
     return Status::OK();
 }
 
-Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo, int32_t devId)
+Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(SetDeviceIdx(devId));
-    {
-        std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
-        CommunicatorMap::ConstAccessor constAccessor;
-        if (!communicatorMap_->Find(constAccessor, key)) {
-            CommunicatorMap::Accessor accessor;
-            if (communicatorMap_->Insert(accessor, key)) {
-                LOG(INFO) << "RemoteH2DManager::P2PGetRootInfo get new root info for client comm id " << key;
-                bool needRollback = true;
-                Raii eraseRaii([this, &needRollback, &accessor]() {
-                    if (needRollback) {
-                        communicatorMap_->BlockingErase(accessor);
-                    }
-                });
-                auto p2pComm = std::make_shared<RemoteH2DContext>();
-                auto &rootInfo = p2pComm->rootInfo;
-                RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->DSP2PGetRootInfo(&rootInfo));
-                accessor.entry->data = p2pComm;
-                needRollback = false;
-            }
-            auto &rootInfo = accessor.entry->data->rootInfo;
-            p2pRootInfo->set_internal(std::string(std::begin(rootInfo.internal), std::end(rootInfo.internal)));
-        } else {
-            auto &rootInfo = constAccessor.entry->data->rootInfo;
-            p2pRootInfo->set_internal(std::string(std::begin(rootInfo.internal), std::end(rootInfo.internal)));
+
+    PerfPoint point(PerfKey::P2P_GET_ROOT_INFO);
+    std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
+    CommunicatorMap::ConstAccessor constAccessor;
+    if (!communicatorMap_->Find(constAccessor, key)) {
+        CommunicatorMap::Accessor accessor;
+        if (communicatorMap_->Insert(accessor, key)) {
+            LOG(INFO) << "RemoteH2DManager::P2PGetRootInfo get new root info for client comm id " << key;
+            bool needRollback = true;
+            Raii eraseRaii([this, &needRollback, &accessor]() {
+                if (needRollback) {
+                    communicatorMap_->BlockingErase(accessor);
+                }
+            });
+            auto p2pComm = std::make_shared<RemoteH2DContext>();
+            auto &rootInfo = p2pComm->rootInfo;
+            RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->DSP2PGetRootInfo(&rootInfo));
+            accessor.entry->data = p2pComm;
+            needRollback = false;
         }
+        auto &rootInfo = accessor.entry->data->rootInfo;
+        p2pRootInfo->set_internal(std::string(std::begin(rootInfo.internal), std::end(rootInfo.internal)));
+    } else {
+        auto &rootInfo = constAccessor.entry->data->rootInfo;
+        p2pRootInfo->set_internal(std::string(std::begin(rootInfo.internal), std::end(rootInfo.internal)));
     }
     return Status::OK();
 }
 
-Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo,
-                                             P2pKind kind, std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId)
+Status RemoteH2DManager::HandleConnection(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
+                                          std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId)
 {
-    RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(SetDeviceIdx(devId));
-    std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
-
-    PerfPoint point(PerfKey::P2P_COMM_INIT_ROOT);
     // If communicator already created and initialized, then do not need to initialize again.
     // Otherwise if the initialization fails, will remove the communicator from list.
     CommunicatorMap::Accessor accessor;
-    if (!communicatorMap_->Find(accessor, key)) {
-        if (communicatorMap_->Insert(accessor, key)) {
-            accessor.entry->data = std::make_shared<RemoteH2DContext>();
-        }
+    if (communicatorMap_->Insert(accessor, key)) {
+        accessor.entry->data = std::make_shared<RemoteH2DContext>();
     }
     p2pComm = accessor.entry->data;
-    if (p2pComm->initialized == RemoteH2DContext::UNINITIALIZED) {
-        bool needRollback = true;
-        Raii eraseRaii([this, &needRollback, &accessor]() {
-            if (needRollback) {
+    RETURN_OK_IF_TRUE(p2pComm->initialized != RemoteH2DContext::InitState::UNINITIALIZED);
+
+    bool needRollback = true;
+    Raii eraseRaii([this, &needRollback, &key, &p2pComm]() {
+        if (needRollback) {
+            CommunicatorMap::Accessor accessor;
+            if (communicatorMap_->Find(accessor, key)) {
                 communicatorMap_->BlockingErase(accessor);
             }
-        });
-        LOG(INFO) << "Initialize new p2p communicator";
-        auto &rootInfo = p2pComm->rootInfo;
-        const std::string &rooInfoStr = p2pRootInfo.internal();
-        auto ret = memcpy_s(static_cast<void *>(rootInfo.internal), HCCL_ROOT_INFO_BYTES,
-                            static_cast<const void *>(rooInfoStr.c_str()), HCCL_ROOT_INFO_BYTES);
-        CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
-                                 FormatString("Copy root info failed, the memcpy_s return: %d", ret));
-        // Always use ROCE for RDMA, even for data transfer between 2 NPUs on the same server.
-        p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZING;
-        p2pComm->waitPost.Clear();
-        accessor.Release();
-        P2pLink link = P2P_LINK_ROCE;
-        Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&rootInfo, kind, link, &p2pComm->p2pComm);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
-        p2pComm->stream = std::make_shared<aclrtStream>();
-        RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get()));
-        if (devId == -1) {
-            try {
-                p2pComm->devId = stoi(FLAGS_remote_h2d_device_ids);
-            } catch (const std::invalid_argument& e) {
-                RETURN_STATUS(StatusCode::K_INVALID, "Invalid RemoteH2D dev ids set: " + FLAGS_remote_h2d_device_ids);
-            } catch (const std::out_of_range &e) {
-                RETURN_STATUS(StatusCode::K_INVALID, "RemoteH2D dev id out of range: " + FLAGS_remote_h2d_device_ids);
-            }
-        } else {
-            p2pComm->devId = devId;
+            p2pComm = nullptr;
         }
-        communicatorMap_->Find(accessor, key);
-        p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZED;
-        p2pComm->waitPost.Set();
-        needRollback = false;
+    });
+    LOG(INFO) << "Initialize new p2p communicator";
+    auto &rootInfo = p2pComm->rootInfo;
+    const std::string &rootInfoStr = p2pRootInfo.internal();
+    auto ret = memcpy_s(static_cast<void *>(rootInfo.internal), HCCL_ROOT_INFO_BYTES,
+                        static_cast<const void *>(rootInfoStr.c_str()), HCCL_ROOT_INFO_BYTES);
+    CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
+                             FormatString("Copy root info failed, the memcpy_s return: %d", ret));
+    // Always use ROCE for RDMA, even for data transfer between 2 NPUs on the same server.
+    p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZING;
+    p2pComm->waitPost.Clear();
+    accessor.Release();
+    P2pLink link = P2P_LINK_ROCE;
+    Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&rootInfo, kind, link, &p2pComm->p2pComm);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
+    p2pComm->stream = std::make_shared<aclrtStream>();
+    RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get()));
+    if (devId == -1) {
+        try {
+            p2pComm->devId = stoi(FLAGS_remote_h2d_device_ids);
+        } catch (const std::invalid_argument& e) {
+            RETURN_STATUS(StatusCode::K_INVALID, "Invalid RemoteH2D dev ids set: " + FLAGS_remote_h2d_device_ids);
+        } catch (const std::out_of_range &e) {
+            RETURN_STATUS(StatusCode::K_INVALID, "RemoteH2D dev id out of range: " + FLAGS_remote_h2d_device_ids);
+        }
+    } else {
+        p2pComm->devId = devId;
     }
+    communicatorMap_->Find(accessor, key);
+    p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZED;
+    p2pComm->waitPost.Set();
+    needRollback = false;
+    return Status::OK();
+}
+
+Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo,
+                                             P2pKind kind, std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId,
+                                             std::shared_ptr<ThreadPool> threadPool)
+{
+    RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+
+    PerfPoint point(PerfKey::P2P_COMM_INIT_ROOT);
+
+    std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
+    CommunicatorMap::ConstAccessor constAccessor;
+    if (communicatorMap_->Find(constAccessor, key)) {
+        // Fast path: already initialized
+        p2pComm = constAccessor.entry->data;
+        RETURN_OK_IF_TRUE(p2pComm->initialized != RemoteH2DContext::InitState::UNINITIALIZED);
+    }
+
+    if (threadPool) {
+        p2pComm = nullptr;
+        auto traceId = Trace::Instance().GetTraceID();
+        l.unlock();
+        threadPool->Execute([this, traceId, key, p2pRootInfo, kind, devId]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            LOG_IF_ERROR(SetDeviceIdx(devId), "SetDeviceId failed.");
+            std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
+            std::shared_ptr<RemoteH2DContext> p2pComm;
+            LOG_IF_ERROR(HandleConnection(key, p2pRootInfo, kind, p2pComm, devId),
+                         "Create p2p communicator connection failed in thread");
+        });
+    } else {
+        RETURN_IF_NOT_OK(HandleConnection(key, p2pRootInfo, kind, p2pComm, devId));
+    }
+
     // Note: 2 threads cannot launch ops on the same comm at the same time, so client side is currently not thread safe.
     // multiple client processes should be fine, as they use different communicator connections.
     // Mutex is added before launching operation.
@@ -275,7 +309,7 @@ Status RemoteH2DManager::RegisterHostMemory(void *data, uint64_t dataSize)
             uint64_t castedData = reinterpret_cast<uint64_t>(data);
             std::shared_lock<std::shared_timed_mutex> l(segmentMutex_);
             HostSegmentMap::Accessor accessor;
-            
+
             // Insert devId mapping if not yet inserted
             if (!hostSegmentMap_->Find(accessor, devId)) {
                 RETURN_OK_IF_TRUE(!hostSegmentMap_->Insert(accessor, devId));
@@ -315,6 +349,8 @@ Status RemoteH2DManager::RegisterHostMemory(void *data, uint64_t dataSize)
 Status RemoteH2DManager::FillSegmentInfo(uint64_t segLen, uint64_t segDataOffset, uint64_t key,
                                          RemoteHostSegmentPb &segmentPb, int32_t devId)
 {
+    PerfPoint point(PerfKey::P2P_FILL_SEG_INFO);
+
     HostSegmentMap::Accessor accessor;
     if (hostSegmentMap_->Find(accessor, devId)) {
         auto &segInfo = accessor.entry->data[key]->segmentInfo;
@@ -325,6 +361,27 @@ Status RemoteH2DManager::FillSegmentInfo(uint64_t segLen, uint64_t segDataOffset
         return Status::OK();
     }
     return Status(K_NOT_FOUND, FormatString("Cannot find segment for devId %d at address %zu", devId, key));
+}
+
+Status RemoteH2DManager::FillDataInfo(uint64_t *dataPtr, RemoteH2DDataInfoPb &dataInfoPb)
+{
+    PerfPoint point(PerfKey::P2P_FILL_DATA_INFO);
+
+    uint64_t sz = *dataPtr;
+
+    // Get the first offset
+    dataPtr++;
+    uint64_t firstOffset = *dataPtr;
+    dataInfoPb.set_offset(firstOffset);
+
+    // Calculate sizes of data
+    for (uint64_t i = 0; i < sz; i++) {
+        uint64_t offsetX = *dataPtr;
+        dataPtr++;
+        uint64_t offsetY = *dataPtr;
+        dataInfoPb.add_sizes(offsetY - offsetX);
+    }
+    return Status::OK();
 }
 
 Status RemoteH2DManager::Init()
@@ -360,7 +417,6 @@ Status RemoteH2DManager::Uninit()
 Status RemoteH2DManager::ImportHostSegment(const RemoteHostSegmentPb &seg)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(SetDeviceIdx());
 
     PerfPoint point(PerfKey::P2P_IMPORT_HOST_SEG);
 
@@ -394,7 +450,6 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
                                       std::shared_ptr<RemoteH2DContext> p2pComm)
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
-    RETURN_IF_NOT_OK(SetDeviceIdx());
 
     PerfPoint point(PerfKey::P2P_SCATTER_BATCH);
 
