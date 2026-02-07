@@ -35,7 +35,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
         ${TBB_LIBRARY}
         protobuf::libprotobuf
-        agc
+        token
         ak_sk_signature
         common_buffer
         common_event_loop

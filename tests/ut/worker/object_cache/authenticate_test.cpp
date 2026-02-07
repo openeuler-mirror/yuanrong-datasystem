@@ -57,7 +57,7 @@ public:
     void SetUp() override
     {
         FLAGS_v = 1;
-        FLAGS_iam_kit = "agc_oauth";
+        FLAGS_iam_kit = "token_oauth";
         ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
         datasystem::inject::Set("CurlHttpClient.Send.ReleaseCurlHandle", "100*call");
     }

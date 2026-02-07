@@ -12,7 +12,7 @@
 1      worker  /path/worker/worker.INFO.log             worker运行日志
 2              /path/worker/access.log                  访问worker POSIX接口的日志
 3              /path/worker/resource.log                Worker资源使用日志 默认关闭，通过log_monitor开关控制是否开启。
-4              /path/worker/requestout.log              访问l2cache、ETCD、AGC IAM接口日志
+4              /path/worker/requestout.log              访问l2cache、ETCD、Token Service接口日志
 5              /path/worker/sc_metrics.log              流缓存运行数据 默认关闭，通过log_monitor开关控制是否开启。
 6              /path/worker/container.log               容器运行日志，管理和监控worker进程的生命周期
 -----------------------------------------------------------------------------------------------------------------------------
@@ -46,8 +46,8 @@ pid:tid                 11           该日志所属的进程ID和线程ID。进
 traceid                 36           请求的traceid。
 cluster_name            128          输出AZ名称，最大长度为128，超出长度则截断。示例：AZ1。
 Message                 1024         自定义消息内容
-status_code             5            该请求的状态，不同消息类型状态值不一样。SDK/Worker 访问日志，0表示成功，其他表示失败。l2cache/AGC 访问日志：http请求，200表示成功，其他表示失败。
-action                  64           表示该请求所访问的接口名称。约定前缀：SDK接口：DS_STATE_CLINET、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX、DS_STREAM_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path}，示例：POST /v1/agc/token
+status_code             5            该请求的状态，不同消息类型状态值不一样。SDK/Worker 访问日志，0表示成功，其他表示失败。l2cache/Token Service 访问日志：http请求，200表示成功，其他表示失败。
+action                  64           表示该请求所访问的接口名称。约定前缀：SDK接口：DS_STATE_CLINET、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX、DS_STREAM_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path}，示例：POST /v1/auth/token
 cost                    16           记录该请求所花费的时间。单位：us
 datasize                16           记录Publish请求接收到的Payload大小。
 Request param           2560         记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。
@@ -147,7 +147,7 @@ timeout         32          接口超时时间。取值：int32
 -----------------------------------------------------------------------------------------------------------------------------
 外部组件        请求类型    关键请求参数    描述
 -----------------------------------------------------------------------------------------------------------------------------
-AGC IAM         HTTP        HttpRequest    将HttpReques中的字段均打印出来。
+Token Service   HTTP        HttpRequest    将HttpReques中的字段均打印出来。
 l2cache         HTTP        HttpRequest    将HttpReques中的字段均打印出来。
 ETCD            GRPC        key            将Key字段获取并打印。
 -----------------------------------------------------------------------------------------------------------------------------

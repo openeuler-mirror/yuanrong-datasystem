@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: agc cloudstorage access token request
+ * Description: Client access token request
  */
-#include "datasystem/common/agc/client_access_token.h"
+#include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
