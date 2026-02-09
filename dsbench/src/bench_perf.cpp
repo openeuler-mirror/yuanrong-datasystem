@@ -35,7 +35,9 @@ PerfManager::PerfManager(const ArgsBase &args)
     : supportPerf_(true),
       action_(args.action),
       perfWorkersStr_(args.perfWorkers.empty() ? args.workerAddress : args.perfWorkers),
-      perfPath_(args.perfPath)
+      perfPath_(args.perfPath),
+      accessKey_(args.accessKey),
+      secretKey_(args.secretKey)
 {
 }
 
@@ -54,6 +56,8 @@ Status PerfManager::Init()
         }
 
         ConnectOptions connectOptions = { .host = hostPort.Host(), .port = hostPort.Port() };
+        connectOptions.accessKey = accessKey_;
+        connectOptions.secretKey = secretKey_;
         auto client = std::make_unique<PerfClient>(connectOptions);
         rc = client->Init();
         if (rc.IsError()) {
