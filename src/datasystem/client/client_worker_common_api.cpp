@@ -109,9 +109,11 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
 {
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
-        FormatString("The connect timeout should be greater than or equal to %d milliseconds.", RPC_MINIMUM_TIMEOUT));
-    CHECK_FAIL_RETURN_STATUS(requestTimeoutMs >= 0, StatusCode::K_INVALID,
-                             FormatString("The req timeout should be greater than or equal to 0 milliseconds."));
+        FormatString("The connectTimeoutMs(%d) should be greater than or equal to %d milliseconds.", connectTimeoutMs,
+                     RPC_MINIMUM_TIMEOUT));
+    CHECK_FAIL_RETURN_STATUS(
+        requestTimeoutMs >= 0, StatusCode::K_INVALID,
+        FormatString("The requestTimeoutMs(%d) should be greater than or equal to 0 milliseconds.", requestTimeoutMs));
     requestTimeoutMs_ = requestTimeoutMs;
     connectTimeoutMs_ = connectTimeoutMs;
     recvClientFdState_.getClientFdTimeoutMs = connectTimeoutMs;
