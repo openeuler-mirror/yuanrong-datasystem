@@ -31,6 +31,7 @@
 #include "common/rdma/mimic_remote_server.h"
 #include "common/rdma/prepare_local_server.h"
 #include "datasystem/common/rdma/ucp_manager.h"
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 #define private public
 #include "datasystem/common/rdma/ucp_worker_pool.h"
 #undef private
@@ -54,6 +55,8 @@ protected:
 
     void SetUp() override
     {
+        bool dlopenInitResult = datasystem::ucp_dlopen_util::Init();
+        EXPECT_EQ(dlopenInitResult, true);
         ucpManager_ = &UcpManager::Instance();
         cUcpContext_ = std::make_unique<CreateUcpContext>();
         context_ = cUcpContext_->GetContext();

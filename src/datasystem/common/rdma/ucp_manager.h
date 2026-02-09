@@ -198,12 +198,6 @@ private:
     Status UcpCreateWorkerPool();
 
     /**
-     * @brief Continously running Event handler thread
-     * @return Status of the call.
-     */
-    Status ServerEventHandleThreadMain();
-
-    /**
      * @brief Register segment
      * @param[in] segAddress Starting address of the segment
      * @param[in] segSize Size of the segment
@@ -212,17 +206,6 @@ private:
      */
     Status GetOrRegisterSegment(const uint64_t &segAddress, const uint64_t &segSize,
                                 UcpSegmentMap::ConstAccessor &constAccessor);
-    /**
-     * @brief Stops the polling thread
-     * @return Status of the call.
-     */
-    Status Stop();
-
-    /**
-     * @brief Checks if waiting requests are completed and notifys them
-     * @return Status of the call.
-     */
-    Status CheckAndNotify();
 
     /**
      * @brief Gets event object of request id
@@ -247,9 +230,6 @@ private:
      */
     void DeleteEvent(uint64_t requestId);
 
-    // Polling thread
-    std::unique_ptr<std::thread> serverEventThread_{ nullptr };
-
     ucp_context_h ucpContext_ = nullptr;
     std::unique_ptr<UcpWorkerPool> workerPool_;
     std::atomic<uint64_t> requestId_{ 0 };
@@ -259,11 +239,6 @@ private:
     mutable std::shared_timed_mutex localMapMutex_;
     mutable std::shared_timed_mutex eventMapMutex_;
     std::unique_ptr<EventMap> eventMap_;
-    std::mutex finishedRequestsMutex_;
-    std::mutex failedRequestsMutex_;
-    std::unordered_set<uint64_t> finishedRequests_;
-    std::unordered_set<uint64_t> failedRequests_;
-    std::atomic<bool> serverStop_{ false };
     TbbInstanceMap instanceTable_;
     std::string uniqueInstanceId_;
 };

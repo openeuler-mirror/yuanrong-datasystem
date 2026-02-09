@@ -39,7 +39,6 @@ class UcpManagerTestFriend {
 public:
     static void Reset(UcpManager &manager)
     {
-        manager.Stop();
         manager.workerPool_.reset();
         manager.localSegmentMap_.reset();
         if (manager.ucpContext_) {
@@ -172,7 +171,6 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
     uint64_t metaDataSize = 0;
     bool blocking = false;
     std::vector<uint64_t> keys;
-    manager_->serverStop_ = true;
     Status status =
         manager_->UcpPutPayload(rdmaInfo, localObjectAddress, readOffset, readSize, metaDataSize, blocking, keys);
     EXPECT_EQ(status, Status::OK());
@@ -181,24 +179,32 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
         std::shared_ptr<Event> event;
         EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
         EXPECT_NE(event, nullptr);
-        int retryCount = 0;
-        const int maxRetries = 1000;
-        while (manager_->finishedRequests_.count(key) == 0 && retryCount < maxRetries) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(TIME));
-            ++retryCount;
-        }
-        EXPECT_EQ(manager_->finishedRequests_.count(key), 1);
+        // Wait for the event to be notified (callback notifies directly now)
+        Status waitStatus = event->WaitFor(std::chrono::milliseconds(1000));
+        EXPECT_TRUE(waitStatus.IsOk());
     }
-    manager_->serverStop_ = false;
 }
 
-TEST_F(UcpManagerTest, InsertEventsModifiesInternalSets)
+TEST_F(UcpManagerTest, InsertEventsNotifiesDirectly)
 {
     uint64_t requestId = 123;
+    std::shared_ptr<Event> event;
+    EXPECT_EQ(manager_->CreateEvent(requestId, event), Status::OK());
+    
+    // InsertSuccessfulEvent should notify the event directly
     manager_->InsertSuccessfulEvent(requestId);
-    EXPECT_EQ(manager_->finishedRequests_.count(requestId), 1);
-    manager_->InsertFailedEvent(requestId);
-    EXPECT_EQ(manager_->failedRequests_.count(requestId), 1);
+    // Event should be ready now (notified)
+    Status waitStatus = event->WaitFor(std::chrono::milliseconds(0));
+    EXPECT_TRUE(waitStatus.IsOk());
+    
+    // Test failed event
+    uint64_t failedRequestId = 456;
+    std::shared_ptr<Event> failedEvent;
+    EXPECT_EQ(manager_->CreateEvent(failedRequestId, failedEvent), Status::OK());
+    manager_->InsertFailedEvent(failedRequestId);
+    waitStatus = failedEvent->WaitFor(std::chrono::milliseconds(0));
+    EXPECT_TRUE(waitStatus.IsOk());
+    EXPECT_TRUE(failedEvent->IsFailed());
 }
 
 TEST_F(UcpManagerTest, EventManagement)
@@ -270,7 +276,6 @@ TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
                 uint64_t metaDataSize = 0;
                 bool blocking = false;
                 std::vector<uint64_t> keys;
-                manager_->serverStop_ = true;
                 Status status = manager_->UcpPutPayload(rdmaInfo, localObjectAddress, readOffset, readSize,
                                                         metaDataSize, blocking, keys);
                 EXPECT_EQ(status, Status::OK());
@@ -279,15 +284,10 @@ TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
                     std::shared_ptr<Event> event;
                     EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
                     EXPECT_NE(event, nullptr);
-                    int retryCount = 0;
-                    const int maxRetries = 1000;
-                    while (manager_->finishedRequests_.count(key) == 0 && retryCount < maxRetries) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(TIME));
-                        ++retryCount;
-                    }
-                    EXPECT_EQ(manager_->finishedRequests_.count(key), 1);
+                    // Wait for the event to be notified (callback notifies directly now)
+                    Status waitStatus = event->WaitFor(std::chrono::milliseconds(1000));
+                    EXPECT_TRUE(waitStatus.IsOk());
                 }
-                manager_->serverStop_ = false;
             } catch (const std::exception &e) {
                 ADD_FAILURE() << "Thread " << i << " threw exception: " << e.what();
                 failureCount++;

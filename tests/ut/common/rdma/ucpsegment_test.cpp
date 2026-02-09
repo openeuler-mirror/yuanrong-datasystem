@@ -28,6 +28,7 @@
 #include "ucp/api/ucp_def.h"
 
 #include "common/rdma/create_ucp_context.h"
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 #define private public
 #include "datasystem/common/rdma/ucp_segment.h"
 #undef private
@@ -48,6 +49,8 @@ protected:
 
     void SetUp() override
     {
+        bool dlopenInitResult = datasystem::ucp_dlopen_util::Init();
+        EXPECT_EQ(dlopenInitResult, true);
         ucpManager_ = &UcpManager::Instance();
         cUcpContext_ = std::make_unique<CreateUcpContext>();
         ucpContext_ = cUcpContext_->GetContext();
