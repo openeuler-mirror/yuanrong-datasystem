@@ -87,12 +87,12 @@ protected:
         if (UCS_PTR_IS_PTR(status_ptr)) {
             ucs_status_t status;
             do {
-                ucp_worker_progress(localServer_->GetWorker());  
-                status = ucp_request_check_status(status_ptr);
+                ds_ucp_worker_progress(localServer_->GetWorker());
+                status = ds_ucp_request_check_status(status_ptr);
             } while (status == UCS_INPROGRESS);
 
             EXPECT_EQ(UCS_OK, status);  
-            ucp_request_free(status_ptr);
+            ds_ucp_request_free(status_ptr);
         } else {
             EXPECT_EQ(UCS_OK, UCS_PTR_STATUS(status_ptr));
         }

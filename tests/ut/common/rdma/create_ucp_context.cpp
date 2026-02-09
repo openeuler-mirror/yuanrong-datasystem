@@ -19,6 +19,7 @@
  */
 
 #include "common/rdma/create_ucp_context.h"
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 
 namespace datasystem {
 
@@ -30,7 +31,7 @@ CreateUcpContext::CreateUcpContext()
 CreateUcpContext::~CreateUcpContext()
 {
     if (context_) {
-        ucp_cleanup(context_);
+        ds_ucp_cleanup(context_);
     }
 }
 
@@ -39,10 +40,10 @@ void CreateUcpContext::InitContext()
     ucp_params_t ucp_params = {};
     ucp_config_t *config;
 
-    ucp_config_read(NULL, NULL, &config);
+    ds_ucp_config_read(NULL, NULL, &config);
     ucp_params.field_mask = UCP_PARAM_FIELD_FEATURES;
     ucp_params.features = UCP_FEATURE_RMA | UCP_FEATURE_WAKEUP;
-    ucp_init(&ucp_params, config, &context_);
+    ds_ucp_init(&ucp_params, config, &context_);
 }
 
 }  // namespace datasystem
