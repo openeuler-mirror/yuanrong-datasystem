@@ -40,12 +40,39 @@ static int Write()
 {
     (void)Context::SetTraceId("write");
     std::string objectKey = "key1";
+    std::string objectKey1 = "key1";
     std::string val = "test1";
     datasystem::SetParam opt;
     opt.writeMode = datasystem::WriteMode::NONE_L2_CACHE;
     Status status = client_->Set(objectKey, val, opt);
     if (status.IsError()) {
         std::cerr << "Set Fail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    std::shared_ptr<datasystem::Buffer> buffer;
+    status = client_->Create(objectKey1, val.size(), opt, buffer);
+    if (status.IsError()) {
+        std::cerr << "Set Fail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    status = buffer->WLatch();
+    if (status.IsError()) {
+        std::cerr << "Wlatch Fail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    status = buffer->MemoryCopy((void *)val.data(), val.size());
+    if (status.IsError()) {
+        std::cerr << "Memory copy Fail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    status = buffer->UnWLatch();
+    if (status.IsError()) {
+        std::cerr << "unWlatch Fail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    status = client_->Set(buffer);
+    if (status.IsError()) {
+        std::cerr << "Set key2 Fail: " << status.ToString() << std::endl;
         return FAILED;
     }
     std::cout << "KV client set succeeds." << std::endl;
