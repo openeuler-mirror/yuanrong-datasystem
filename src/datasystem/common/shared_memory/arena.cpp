@@ -58,6 +58,7 @@ DS_DEFINE_uint32(
     "the first time, but each arena will use one more fd. The valid range is 0 to 32.");
 DS_DEFINE_validator(shared_disk_arena_per_tenant, &Validator::ValidateSharedDiskArenaPerTenant);
 DS_DECLARE_string(shared_disk_directory);
+DS_DECLARE_bool(enable_fallocate);
 
 namespace datasystem {
 namespace memory {
@@ -306,8 +307,13 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
     arenas_.resize(ARENAS_INIT_SIZE);
     Jemalloc::Init(&ArenaManager::AllocHook, &ArenaManager::DestroyHook, &ArenaManager::CommitHook);
     handleExpiredTenantThread_ = std::make_unique<ThreadPool>(handleExpiredTenantThreadNum_, 0, "TenantExpired");
-    if (FLAGS_enable_huge_tlb) {
+    if (populate || FLAGS_enable_huge_tlb || NeedRegisterWholeArena()) {
+        // Adding multiple arenas per tenant allows parallel physical memory binding operations across different arenas.
+        // For scenarios requiring pre-allocation of physical memory, a single arena is sufficient.
         FLAGS_arena_per_tenant = 1;
+        // Since physical memory has already been pre-allocated, there is no need to trigger fallocate during the commit
+        // phase.
+        FLAGS_enable_fallocate = false;
     }
     auto arenaNum = FLAGS_arena_per_tenant;
     if (!FLAGS_shared_disk_directory.empty()) {

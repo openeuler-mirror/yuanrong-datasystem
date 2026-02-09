@@ -130,6 +130,22 @@ Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress)
     return Status::OK();
 }
 
+bool NeedRegisterWholeArena()
+{
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled() && UrmaManager::IsRegisterWholeArenaEnabled()) {
+        return true;
+    }
+#endif
+
+#ifdef USE_RDMA
+    if (UcpManager::IsUcpEnabled() && UcpManager::IsRegisterWholeArenaEnabled()) {
+        return true;
+    }
+#endif
+    return false;
+}
+
 Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize)
 {
     (void)segAddress;
