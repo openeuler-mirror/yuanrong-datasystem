@@ -783,8 +783,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY);
     if (!IsRemoteH2DEnabled()) {
-        RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList,
-                                                              MemcpyKind::HOST_TO_DEVICE,
+        RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList, MemcpyKind::HOST_TO_DEVICE,
                                                               workerApi_[LOCAL_WORKER]->enableHugeTlb_));
     } else {
         // Group buffers by data source in RH2D scenario
@@ -826,7 +825,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
 
     // existBufferList same as bufferList
     point.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
-    BatchReleaseBufferPtr(existBufferList);
+    existBufferList.clear();
     return Status::OK();
 }
 
@@ -879,9 +878,8 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
     for (auto &buff : bufferList) {
         bufferRawPtrList.emplace_back(buff.get());
     }
-    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(filterDevBlobList, bufferRawPtrList,
-                                                          MemcpyKind::DEVICE_TO_HOST,
-                                                          workerApi_[LOCAL_WORKER]->enableHugeTlb_));
+    RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(
+        filterDevBlobList, bufferRawPtrList, MemcpyKind::DEVICE_TO_HOST, workerApi_[LOCAL_WORKER]->enableHugeTlb_));
 
     return Status::OK();
 }
@@ -1373,13 +1371,9 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, true, false, nestedObjectKeys, ttlSecond, existence),
                                      FormatString("Put object %s", objectKey));
     buffer->SetVisibility(true);
-    // Destruct Buffer With Lock.
-    auto status = DecreaseRefCntByAccessor(shmBuf->id, accessor, true);
-    if (status.IsError()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Failed to handler memory release.");
-    }
-    buffer->isReleased_ = true;
     accessor.release();  // avoid deadlock in buffer destroy.
+    // Destruct buffer with async
+    buffer.reset();
     return Status::OK();
 }
 

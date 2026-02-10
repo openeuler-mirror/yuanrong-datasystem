@@ -116,7 +116,7 @@ TEST_F(OCClientRefTest, GRefEmptyIdVectorTest)
 TEST_F(OCClientRefTest, GDecreaseRefTestCore)
 {
     std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client, 2000); // timeout is 2000 ms
+    InitTestClient(0, client, 2000);  // timeout is 2000 ms
     std::string objectKey = NewObjectKey();
     std::vector<std::string> failObjects;
     std::vector<std::string> objectKeys = { objectKey };
@@ -2229,10 +2229,8 @@ TEST_F(OCClientShmRefTest, LEVEL1_TestWorkerLostInDeadLockAndReconnect)
         CreateParam param{};
         // Put operate is waiting for worker resp decrease, when reconnect to worker, auto wake up old queue and
         // update the queue.
-        auto status =
-            client1->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(), param);
-        ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR);
-        ASSERT_TRUE(status.GetMsg().find("ShmQueue is destroyed.") != std::string::npos);
+        DS_ASSERT_OK(
+            client1->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(), param));
     }));
 
     sleep(2);
@@ -2265,8 +2263,8 @@ TEST_F(OCClientShmRefTest, LEVEL1_TestWorkerLostWhenDeadLock)
             std::string objectKey = NewObjectKey();
             CreateParam param{};
             // Put wait for worker resp, when reconnect to worker, auto wake up last queue, and update.
-            DS_ASSERT_NOT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())),
-                                         data.size(), param));
+            DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())),
+                                     data.size(), param));
         }));
     }
     sleep(2);
