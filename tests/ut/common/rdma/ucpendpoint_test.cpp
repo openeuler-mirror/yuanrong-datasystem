@@ -53,7 +53,7 @@ protected:
 
     void SetUp() override
     {
-        bool dlopenInitResult = datasystem::ucp_dlopen_util::Init();
+        bool dlopenInitResult = datasystem::ucp_dlopen::Init();
         EXPECT_EQ(dlopenInitResult, true);
         ucpManager_ = &UcpManager::Instance();
         cUcpContext_ = std::make_unique<CreateUcpContext>();
