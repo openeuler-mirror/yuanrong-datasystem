@@ -33,8 +33,10 @@ include_directories(SYSTEM ${ASCEND_INCLUDE_DIR})
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/runtime)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/msprof)
-include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/msprof)
 include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/experiment/slog/toolchain)
+if(EXISTS ${ASCEND_INCLUDE_DIR}/../pkg_inc/runtime)
+    include_directories(SYSTEM ${ASCEND_INCLUDE_DIR}/../pkg_inc/runtime)
+endif()
 
 # ---- Libraries ----
 set(DEPENDS_LIBS pthread dl m ${ASCENDCL_LIBRARY} ${ASCEND_RUNTIME_LIBRARY} ${ASCEND_HCCL_TRANSFER_LIBRARY} ${ASCEND_RA_LIBRARY})

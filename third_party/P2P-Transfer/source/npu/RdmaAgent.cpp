@@ -4,10 +4,9 @@
 #include "npu/RdmaAgent.h"
 #include "npu/RaWrapper.h"
 #include <string>
-#include "hccl/hccl_network_pub.h"
-#include "hccl/adapter_hccp_common.h"
+#include "external/hccl_network_pub.h"
 #include "runtime/dev.h"
-#include "hccl/adapter_rts_common.h"
+#include "external/adapter_rts_common.h"
 
 std::shared_ptr<RdmaAgent> RdmaAgent::instances[MAX_LOCAL_DEVICES];
 std::mutex RdmaAgent::instanceMutex;
@@ -63,14 +62,14 @@ Status RdmaAgent::getDeviceIpv4(union hccp_ip_addr *ipv4Addr)
     }
 
     unsigned int num = 0;
-    struct ra_get_ifattr ifAttr {};
+    struct ra_get_ifattr ifAttr{};
     ifAttr.phy_id = phyId;
     ifAttr.nic_position = static_cast<int>(nicDeployment);
     ifAttr.is_all = false;
-    CHECK_STATUS(RaGetIfNum(&ifAttr, &num));
+    CHECK_STATUS(RaGetIfNumWrapper(&ifAttr, &num));
 
     struct interface_info interface_infos[num];
-    CHECK_STATUS(RaGetIfaddrs(&ifAttr, interface_infos, &num));
+    CHECK_STATUS(RaGetIfaddrsWrapper(&ifAttr, interface_infos, &num));
     for (int i = 0; i < num; i++) {
         if (interface_infos[i].family == AF_INET) {
             ipv4Addr->addr = interface_infos[i].ifaddr.ip.addr;

@@ -13,7 +13,17 @@
 #include "acl/acl.h"
 #include <arpa/inet.h>
 #include "tools/common.h"
+#include "version/hccl_version.h"
+
+#if HCCL_VERSION_NUM >= ((8 * 10000000) + (5 * 100000))
+enum class NICDeployment {
+    NIC_DEPLOYMENT_HOST = 0,
+    NIC_DEPLOYMENT_DEVICE,
+    NIC_DEPLOYMENT_RESERVED
+};
+#else
 #include "hccl/hccl_common.h"
+#endif
 
 constexpr uint32_t DEFAULT_HDC_TYPE = 6;
 

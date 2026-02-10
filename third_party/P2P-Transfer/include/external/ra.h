@@ -23,6 +23,7 @@
 #include <sys/types.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include "version/hccl_version.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -285,60 +286,129 @@ struct interface_info {
     char ifname[256];          /* Name of interface */
 };
 
-int ra_init(struct ra_init_config *config);
-int ra_deinit(struct ra_init_config *config);
 
-int ra_socket_get_vnic_ip_infos(uint32_t phy_id, enum id_type type, uint32_t ids[], uint32_t num,
-                                struct ip_info infos[]);
+#if HCCL_VERSION_NUM < ((8 * 10000000) + (5 * 100000))
+#define RA_INIT ra_init
+#define RA_DEINIT ra_deinit
+#define RA_SOCKET_LISTEN_START ra_socket_listen_start
+#define RA_SOCKET_LISTEN_STOP ra_socket_listen_stop
+#define RA_RDEV_INIT_V2 ra_rdev_init_v2
+#define RA_RDEV_DEINIT ra_rdev_deinit
+#define RA_GET_SOCKETS ra_get_sockets
+#define RA_SOCKET_BATCH_CONNECT ra_socket_batch_connect
+#define RA_SOCKET_BATCH_CLOSE ra_socket_batch_close
+#define RA_SOCKET_WHITE_LIST_ADD ra_socket_white_list_add
+#define RA_SOCKET_WHITE_LIST_DEL ra_socket_white_list_del
+#define RA_QP_CREATE_WITH_ATTRS ra_qp_create_with_attrs
+#define RA_QP_DESTROY ra_qp_destroy
+#define RA_SET_QP_ATTR_QOS ra_set_qp_attr_qos
+#define RA_SET_QP_ATTR_TIMEOUT ra_set_qp_attr_timeout
+#define RA_SET_QP_ATTR_RETRY_CNT ra_set_qp_attr_retry_cnt
+#define RA_MR_REG ra_mr_reg
+#define RA_MR_DEREG ra_mr_dereg
+#define RA_REGISTER_MR ra_register_mr
+#define RA_DEREGISTER_MR ra_deregister_mr
+#define RA_QP_CONNECT_ASYNC ra_qp_connect_async
+#define RA_GET_QP_STATUS ra_get_qp_status
+#define RA_SEND_WRLIST_EXT ra_send_wrlist_ext
+#define RA_GET_NOTIFY_BASE_ADDR ra_get_notify_base_addr
+#define RA_SEND_WR ra_send_wr
+#define RA_TYPICAL_SEND_WR ra_typical_send_wr
+#define RA_GET_IFADDRS ra_get_ifaddrs
+#define RA_GET_IFNUM ra_get_ifnum
+#define RA_SOCKET_GET_VNIC_IP_INFOS ra_socket_get_vnic_ip_infos
+#define RA_SOCKET_INIT ra_socket_init
+#define RA_SOCKET_DEINIT ra_socket_deinit
+#define RA_RDEV_GET_SUPPORT_LITE ra_rdev_get_support_lite
+#else
+#define RA_INIT RaInit
+#define RA_DEINIT RaDeinit
+#define RA_SOCKET_LISTEN_START RaSocketListenStart
+#define RA_SOCKET_LISTEN_STOP RaSocketListenStop
+#define RA_RDEV_INIT_V2 RaRdevInitV2
+#define RA_RDEV_DEINIT RaRdevDeinit
+#define RA_GET_SOCKETS RaGetSockets
+#define RA_SOCKET_BATCH_CONNECT RaSocketBatchConnect
+#define RA_SOCKET_BATCH_CLOSE RaSocketBatchClose
+#define RA_SOCKET_WHITE_LIST_ADD RaSocketWhiteListAdd
+#define RA_SOCKET_WHITE_LIST_DEL RaSocketWhiteListDel
+#define RA_QP_CREATE_WITH_ATTRS RaQpCreateWithAttrs
+#define RA_QP_DESTROY RaQpDestroy
+#define RA_SET_QP_ATTR_QOS RaSetQpAttrQos
+#define RA_SET_QP_ATTR_TIMEOUT RaSetQpAttrTimeout
+#define RA_SET_QP_ATTR_RETRY_CNT RaSetQpAttrRetryCnt
+#define RA_MR_REG RaMrReg
+#define RA_MR_DEREG RaMrDereg
+#define RA_REGISTER_MR RaRegisterMr
+#define RA_DEREGISTER_MR RaDeregisterMr
+#define RA_QP_CONNECT_ASYNC RaQpConnectAsync
+#define RA_GET_QP_STATUS RaGetQpStatus
+#define RA_SEND_WRLIST_EXT RaSendWrlistExt
+#define RA_GET_NOTIFY_BASE_ADDR RaGetNotifyBaseAddr
+#define RA_SEND_WR RaSendWr
+#define RA_TYPICAL_SEND_WR RaTypicalSendWr
+#define RA_GET_IFADDRS RaGetIfaddrs
+#define RA_GET_IFNUM RaGetIfnum
+#define RA_SOCKET_GET_VNIC_IP_INFOS RaSocketGetVnicIpInfos
+#define RA_SOCKET_INIT RaSocketInit
+#define RA_SOCKET_DEINIT RaSocketDeinit
+#define RA_RDEV_GET_SUPPORT_LITE RaRdevGetSupportLite
+#endif
 
-int ra_socket_init(int mode, struct rdev rdev_info, void **socket_handle);
-int ra_socket_deinit(void *socket_handle);
+int RA_INIT(struct ra_init_config *config);
+int RA_DEINIT(struct ra_init_config *config);
 
-int ra_socket_listen_start(struct socket_listen_info_t conn[], uint32_t num);
-int ra_socket_listen_stop(struct socket_listen_info_t conn[], uint32_t num);
+int RA_SOCKET_LISTEN_START(struct socket_listen_info_t conn[], uint32_t num);
+int RA_SOCKET_LISTEN_STOP(struct socket_listen_info_t conn[], uint32_t num);
 
-int ra_rdev_init_v2(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle);
-int ra_rdev_deinit(void *rdma_handle, unsigned int notify_type);
+int RA_RDEV_INIT_V2(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle);
+int RA_RDEV_DEINIT(void *rdma_handle, unsigned int notify_type);
 
-int ra_rdev_get_support_lite(void *rdma_handle, int *support_lite);
+int RA_GET_SOCKETS(uint32_t role, struct socket_info_t conn[], uint32_t num, uint32_t *connected_num);
 
-int ra_get_sockets(uint32_t role, struct socket_info_t conn[], uint32_t num, uint32_t *connected_num);
+int RA_SOCKET_BATCH_CONNECT(struct socket_connect_info_t conn[], uint32_t num);
+int RA_SOCKET_BATCH_CLOSE(struct socket_close_info_t conn[], unsigned int num);
 
-int ra_socket_batch_connect(struct socket_connect_info_t conn[], uint32_t num);
-int ra_socket_batch_close(struct socket_close_info_t conn[], unsigned int num);
+int RA_SOCKET_WHITE_LIST_ADD(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num);
+int RA_SOCKET_WHITE_LIST_DEL(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num);
 
-int ra_socket_white_list_add(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num);
-int ra_socket_white_list_del(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num);
+int RA_QP_CREATE_WITH_ATTRS(void *rdev_handle, struct qp_ext_attrs *ext_attrs, void **qp_handle);
+int RA_QP_DESTROY(void *qp_handle);
 
-int ra_qp_create_with_attrs(void *rdev_handle, struct qp_ext_attrs *ext_attrs, void **qp_handle);
-int ra_qp_destroy(void *qp_handle);
+int RA_SET_QP_ATTR_QOS(void *qp_handle, struct qos_attr *attr);
+int RA_SET_QP_ATTR_TIMEOUT(void *qp_handle, uint32_t *timeout);
+int RA_SET_QP_ATTR_RETRY_CNT(void *qp_handle, uint32_t *retry_cnt);
 
-int ra_set_qp_attr_qos(void *qp_handle, struct qos_attr *attr);
-int ra_set_qp_attr_timeout(void *qp_handle, uint32_t *timeout);
-int ra_set_qp_attr_retry_cnt(void *qp_handle, uint32_t *retry_cnt);
+int RA_MR_REG(void *qp_handle, struct mr_info *info);
+int RA_MR_DEREG(void *qp_handle, struct mr_info *info);
 
-int ra_mr_reg(void *qp_handle, struct mr_info *info);
-int ra_mr_dereg(void *qp_handle, struct mr_info *info);
+int RA_REGISTER_MR(const void *rdma_handle, struct mr_info *info, void **mr_handle);
+int RA_DEREGISTER_MR(const void *rdma_handle, void *mr_handle);
 
-int ra_register_mr(const void *rdma_handle, struct mr_info *info, void **mr_handle);
-int ra_deregister_mr(const void *rdma_handle, void *mr_handle);
+int RA_QP_CONNECT_ASYNC(void *qp_handle, const void *fd_handle);
 
-int ra_qp_connect_async(void *qp_handle, const void *fd_handle);
+int RA_GET_QP_STATUS(void *qp_handle, ra_qp_status *status);
 
-int ra_get_qp_status(void *qp_handle, ra_qp_status *status);
-
-int ra_send_wrlist_ext(void *qp_handle, struct send_wrlist_data_ext wr[], struct send_wr_rsp op_rsp[],
+int RA_SEND_WRLIST_EXT(void *qp_handle, struct send_wrlist_data_ext wr[], struct send_wr_rsp op_rsp[],
                        uint32_t send_num, uint32_t *complete_num);
 
-int ra_get_notify_base_addr(void *rdev_handle, unsigned long long *va, unsigned long long *size);
+int RA_GET_NOTIFY_BASE_ADDR(void *rdev_handle, unsigned long long *va, unsigned long long *size);
 
-int ra_send_wr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
+int RA_SEND_WR(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
 
-int ra_typical_send_wr(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
+int RA_TYPICAL_SEND_WR(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp);
 
-int ra_get_ifaddrs(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num);
+int RA_GET_IFADDRS(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num);
 
-int ra_get_ifnum(struct ra_get_ifattr *config, unsigned int *num);
+int RA_GET_IFNUM(struct ra_get_ifattr *config, unsigned int *num);
+
+int RA_SOCKET_GET_VNIC_IP_INFOS(uint32_t phy_id, enum id_type type, uint32_t ids[], uint32_t num,
+                                struct ip_info infos[]);
+
+int RA_SOCKET_INIT(int mode, struct rdev rdev_info, void **socket_handle);
+int RA_SOCKET_DEINIT(void *socket_handle);
+
+int RA_RDEV_GET_SUPPORT_LITE(void *rdma_handle, int *support_lite);
 
 #ifdef __cplusplus
 }
