@@ -36,7 +36,7 @@ UcpSegment::UcpSegment(uintptr_t localSegAddr, size_t localSegSize, const ucp_co
 UcpSegment::~UcpSegment()
 {
     if (memH_) {
-        ucp_mem_unmap(context_, memH_);
+        ds_ucp_mem_unmap(context_, memH_);
     }
 }
 
@@ -44,7 +44,7 @@ UcpSegment &UcpSegment::operator=(UcpSegment &&other) noexcept
 {
     if (this != &other) {
         if (memH_ && context_) {
-            ucp_mem_unmap(context_, memH_);
+            ds_ucp_mem_unmap(context_, memH_);
         }
         context_ = other.context_;
         memBuffer_ = other.memBuffer_;
@@ -65,23 +65,23 @@ Status UcpSegment::Init()
     params.address = memBuffer_;
     params.length = memSize_;
 
-    ucs_status_t status = ucp_mem_map(context_, &params, &memH_);
+    ucs_status_t status = ds_ucp_mem_map(context_, &params, &memH_);
     if (status != UCS_OK) {
-        RETURN_STATUS(K_RDMA_ERROR, std::string("[UcpSegment] Failed to map memory: ") + ucs_status_string(status));
+        RETURN_STATUS(K_RDMA_ERROR, std::string("[UcpSegment] Failed to map memory: ") + ds_ucs_status_string(status));
     }
 
     void *rkeyBuffer;
     size_t rkeySize;
-    status = ucp_rkey_pack(context_, memH_, &rkeyBuffer, &rkeySize);
+    status = ds_ucp_rkey_pack(context_, memH_, &rkeyBuffer, &rkeySize);
     if (status != UCS_OK) {
-        LOG(ERROR) << "[UcpSegment] Failed to pack rkey: " << ucs_status_string(status);
-        ucp_mem_unmap(context_, memH_);
+        LOG(ERROR) << "[UcpSegment] Failed to pack rkey: " << ds_ucs_status_string(status);
+        ds_ucp_mem_unmap(context_, memH_);
         RETURN_STATUS(K_RDMA_ERROR, "[UcpSegment] Failed to pack rkey.");
     }
 
     packedRkey_ = std::string(static_cast<const char *>(rkeyBuffer), rkeySize);
 
-    ucp_rkey_buffer_release(rkeyBuffer);
+    ds_ucp_rkey_buffer_release(rkeyBuffer);
 
     return Status::OK();
 }

@@ -20,6 +20,7 @@
  */
 
 #include "common/rdma/mimic_remote_server.h"
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 
 #include <cstdint>
 #include <cstring>
@@ -33,17 +34,17 @@ MimicRemoteServer::MimicRemoteServer(ucp_context_h &context) : context_(context)
 MimicRemoteServer::~MimicRemoteServer()
 {
     if (localWorkerAddr_) {
-        ucp_worker_release_address(worker_, localWorkerAddr_);
+        ds_ucp_worker_release_address(worker_, localWorkerAddr_);
         localWorkerAddr_ = nullptr;
     }
 
     if (memH_) {
-        ucp_mem_unmap(context_, memH_);
+        ds_ucp_mem_unmap(context_, memH_);
         memH_ = nullptr;
     }
 
     if (worker_) {
-        ucp_worker_destroy(worker_);
+        ds_ucp_worker_destroy(worker_);
         worker_ = nullptr;
     }
 
@@ -58,10 +59,10 @@ void MimicRemoteServer::InitUcpWorker()
     workerParams.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
     workerParams.thread_mode = UCS_THREAD_MODE_SINGLE;
 
-    ucp_worker_create(context_, &workerParams, &worker_);
+    ds_ucp_worker_create(context_, &workerParams, &worker_);
     size_t workerAddrLen;
 
-    ucp_worker_get_address(worker_, &localWorkerAddr_, &workerAddrLen);
+    ds_ucp_worker_get_address(worker_, &localWorkerAddr_, &workerAddrLen);
 
     localWorkerAddrStr_ = std::string(reinterpret_cast<const char *>(localWorkerAddr_), workerAddrLen);
 }
@@ -75,21 +76,21 @@ void MimicRemoteServer::InitUcpSegment()
     params.length = buf_size_;
     params.flags = UCP_MEM_MAP_ALLOCATE;
 
-    ucp_mem_map(context_, &params, &memH_);
+    ds_ucp_mem_map(context_, &params, &memH_);
 
     void *rkeyBuffer;
     size_t rkeySize;
-    ucp_rkey_pack(context_, memH_, &rkeyBuffer, &rkeySize);
+    ds_ucp_rkey_pack(context_, memH_, &rkeyBuffer, &rkeySize);
 
     ucp_mem_attr_t mem_attr = {};
     mem_attr.field_mask = UCP_MEM_ATTR_FIELD_ADDRESS | UCP_MEM_ATTR_FIELD_LENGTH;
-    ucp_mem_query(memH_, &mem_attr);
+    ds_ucp_mem_query(memH_, &mem_attr);
 
     buffer_ = mem_attr.address;
 
     packedRkey_ = std::string(static_cast<const char *>(rkeyBuffer), rkeySize);
 
-    ucp_rkey_buffer_release(rkeyBuffer);
+    ds_ucp_rkey_buffer_release(rkeyBuffer);
 }
 
 std::string MimicRemoteServer::ReadBuffer(size_t len)

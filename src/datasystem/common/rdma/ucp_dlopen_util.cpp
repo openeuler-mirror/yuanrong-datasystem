@@ -220,137 +220,147 @@ void Cleanup()
 }
 
 }  // namespace ucp_dlopen
-}  // namespace datasystem
 
 // UCP shim functions (resolved via dlsym)
-ucs_status_t ucp_config_read(const char *env_prefix, const char *filename, ucp_config_t **config_p)
+ucs_status_t ds_ucp_config_read(const char *env_prefix, const char *filename, ucp_config_t **config_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_config_read)>("ucp_config_read", UCS_ERR_UNSUPPORTED, env_prefix,
-                                                             filename, config_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_config_read)>("ucp_config_read", UCS_ERR_UNSUPPORTED, env_prefix,
+                                                                filename, config_p);
 }
 
-void ucp_config_release(ucp_config_t *config)
+void ds_ucp_config_release(ucp_config_t *config)
 {
-    CallVoid<decltype(&ucp_config_release)>("ucp_config_release", config);
+    CallVoid<decltype(&ds_ucp_config_release)>("ucp_config_release", config);
 }
 
-ucs_status_t ucp_init_version(unsigned int api_major_version, unsigned int api_minor_version,
-                              const ucp_params_t *params, const ucp_config_t *config, ucp_context_h *context_p)
+ucs_status_t ds_ucp_init(const ucp_params_t *params, const ucp_config_t *config, ucp_context_h *context_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_init_version)>(
-        "ucp_init_version", UCS_ERR_UNSUPPORTED, api_major_version, api_minor_version, params, config, context_p);
+    using UcpInitVersionFn =
+        ucs_status_t (*)(unsigned int, unsigned int, const ucp_params_t *, const ucp_config_t *, ucp_context_h *);
+    return CallRet<ucs_status_t, UcpInitVersionFn>("ucp_init_version", UCS_ERR_UNSUPPORTED, UCP_API_MAJOR,
+                                                   UCP_API_MINOR, params, config, context_p);
 }
 
-void ucp_cleanup(ucp_context_h context)
+void ds_ucp_cleanup(ucp_context_h context)
 {
-    CallVoid<decltype(&ucp_cleanup)>("ucp_cleanup", context);
+    CallVoid<decltype(&ds_ucp_cleanup)>("ucp_cleanup", context);
 }
 
-ucs_status_t ucp_worker_create(ucp_context_h context, const ucp_worker_params_t *params, ucp_worker_h *worker_p)
+ucs_status_t ds_ucp_worker_create(ucp_context_h context, const ucp_worker_params_t *params, ucp_worker_h *worker_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_worker_create)>("ucp_worker_create", UCS_ERR_UNSUPPORTED, context,
-                                                               params, worker_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_worker_create)>("ucp_worker_create", UCS_ERR_UNSUPPORTED, context,
+                                                                  params, worker_p);
 }
 
-ucs_status_t ucp_worker_get_address(ucp_worker_h worker, ucp_address_t **address_p, size_t *address_length_p)
+ucs_status_t ds_ucp_worker_get_address(ucp_worker_h worker, ucp_address_t **address_p, size_t *address_length_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_worker_get_address)>("ucp_worker_get_address", UCS_ERR_UNSUPPORTED,
-                                                                    worker, address_p, address_length_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_worker_get_address)>("ucp_worker_get_address", UCS_ERR_UNSUPPORTED,
+                                                                       worker, address_p, address_length_p);
 }
 
-void ucp_worker_release_address(ucp_worker_h worker, ucp_address_t *address)
+void ds_ucp_worker_release_address(ucp_worker_h worker, ucp_address_t *address)
 {
-    CallVoid<decltype(&ucp_worker_release_address)>("ucp_worker_release_address", worker, address);
+    CallVoid<decltype(&ds_ucp_worker_release_address)>("ucp_worker_release_address", worker, address);
 }
 
-ucs_status_t ucp_worker_get_efd(ucp_worker_h worker, int *fd_p)
+ucs_status_t ds_ucp_worker_get_efd(ucp_worker_h worker, int *fd_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_worker_get_efd)>("ucp_worker_get_efd", UCS_ERR_UNSUPPORTED, worker,
-                                                                fd_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_worker_get_efd)>("ucp_worker_get_efd", UCS_ERR_UNSUPPORTED, worker,
+                                                                   fd_p);
 }
 
-unsigned ucp_worker_progress(ucp_worker_h worker)
+unsigned ds_ucp_worker_progress(ucp_worker_h worker)
 {
-    return CallRet<unsigned, decltype(&ucp_worker_progress)>("ucp_worker_progress", 0U, worker);
+    return CallRet<unsigned, decltype(&ds_ucp_worker_progress)>("ucp_worker_progress", 0U, worker);
 }
 
-ucs_status_t ucp_worker_arm(ucp_worker_h worker)
+ucs_status_t ds_ucp_worker_arm(ucp_worker_h worker)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_worker_arm)>("ucp_worker_arm", UCS_ERR_UNSUPPORTED, worker);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_worker_arm)>("ucp_worker_arm", UCS_ERR_UNSUPPORTED, worker);
 }
 
-void ucp_worker_destroy(ucp_worker_h worker)
+void ds_ucp_worker_destroy(ucp_worker_h worker)
 {
-    CallVoid<decltype(&ucp_worker_destroy)>("ucp_worker_destroy", worker);
+    CallVoid<decltype(&ds_ucp_worker_destroy)>("ucp_worker_destroy", worker);
 }
 
-ucs_status_t ucp_mem_map(ucp_context_h context, const ucp_mem_map_params_t *params, ucp_mem_h *memh_p)
+ucs_status_t ds_ucp_mem_map(ucp_context_h context, const ucp_mem_map_params_t *params, ucp_mem_h *memh_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_mem_map)>("ucp_mem_map", UCS_ERR_UNSUPPORTED, context, params, memh_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_mem_map)>("ucp_mem_map", UCS_ERR_UNSUPPORTED, context, params,
+                                                            memh_p);
 }
 
-ucs_status_t ucp_mem_unmap(ucp_context_h context, ucp_mem_h memh)
+ucs_status_t ds_ucp_mem_unmap(ucp_context_h context, ucp_mem_h memh)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_mem_unmap)>("ucp_mem_unmap", UCS_ERR_UNSUPPORTED, context, memh);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_mem_unmap)>("ucp_mem_unmap", UCS_ERR_UNSUPPORTED, context, memh);
 }
 
-ucs_status_t ucp_mem_query(const ucp_mem_h memh, ucp_mem_attr_t *attr)
+ucs_status_t ds_ucp_mem_query(const ucp_mem_h memh, ucp_mem_attr_t *attr)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_mem_query)>("ucp_mem_query", UCS_ERR_UNSUPPORTED, memh, attr);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_mem_query)>("ucp_mem_query", UCS_ERR_UNSUPPORTED, memh, attr);
 }
 
-ucs_status_t ucp_rkey_pack(ucp_context_h context, ucp_mem_h memh, void **rkey_buffer_p, size_t *size_p)
+ucs_status_t ds_ucp_rkey_pack(ucp_context_h context, ucp_mem_h memh, void **rkey_buffer_p, size_t *size_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_rkey_pack)>("ucp_rkey_pack", UCS_ERR_UNSUPPORTED, context, memh,
-                                                           rkey_buffer_p, size_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_rkey_pack)>("ucp_rkey_pack", UCS_ERR_UNSUPPORTED, context, memh,
+                                                              rkey_buffer_p, size_p);
 }
 
-void ucp_rkey_buffer_release(void *rkey_buffer)
+void ds_ucp_rkey_buffer_release(void *rkey_buffer)
 {
-    CallVoid<decltype(&ucp_rkey_buffer_release)>("ucp_rkey_buffer_release", rkey_buffer);
+    CallVoid<decltype(&ds_ucp_rkey_buffer_release)>("ucp_rkey_buffer_release", rkey_buffer);
 }
 
-ucs_status_t ucp_ep_create(ucp_worker_h worker, const ucp_ep_params_t *params, ucp_ep_h *ep_p)
+ucs_status_t ds_ucp_ep_create(ucp_worker_h worker, const ucp_ep_params_t *params, ucp_ep_h *ep_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_ep_create)>("ucp_ep_create", UCS_ERR_UNSUPPORTED, worker, params, ep_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_ep_create)>("ucp_ep_create", UCS_ERR_UNSUPPORTED, worker, params,
+                                                              ep_p);
 }
 
-ucs_status_t ucp_ep_rkey_unpack(ucp_ep_h ep, const void *rkey_buffer, ucp_rkey_h *rkey_p)
+ucs_status_t ds_ucp_ep_rkey_unpack(ucp_ep_h ep, const void *rkey_buffer, ucp_rkey_h *rkey_p)
 {
-    return CallRet<ucs_status_t, decltype(&ucp_ep_rkey_unpack)>("ucp_ep_rkey_unpack", UCS_ERR_UNSUPPORTED, ep,
-                                                                rkey_buffer, rkey_p);
+    return CallRet<ucs_status_t, decltype(&ds_ucp_ep_rkey_unpack)>("ucp_ep_rkey_unpack", UCS_ERR_UNSUPPORTED, ep,
+                                                                   rkey_buffer, rkey_p);
 }
 
-void ucp_rkey_destroy(ucp_rkey_h rkey)
+void ds_ucp_rkey_destroy(ucp_rkey_h rkey)
 {
-    CallVoid<decltype(&ucp_rkey_destroy)>("ucp_rkey_destroy", rkey);
+    CallVoid<decltype(&ds_ucp_rkey_destroy)>("ucp_rkey_destroy", rkey);
 }
 
-void *ucp_ep_close_nbx(ucp_ep_h ep, const ucp_request_param_t *param)
+void *ds_ucp_ep_close_nbx(ucp_ep_h ep, const ucp_request_param_t *param)
 {
-    return CallPtr<decltype(&ucp_ep_close_nbx)>("ucp_ep_close_nbx", ep, param);
+    return CallPtr<decltype(&ds_ucp_ep_close_nbx)>("ucp_ep_close_nbx", ep, param);
 }
 
-void *ucp_ep_flush_nbx(ucp_ep_h ep, const ucp_request_param_t *param)
+void *ds_ucp_ep_flush_nbx(ucp_ep_h ep, const ucp_request_param_t *param)
 {
-    return CallPtr<decltype(&ucp_ep_flush_nbx)>("ucp_ep_flush_nbx", ep, param);
+    return CallPtr<decltype(&ds_ucp_ep_flush_nbx)>("ucp_ep_flush_nbx", ep, param);
 }
 
-void *ucp_put_nbx(ucp_ep_h ep, const void *buffer, size_t count, uint64_t remote_addr, ucp_rkey_h rkey,
-                  const ucp_request_param_t *param)
+void *ds_ucp_put_nbx(ucp_ep_h ep, const void *buffer, size_t count, uint64_t remote_addr, ucp_rkey_h rkey,
+                     const ucp_request_param_t *param)
 {
-    return CallPtr<decltype(&ucp_put_nbx)>("ucp_put_nbx", ep, buffer, count, remote_addr, rkey, param);
+    return CallPtr<decltype(&ds_ucp_put_nbx)>("ucp_put_nbx", ep, buffer, count, remote_addr, rkey, param);
 }
 
-void ucp_request_free(void *request)
+void ds_ucp_request_free(void *request)
 {
-    CallVoid<decltype(&ucp_request_free)>("ucp_request_free", request);
+    CallVoid<decltype(&ds_ucp_request_free)>("ucp_request_free", request);
+}
+
+ucs_status_t ds_ucp_request_check_status(void *request)
+{
+    return CallRet<ucs_status_t, decltype(&ds_ucp_request_check_status)>("ucp_request_check_status",
+                                                                         UCS_ERR_UNSUPPORTED, request);
 }
 
 // UCS shim (for status strings)
-const char *ucs_status_string(ucs_status_t status)
+const char *ds_ucs_status_string(ucs_status_t status)
 {
     // Fallback string when symbol is unavailable
     static const char *kMissing = "UCS_STATUS_STRING_UNAVAILABLE";
-    return CallRetUcs<const char *, decltype(&ucs_status_string)>("ucs_status_string", kMissing, status);
+    return CallRetUcs<const char *, decltype(&ds_ucs_status_string)>("ucs_status_string", kMissing, status);
 }
+
+}  // namespace datasystem

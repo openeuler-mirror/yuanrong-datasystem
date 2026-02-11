@@ -52,14 +52,14 @@ Status UcpEndpoint::Init()
     static ucp_err_handler_cb_t errCb = [](void *arg, ucp_ep_h ep, ucs_status_t status) {
         (void)arg;
         (void)ep;
-        LOG(ERROR) << "[UcpEndpoint] error: " << ucs_status_string(status);
+        LOG(ERROR) << "[UcpEndpoint] error: " << ds_ucs_status_string(status);
     };
     epParams.err_handler.cb = errCb;
     epParams.err_handler.arg = nullptr;
 
-    ucs_status_t status = ucp_ep_create(worker_, &epParams, &ep_);
+    ucs_status_t status = ds_ucp_ep_create(worker_, &epParams, &ep_);
     if (status != UCS_OK) {
-        LOG(ERROR) << "[UcpEndpoint] ucp_ep_create failed with status " << ucs_status_string(status);
+        LOG(ERROR) << "[UcpEndpoint] ucp_ep_create failed with status " << ds_ucs_status_string(status);
         RETURN_STATUS(K_RDMA_ERROR, "[UcpEndpoint] ucp_ep_create failed");
     }
 
@@ -79,9 +79,9 @@ ucp_rkey_h UcpEndpoint::GetOrUnpackRkey(const std::string &remoteRkey)
         std::unique_lock writeLock(rkeyMutex_);
         CleanUnpackedRkey();
         remoteRkey_ = remoteRkey;
-        ucs_status_t status = ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);
+        ucs_status_t status = ds_ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);
         if (status != UCS_OK) {
-            LOG(ERROR) << "[UcpEndpoint] Failed to unpack rkey with status " << ucs_status_string(status);
+            LOG(ERROR) << "[UcpEndpoint] Failed to unpack rkey with status " << ds_ucs_status_string(status);
         }
         return unpackedRkey_;
     }
@@ -90,7 +90,7 @@ ucp_rkey_h UcpEndpoint::GetOrUnpackRkey(const std::string &remoteRkey)
 void UcpEndpoint::CleanUnpackedRkey()
 {
     if (unpackedRkey_ != nullptr) {
-        ucp_rkey_destroy(unpackedRkey_);
+        ds_ucp_rkey_destroy(unpackedRkey_);
         unpackedRkey_ = nullptr;
     }
 }
@@ -108,7 +108,7 @@ void UcpEndpoint::Clean()
         ucp_request_param_t param = {};
         param.op_attr_mask = UCP_OP_ATTR_FIELD_FLAGS;
         param.flags = UCP_EP_CLOSE_FLAG_FORCE;
-        ucp_ep_close_nbx(ep_, &param);
+        ds_ucp_ep_close_nbx(ep_, &param);
         ep_ = nullptr;
     }
 }

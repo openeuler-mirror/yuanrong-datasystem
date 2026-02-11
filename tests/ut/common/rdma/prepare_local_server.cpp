@@ -20,6 +20,7 @@
  */
 
 #include "common/rdma/prepare_local_server.h"
+#include "datasystem/common/rdma/ucp_dlopen_util.h"
 
 namespace datasystem {
 
@@ -36,11 +37,11 @@ PrepareLocalServer::PrepareLocalServer(const ucp_context_h &context, const std::
     params.length = alignedSize;
     params.flags = 0;
 
-    ucp_mem_map(context_, &params, &memH_);
+    ds_ucp_mem_map(context_, &params, &memH_);
 
     ucp_mem_attr_t mem_attr = {};
     mem_attr.field_mask = UCP_MEM_ATTR_FIELD_ADDRESS;
-    ucp_mem_query(memH_, &mem_attr);
+    ds_ucp_mem_query(memH_, &mem_attr);
 
     bufferAddr_ = reinterpret_cast<uintptr_t>(mem_attr.address);
     actualSize_ = alignedSize;
@@ -50,7 +51,7 @@ PrepareLocalServer::PrepareLocalServer(const ucp_context_h &context, const std::
 PrepareLocalServer::~PrepareLocalServer()
 {
     if (memH_ != nullptr) {
-        ucp_mem_unmap(context_, memH_);
+        ds_ucp_mem_unmap(context_, memH_);
     }
 }
 

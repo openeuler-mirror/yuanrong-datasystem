@@ -78,7 +78,7 @@ Status UcpManager::UcpCreateContext()
 {
     LOG(INFO) << "UcpManager::UcpCreateContext()";
     ucp_config_t *config = nullptr;
-    ucs_status_t configRet = ucp_config_read(nullptr, nullptr, &config);
+    ucs_status_t configRet = ds_ucp_config_read(nullptr, nullptr, &config);
     if (configRet != UCS_OK) {
         RETURN_STATUS_LOG_ERROR(
             K_RDMA_ERROR, FormatString("Failed to read UCX config, ret = %d. Possible causes: "
@@ -95,8 +95,8 @@ Status UcpManager::UcpCreateContext()
     params.mt_workers_shared = 1;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!ucpContext_, K_DUPLICATED,
                                          "Failed to ucp create context, context already exist");
-    ucs_status_t contextRet = ucp_init(&params, config, &ucpContext_);
-    ucp_config_release(config);
+    ucs_status_t contextRet = ds_ucp_init(&params, config, &ucpContext_);
+    ds_ucp_config_release(config);
     if (contextRet != UCS_OK) {
         RETURN_STATUS_LOG_ERROR(
             K_RDMA_ERROR, FormatString("Failed to ucp create context, ret = %d. Possible causes: "
@@ -112,7 +112,7 @@ Status UcpManager::UcpDeleteContext()
 {
     LOG(INFO) << "UcpManager::UcpDeleteContext()";
     if (ucpContext_) {
-        ucp_cleanup(ucpContext_);
+        ds_ucp_cleanup(ucpContext_);
         ucpContext_ = nullptr;
     }
     return Status::OK();
@@ -265,9 +265,8 @@ Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDat
             const uint64_t key = requestId_.fetch_add(1);
             std::shared_ptr<Event> event;
             RETURN_IF_NOT_OK(CreateEvent(key, event));
-            Status status =
-                workerPool_->Write(ucpInfo.rkey(), dstBase + writtenSize, remoteWorkerAddr, remoteIpAddr,
-                                   srcBase + writtenSize, writeSize, key);
+            Status status = workerPool_->Write(ucpInfo.rkey(), dstBase + writtenSize, remoteWorkerAddr, remoteIpAddr,
+                                               srcBase + writtenSize, writeSize, key);
             if (!status.IsOk()) {
                 std::string detailed_msg =
                     FormatString("Failed to ucp gather write object with key = %zu. Underlying error: %s", key,

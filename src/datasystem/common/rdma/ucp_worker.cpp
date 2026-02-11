@@ -57,17 +57,17 @@ Status UcpWorker::Init()
     workerParams.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
     workerParams.thread_mode = UCS_THREAD_MODE_MULTI;
 
-    ucs_status_t status = ucp_worker_create(context_, &workerParams, &worker_);
+    ucs_status_t status = ds_ucp_worker_create(context_, &workerParams, &worker_);
     if (status != UCS_OK) {
-        LOG(ERROR) << errorMsgHead_ << " Failed to create worker. Status: " << ucs_status_string(status);
+        LOG(ERROR) << errorMsgHead_ << " Failed to create worker. Status: " << ds_ucs_status_string(status);
         RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to create worker.");
     }
 
     size_t workerAddrLen;
 
-    status = ucp_worker_get_address(worker_, &localWorkerAddr_, &workerAddrLen);
+    status = ds_ucp_worker_get_address(worker_, &localWorkerAddr_, &workerAddrLen);
     if (status != UCS_OK) {
-        LOG(ERROR) << errorMsgHead_ << " Failed to get worker address. Status: " << ucs_status_string(status);
+        LOG(ERROR) << errorMsgHead_ << " Failed to get worker address. Status: " << ds_ucs_status_string(status);
         RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to get worker address.");
     }
 
@@ -102,13 +102,13 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSeg
     ucp_request_param_t putParam{};
 
     void *putRequest =
-        ucp_put_nbx(ep, reinterpret_cast<const void *>(localSegAddr), localSegSize, remoteSegAddr, rkey, &putParam);
+        ds_ucp_put_nbx(ep, reinterpret_cast<const void *>(localSegAddr), localSegSize, remoteSegAddr, rkey, &putParam);
 
     point.RecordAndReset(PerfKey::RDMA_UCP_WORKER_WRITE);
 
     if (UCS_PTR_IS_ERR(putRequest)) {
         ucs_status_t status = UCS_PTR_STATUS(putRequest);
-        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_put_nbx. Status: " << ucs_status_string(status);
+        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_put_nbx. Status: " << ds_ucs_status_string(status);
         RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to send data immediately.");
     }
 
@@ -118,12 +118,12 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSeg
     CallbackContext *flushCtx = new CallbackContext{ this, requestID, putRequest };
     flushParam.user_data = flushCtx;
 
-    void *flushRequest = ucp_ep_flush_nbx(ep, &flushParam);
+    void *flushRequest = ds_ucp_ep_flush_nbx(ep, &flushParam);
     if (UCS_PTR_IS_ERR(flushRequest)) {
         ucs_status_t status = UCS_PTR_STATUS(flushRequest);
-        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_ep_flush_nbx. Status: " << ucs_status_string(status);
+        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_ep_flush_nbx. Status: " << ds_ucs_status_string(status);
         if (putRequest != nullptr) {
-            ucp_request_free(putRequest);
+            ds_ucp_request_free(putRequest);
         }
         delete flushCtx;
         RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to flush ep immediately.");
@@ -170,14 +170,14 @@ void UcpWorker::StopProgressThread()
 void UcpWorker::ProgressLoop()
 {
     int fd;
-    ucs_status_t status = ucp_worker_get_efd(worker_, &fd);
+    ucs_status_t status = ds_ucp_worker_get_efd(worker_, &fd);
     if (status != UCS_OK) {
-        LOG(ERROR) << errorMsgHead_ << " Failed to get efd. Status: " << ucs_status_string(status);
+        LOG(ERROR) << errorMsgHead_ << " Failed to get efd. Status: " << ds_ucs_status_string(status);
     }
 
     while (running_.load()) {
         bool innerBreak = false;
-        while (ucp_worker_progress(worker_)) {
+        while (ds_ucp_worker_progress(worker_)) {
             if (!running_.load()) {
                 innerBreak = true;
                 break;
@@ -188,13 +188,13 @@ void UcpWorker::ProgressLoop()
             break;
         }
 
-        status = ucp_worker_arm(worker_);
+        status = ds_ucp_worker_arm(worker_);
         if (status == UCS_ERR_BUSY) {
             // meaning there are new jobs in QP again, just restart the while loop
             continue;
         }
         if (status != UCS_OK) {
-            LOG(ERROR) << errorMsgHead_ << " Failed to arm worker. Status: " << ucs_status_string(status);
+            LOG(ERROR) << errorMsgHead_ << " Failed to arm worker. Status: " << ds_ucs_status_string(status);
         }
 
         struct pollfd pfd = { fd, POLLIN, 0 };
@@ -242,12 +242,12 @@ void UcpWorker::Clean()
     remoteEndpointMap_.clear();
 
     if (localWorkerAddr_) {
-        ucp_worker_release_address(worker_, localWorkerAddr_);
+        ds_ucp_worker_release_address(worker_, localWorkerAddr_);
         localWorkerAddr_ = nullptr;
     }
 
     if (worker_ != nullptr) {
-        ucp_worker_destroy(worker_);
+        ds_ucp_worker_destroy(worker_);
         worker_ = nullptr;
     }
 }
@@ -265,15 +265,15 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
     if (status == UCS_OK) {
         ctx->worker->manager_->InsertSuccessfulEvent(ctx->request_id);
     } else {
-        LOG(ERROR) << ctx->worker->errorMsgHead_ << " Put failed. Status: " << ucs_status_string(status);
+        LOG(ERROR) << ctx->worker->errorMsgHead_ << " Put failed. Status: " << ds_ucs_status_string(status);
         ctx->worker->manager_->InsertFailedEvent(ctx->request_id);
     }
 
     if (ctx->put_request) {
-        ucp_request_free(ctx->put_request);
+        ds_ucp_request_free(ctx->put_request);
     }
 
     delete ctx;
-    ucp_request_free(request);
+    ds_ucp_request_free(request);
 }
 }  // namespace datasystem
