@@ -96,6 +96,12 @@ Status InitializeFastTransportManager(const HostPort &hostport);
 Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress);
 
 /**
+ * @brief Check if the whole arena needs to be registered.
+ * @return True if the whole arena needs to be registered, else false.
+ */
+bool NeedRegisterWholeArena();
+
+/**
  * @brief Register fast transport memory (as segment).
  * @param[in] segAddress Starting address of the segment.
  * @param[in] segSize Size of the segment.
