@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -1066,7 +1067,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>collect_log<span class="w"> </span>--cluster_config_path<span class="w"> </span>./cluster_config.json
 </pre></div>
 </div>
-<p>更多关于 dscli generate_helm_chart 命令的使用请参考：<a class="reference internal" href="#dscli-collect-log">dscli collect_log</a>。</p>
+<p>更多关于 dscli collect_log 命令的使用请参考：<a class="reference internal" href="#dscli-collect-log">dscli collect_log</a>。</p>
 </section>
 <section id="id12">
 <h3>多机命令运行<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
@@ -1128,7 +1129,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 </tr>
 <tr class="row-odd"><td><p>–datasystem_home_dir</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
-<td><p>指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 datasystem_home_dir 的值</p></td>
+<td><p>指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 ‘./yr_datasystem/log_dir’，其中的 ‘.’ 将被替换为 <code class="docutils literal notranslate"><span class="pre">datasystem_home_dir</span></code> 的值</p></td>
 </tr>
 <tr class="row-even"><td><p>–cpunodebind</p></td>
 <td><p>-N</p></td>
@@ -1350,7 +1351,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tbody>
 <tr class="row-even"><td><p>–output_path &lt;OUTPUT_PATH&gt;</p></td>
 <td><p>-o &lt;OUTPUT_PATH&gt;</p></td>
-<td><p>指定生成C++代码模板文件存放路径，默认存放路径为当前目录</p></td>
+<td><p>指定生成C++代码模板文件的存放路径，默认存放路径为当前目录</p></td>
 </tr>
 </tbody>
 </table>
@@ -1446,7 +1447,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </section>
 <section id="id16">
 <h3>命令行参数配置项<a class="headerlink" href="#id16" title="Link to this heading">#</a></h3>
-<p>集群相关配置项位于 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 文件中，包含 datasystem_worker 的命令行参数相关的配置项</p>
+<p>命令行参数相关配置项位于 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 文件中，包含 datasystem_worker 的命令行参数相关的配置项</p>
 <blockquote>
 <div><p><strong>注意事项：</strong></p>
 <p>单机快速部署 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span></code> 该命令支持直接传入 datasystem_worker 的参数进行配置。表格中的配置项需要映射为命令行长参数。以配置项 <code class="docutils literal notranslate"><span class="pre">max_client_num</span></code> 为例，如需在启动时配置该项，应当写为 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span> <span class="pre">--max_client_num</span> <span class="pre">200</span></code>。</p>
@@ -1715,7 +1716,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><td><p>logbufsecs</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10</span></code></p></td>
-<td><p>最多缓冲这么多秒的日志消息</p></td>
+<td><p>日志消息最多缓冲时长（以秒为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>log_filename</p></td>
 <td><p>string</p></td>
@@ -2107,6 +2108,11 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
+</tr>
+<tr class="row-even"><td><p>memory_alignment</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
+<td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
 </tr>
 </tbody>
 </table>

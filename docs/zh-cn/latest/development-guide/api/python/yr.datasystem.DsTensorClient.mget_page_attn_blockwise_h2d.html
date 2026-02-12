@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -510,16 +511,16 @@ document.write(`
 <dl class="py method">
 <dt class="sig sig-object py" id="yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d">
 <span class="sig-prename descclassname"><span class="pre">yr.datasystem.DsTensorClient.</span></span><span class="sig-name descname"><span class="pre">mget_page_attn_blockwise_h2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layer_tensors</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_ids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_timeout_ms</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d" title="Link to this definition">#</a></dt>
-<dd><p>从 Host 中获取 PagedAttention 的层级 Tensor 并写入 Device 中。</p>
+<dd><p>从 host 中获取 PagedAttention 的层级 Tensor 并写入 device 中。</p>
 <p>mget_page_attn_blockwise_h2d 和 mset_page_attn_blockwise_d2h 需配套使用。</p>
 <p>若 mset_page_attn_blockwise_d2h 时将多个内存地址拼接写入了 Host 的内存，则在 mget_page_attn_blockwise_h2d 中自动将 Host 内存中的数据拆分成多个内存地址写入 Device。</p>
-<p>若 Host 的 key 不再使用，可调用 delete 接口删除。</p>
+<p>若 host 的 key 不再使用，可调用 delete 接口删除。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>keys</strong> (list) - Host 的键列表。约束：最多允许10,000个键。</p></li>
 <li><p><strong>layer_tensors</strong> (list) - PyTorch 的 Tensor 列表。约束：Tensor 的地址空间必须连续。</p></li>
 <li><p><strong>block_ids</strong> (list) - 要发布的块ID列表，例如 [0, 3, 5] 表示只传输第 0、3、5 个块。注意：该列表作用于每个 Tensor，即每个 Tensor 都会按相同的 block_ids 提取子块。</p></li>
-<li><p><strong>sub_timeout_ms</strong> (int) - 超时时间，当在指定时间内无法获取完成，则抛出异常。</p></li>
+<li><p><strong>sub_timeout_ms</strong> (int) - 超时时间，以毫秒为单位，当在指定时间内无法获取完成，则抛出异常。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><ul class="simple">
@@ -528,7 +529,7 @@ document.write(`
 </dd>
 <dt>异常：</dt><dd><ul class="simple">
 <li><p><strong>TypeError</strong> - 输入参数存在非法值。</p></li>
-<li><p><strong>RuntimeError</strong> - 给定列表的对象 key 都未执行成功。</p></li>
+<li><p><strong>RuntimeError</strong> - 给定列表的对象 key 都未获取成功。</p></li>
 </ul>
 </dd>
 </dl>

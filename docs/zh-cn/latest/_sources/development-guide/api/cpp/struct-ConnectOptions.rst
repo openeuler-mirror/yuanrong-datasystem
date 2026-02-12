@@ -58,6 +58,9 @@ ConnectOptions
 
         如果为 true，开启IPC性能调优功能，减小客户端与同节点服务端的访问时延。默认值：false
 
+        .. note::
+            **连接数限制**：单个 ``worker`` 最多支持 128 个启用 ``enableExclusiveConnection`` 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。
+
     .. cpp:member:: bool enableRemoteH2D = false;
         
         如果为 true，开启 RH2D 功能，该功能需要服务端同步开启 ``enable_remote_h2d`` 能力。默认值：false

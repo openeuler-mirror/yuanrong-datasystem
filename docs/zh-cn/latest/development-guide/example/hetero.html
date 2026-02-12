@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -983,7 +984,7 @@ C++</label><div class="sd-tab-content docutils">
 <li><p>key 的最大长度为 255 字节。</p></li>
 <li><p>DevPublish 和 DevSubscribe 需配套使用，不能和 DevMSet 及 DevMGet 混合使用。</p></li>
 <li><p>DevMSet 及 DevMGet 配套使用，写入的 key 使用 DevDelete 及 DevLocalDelete 删除。</p></li>
-<li><p>MSetD2H 和 MGetH2D 需要配套使用，MGetH2D 接口中只能传入 MSetD2H 接口写入的key。写入的 key 使用 delete 接口删除。</p></li>
+<li><p>MSetD2H 和 MGetH2D 需要配套使用，MGetH2D 接口中只能传入 MSetD2H 接口写入的key。写入的 key 使用 Delete 接口删除。</p></li>
 </ul>
 </section>
 </section>

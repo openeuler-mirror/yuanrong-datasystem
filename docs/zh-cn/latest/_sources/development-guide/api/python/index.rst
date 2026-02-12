@@ -87,9 +87,9 @@ Tensor接口
    * - :doc:`yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d <yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d>`
      - 根据 key 获取缓存在数据系统的 PagedAttention 的层级 Tensor。
    * - :doc:`yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h <yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h>`
-     - 将 PagedAttention 的层级 Tensor 异步写入 Host 中。
+     - 将 PagedAttention 的层级 Tensor 异步写入 host 中。
    * - :doc:`yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d <yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d>`
-     - 从 Host 中获取 PagedAttention 的层级 Tensor 并写入 Device 中。
+     - 从 host 中获取 PagedAttention 的层级 Tensor 并写入 device 中。
 
 
 异构对象接口
@@ -170,6 +170,8 @@ KV接口
      - 查看 key 在数据系统中是否存在。
    * - :doc:`yr.datasystem.kv_client.KVClient.expire <yr.datasystem.kv_client.KVClient.expire>`
      - 为一组键设置过期生命周期，返回函数操作状态及设置失败的键列表。
+   * - :doc:`yr.datasystem.kv_client.KVClient.health_check <yr.datasystem.kv_client.KVClient.health_check>`
+     - 查看连接的 Worker 的健康状态。
 
 
 对象缓存接口

@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -1591,25 +1592,25 @@ SFS</label><div class="sd-tab-content docutils">
 <td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
 <td><p>释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.asyncDelete</p></td>
+<tr class="row-even"><td><p>global.performance.memoryAlignment</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
+<td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.performance.asyncDelete</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否异步删除对象，如果设置为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.enableP2pTransfer</p></td>
+<tr class="row-even"><td><p>global.performance.enableP2pTransfer</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启异构对象传输协议支持点对点传输</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.enableWorkerWorkerBatchGet</p></td>
+<tr class="row-odd"><td><p>global.performance.enableWorkerWorkerBatchGet</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启worker到worker的对象数据批量获取，默认值为false</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.performance.enableRemoteH2D</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>如果为true，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值：false</p></td>
 </tr>
 <tr class="row-even"><td><p>global.performance.ocShmTransferThresholdKB</p></td>
 <td><p>int</p></td>

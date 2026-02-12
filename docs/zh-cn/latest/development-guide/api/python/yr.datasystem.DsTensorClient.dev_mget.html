@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -518,7 +519,7 @@ document.write(`
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>keys</strong> (list) - device 的异构对象的 key。约束：传入的key的数量 <cite>&lt;=10000</cite>。</p></li>
 <li><p><strong>tensors</strong> (list) - : mindspore或pytorch的Tensor列表。约束：Tensor的地址空间必须连续。</p></li>
-<li><p><strong>sub_timeout_ms</strong> (int) - 超时时间，当在指定时间内无法获取完成，则抛出异常。</p></li>
+<li><p><strong>sub_timeout_ms</strong> (int) - 超时时间，以毫秒为单位，当在指定时间内无法获取完成，则抛出异常。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><ul class="simple">

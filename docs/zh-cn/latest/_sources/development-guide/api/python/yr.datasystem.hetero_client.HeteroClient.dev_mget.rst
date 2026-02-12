@@ -14,7 +14,7 @@ yr.datasystem.hetero_client.HeteroClient.dev_mget
     参数：
         - **keys** (list) - device 的异构对象的 key。约束：传入的key的数量 `<=10000`。
         - **data_blob_list** (list) - :class:`yr.datasystem.hetero_client.DeviceBlobList` 列表。
-        - **sub_timeout_ms** (int) - 超时时间，当在指定时间内无法获取完成，则抛出异常。
+        - **sub_timeout_ms** (int) - 超时时间，以毫秒为单位，当在指定时间内无法获取完成，则抛出异常。
 
     返回：
         - **failed_keys** (list) - 用于描述get失败的key。

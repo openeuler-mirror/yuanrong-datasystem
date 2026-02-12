@@ -1,5 +1,5 @@
 yr.datasystem.kv_client.KVClient.get_buffers
-=====================================
+============================================
 
 .. py:method:: yr.datasystem.kv_client.KVClient.get_buffers(keys=None, timeout_ms=0)
 

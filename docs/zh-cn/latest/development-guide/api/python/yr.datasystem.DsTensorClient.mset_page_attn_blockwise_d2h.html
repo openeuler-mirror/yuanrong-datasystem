@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -510,20 +511,15 @@ document.write(`
 <dl class="py method">
 <dt class="sig sig-object py" id="yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h">
 <span class="sig-prename descclassname"><span class="pre">yr.datasystem.DsTensorClient.</span></span><span class="sig-name descname"><span class="pre">mset_page_attn_blockwise_d2h</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layer_tensors</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_ids</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h" title="Link to this definition">#</a></dt>
-<dd><p>将 PagedAttention 的层级 Tensor 异步写入 Host 中。</p>
+<dd><p>将 PagedAttention 的层级 Tensor 异步写入 host 中。</p>
 <p>若 Device 的 Blob 中存在多个内存地址时，会自动将数据拼接后写入 Host。</p>
-<p>若 Host 的 key 不再使用，可调用 delete 接口删除。</p>
-<dl>
+<p>若 host 的 key 不再使用，可调用 delete 接口删除。</p>
+<dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>keys</strong> (list) - Host 的键列表。约束：最多允许10,000个键。</p></li>
 <li><p><strong>layer_tensors</strong> (list) - PyTorch 的 Tensor 列表。约束：Tensor 的地址空间必须连续。</p></li>
 <li><p><strong>block_ids</strong> (list) - 要发布的块ID列表，例如 [0, 3, 5] 表示只传输第 0、3、5 个块。注意：该列表作用于每个 Tensor，即每个 Tensor 都会按相同的 block_ids 提取子块。</p></li>
 </ul>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>write_mode = WriteMode.NONE_L2_CACHE
-ttl_second = 0
-existence = ExistenceOpt.NONE
-</pre></div>
-</div>
 </dd>
 <dt>返回：</dt><dd><ul class="simple">
 <li><p><strong>Future</strong> (Future) - 可通过该Future对象查询异步请求执行结果。</p></li>
