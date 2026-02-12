@@ -179,7 +179,9 @@ class KVClient:
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same
             with timeout_ms.
             enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker.
+            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
+            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
+            the system will throw a request exception.
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.

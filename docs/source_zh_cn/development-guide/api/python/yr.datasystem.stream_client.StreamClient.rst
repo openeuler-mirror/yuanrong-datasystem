@@ -15,7 +15,7 @@ yr.datasystem.stream_client.StreamClient
         - **access_key** (str) - AK/SK授权使用的访问密钥。默认值： ``""`` 。
         - **secret_key** (str) - AK/SK授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户ID。默认值： ``""`` 。
-        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。
+        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。**连接数限制**：单个 ``worker`` 最多支持 128 个启用 ``enable_exclusive_connection`` 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。
 
     输出：
         StreamClient

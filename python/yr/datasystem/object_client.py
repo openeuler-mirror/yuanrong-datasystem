@@ -302,7 +302,9 @@ class ObjectClient:
         oauth_url(str): The auth url of IAM.
         tenant_id(str): The tenant ID.
         enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-        datasystem_worker
+        datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
+        `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
+        the system will throw a request exception.
 
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
@@ -344,7 +346,9 @@ class ObjectClient:
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
             enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker.
+            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
+            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
+            the system will throw a request exception.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
