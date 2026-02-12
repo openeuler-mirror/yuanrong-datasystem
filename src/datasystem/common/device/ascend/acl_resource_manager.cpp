@@ -29,7 +29,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/utils/status.h"
 
 #define CHECK_ACL_RESULT(aclRet, apiName)                                                             \
     do {                                                                                              \
@@ -43,218 +42,24 @@
 namespace datasystem {
 const size_t MAX_FFTS_TASKS_COUNT = 8;
 
-void MemcopyConfig::Init()
+Status AclResourceManager::MemcpyBatchD2H(const std::vector<DeviceBlobList> &devBlobList,
+                                          std::vector<Buffer *> &bufferList)
 {
-    LOG_IF_ERROR(GetNumberFromEnv("DS_DEVICE_ACL_SIZE", deviceMemSize), "GetNumberFromEnv failed");
-    LOG_IF_ERROR(GetNumberFromEnv("DS_HOST_ACL_SIZE", hostMemSize), "GetNumberFromEnv failed");
-    LOG_IF_ERROR(GetPolicyFromEnv("DS_D2H_MEMCPY_POLICY", policyD2H), "GetPolicyFromEnv failed");
-    LOG_IF_ERROR(GetPolicyFromEnv("DS_H2D_MEMCPY_POLICY", policyH2D), "GetPolicyFromEnv failed");
+    DeviceBatchCopyHelper helper;
+    RETURN_IF_NOT_OK(helper.Prepare(devBlobList, bufferList, MemcpyKind::DEVICE_TO_HOST));
+    // Prepare before get deviceId in case that deviBlobList maybe empty
+    auto deviceId = devBlobList[0].deviceIdx;
+    helper.PrintGetPerfInfo(helper);
+    return swapOutPool_->MemcpyBatchD2H(deviceId, helper, policyD2H);
 }
-
-std::string MemcopyConfig::ToString()
+Status AclResourceManager::MemcpyBatchH2D(const std::vector<DeviceBlobList> &devBlobList,
+                                          std::vector<Buffer *> &bufferList)
 {
-    std::stringstream ss;
-    ss << "MemcopyConfig { policyD2H:" << static_cast<int>(policyD2H);
-    ss << ", policyH2D:" << static_cast<int>(policyH2D);
-    ss << ", deviceMemSize:" << deviceMemSize;
-    ss << ", hostMemSize:" << hostMemSize;
-    ss << "}";
-    return ss.str();
-}
-
-Status MemcopyConfig::GetNumberFromEnv(const char *key, uint64_t &value)
-{
-    auto strValue = std::getenv(key);
-    RETURN_OK_IF_TRUE(strValue == nullptr);
-    try {
-         uint64_t ret = StrToUnsignedLong(strValue);
-        if (ret == 0) {
-            throw std::out_of_range("Memory should not be set to zero.");
-        }
-        value = ret;
-    } catch (std::invalid_argument &invalidArgument) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-                      FormatString("Env %s value %s parse to number failed, invalid argument", key, strValue));
-    } catch (std::out_of_range &outOfRange) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-                      FormatString("Env %s value %s parse to number failed, out of range", key, strValue));
-    }
-    return Status::OK();
-}
-
-Status MemcopyConfig::GetPolicyFromEnv(const char *key, MemcopyPolicy &policy)
-{
-    auto strValue = std::getenv(key);
-    RETURN_OK_IF_TRUE(strValue == nullptr);
-    std::string str = strValue;
-    if (str == "ffts") {
-        policy = MemcopyPolicy::FFTS;
-    } else if (str == "direct") {
-        policy = MemcopyPolicy::DIRECT;
-    } else if (str == "huge_ffts") {
-        policy = MemcopyPolicy::HUGE_FFTS;
-    } else {
-        RETURN_STATUS(K_INVALID, FormatString("Unknown memcopy policy %s from env %s", str, key));
-    }
-    return Status::OK();
-}
-
-Status AclMemMgrBase::Init()
-{
-    int index;
-    auto rc = acl::AclDeviceManager::Instance()->GetDeviceIdx(index);
-    if (rc.IsError()) {
-        LOG(WARNING) << "Not set device idx yet, return warning!";
-        return Status::OK();
-    }
-    waitPost_ = std::make_unique<WaitPost>();
-    return Status::OK();
-}
-
-Status AclMemMgrBase::Allocate(const std::vector<BufferMetaInfo> &bMeta, std::vector<ShmUnit> &memoryPool,
-                               bool skipRetry)
-{
-    std::lock_guard<std::mutex> lock(memPoolLock_);
-    uint64_t batchSize = bMeta.size();
-    uint64_t maxAllocateSize = 0;
-    if (type_ == AllocateType::DEV_DEVICE) {
-        for (const auto &meta : bMeta) {
-            maxAllocateSize = std::max(maxAllocateSize, meta.size);
-        }
-        batchSize = memoryPool.size();
-    }
-    uint32_t intervalMs = 100;
-    for (uint64_t i = 0; i < batchSize; i++) {
-        int retryNums = 10;
-        if (skipRetry) {
-            retryNums = 0;
-        }
-        Status rc = Status::OK();
-        do {
-            if (rc.IsError()) {
-                waitPost_->WaitFor(intervalMs);
-            }
-
-            size_t allocSize = (type_ == AllocateType::DEV_DEVICE) ? maxAllocateSize : bMeta[i].size;
-            rc = memoryPool[i].AllocateMemory(DEFAULT_TENANTID, allocSize, false, ServiceType::OBJECT, type_);
-            if (retryNums <= 0) {
-                break;
-            }
-            retryNums--;
-        } while (rc.IsError() && rc.GetCode() == K_OUT_OF_MEMORY);
-        if (skipRetry) {
-            RETURN_IF_NOT_OK(rc);
-        } else {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Failed to allocate memory with size %d", bMeta[i].size));
-        }
-    }
-    return Status::OK();
-}
-
-Status AclMemMgrBase::Free(std::vector<ShmUnit> &memoryPool)
-{
-    std::lock_guard<std::mutex> lock(memPoolLock_);
-    uint64_t size = memoryPool.size();
-    for (uint64_t i = 0; i < size; i++) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(memoryPool[i].FreeMemory(), "Failed to free memory");
-    }
-    return Status::OK();
-}
-
-AclHostMemMgr::AclHostMemMgr(Allocator *allocator) : AclMemMgrBase(allocator)
-{
-    type_ = AllocateType::DEV_HOST;
-    memoryCopyThreadPool_ = std::make_shared<ThreadPool>(0, GetRecommendedMemoryCopyThreadsNum());
-}
-
-Status AclHostMemMgr::HostMemoryCopy(void *dstData, uint64_t dstLength, void *srcData, uint64_t srcLength)
-{
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(dstData != nullptr, K_INVALID, "Can't put null dst ptr!");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(srcData != nullptr, K_INVALID, "Can't put null src ptr!");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        dstLength > 0 && srcLength > 0, K_INVALID,
-        FormatString("length must greater than 0! dstLength : %lld, srcLength : %lld", dstLength, srcLength));
-    Status status = ::datasystem::MemoryCopy(static_cast<uint8_t *>(dstData), dstLength,
-                                             static_cast<const uint8_t *>(srcData), srcLength, memoryCopyThreadPool_);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
-                                         FormatString("Copy data to buffer failed, err: %s", status.ToString()));
-    return Status::OK();
-}
-
-AclResourceManager::AclResourceManager()
-{
-    deviceResources_.reserve(MAX_DEVICE_COUNT);
-    for (size_t deviceId = 0; deviceId < MAX_DEVICE_COUNT; deviceId++) {
-        deviceResources_.emplace_back(std::make_unique<DeviceResource>(deviceId));
-    }
-    config.Init();
-}
-
-Status AclResourceManager::Init()
-{
-    {
-        std::shared_lock<std::shared_timed_mutex> rlocker(mutex_);
-        if (aclHostMemMgr_ != nullptr && aclDeviceMemMgr_ != nullptr) {
-            return Status::OK();
-        }
-    }
-    INJECT_POINT_NO_RETURN("AclResourceManager.Init");
-
-    auto devInterImpl = acl::AclDeviceManager::Instance();
-    struct DevMemFuncRegister regFunc;
-
-    auto hostAllocFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
-        return devInterImpl->aclrtMallocHost(&(*ptr), maxSize);
-    };
-    auto hostdestroyFunc = [](void *ptr, size_t destroySize) -> Status {
-        (void)destroySize;
-        if (ptr) {
-            // do not free in instance yet (destroy func : devInterImpl->aclrtFreeHost(ptr))
-            // destroy may cause interrupt with acl static data
-            return Status::OK();
-        }
-        return Status::OK();
-    };
-    auto devAllocFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
-        return devInterImpl->aclrtMalloc(&(*ptr), maxSize, ACL_MEM_MALLOC_HUGE_FIRST);
-    };
-    auto devdestroyFunc = [](void *ptr, size_t destroySize) -> Status {
-        (void)destroySize;
-        if (ptr) {
-            // do not free in instance yet (destroy func : devInterImpl->aclrtFree(ptr)
-            // destroy may cause interrupt with acl static data
-            return Status::OK();
-        }
-        return Status::OK();
-    };
-    regFunc.devDeviceCreateFunc = devAllocFunc;
-    regFunc.devDeviceDestroyFunc = devdestroyFunc;
-    regFunc.devHostCreateFunc = hostAllocFunc;
-    regFunc.devHostDestroyFunc = hostdestroyFunc;
-
-    std::lock_guard<std::shared_timed_mutex> wlocker(mutex_);
-    auto *allocator = Allocator::Instance();
-    LOG(INFO) << config.ToString();
-    allocator->InitWithoutShm(config.deviceMemSize, config.hostMemSize, regFunc);
-
-    if (!aclHostMemMgr_) {
-        aclHostMemMgr_ = std::make_unique<AclHostMemMgr>(allocator);
-        auto rc = aclHostMemMgr_->Init();
-        if (rc.IsError()) {
-            aclHostMemMgr_.reset();
-        }
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to init dev host mem.");
-    }
-
-    if (!aclDeviceMemMgr_) {
-        aclDeviceMemMgr_ = std::make_unique<AclDeviceMemMgr>(allocator);
-        auto rc = aclDeviceMemMgr_->Init();
-        if (rc.IsError()) {
-            aclDeviceMemMgr_.reset();
-        }
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to init dev device mem.");
-    }
-    return Status::OK();
+    DeviceBatchCopyHelper helper;
+    RETURN_IF_NOT_OK(helper.Prepare(devBlobList, bufferList, MemcpyKind::HOST_TO_DEVICE));
+    auto deviceId = devBlobList[0].deviceIdx;
+    helper.PrintGetPerfInfo(helper);
+    return swapInPool_->MemcpyBatchH2D(deviceId, helper, policyH2D);
 }
 
 Status AclResourceManager::CreateAclRtStream(uint32_t deviceId, aclrtStream &stream, bool subscribeReport)
@@ -386,6 +191,93 @@ Status AclResourceManager::DeviceResource::FreeRtNotify(rtNotify_t notify)
         RETURN_IF_NOT_OK(aclDeviceManager->RtNotifyDestroy(notify));
     }
     return Status::OK();
+}
+
+AclMemCopyPool::AclMemCopyPool(AclResourceManager *resourceMgr) : resourceMgr_(resourceMgr)
+{
+    const size_t pipeLineNums = 2;
+    copyPool_ = std::make_unique<ThreadPool>(1);
+    fftsCopyPool_ = std::make_unique<ThreadPool>(1);
+    const int h2hThreadCount = 2;
+    h2hCopyPool_ = std::make_unique<ThreadPool>(h2hThreadCount);
+    devInterImpl_ = acl::AclDeviceManager::Instance();
+    for (size_t i = 0; i < pipeLineNums; i++) {
+        aclrtStream copyStream = nullptr;
+        copyStreams_.emplace_back(copyStream);
+    }
+}
+
+Status AclMemCopyPool::MemcpyBatchD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
+{
+    PerfPoint point(PerfKey::CLIENT_D2H_MEMCPY_INIT);
+    if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
+        if (deviceNow_ != static_cast<int32_t>(deviceId)) {
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
+        }
+        RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
+        point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY_RUN);
+        CHECK_FAIL_RETURN_STATUS(
+            deviceId < MAX_DEVICE_COUNT, K_INVALID,
+            FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+        FftsPipelineD2HCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(),
+                                     fftsCopyPool_.get());
+        return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+    } else {
+        PerfPoint point(PerfKey::TOTAL_D2H_BATCH_MEMCPY);
+        return AclMemcpyBatch(deviceId, helper, MemcpyKind::DEVICE_TO_HOST);
+    }
+}
+
+Status AclMemCopyPool::MemcpyBatchH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
+{
+    PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY_INIT);
+    if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
+        if (deviceNow_ != static_cast<int32_t>(deviceId)) {
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
+        }
+        RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
+        point.RecordAndReset(PerfKey::CLIENT_H2D_MEMCPY_RUN);
+        CHECK_FAIL_RETURN_STATUS(
+            deviceId < MAX_DEVICE_COUNT, K_INVALID,
+            FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+        FftsPipelineH2DCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(),
+                                     fftsCopyPool_.get());
+        return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+    } else {
+        PerfPoint point(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
+        return AclMemcpyBatch(deviceId, helper, MemcpyKind::HOST_TO_DEVICE);
+    }
+}
+
+Status AclMemCopyPool::AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind copyKind)
+{
+    size_t leftNum = helper.dataSizeList.size();
+    size_t startIndex = 0;
+    while (leftNum > 0) {
+        auto maxBatchSize = 4096UL;
+        auto batchNum = std::min(leftNum, maxBatchSize);
+        size_t failedIdx = 0;
+        auto res =
+            devInterImpl_->MemcpyBatch(helper.dstList.data() + startIndex, helper.dataSizeList.data() + startIndex,
+                                       helper.srcList.data() + startIndex, helper.dataSizeList.data() + startIndex,
+                                       batchNum, copyKind, deviceId, &failedIdx);
+        if (res.IsError()) {
+            LOG(ERROR) << FormatString("AclMemcpyBatch return error , failed index:%lu", failedIdx) << "," << res;
+            return res;
+        }
+        leftNum -= batchNum;
+        startIndex += batchNum;
+    }
+    return Status::OK();
+}
+
+AclMemCopyPool::~AclMemCopyPool()
+{
+    for (auto &stream : copyStreams_) {
+        if (stream != nullptr) {
+            LOG_IF_ERROR(devInterImpl_->DestroyStream(stream), "Destory stream failed.");
+        }
+    }
 }
 
 FftsPipelineCopierBase::FftsPipelineCopierBase(int32_t deviceId, AclResourceManager *aclResourceMgr,

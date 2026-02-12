@@ -33,7 +33,7 @@ constexpr uint32_t P2P_RECV_RANK = 1;
 class CommWrapper : public CommWrapperBase {
 public:
     explicit CommWrapper(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                         std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr);
+                         std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr);
 
     ~CommWrapper();
 

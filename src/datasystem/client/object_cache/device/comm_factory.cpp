@@ -44,8 +44,8 @@ inline static void PrintRootInfo(const T &rootInfo)
 }
 
 CommFactory::CommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
-                         AclResourceManager *aclResourceMgr)
-    : ClientDeviceCurd(std::move(workerApi)), aclResourceMgr_(aclResourceMgr)
+                         DeviceResourceManager *resourceMgr)
+    : ClientDeviceCurd(std::move(workerApi)), resourceMgr_(resourceMgr)
 {
     commThreadControl_ = std::make_shared<HcclCommMagr>();
 }
@@ -107,7 +107,7 @@ Status CommFactory::GetOrCreateComm(P2PEventType eventType, int32_t localDeviceI
 
     if (enableP2Ptransfer) {
         comm = std::make_shared<P2PHcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_,
-                                                    aclResourceMgr_);
+                                                    resourceMgr_);
         acc->second = comm;
         if (eventType == P2PEventType::SEND) {
             CreateCommInSend(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
@@ -117,7 +117,7 @@ Status CommFactory::GetOrCreateComm(P2PEventType eventType, int32_t localDeviceI
         return CreateCommCheckError(comm);
     }
     comm =
-        std::make_shared<CommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_, aclResourceMgr_);
+        std::make_shared<CommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_, resourceMgr_);
     acc->second = comm;
     if (eventType == P2PEventType::SEND) {
         CreateCommInSend(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);

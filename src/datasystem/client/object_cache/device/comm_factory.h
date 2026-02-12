@@ -54,7 +54,7 @@ public:
 
     ClientDeviceCurd &operator=(const ClientDeviceCurd &) = delete;
 
-    virtual void ShutDown(){};
+    virtual void ShutDown() {};
 
     virtual ~ClientDeviceCurd() = default;
 
@@ -65,7 +65,7 @@ protected:
 
 class CommFactory : public ClientDeviceCurd {
 public:
-    CommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi, AclResourceManager *aclResourceMgr);
+    CommFactory(std::shared_ptr<object_cache::IClientWorkerApi> workerApi, DeviceResourceManager *resourceMgr);
 
     void ShutDown();
 
@@ -150,7 +150,7 @@ public:
      * @return The mix key of eventType, localDeviceId, remoteClientId and remoteDeviceId.
      */
     static std::string GetCommKey(P2PEventType eventType, int32_t localDeviceId, const std::string &remoteClientId,
-                                   int32_t remoteDeviceId);
+                                  int32_t remoteDeviceId);
 
 private:
     /**
@@ -215,7 +215,7 @@ private:
     // To prevent two threads from trying to create a communication domain at the same time.
     std::shared_timed_mutex mutex_;
     std::shared_ptr<HcclCommMagr> commThreadControl_;
-    AclResourceManager *aclResourceMgr_;
+    DeviceResourceManager *resourceMgr_;
 };
 }  // namespace datasystem
 

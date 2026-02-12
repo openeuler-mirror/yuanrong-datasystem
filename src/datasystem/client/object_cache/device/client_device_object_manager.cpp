@@ -47,6 +47,9 @@ ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
       objClientImpl_(impl),
       clientDevOJTimeoutMs_(impl->requestTimeoutMs_)
 {
+    // According to device type, we should create corresponding resource manage.
+    // Now only ACL resource manager is created.
+    resourceMgr_ = std::make_unique<AclResourceManager>();
 }
 
 Status ClientDeviceObjectManager::Init()
@@ -54,9 +57,7 @@ Status ClientDeviceObjectManager::Init()
     devInterImpl_ = DeviceManagerFactory::GetDeviceManager();
     std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
-    commFactory_ = std::make_shared<CommFactory>(workerApi, &aclResourceMgr_);
-    swapOutPool_ = std::make_unique<AsyncAclMemCopyPool>(&aclResourceMgr_);
-    swapInPool_ = std::make_unique<AsyncAclMemCopyPool>(&aclResourceMgr_);
+    commFactory_ = std::make_shared<CommFactory>(workerApi, resourceMgr_.get());
     return Status::OK();
 }
 
@@ -197,7 +198,7 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
 
 Status ClientDeviceObjectManager::GetOrCreateP2PSubscribe(int32_t deviceId, std::shared_ptr<P2PSubscribe> &p2pSubscribe)
 {
-    RETURN_IF_NOT_OK(aclResourceMgr_.Init());
+    RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
     tbb::concurrent_hash_map<int, std::shared_ptr<P2PSubscribe>>::accessor acc;
     if (!subscribeTable_.find(acc, deviceId)) {
         std::shared_ptr<IClientWorkerApi> workerApi;
@@ -270,63 +271,18 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
                                                            std::vector<Buffer *> &bufferList, MemcpyKind copyKind,
                                                            bool enableHugeTlb)
 {
-    DeviceBatchCopyHelper helper;
-    RETURN_IF_NOT_OK(helper.Prepare(devBlobList, bufferList, copyKind));
-    auto deviceId = devBlobList[0].deviceIdx;
-    aclResourceMgr_.SetD2HPolicyByHugeTlb(enableHugeTlb);
+    resourceMgr_->SetPolicyByHugeTlb(enableHugeTlb);
+
     INJECT_POINT("NO_USE_FFTS", [this]() {
-        aclResourceMgr_.SetPolicyDirect();
+        resourceMgr_->SetPolicyDirect();
         return Status::OK();
     });
-    if (copyKind == MemcpyKind::DEVICE_TO_HOST) {
-        auto policy = aclResourceMgr_.GetD2HPolicy();
-        if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
-            return swapOutPool_->AclMemcpyBatchD2H(deviceId, helper.dstBuffers, helper.srcBuffers, helper.bufferMetas);
-        } else {
-            PerfPoint p(PerfKey::TOTAL_D2H_BATCH_MEMCPY);
-            return swapOutPool_->AclMemcpyBatch(copyKind, helper, deviceId);
-        }
-    }
-    auto policy = aclResourceMgr_.GetH2DPolicy();
-    if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
-        PrintGetPerfInfo(helper);
-        return swapInPool_->AclMemcpyBatchH2D(deviceId, helper.srcBuffers, helper.dstBuffers, helper.bufferMetas);
+    // caller makes sure that the copyKind is HOST_TO_DEVICE or DEVICE_TO_HOST
+    if (copyKind == MemcpyKind::HOST_TO_DEVICE) {
+        return resourceMgr_->MemcpyBatchH2D(devBlobList, bufferList);
     } else {
-        PerfPoint p(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
-        return swapOutPool_->AclMemcpyBatch(copyKind, helper, deviceId);
+        return resourceMgr_->MemcpyBatchD2H(devBlobList, bufferList);
     }
-}
-
-void ClientDeviceObjectManager::PrintGetPerfInfo(DeviceBatchCopyHelper &helper)
-{
-    BlobListInfo infoList;
-    infoList.keyNums = helper.bufferMetas.size();
-    int64_t blobSum = std::accumulate(helper.bufferMetas.begin(), helper.bufferMetas.end(), 0,
-                                      [](int64_t total, const BufferMetaInfo &view) { return total + view.blobCount; });
-    infoList.minBlobNums = std::min_element(helper.bufferMetas.begin(), helper.bufferMetas.end(),
-                                            [](const BufferMetaInfo &view1, const BufferMetaInfo &view2) {
-        return view1.blobCount < view2.blobCount;
-    })
-        ->blobCount;
-    infoList.maxBlobNums = std::max_element(helper.bufferMetas.begin(), helper.bufferMetas.end(),
-                                            [](const BufferMetaInfo &view1, const BufferMetaInfo &view2) {
-        return view1.blobCount < view2.blobCount;
-    })
-        ->blobCount;
-    infoList.avgBlobNums = blobSum / infoList.keyNums;
-
-    infoList.totalSize = std::accumulate(helper.srcBuffers.begin(), helper.srcBuffers.end(), 0,
-                                         [](int64_t total, const BufferView &view) { return total + view.size; });
-    infoList.minBlockSize =
-        std::min_element(helper.srcBuffers.begin(), helper.srcBuffers.end(),
-                         [](const BufferView &view1, const BufferView &view2) { return view1.size < view2.size; })
-                         ->size;
-    infoList.maxBlockSize =
-        std::max_element(helper.srcBuffers.begin(), helper.srcBuffers.end(),
-                         [](const BufferView &view1, const BufferView &view2) { return view1.size < view2.size; })
-                         ->size;
-    infoList.avgBlockSize = infoList.totalSize / infoList.keyNums;
-    LOG(INFO) << infoList.ToString(false);
 }
 
 void ClientDeviceObjectManager::SetThreadInterruptFlag2True()
@@ -336,76 +292,5 @@ void ClientDeviceObjectManager::SetThreadInterruptFlag2True()
     }
 }
 
-AsyncAclMemCopyPool::AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr) : aclResourceMgr_(aclResourceMgr)
-{
-    copyPool_ = std::make_unique<ThreadPool>(1);
-    fftsCopyPool_ = std::make_unique<ThreadPool>(1);
-    const int h2hThreadCount = 2;
-    h2hCopyPool_ = std::make_unique<ThreadPool>(h2hThreadCount);
-    devInterImpl_ = DeviceManagerFactory::GetDeviceManager();
-    for (size_t i = 0; i < AclHostMemMgr::GetPiplineNums(); i++) {
-        aclrtStream copyStream = nullptr;
-        copyStreams_.emplace_back(copyStream);
-    }
-}
-
-Status AsyncAclMemCopyPool::AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                                              const std::vector<BufferView> &deviceBuffers,
-                                              const std::vector<BufferMetaInfo> &metaInfos)
-{
-    PerfPoint point(PerfKey::CLIENT_D2H_MEMCPY_INIT);
-    if (deviceNow_ != static_cast<int32_t>(deviceId)) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
-    }
-    RETURN_IF_NOT_OK(aclResourceMgr_->Init());
-    point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY_RUN);
-    FftsPipelineD2HCopier copier(deviceId, aclResourceMgr_, metaInfos, h2hCopyPool_.get(), fftsCopyPool_.get());
-    return copier.ExecuteMemcpy(hostBuffers, deviceBuffers);
-}
-
-Status AsyncAclMemCopyPool::AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                                              const std::vector<BufferView> &deviceBuffers,
-                                              const std::vector<BufferMetaInfo> &metaInfos)
-{
-    PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY_INIT);
-    if (deviceNow_ != static_cast<int32_t>(deviceId)) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
-    }
-    RETURN_IF_NOT_OK(aclResourceMgr_->Init());
-    point.RecordAndReset(PerfKey::CLIENT_H2D_MEMCPY_RUN);
-    FftsPipelineH2DCopier copier(deviceId, aclResourceMgr_, metaInfos, h2hCopyPool_.get(), fftsCopyPool_.get());
-    return copier.ExecuteMemcpy(deviceBuffers, hostBuffers);
-}
-
-Status AsyncAclMemCopyPool::AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId)
-{
-    size_t leftNum = helper.batchSize;
-    size_t startIndex = 0;
-    while (leftNum > 0) {
-        auto maxBatchSize = 4096UL;
-        auto batchNum = std::min(leftNum, maxBatchSize);
-        size_t failedIdx = 0;
-        auto res =
-            devInterImpl_->MemcpyBatch(helper.dstList.data() + startIndex, helper.dataSizeList.data() + startIndex,
-                                       helper.srcList.data() + startIndex, helper.dataSizeList.data() + startIndex,
-                                       batchNum, copyKind, deviceId, &failedIdx);
-        if (res.IsError()) {
-            LOG(ERROR) << FormatString("AclMemcpyBatch return error , failed index:%lu", failedIdx) << "," << res;
-            return res;
-        }
-        leftNum -= batchNum;
-        startIndex += batchNum;
-    }
-    return Status::OK();
-};
-
-AsyncAclMemCopyPool::~AsyncAclMemCopyPool()
-{
-    for (auto &stream : copyStreams_) {
-        if (stream != nullptr) {
-            LOG_IF_ERROR(devInterImpl_->DestroyStream(stream), "Destory stream failed.");
-        }
-    }
-}
 }  // namespace object_cache
 }  // namespace datasystem

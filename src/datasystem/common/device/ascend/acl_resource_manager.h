@@ -30,16 +30,16 @@
 #include "datasystem/common/device/ascend/callback_thread.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/ascend/ffts_dispatcher.h"
-#include "datasystem/common/shared_memory/allocator.h"
-#include "datasystem/common/shared_memory/arena_group_key.h"
+#include "datasystem/common/device/device_resource_manager.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
+#include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 const size_t FFTS_PIPELINE = 2;
-
+const size_t MAX_DEVICE_COUNT = 64;
 struct DataMetaInfo {
     size_t blobCount;
     size_t firstBlobOffset;
@@ -52,101 +52,171 @@ struct BufferView {
     size_t size;
 };
 
-struct BufferMetaInfo {
-    size_t blobCount;
-    size_t firstBlobOffset;
-    size_t size;
-};
-
-enum class MemcopyPolicy : int {
-    DIRECT,
-    FFTS,
-    HUGE_FFTS,
-};
-
-struct MemcopyConfig {
-    void Init();
-    std::string ToString();
-    Status GetNumberFromEnv(const char *key, uint64_t &value);
-    Status GetPolicyFromEnv(const char *key, MemcopyPolicy &policy);
-
-    const uint64_t defaultHostMemSize = 2684354560;   // 2.5G
-    const uint64_t defaultDeviceMemSize = 104857600;  // 100MB
-    const uint64_t defaultBlockSize = 10485760;       // 10MB
-    MemcopyPolicy policyD2H = MemcopyPolicy::FFTS;
-    MemcopyPolicy policyH2D = MemcopyPolicy::FFTS;
-    uint64_t deviceMemSize = defaultDeviceMemSize;
-    uint64_t hostMemSize = defaultHostMemSize;
-};
-
-using datasystem::memory::Allocator;
-using datasystem::memory::DevMemFuncRegister;
-using AllocateType = datasystem::memory::CacheType;
-
-class AclMemMgrBase {
-public:
-    AclMemMgrBase(Allocator *allocator) : allocator_(allocator)
+struct DeviceBatchCopyHelper {
+    bool is64BitAligned(void *ptr)
     {
+        constexpr uintptr_t alignmentMask = 0x7;
+        uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+        return (address & alignmentMask) == 0;
     }
 
-    virtual ~AclMemMgrBase() = default;
-
-    Status Init();
-
-    Status Allocate(const std::vector<BufferMetaInfo> &bMeta, std::vector<ShmUnit> &memoryPool, bool skipRetry = false);
-
-    Status Free(std::vector<ShmUnit> &memoryPool);
-
-    static size_t GetPiplineNums()
+    Status Prepare(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
+                   MemcpyKind copyKind)
     {
-        return pipeLineNums;
+        std::vector<void *> hostPointerList;
+        std::vector<void *> devPointerList;
+        std::vector<BufferView> hostBuffers;
+        std::vector<BufferView> deviceBuffers;
+        hostBuffers.reserve(devBlobList.size());
+        deviceBuffers.reserve(devBlobList.size());
+        CHECK_FAIL_RETURN_STATUS(!devBlobList.empty(), K_INVALID, "The devBlobList is empty.");
+        CHECK_FAIL_RETURN_STATUS(!bufferList.empty(), K_INVALID, "The bufferList is empty.");
+        size_t keyStartInBlobs = 0;
+        for (size_t i = 0; i < devBlobList.size(); i++) {
+            auto &blobs = devBlobList[i].blobs;
+            if (bufferList[i] == nullptr) {
+                continue;
+            }
+            auto &buffer = bufferList[i];
+            auto offsetArrPtr = reinterpret_cast<uint64_t *>(buffer->MutableData());
+            auto hostRawPointer = reinterpret_cast<uint8_t *>(buffer->MutableData());
+            auto sz = *offsetArrPtr;
+            auto offsets = offsetArrPtr + 1;
+            CHECK_FAIL_RETURN_STATUS(
+                sz == blobs.size() && sz > 0, K_INVALID,
+                FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
+                             "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
+                             sz, blobs.size(), i, i));
+            size_t dataSize = buffer->GetSize() - offsets[0];
+            bufferMetas.emplace_back(
+                BufferMetaInfo{ .blobCount = blobs.size(), .firstBlobOffset = keyStartInBlobs, .size = dataSize });
+            hostBuffers.emplace_back(BufferView{ .ptr = hostRawPointer + offsets[0], .size = dataSize });
+            for (size_t j = 0; j < blobs.size(); j++) {
+                auto hostDataSize = offsets[j + 1] - offsets[j];
+                auto devicePointer = blobs[j].pointer;
+                auto deviceDataSize = blobs[j].size;
+                auto hostPointer = hostRawPointer + offsets[j];
+                if (!is64BitAligned(hostPointer)) {
+                    LOG(WARNING) << "host memory is not 64 aligned: " << hostRawPointer;
+                }
+                if (!is64BitAligned(devicePointer)) {
+                    LOG(WARNING) << "deivce memory is not 64 aligned: " << devicePointer;
+                }
+                CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
+                                         "The data size of device and host is not equal.");
+                deviceBuffers.emplace_back(BufferView{ .ptr = devicePointer, .size = hostDataSize });
+                hostPointerList.emplace_back(hostPointer);
+                devPointerList.emplace_back(devicePointer);
+                dataSizeList.emplace_back(hostDataSize);
+                batchSize++;
+            }
+            keyStartInBlobs += blobs.size();
+        }
+        if (copyKind == MemcpyKind::HOST_TO_DEVICE) {
+            srcBuffers = std::move(hostBuffers);
+            dstBuffers = std::move(deviceBuffers);
+
+            srcList = std::move(hostPointerList);
+            dstList = std::move(devPointerList);
+        } else if (copyKind == MemcpyKind::DEVICE_TO_HOST) {
+            srcBuffers = std::move(deviceBuffers);
+            dstBuffers = std::move(hostBuffers);
+
+            srcList = std::move(devPointerList);
+            dstList = std::move(hostPointerList);
+        } else {
+            RETURN_STATUS(K_INVALID, "Invalid MemcpyKind");
+        }
+        return Status::OK();
     }
 
-protected:
-    std::mutex memPoolLock_;
-    static const size_t pipeLineNums = 2;
-    void *ptr_ = nullptr;
-    Allocator *allocator_ = nullptr;
-    const std::string DEFAULT_TENANTID = "";
-    AllocateType type_ = AllocateType::DEV_HOST;
-    std::unique_ptr<WaitPost> waitPost_{ nullptr };  // wait for some second to check memory is free
-};
-
-class AclHostMemMgr : public AclMemMgrBase {
-public:
-    AclHostMemMgr(Allocator *allocator);
-    ~AclHostMemMgr() = default;
-
-    Status HostMemoryCopy(void *dstData, uint64_t dstLength, void *srcData, uint64_t srcLength);
-
-protected:
-    std::shared_ptr<ThreadPool> memoryCopyThreadPool_;
-};
-
-class AclDeviceMemMgr : public AclMemMgrBase {
-public:
-    AclDeviceMemMgr(Allocator *allocator) : AclMemMgrBase(allocator)
+    void PrintGetPerfInfo(DeviceBatchCopyHelper &helper)
     {
-        type_ = AllocateType::DEV_DEVICE;
+        object_cache::BlobListInfo infoList;
+        infoList.keyNums = helper.bufferMetas.size();
+        int64_t blobSum =
+            std::accumulate(helper.bufferMetas.begin(), helper.bufferMetas.end(), 0,
+                            [](int64_t total, const BufferMetaInfo &view) { return total + view.blobCount; });
+        infoList.minBlobNums = std::min_element(helper.bufferMetas.begin(), helper.bufferMetas.end(),
+                                                [](const BufferMetaInfo &view1, const BufferMetaInfo &view2) {
+                                                    return view1.blobCount < view2.blobCount;
+                                                })
+                                   ->blobCount;
+        infoList.maxBlobNums = std::max_element(helper.bufferMetas.begin(), helper.bufferMetas.end(),
+                                                [](const BufferMetaInfo &view1, const BufferMetaInfo &view2) {
+                                                    return view1.blobCount < view2.blobCount;
+                                                })
+                                   ->blobCount;
+        infoList.avgBlobNums = blobSum / infoList.keyNums;
+
+        infoList.totalSize = std::accumulate(helper.srcBuffers.begin(), helper.srcBuffers.end(), 0,
+                                             [](int64_t total, const BufferView &view) { return total + view.size; });
+        infoList.minBlockSize =
+            std::min_element(helper.srcBuffers.begin(), helper.srcBuffers.end(),
+                             [](const BufferView &view1, const BufferView &view2) { return view1.size < view2.size; })
+                ->size;
+        infoList.maxBlockSize =
+            std::max_element(helper.srcBuffers.begin(), helper.srcBuffers.end(),
+                             [](const BufferView &view1, const BufferView &view2) { return view1.size < view2.size; })
+                ->size;
+        infoList.avgBlockSize = infoList.totalSize / infoList.keyNums;
+        LOG(INFO) << infoList.ToString(false);
     }
-    ~AclDeviceMemMgr() = default;
+
+    size_t batchSize = 0;
+    std::vector<size_t> dataSizeList;
+    std::vector<void *> srcList;
+    std::vector<void *> dstList;
+
+    std::vector<BufferView> srcBuffers;
+    std::vector<BufferView> dstBuffers;
+    std::vector<BufferMetaInfo> bufferMetas;
 };
 
-class AclResourceManager {
+class AclResourceManager;
+class AclMemCopyPool {
 public:
-    AclResourceManager();
+    AclMemCopyPool(AclResourceManager *resourceMgr);
+    /**
+     * @brief Perform a batch memory copy operation on the NPU.
+     *
+     * @param[in] copyKind   Type of memory copy.
+     * @param[in] helper     Helper object that holds the batch copy tasks.
+     * @param[in] deviceId   Target device ID.
+     * @return Status K_OK on success; an error code otherwise.
+     */
+    Status MemcpyBatchD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy);
+
+    Status MemcpyBatchH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy);
+
+    ~AclMemCopyPool();
+
+private:
+    Status AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind copyKind);
+    std::unique_ptr<ThreadPool> copyPool_;
+    std::unique_ptr<ThreadPool> h2hCopyPool_;
+    std::unique_ptr<ThreadPool> fftsCopyPool_;
+    std::vector<void *> copyStreams_;
+    int32_t deviceNow_ = -1;
+    DeviceManagerBase *devInterImpl_;
+    AclResourceManager *resourceMgr_;
+};
+
+class AclResourceManager : public DeviceResourceManager {
+public:
+    AclResourceManager()
+    {
+        deviceResources_.reserve(MAX_DEVICE_COUNT);
+        for (size_t deviceId = 0; deviceId < MAX_DEVICE_COUNT; deviceId++) {
+            deviceResources_.emplace_back(std::make_unique<DeviceResource>(deviceId));
+        }
+        swapOutPool_ = std::make_unique<AclMemCopyPool>(this);
+        swapInPool_ = std::make_unique<AclMemCopyPool>(this);
+    };
     ~AclResourceManager() = default;
-    Status Init();
-    std::shared_ptr<AclHostMemMgr> &Host()
-    {
-        std::shared_lock<std::shared_timed_mutex> rlocker(mutex_);
-        return aclHostMemMgr_;
-    }
-    std::shared_ptr<AclDeviceMemMgr> &Device()
-    {
-        std::shared_lock<std::shared_timed_mutex> rlocker(mutex_);
-        return aclDeviceMemMgr_;
-    }
+
+    Status MemcpyBatchD2H(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
+    Status MemcpyBatchH2D(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
 
     Status CreateAclRtStream(uint32_t deviceId, aclrtStream &stream, bool subscribeReport);
     Status FreeAclRtStream(uint32_t deviceId, aclrtStream stream, bool subscribeReport);
@@ -154,35 +224,18 @@ public:
     Status CreateRtNotify(uint32_t deviceIdx, rtNotify_t &notify);
     Status FreeRtNotify(uint32_t deviceId, rtNotify_t notify);
 
-    void SetPolicyDirect()
+    void SetPolicyByHugeTlb(bool enableHugeTlb) override
     {
-        config.policyD2H = MemcopyPolicy::DIRECT;
-        config.policyH2D = MemcopyPolicy::DIRECT;
-    }
-
-    void SetD2HPolicyByHugeTlb(bool enableHugeTlb)
-    {
-        if (enableHugeTlb && config.policyD2H == MemcopyPolicy::FFTS) {
-            config.policyD2H = MemcopyPolicy::HUGE_FFTS;
-            config.hostMemSize = 0;
+        if (enableHugeTlb && policyD2H == MemcopyPolicy::FFTS) {
+            policyD2H = MemcopyPolicy::HUGE_FFTS;
+            hostMemSize = 0;
         }
-        if (enableHugeTlb && config.policyH2D == MemcopyPolicy::FFTS) {
-            config.policyH2D = MemcopyPolicy::HUGE_FFTS;
-            config.hostMemSize = 0;
+        if (enableHugeTlb && policyH2D == MemcopyPolicy::FFTS) {
+            policyH2D = MemcopyPolicy::HUGE_FFTS;
+            hostMemSize = 0;
         }
     }
 
-    MemcopyPolicy GetD2HPolicy()
-    {
-        return config.policyD2H;
-    }
-
-    MemcopyPolicy GetH2DPolicy()
-    {
-        return config.policyH2D;
-    }
-
-private:
     class DeviceResource {
     public:
         DeviceResource(uint32_t deviceId) : deviceId_(deviceId)
@@ -206,14 +259,10 @@ private:
         std::deque<rtNotify_t> notifyQueue_;
     };
 
-    MemcopyConfig config;
-    const size_t CACHE_SIZE = 8;
-    std::shared_timed_mutex mutex_;
-    std::shared_ptr<AclHostMemMgr> aclHostMemMgr_;
-    std::shared_ptr<AclDeviceMemMgr> aclDeviceMemMgr_;
-
-    const size_t MAX_DEVICE_COUNT = 64;
+private:
     std::vector<std::unique_ptr<DeviceResource>> deviceResources_;
+    std::unique_ptr<AclMemCopyPool> swapOutPool_;
+    std::unique_ptr<AclMemCopyPool> swapInPool_;
 };
 
 struct AclResource {
@@ -261,7 +310,7 @@ protected:
 
     acl::AclDeviceManager *aclDeviceManager_;
     AclResourceManager *aclResourceMgr_;
-    bool skipH2HMemcpy_ =  false;
+    bool skipH2HMemcpy_ = false;
     const int32_t deviceId_;
     const std::vector<BufferMetaInfo> &bufferMetas_;
     AclResource resource_;

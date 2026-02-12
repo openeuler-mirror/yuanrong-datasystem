@@ -23,7 +23,7 @@
 #include <string>
 #include <tuple>
 #include "datasystem/common/util/strings_util.h"
-
+#include "datasystem/common/util/status_helper.h"
 namespace datasystem {
 static const std::string P2P_DEFAULT_MASTER = "DEFAULT";
 static const int32_t ALL_DEVICE_ID = -1;
@@ -50,10 +50,54 @@ inline std::tuple<std::string, int32_t> SplitNpuId(const std::string &npuId)
     return std::make_tuple("", -1);
 }
 
-inline static std::string GetPeerId(const std::string &srcClientId, int32_t srcDeviceId,
-                                    const std::string &dstCilentId, int32_t dstDeviceId)
+inline static std::string GetPeerId(const std::string &srcClientId, int32_t srcDeviceId, const std::string &dstCilentId,
+                                    int32_t dstDeviceId)
 {
     return srcClientId + ";" + std::to_string(srcDeviceId) + "---" + dstCilentId + ";" + std::to_string(dstDeviceId);
 }
+
+enum class MemcopyPolicy : int {
+    DIRECT,
+    FFTS,
+    HUGE_FFTS,
+};
+
+inline Status GetNumberFromEnv(const char *key, uint64_t &value)
+{
+    auto strValue = std::getenv(key);
+    RETURN_OK_IF_TRUE(strValue == nullptr);
+    try {
+        uint64_t ret = StrToUnsignedLong(strValue);
+        if (ret == 0) {
+            throw std::out_of_range("Memory should not be set to zero.");
+        }
+        value = ret;
+    } catch (std::invalid_argument &invalidArgument) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("Env %s value %s parse to number failed, invalid argument", key, strValue));
+    } catch (std::out_of_range &outOfRange) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("Env %s value %s parse to number failed, out of range", key, strValue));
+    }
+    return Status::OK();
+}
+
+inline Status GetPolicyFromEnv(const char *key, MemcopyPolicy &policy)
+{
+    auto strValue = std::getenv(key);
+    RETURN_OK_IF_TRUE(strValue == nullptr);
+    std::string str = strValue;
+    if (str == "ffts") {
+        policy = MemcopyPolicy::FFTS;
+    } else if (str == "direct") {
+        policy = MemcopyPolicy::DIRECT;
+    } else if (str == "huge_ffts") {
+        policy = MemcopyPolicy::HUGE_FFTS;
+    } else {
+        RETURN_STATUS(K_INVALID, FormatString("Unknown memcopy policy %s from env %s", str, key));
+    }
+    return Status::OK();
+}
+
 }  // namespace datasystem
 #endif

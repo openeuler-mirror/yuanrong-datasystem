@@ -27,8 +27,8 @@
 namespace datasystem {
 
 CommWrapperBase::CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                                 std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr)
-    : aclResourceMgr_(aclResourceMgr),
+                                 std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr)
+    : resourceMgr_(resourceMgr),
       commId_(commId),
       localDeviceIdx_(localDeviceId),
       remoteDeviceIdx_(remoteDeviceId),
@@ -176,10 +176,10 @@ Status CommWrapperBase::CheckHealth(uint32_t createTimeoutMs)
 Status CommWrapperBase::InitPipeline(CommDirection direction)
 {
     if (direction == CommDirection::SEND) {
-        sender_ = std::make_unique<acl::PipeLineP2PSend>(aclResourceMgr_);
+        sender_ = std::make_unique<acl::PipeLineP2PSend>(static_cast<AclResourceManager *>(resourceMgr_));
         return sender_->Init(resource_);
     } else {
-        receiver_ = std::make_unique<acl::PipeLineP2PRecv>(aclResourceMgr_);
+        receiver_ = std::make_unique<acl::PipeLineP2PRecv>(static_cast<AclResourceManager *>(resourceMgr_));
         return receiver_->Init(resource_);
     }
 }
@@ -188,11 +188,11 @@ Status CommWrapperBase::CheckTranPointer(const void *pointer, const std::string 
 {
     if (pointer == nullptr) {
         auto rc = GetDetailStatus();
-        std::string errMsg = FormatString("The pointer [%s] is null, "
-                                          "which usually indicates that the hccl communication domain creation failed. "
-                                          "Specifically: [%s]",
-            pointerName,
-            rc.GetMsg());
+        std::string errMsg = FormatString(
+            "The pointer [%s] is null, "
+            "which usually indicates that the hccl communication domain creation failed. "
+            "Specifically: [%s]",
+            pointerName, rc.GetMsg());
         return Status(rc.GetCode(), errMsg);
     }
     return Status::OK();
