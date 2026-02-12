@@ -54,7 +54,9 @@ class StreamClient:
             token(str): A string used for authentication.
             tenant_id(str): The tenant ID.
             enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker.
+            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
+            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
+            the system will throw a request exception.
         """
 
         if isinstance(token, str):

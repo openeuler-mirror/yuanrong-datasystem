@@ -16,6 +16,8 @@ yr.datasystem.hetero_client.HeteroClient
         - **secret_key** (str) - AK/SK 授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户 ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统 Worker 连接异常时自动切换到备用节点。默认值： ``False`` 。
+        - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
+        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。**连接数限制**：单个 ``worker`` 最多支持 128 个启用 ``enable_exclusive_connection`` 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。
         - **enable_remote_h2d** (bool) - 如果为 ``True`` ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： ``False`` 。
 
     输出：

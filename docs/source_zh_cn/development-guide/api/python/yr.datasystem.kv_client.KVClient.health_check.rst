@@ -1,5 +1,5 @@
 yr.datasystem.kv_client.KVClient.health_check
-======================================
+=============================================
 
 .. py:method:: yr.datasystem.kv_client.KVClient.health_check(self)
 

@@ -92,7 +92,9 @@ class HeteroClient:
         req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
         connect_timeout_ms.
         enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-        datasystem_worker.
+        datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
+        `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
+        the system will throw a request exception.
         enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
     Raises:
@@ -133,7 +135,9 @@ class HeteroClient:
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
             enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker.
+            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
+            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
+            the system will throw a request exception.
             enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
         Raises:

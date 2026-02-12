@@ -1,5 +1,5 @@
 yr.datasystem.kv_client.KVClient.mset_buffer
-=====================================
+============================================
 
 .. py:method:: yr.datasystem.kv_client.KVClient.mset_buffer(buffers)
 
