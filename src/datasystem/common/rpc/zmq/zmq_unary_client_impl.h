@@ -445,7 +445,7 @@ private:
             // points, and just record the network transfer here.
             // Note that in non-exclusive mode, the ZMQ_NETWORK_TRANSFER_STUB_UDS was recorded in the frontend codepath,
             // but that code did not run here so this is the appropriate time to capture this stat.
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id(), true);
             PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS,
                                      GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
             reply = std::make_pair(meta, std::move(replyFrames));
