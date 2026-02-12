@@ -100,6 +100,7 @@ ds_cc_library(
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/metastore:metastore_server",
         "//src/datasystem/common/kvstore/etcd:etcd_health",
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/log:common_log",

@@ -45,6 +45,7 @@
 DS_DECLARE_string(etcd_address);
 DS_DEFINE_string(other_cluster_names, "", "Specify other az names using the same etcd. Split by ','");
 DS_DEFINE_validator(other_cluster_names, &Validator::ValidateOtherAzNames);
+DS_DEFINE_string(metastore_address, "", "Address of metastore server");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_bool(auto_del_dead_node);
@@ -85,6 +86,15 @@ Status KeepAliveValue::FromString(const std::string &str, KeepAliveValue &value)
     value.state = str.substr(firstPos + 1, secondPos - firstPos - 1);
     value.hostId = str.substr(secondPos + 1);
     return Status::OK();
+}
+
+
+static std::string GetBackendAddress()
+{
+    if (!FLAGS_metastore_address.empty()) {
+        return FLAGS_metastore_address;
+    }
+    return FLAGS_etcd_address;
 }
 
 EtcdStore::EtcdStore(const std::string &address) : address_(address)
@@ -1161,7 +1171,8 @@ Transaction::Transaction(std::string authToken) : authToken_(std::move(authToken
 {
     (void)num_.fetch_add(1);
     std::call_once(flag_, []() {
-        Status rc = GrpcSession<etcdserverpb::KV>::CreateSession(FLAGS_etcd_address, rpcSession_);
+        std::string backendAddress = GetBackendAddress();
+        Status rc = GrpcSession<etcdserverpb::KV>::CreateSession(backendAddress, rpcSession_);
         LOG_IF_ERROR(rc, "Transaction CreateSession failed!");
     });
 }

@@ -309,9 +309,8 @@ class Command(BaseCommand):
             ValueError: If required parameters are missing.
             RuntimeError: If the worker service fails to start or exits abnormally.
         """
-        for param in self._REQUIRED_PARAMS:
-            if not params.get(param):
-                raise ValueError(f"Missing required parameters: {param}")
+        if not params.get("etcd_address") and not params.get("metastore_address"):
+            raise ValueError("Missing required: either etcd_address or metastore_address must be specified")
 
         cmd = self.build_command(params, use_ums, use_numactl, numactl_opts)
         lib_dir = os.path.join(self._base_dir, "lib")
