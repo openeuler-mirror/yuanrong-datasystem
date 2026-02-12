@@ -95,11 +95,7 @@ Status HeteroClient::MGetH2D(const std::vector<std::string> &keys, const std::ve
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MGET_H2D_ALL);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    std::shared_future<AsyncResult> future = impl_->MGetH2D(keys, devBlobList, subTimeoutMs,
-                                                            AccessRecorderKey::DS_HETERO_CLIENT_MGETH2D);
-    auto result = future.get();
-    failedKeys = std::move(result.failedList);
-    return result.status;
+    return impl_->MGetH2D(keys, devBlobList, failedKeys, subTimeoutMs);
 }
 
 Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
@@ -108,10 +104,7 @@ Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::ve
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MSET_D2H_ALL);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    std::shared_future<AsyncResult> future = impl_->MSet(keys, devBlobList, setParam,
-                                                         AccessRecorderKey::DS_HETERO_CLIENT_MSETD2H);
-    auto rc = future.get().status;
-    return rc;
+    return impl_->MSetD2H(keys, devBlobList, setParam);
 }
 
 Status HeteroClient::Delete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
@@ -141,7 +134,7 @@ std::shared_future<AsyncResult> HeteroClient::AsyncMSetD2H(const std::vector<std
         return future;
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->MSet(keys, devBlobList, setParam, AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMSETD2H);
+    return impl_->AsyncMSetD2H(keys, devBlobList, setParam);
 }
 
 std::shared_future<AsyncResult> HeteroClient::AsyncMGetH2D(const std::vector<std::string> &keys,
@@ -156,7 +149,7 @@ std::shared_future<AsyncResult> HeteroClient::AsyncMGetH2D(const std::vector<std
         return future;
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->MGetH2D(keys, devBlobList, subTimeoutMs, AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMGETH2D);
+    return impl_->AsyncMGetH2D(keys, devBlobList, subTimeoutMs);
 }
 
 Status HeteroClient::GenerateKey(const std::string &prefix, std::string &key)
