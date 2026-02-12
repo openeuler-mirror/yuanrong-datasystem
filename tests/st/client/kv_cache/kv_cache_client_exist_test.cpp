@@ -277,6 +277,11 @@ TEST_F(KVCacheClientExistTest, ConnectTimeout)
         .accessKey = "QTWAOYTTINDUT2QVKYUC",
         .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
     };
+    auto op2 = op;
+    op2.connectTimeoutMs = 1;
+    auto client2 = KVClient(op2);
+    ASSERT_TRUE(client2.Init().GetMsg().find("The connectTimeoutMs(1) should be greater than or equal to")
+                != std::string::npos);
     cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "Exist.Sleep", "sleep(8000)");
     client = KVClient(op);
     DS_ASSERT_OK(client.Init());
@@ -310,9 +315,11 @@ TEST_F(KVCacheClientExistTest, ReqTimeoutMs)
         };
         KVClient client(op);
         DS_ASSERT_OK(client.Init());
-        op.requestTimeoutMs = -1;
+        int32_t invalidMs = 2147483648;
+        op.requestTimeoutMs = invalidMs;
         KVClient client2(op);
-        ASSERT_TRUE(client2.Init().GetMsg().find("The req timeout should be greater than or equal to 0 milliseconds.")
+        ASSERT_TRUE(client2.Init().GetMsg().find(
+                        "The requestTimeoutMs(-2147483648) should be greater than or equal to 0 milliseconds.")
                     != std::string::npos);
         std::vector<bool> ex;
         Timer timer2;
