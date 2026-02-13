@@ -28,6 +28,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
 
@@ -70,13 +71,28 @@ ucp_rkey_h UcpEndpoint::GetOrUnpackRkey(const std::string &remoteRkey)
 {
     {
         std::shared_lock readLock(rkeyMutex_);
-        if (unpackedRkey_ != nullptr && remoteRkey_ == remoteRkey) {
-            return unpackedRkey_;
+        if (unpackedRkey_ != nullptr) {
+            if (remoteRkey_ == remoteRkey) {
+                return unpackedRkey_;
+            } else {
+                LOG(ERROR) << "[UcpEndpoint] The provided remoteRkey differs from the cached one. cached = "
+                        << BytesToHex(remoteRkey_) << ", provided=" << BytesToHex(remoteRkey);
+                return nullptr;
+            }
         }
     }
 
     {
         std::unique_lock writeLock(rkeyMutex_);
+        if (unpackedRkey_ != nullptr) {
+            if (remoteRkey_ == remoteRkey) {
+                return unpackedRkey_;
+            } else {
+                LOG(ERROR) << "[UcpEndpoint] The provided remoteRkey differs from the cached one. cached = "
+                        << BytesToHex(remoteRkey_) << ", provided=" << BytesToHex(remoteRkey);
+                return nullptr;
+            }
+        }
         CleanUnpackedRkey();
         remoteRkey_ = remoteRkey;
         ucs_status_t status = ds_ucp_ep_rkey_unpack(ep_, remoteRkey.data(), &unpackedRkey_);

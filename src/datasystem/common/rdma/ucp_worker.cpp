@@ -96,7 +96,7 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSeg
 
     ucp_rkey_h rkey = ucpEp->GetOrUnpackRkey(remoteRkey);
     if (rkey == nullptr) {
-        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to get an unpack rkey.");
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + ipAddr + " Failed to get an unpack rkey.");
     }
 
     ucp_request_param_t putParam{};

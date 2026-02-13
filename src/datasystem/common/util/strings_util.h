@@ -51,6 +51,22 @@ inline std::string StrErr(int errNum)
     return strerror_r(errNum, errBuf, sizeof errBuf);
 }
 
+inline std::string BytesToHex(const std::string &binaryData)
+{
+    if (binaryData.empty()) {
+        return "";
+    }
+    const char hex_chars[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(binaryData.size() * 2);
+
+    for (unsigned char c : binaryData) {
+        result.push_back(hex_chars[c >> 4]);
+        result.push_back(hex_chars[c & 0xF]);
+    }
+    return result;
+}
+
 inline std::streampos GetSize(std::iostream *ss)
 {
     if (!ss) {
