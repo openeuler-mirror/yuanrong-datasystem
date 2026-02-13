@@ -39,6 +39,8 @@ namespace datasystem {
 const uint32_t LOG_MAX_SIZE_LIMIT = 25000;  // log max size is 30000.
 constexpr size_t MIN_TOKEN_SIZE_TO_STRING = 16;
 const std::string STR_WHITESPACE = " \t\n\r";
+constexpr size_t HEX_DIGITS_PER_BYTE = 2;
+constexpr size_t NIBBLE_BITS = 4;
 /**
  * @brief Format error num to error string.
  * @param[in] errNum Linux error number.
@@ -58,10 +60,10 @@ inline std::string BytesToHex(const std::string &binaryData)
     }
     const char hex_chars[] = "0123456789abcdef";
     std::string result;
-    result.reserve(binaryData.size() * 2);
+    result.reserve(binaryData.size() * HEX_DIGITS_PER_BYTE);
 
     for (unsigned char c : binaryData) {
-        result.push_back(hex_chars[c >> 4]);
+        result.push_back(hex_chars[c >> NIBBLE_BITS]);
         result.push_back(hex_chars[c & 0xF]);
     }
     return result;
