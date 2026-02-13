@@ -58,13 +58,13 @@ inline std::string BytesToHex(const std::string &binaryData)
     if (binaryData.empty()) {
         return "";
     }
-    const char hex_chars[] = "0123456789abcdef";
+    const char hexChars[] = "0123456789abcdef";
     std::string result;
     result.reserve(binaryData.size() * HEX_DIGITS_PER_BYTE);
 
     for (unsigned char c : binaryData) {
-        result.push_back(hex_chars[c >> NIBBLE_BITS]);
-        result.push_back(hex_chars[c & 0xF]);
+        result.push_back(hexChars[c >> NIBBLE_BITS]);
+        result.push_back(hexChars[c & 0xF]);
     }
     return result;
 }
