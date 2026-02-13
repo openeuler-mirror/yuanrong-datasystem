@@ -181,6 +181,8 @@ Status KVBench::Run(uint64_t threadIndex, Barrier &barrier)
     auto init = [&] {
         ConnectOptions connectOptions;
         RETURN_IF_NOT_OK(bench::StrToHostPort(args_.workerAddress, connectOptions.host, connectOptions.port));
+        connectOptions.accessKey = args_.accessKey;
+        connectOptions.secretKey = args_.secretKey;
         client = std::make_unique<KVClient>(connectOptions);
         return client->Init();
     };

@@ -46,6 +46,8 @@ private:
     std::string action_;
     std::string perfWorkersStr_;
     std::string perfPath_;
+    std::string accessKey_;
+    std::string secretKey_;
 };
 #else
 class PerfManager {
