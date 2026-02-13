@@ -57,7 +57,7 @@ RdmaDev::RdmaDev(uint32_t phyId, union hccp_ip_addr ipv4Addr)
 RdmaDev::~RdmaDev()
 {
     if (status == RdmaDevStatus::RDEV_INITIALIZED) {
-        RaRdevDeinitWrapper(rdmaHandle, EVENTID);
+        RaRdevDeinitWrapper(rdmaHandle, EVENTID, initialized);
     }
 }
 
@@ -71,7 +71,7 @@ Status RdmaDev::init()
     roceInitInfo.mode = NETWORK_OFFLINE;
     roceInitInfo.notify_type = EVENTID;
 
-    CHECK_STATUS(RaRdevInitV2Wrapper(roceInitInfo, roceDevInfo, &rdmaHandle));
+    CHECK_STATUS(RaRdevInitV2Wrapper(roceInitInfo, roceDevInfo, &rdmaHandle, initialized));
     status = RdmaDevStatus::RDEV_INITIALIZED;
 
     return Status::Success();

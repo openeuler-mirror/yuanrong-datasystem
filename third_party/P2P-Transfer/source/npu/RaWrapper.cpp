@@ -114,15 +114,23 @@ Status RaSocketListenStopWrapper(struct socket_listen_info_t conn[], uint32_t nu
     return Status::Success();
 }
 
-Status RaRdevInitV2Wrapper(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle)
+Status RaRdevInitV2Wrapper(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle, bool &initialized)
 {
+    // Check if the RDMA device is already initialized to avoid conflict initialization
+    if (RA_RDEV_GET_HANDLE(rdev_info.phy_id, rdma_handle) == ACL_SUCCESS) {
+        return Status::Success();
+    }
     ACL_CHECK_STATUS(RA_RDEV_INIT_V2(init_info, rdev_info, rdma_handle));
+    initialized = true;
     return Status::Success();
 }
 
-Status RaRdevDeinitWrapper(void *rdma_handle, unsigned int notify_type)
+Status RaRdevDeinitWrapper(void *rdma_handle, unsigned int notify_type, bool initialized)
 {
-    ACL_CHECK_STATUS(RA_RDEV_DEINIT(rdma_handle, notify_type));
+    // Deinitialize the RDMA device only if it was initialized by the current instance
+    if (initialized) {
+        ACL_CHECK_STATUS(RA_RDEV_DEINIT(rdma_handle, notify_type));
+    }
     return Status::Success();
 }
 
