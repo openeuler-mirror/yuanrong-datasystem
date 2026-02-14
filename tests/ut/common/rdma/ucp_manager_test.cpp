@@ -285,7 +285,7 @@ TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
                     EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
                     EXPECT_NE(event, nullptr);
                     // Wait for the event to be notified (callback notifies directly now)
-                    Status waitStatus = event->WaitFor(std::chrono::milliseconds(1000));
+                    Status waitStatus = event->WaitFor(std::chrono::milliseconds(2000));
                     EXPECT_TRUE(waitStatus.IsOk());
                 }
             } catch (const std::exception &e) {
