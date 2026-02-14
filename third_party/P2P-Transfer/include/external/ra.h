@@ -320,6 +320,7 @@ struct interface_info {
 #define RA_SOCKET_INIT ra_socket_init
 #define RA_SOCKET_DEINIT ra_socket_deinit
 #define RA_RDEV_GET_SUPPORT_LITE ra_rdev_get_support_lite
+#define RA_RDEV_GET_HANDLE ra_rdev_get_handle
 #else
 #define RA_INIT RaInit
 #define RA_DEINIT RaDeinit
@@ -353,6 +354,7 @@ struct interface_info {
 #define RA_SOCKET_INIT RaSocketInit
 #define RA_SOCKET_DEINIT RaSocketDeinit
 #define RA_RDEV_GET_SUPPORT_LITE RaRdevGetSupportLite
+#define RA_RDEV_GET_HANDLE RaRdevGetHandle
 #endif
 
 int RA_INIT(struct ra_init_config *config);
@@ -409,6 +411,8 @@ int RA_SOCKET_INIT(int mode, struct rdev rdev_info, void **socket_handle);
 int RA_SOCKET_DEINIT(void *socket_handle);
 
 int RA_RDEV_GET_SUPPORT_LITE(void *rdma_handle, int *support_lite);
+
+int RA_RDEV_GET_HANDLE(unsigned int phy_id, void **rdma_handle);
 
 #ifdef __cplusplus
 }

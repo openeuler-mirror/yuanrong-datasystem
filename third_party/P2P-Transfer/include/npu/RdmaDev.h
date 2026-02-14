@@ -98,6 +98,7 @@ private:
 
     void *rdmaHandle;
     struct rdev roceDevInfo {};
+    bool initialized = false;
 };
 
 #endif  // P2P_RA_DEV_H
