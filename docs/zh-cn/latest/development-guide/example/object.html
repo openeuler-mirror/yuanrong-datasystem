@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -513,12 +514,12 @@ document.write(`
 <h1>Object<a class="headerlink" href="#object" title="Link to this heading">#</a></h1>
 <section id="id1">
 <h2>基本概念<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
-<p>openYuanrong datasystem (下文中称为数据系统)的Object接口，基于共享内存实现 host上的 Object 语义读写，提供基于引用计数管理生命周期，将共享内存抽象为 buffer，直接映射共享内存指针，提供更底层灵活的编程接口。</p>
+<p>openYuanrong datasystem (下文中称为数据系统)的Object接口，基于共享内存实现 host上的 Object 语义读写，提供基于引用计数的生命周期管理，将共享内存抽象为 buffer，直接映射共享内存指针，提供更底层灵活的编程接口。</p>
 </section>
 <section id="id2">
 <h2>样例代码<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p>object 接口中提供了 buffer 类，其中封装了共享内存，可直接将指针映射，并提供了锁保证数据一致性。
-object 当前支持基于引用计数的生命周期管理，当对象的引用计数大于 0 时，保持对象的生命周期，当对象的引用计数变为 0 时，则删除对象。</p>
+<p>Object 接口中提供了 buffer 类，其中封装了共享内存，可直接将指针映射，并提供了锁保证数据一致性。
+Object 当前支持基于引用计数的生命周期管理，当对象的引用计数大于 0 时，保持对象的生命周期，当对象的引用计数变为 0 时，则删除对象。</p>
 <div class="sd-tab-set docutils">
 <input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-0">

@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -522,7 +523,7 @@ document.write(`
 <li><p><strong>access_key</strong> (str) - AK/SK授权使用的访问密钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
 <li><p><strong>secret_key</strong> (str) - AK/SK授权的密钥。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
 <li><p><strong>tenant_id</strong> (str) - 租户ID。默认值： <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> 。</p></li>
-<li><p><strong>enable_exclusive_connection</strong> (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： <code class="docutils literal notranslate"><span class="pre">False</span></code> 。</p></li>
+<li><p><strong>enable_exclusive_connection</strong> (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： <code class="docutils literal notranslate"><span class="pre">False</span></code> 。<strong>连接数限制</strong>：单个 <code class="docutils literal notranslate"><span class="pre">worker</span></code> 最多支持 128 个启用 <code class="docutils literal notranslate"><span class="pre">enable_exclusive_connection</span></code> 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。</p></li>
 </ul>
 </dd>
 <dt>输出：</dt><dd><p>StreamClient</p>

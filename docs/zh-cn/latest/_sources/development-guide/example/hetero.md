@@ -485,4 +485,4 @@ ASSERT_TRUE(status.IsOk());
 - key 的最大长度为 255 字节。
 - DevPublish 和 DevSubscribe 需配套使用，不能和 DevMSet 及 DevMGet 混合使用。
 - DevMSet 及 DevMGet 配套使用，写入的 key 使用 DevDelete 及 DevLocalDelete 删除。
-- MSetD2H 和 MGetH2D 需要配套使用，MGetH2D 接口中只能传入 MSetD2H 接口写入的key。写入的 key 使用 delete 接口删除。
+- MSetD2H 和 MGetH2D 需要配套使用，MGetH2D 接口中只能传入 MSetD2H 接口写入的key。写入的 key 使用 Delete 接口删除。

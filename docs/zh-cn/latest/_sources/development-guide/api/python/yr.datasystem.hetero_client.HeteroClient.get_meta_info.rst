@@ -10,7 +10,7 @@ yr.datasystem.hetero_client.HeteroClient.get_meta_info
         - **is_dev_key** (bool) - key的属性，true 表示D2D类型，false表示D2H类型。
     异常：
         - **TypeError** - 输入参数存在非法值。
-        - **RuntimeError** - 给定列表的对象 key 都未执行成功。
+        - **RuntimeError** - 给定列表的对象 key 都未获取成功。
 
     返回：
         - **failed_keys** (list) - 失败的key列表。

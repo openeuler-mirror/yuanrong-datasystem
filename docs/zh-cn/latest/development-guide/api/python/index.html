@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -598,10 +599,10 @@ document.write(`
 <td><p>根据 key 获取缓存在数据系统的 PagedAttention 的层级 Tensor。</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html"><span class="doc">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</span></a></p></td>
-<td><p>将 PagedAttention 的层级 Tensor 异步写入 Host 中。</p></td>
+<td><p>将 PagedAttention 的层级 Tensor 异步写入 host 中。</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html"><span class="doc">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</span></a></p></td>
-<td><p>从 Host 中获取 PagedAttention 的层级 Tensor 并写入 Device 中。</p></td>
+<td><p>从 host 中获取 PagedAttention 的层级 Tensor 并写入 device 中。</p></td>
 </tr>
 </tbody>
 </table>
@@ -719,6 +720,9 @@ document.write(`
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.expire.html"><span class="doc">yr.datasystem.kv_client.KVClient.expire</span></a></p></td>
 <td><p>为一组键设置过期生命周期，返回函数操作状态及设置失败的键列表。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.kv_client.KVClient.health_check.html"><span class="doc">yr.datasystem.kv_client.KVClient.health_check</span></a></p></td>
+<td><p>查看连接的 Worker 的健康状态。</p></td>
 </tr>
 </tbody>
 </table>

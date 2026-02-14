@@ -180,6 +180,7 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -606,6 +607,10 @@ document.write(`
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions25enableExclusiveConnectionE">
 <span id="_CPPv3N14ConnectOptions25enableExclusiveConnectionE"></span><span id="_CPPv2N14ConnectOptions25enableExclusiveConnectionE"></span><span id="ConnectOptions::enableExclusiveConnection__b"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enableExclusiveConnection</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions25enableExclusiveConnectionE" title="Link to this definition">#</a><br /></dt>
 <dd><p>如果为 true，开启IPC性能调优功能，减小客户端与同节点服务端的访问时延。默认值：false</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><strong>连接数限制</strong>：单个 <code class="docutils literal notranslate"><span class="pre">worker</span></code> 最多支持 128 个启用 <code class="docutils literal notranslate"><span class="pre">enableExclusiveConnection</span></code> 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。</p>
+</div>
 </dd></dl>
 
 <dl class="cpp member">

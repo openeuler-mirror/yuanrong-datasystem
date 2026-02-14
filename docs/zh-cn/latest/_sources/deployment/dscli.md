@@ -510,7 +510,7 @@ bash run.sh <worker_address>
 dscli collect_log --cluster_config_path ./cluster_config.json
 ```
 
-更多关于 dscli generate_helm_chart 命令的使用请参考：[dscli collect_log](#dscli-collect_log)。
+更多关于 dscli collect_log 命令的使用请参考：[dscli collect_log](#dscli-collect_log)。
 
 ### 多机命令运行
 
@@ -557,7 +557,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待 worker 服务就绪的最大时间（默认：90秒） |
 |--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成 |
 |--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"<br>**注意**：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数|
-|--datasystem_home_dir |-d &lt;DIR&gt; | 指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 datasystem_home_dir 的值 |
+|--datasystem_home_dir |-d &lt;DIR&gt; | 指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 `datasystem_home_dir` 的值 |
 |--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
 |--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
 |--interleave|-i | 设置内存交错策略，按编号顺序在指定 NUMA 节点间轮询分配页面 |
@@ -659,7 +659,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
-|--output_path &lt;OUTPUT_PATH&gt; |-o &lt;OUTPUT_PATH&gt; | 指定生成C++代码模板文件存放路径，默认存放路径为当前目录 |
+|--output_path &lt;OUTPUT_PATH&gt; |-o &lt;OUTPUT_PATH&gt; | 指定生成C++代码模板文件的存放路径，默认存放路径为当前目录 |
 
 ### dscli generate_config
 
@@ -691,7 +691,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 ### 命令行参数配置项
 
-集群相关配置项位于 `worker_config.json` 文件中，包含 datasystem_worker 的命令行参数相关的配置项
+命令行参数相关配置项位于 `worker_config.json` 文件中，包含 datasystem_worker 的命令行参数相关的配置项
 
 > **注意事项：**
 >
@@ -759,7 +759,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_async | bool | `true` | 是否开启异步刷新日志功能 |
 | log_async_queue_size | int | `65536` | 异步日志的消息队列最大容量（消息条数） |
 | log_compress | bool | `true` | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
-| logbufsecs | int | `10` | 最多缓冲这么多秒的日志消息 |
+| logbufsecs | int | `10` | 日志消息最多缓冲时长（以秒为单位） |
 | log_filename | string | `""` | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
@@ -851,6 +851,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | shared_disk_arena_per_tenant | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
 | shared_disk_directory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | shared_disk_size_mb | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
+| memory_alignment | int | `64` | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
 
 #### AK/SK相关配置
 

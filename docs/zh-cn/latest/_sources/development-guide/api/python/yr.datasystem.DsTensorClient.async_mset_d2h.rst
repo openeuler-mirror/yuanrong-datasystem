@@ -17,7 +17,7 @@ yr.datasystem.DsTensorClient.async_mset_d2h
             write_mode = WriteMode.NONE_L2_CACHE
             ttl_second = 0
             existence = ExistenceOpt.NONE
-
+            cache_type = CacheType.MEMORY
     返回：
         - **Future** (Future) - 可通过该Future对象查询异步请求执行结果。
 

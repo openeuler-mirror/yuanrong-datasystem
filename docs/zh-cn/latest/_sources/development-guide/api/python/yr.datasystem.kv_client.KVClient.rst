@@ -16,6 +16,8 @@ yr.datasystem.kv_client.KVClient
         - **secret_key** (str) - AK/SK授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统Worker连接异常时自动切换到备用节点。默认值： ``False`` 。
+        - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
+        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。**连接数限制**：单个 ``worker`` 最多支持 128 个启用 ``enable_exclusive_connection`` 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。
 
     输出：
         KVClient
@@ -56,6 +58,8 @@ yr.datasystem.kv_client.KVClient
          - 查看 key 在数据系统中是否存在。
        * - :doc:`expire <yr.datasystem.kv_client.KVClient.expire>`
          - 为一组键设置过期生命周期，返回函数操作状态及设置失败的键列表。
+       * - :doc:`health_check <yr.datasystem.kv_client.KVClient.health_check>`
+         - 查看连接的 Worker 的健康状态。
        
 .. toctree::
     :maxdepth: 1
