@@ -18,6 +18,7 @@
 #include <mutex>
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
@@ -28,10 +29,6 @@
 
 DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
-
-DS_DECLARE_int32(oc_worker_worker_direct_port);
-DS_DECLARE_int32(sc_worker_worker_direct_port);
-DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem {
 Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress)

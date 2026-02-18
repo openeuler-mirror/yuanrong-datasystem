@@ -206,7 +206,11 @@ Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const bool &shmEnable
         RETURN_IF_NOT_OK(memoryRefTable_->GetShmUnit(shmUnitId, shmUnit));
     } else {
         // non-shm case, create first
+        // Only create new shm if size changed or not exist.
         uint64_t metaDataSz = GetMetadataSize();
+        uint64_t cap = dataSize + metaDataSz;
+        bool szChanged = (entry->GetShmUnit() == nullptr) || (entry->GetShmUnit()->size != cap);
+        RETURN_OK_IF_TRUE(!szChanged);
         RETURN_IF_NOT_OK(AllocateNewShmUnit(objectKey, dataSize, metaDataSz, false, evictionManager_, shmUnit,
                                             entry->modeInfo.GetCacheType()));
     }

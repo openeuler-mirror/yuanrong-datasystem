@@ -49,7 +49,7 @@ public:
      * @param[in] rsp Urma handshake response.
      * @return Status of the call.
      */
-    Status ExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp) override;
+    Status WorkerWorkerExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp) override;
 
 private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;

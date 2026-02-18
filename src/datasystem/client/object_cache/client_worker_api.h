@@ -20,6 +20,8 @@
 #ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_WORKER_API_H
 #define DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_WORKER_API_H
 
+#include <atomic>
+#include <mutex>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -48,6 +50,10 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_info.h"
+#include "datasystem/common/rdma/urma_manager.h"
+#endif
 
 namespace datasystem {
 namespace object_cache {
@@ -381,7 +387,7 @@ public:
      */
     virtual Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
                                GetMetaInfoRspPb &metaInfos) = 0;
-    
+
     /**
      * @brief Reconnect worker.
      * @param[in] gRefIds Global reference object keys.
@@ -501,6 +507,14 @@ public:
     Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
                           std::shared_timed_mutex &mtx) override;
 
+    /**
+     * @brief After MemoryCopy: do phase1 if needed, then UrmaWrite from buffer (or pool), set ubDataSentByMemoryCopy.
+     *        Used by path Create+MemoryCopy+Publish so that Publish() only sends phase2.
+     * @param[in] bufferInfo Buffer information; must have valid pointer and dataSize/metadataSize.
+     * @return K_OK on success or when UB disabled / already sent; the error code otherwise.
+     */
+    Status SendBufferViaUbAfterMemoryCopy(const std::shared_ptr<ObjectBufferInfo> &bufferInfo);
+
 private:
     void ParseGlbRefPb(QueryGlobalRefNumRspCollectionPb &rsp,
                        std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap);
@@ -555,6 +569,25 @@ private:
                              PublishReqPb &req);
 
     /**
+     * @brief Phase1 only: send Publish(use_ub=true), store urma_info in bufferInfo for Create+MemoryCopy+Publish path.
+     * @param[in] bufferInfo Buffer information; on success, ubUrmaInfoOpaque is set to a new UrmaRemoteAddrPb.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status PublishPhase1Only(const std::shared_ptr<ObjectBufferInfo> &bufferInfo);
+
+    /**
+     * @brief Send Publish phase2 only (publish_complete_ub=true). Used by UB path after data is sent via UrmaWrite.
+     * @param[in] bufferInfo Buffer information.
+     * @param[in] isSeal Is seal or not.
+     * @param[in] nestedKeys Nested keys.
+     * @param[in] ttlSecond TTL in seconds.
+     * @param[in] existence Existence option for state api.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status SendPublishPhase2(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
+                             const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence);
+
+    /**
      * @brief Create communication circular queue based on shared memory.
      * @return K_OK on success; the error code otherwise.
      */
@@ -564,7 +597,12 @@ private:
                          std::vector<MultiCreateParam> &createParams, bool &useShmTransfer, PerfPoint &point,
                          uint32_t &version, std::vector<bool> &exists);
     Status PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req, int64_t &rpcTimeout);
-
+#ifdef USE_URMA
+    void PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
+                             uint8_t *&ubBufferPtr, uint64_t &ubBufferSize);
+    Status FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, GetRspPb &rsp,
+                          std::vector<RpcMessage> &payloads, uint8_t *ubBufferPtr, uint64_t ubBufferSize);
+#endif
     // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.
     mutable std::mutex mtx_;
     std::unordered_map<int, uint8_t *> waitRespMap_;

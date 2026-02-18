@@ -278,9 +278,6 @@ private:
     Status ZmqFrontendToSvc();
     Status SendErrorToClient(const MetaPb &meta, const Status &status);
     Status ProcessReply(ZmqService *svc);
-#ifdef USE_URMA
-    Status ProcessExchangeJfrRq(MetaPb &meta, ZmqMsgFrames &inMsg);
-#endif
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_SERVER_IMPL_H

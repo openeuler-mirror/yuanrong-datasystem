@@ -157,7 +157,8 @@ message MigrateDataDirectRspPb {
 }
 
 service WorkerWorkerTransportService {
-  rpc ExchangeUrmaConnectInfo(UrmaHandshakeReqPb) returns (UrmaHandshakeRspPb) {}
+  // Named to avoid redefinition of ExchangeUrmaConnectInfoSvcMethod with WorkerOCService in object_posix.proto.
+  rpc WorkerWorkerExchangeUrmaConnectInfo(UrmaHandshakeReqPb) returns (UrmaHandshakeRspPb) {}
 }
 
 service WorkerWorkerOCService {

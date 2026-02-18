@@ -17,7 +17,7 @@
 /**
  * Description: Manager for exclusive connections in thread local memory
  */
-#ifndef DATASYSTEM_COMMON_RPC_ZQM_EXCLUSIVE_CONN_MGR_H
+#ifndef DATASYSTEM_COMMON_RPC_ZMQ_EXCLUSIVE_CONN_MGR_H
 #define DATASYSTEM_COMMON_RPC_ZMQ_EXCLUSIVE_CONN_MGR_H
 
 #include <thread>

@@ -1,7 +1,6 @@
 set(WORKER_OC_SRCS
         worker_master_oc_api.cpp
         worker_worker_oc_api.cpp
-        worker_worker_transport_api.cpp
         worker_oc_service_impl.cpp
         worker_request_manager.cpp
         worker_worker_oc_service_impl.cpp
@@ -41,6 +40,19 @@ set(WORKER_OC_SRCS
         service/worker_oc_service_batch_get_impl.cpp
         service/worker_oc_service_expire_impl.cpp)
 
+# Lightweight library for transport API
+set(WORKER_TRANSPORT_API_SRCS
+        worker_worker_transport_api.cpp)
+
+set(WORKER_TRANSPORT_API_DEPEND_LIBS
+        common_log
+        common_util
+        common_inject
+        common_rpc_zmq
+        common_rdma
+        rpc_stub_cache_mgr
+        worker_object_protos)
+
 set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         ${TBB_LIBRARY}
         common_etcd
@@ -68,7 +80,11 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
 
 list(APPEND WORKER_OBJECT_CACHE_DEPEND_LIBS common_rdma)
 
-add_library(worker_object_cache STATIC ${WORKER_OC_SRCS})
+add_library(worker_transport_api STATIC ${WORKER_TRANSPORT_API_SRCS})
+target_link_libraries(worker_transport_api PRIVATE ${WORKER_TRANSPORT_API_DEPEND_LIBS})
+add_dependencies(worker_transport_api worker_object_protos)
+
+add_library(worker_object_cache STATIC ${WORKER_OC_SRCS} ${WORKER_TRANSPORT_API_SRCS})
 target_link_libraries(worker_object_cache PRIVATE ${WORKER_OBJECT_CACHE_DEPEND_LIBS})
 add_dependencies(worker_object_cache
         master_heartbeat_protos

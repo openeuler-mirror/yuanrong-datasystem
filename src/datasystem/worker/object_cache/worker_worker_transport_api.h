@@ -25,6 +25,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_unary_client_impl.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
 
 namespace datasystem {
@@ -42,16 +43,18 @@ public:
     virtual Status Init() = 0;
 
     /**
-     * @brief Send local urma connect info.
+     * @brief Exchange urma connect info and fill response.
+     * @param[out] rsp Urma handshake response.
      * @return Status of the call.
      */
-    virtual Status ExchangeUrmaConnectInfo() = 0;
+    virtual Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp) = 0;
 
     /**
      * @brief Execute only once during concurrent execution of exchange.
+     * @param[out] rsp Urma handshake response.
      * @return Status of the call.
      */
-    Status ExecOnceParrallelExchange();
+    Status ExecOnceParrallelExchange(UrmaHandshakeRspPb &rsp);
 
 private:
     std::mutex mtx_;
@@ -69,7 +72,7 @@ public:
 
     Status Init() override;
 
-    Status ExchangeUrmaConnectInfo() override;
+    Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp) override;
 
 private:
     HostPort localHost_;
@@ -84,7 +87,7 @@ public:
 
     Status Init() override;
 
-    Status ExchangeUrmaConnectInfo() override;
+    Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp) override;
 
 private:
     HostPort hostPort_;

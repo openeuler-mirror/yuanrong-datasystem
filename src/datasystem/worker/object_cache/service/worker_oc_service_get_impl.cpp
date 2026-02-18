@@ -38,6 +38,7 @@
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/format.h"
@@ -929,7 +930,8 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
         }
     }
 
-    RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange());
+    UrmaHandshakeRspPb dummyRsp;
+    RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(dummyRsp));
     RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
 }
 

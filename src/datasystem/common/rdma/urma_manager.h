@@ -22,6 +22,7 @@
 
 #include <csignal>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
@@ -39,6 +40,8 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/queue/queue.h"
+#include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 
@@ -149,6 +152,88 @@ public:
     Status Init(const HostPort &hostport);
 
     /**
+     * @brief Initialize memory buffer for client side.
+     * @return Status of the call.
+     */
+    Status InitMemoryBufferPool();
+
+    class BufferHandle {
+    public:
+        BufferHandle() = default;
+
+        BufferHandle(Queue<uint32_t> *pool, uint32_t offset, void *basePtr, uint64_t segmentSize, uint64_t slotSize)
+            : pool_(pool), offset_(offset), basePtr_(basePtr), segmentSize_(segmentSize), slotSize_(slotSize)
+        {
+        }
+
+        BufferHandle(const BufferHandle &) = delete;
+        BufferHandle &operator=(const BufferHandle &) = delete;
+
+        ~BufferHandle()
+        {
+            Release();
+        }
+
+        uint32_t GetOffset() const
+        {
+            return offset_;
+        }
+
+        void *GetPointer() const
+        {
+            return basePtr_ ? static_cast<uint8_t *>(basePtr_) + offset_ : nullptr;
+        }
+
+        uint64_t GetSegmentAddress() const
+        {
+            return reinterpret_cast<uint64_t>(basePtr_);
+        }
+
+        uint64_t GetSegmentSize() const
+        {
+            return segmentSize_;
+        }
+
+        uint64_t GetSlotSize() const
+        {
+            return slotSize_;
+        }
+
+    private:
+        void Release()
+        {
+            if (pool_) {
+                pool_->Add(offset_);
+                pool_ = nullptr;
+            }
+        }
+
+        Queue<uint32_t> *pool_ = nullptr;
+        uint32_t offset_ = 0;
+        void *basePtr_ = nullptr;
+        uint64_t segmentSize_ = 0;
+        uint64_t slotSize_ = 0;
+    };
+
+    /**
+     * @brief Get a self-release memory buffer handle for client side RDMA operation.
+     * @param[out] handle The memory buffer handle with offset info.
+     * @return Status of the call.
+     */
+    Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle);
+
+    /**
+     * @brief Get client comm-buffer details for UB Get by buffer offset.
+     * @param[in] bufferOffset Offset in the client memory buffer pool.
+     * @param[out] bufferPtr Pointer to the beginning of this buffer slot.
+     * @param[out] bufferSize Buffer slot size.
+     * @param[out] urmaInfo Remote address info used by worker-side UrmaWritePayload.
+     * @return Status of the call.
+     */
+    Status GetMemoryBufferInfo(uint32_t bufferOffset, uint8_t *&bufferPtr, uint64_t &bufferSize,
+                               UrmaRemoteAddrPb &urmaInfo);
+
+    /**
      * @brief Check if Urma worker flag is set
      * @return True if flag is set, else false
      */
@@ -156,6 +241,19 @@ public:
     {
         return FLAGS_enable_urma;
     };
+
+    /**
+     * @brief Set the fast transport mode and client id for client process (e.g. UB Put).
+     * @param[in] urmaMode The transport mode, e.g. UB.
+     * @param[in] clientId The client identifier; shall be consistent in the same client process.
+     */
+    static void SetClientUrmaConfig(FastTransportMode urmaMode);
+
+    /**
+     * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
+     * @return Client id string.
+     */
+    const std::string &GetClientId();
 
     /**
      * @brief Check we should register whole arena upfront
@@ -206,11 +304,21 @@ public:
     Status GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq);
 
     /**
+     * @brief Fill segment info into handshake response (for callee to expose JFR to caller).
+     */
+    Status GetSegmentInfo(UrmaHandshakeRspPb &handshakeRsp);
+
+    /**
      * @brief Import segment info from request
      * @param[in] handshakeReq The protobuf to import segment info from
      * @return Status of the call.
      */
     Status ImportRemoteInfo(const UrmaHandshakeReqPb &req);
+
+    /**
+     * @brief Import segment info from handshake response (caller imports callee's segments).
+     */
+    Status ImportRemoteInfo(const UrmaHandshakeRspPb &rsp);
 
     /**
      * @brief Does a RDMA write to remote worker memory location
@@ -380,6 +488,15 @@ private:
      * @return Status of the call.
      */
     Status UrmaGetEffectiveDevice(std::string &urmaDevName);
+
+    /**
+     * @brief Get Urma device name and eid index for a given hostport
+     * @param[in] hostport HostPort of the remote device
+     * @param[out] urmaDeviceName Urma device name
+     * @param[out] eidIndex Eid index to use for the device
+     * @return Status of the call.
+     */
+    Status GetUrmaDeviceName(const HostPort &hostport, std::string &urmaDeviceName, int &eidIndex);
 
     /**
      * @brief Gets Urma effective device from devList
@@ -594,6 +711,15 @@ private:
     std::unordered_set<uint64_t> failedRequests_;
     std::atomic<bool> serverStop_{ false };
     urma_log_cb_t urmaLogCallback_;
+
+    enum InitState { UNINITIALIZED = 0, INITIALIZED, DISABLED };
+    std::atomic<InitState> initState_{ UNINITIALIZED };
+    WaitPost waitInit_;
+    std::string clientId_;
+    static bool clientMode_;
+    static uint64_t clientMemoryBufferNum_;
+    void *memoryBuffer_ = nullptr;
+    std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
 };
 
 }  // namespace datasystem

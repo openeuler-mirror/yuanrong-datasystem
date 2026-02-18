@@ -31,6 +31,12 @@ DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_bool(urma_register_whole_arena);
+DS_DECLARE_uint32(urma_poll_size);
+DS_DECLARE_uint32(urma_connection_size);
+DS_DECLARE_bool(urma_event_mode);
+DS_DECLARE_string(urma_mode);
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
+DS_DECLARE_int32(oc_worker_worker_direct_port);
+DS_DECLARE_int32(sc_worker_worker_direct_port);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

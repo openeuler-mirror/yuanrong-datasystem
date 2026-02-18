@@ -78,6 +78,15 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
     noQueryL2Cache_ = req.no_query_l2cache();
     enableReturnObjectIndex_ = req.return_object_index();
     clientCommId_ = req.comm_id();
+    hasUbGetInfo_ = req.has_urma_info();
+    if (hasUbGetInfo_) {
+        ubUrmaInfo_ = req.urma_info();
+        ubBufferSize_ = req.ub_buffer_size();
+        if (ubBufferSize_ == 0) {
+            LOG(WARNING) << "Disable UB Get for client " << clientId_ << " due to empty ub_buffer_size.";
+            hasUbGetInfo_ = false;
+        }
+    }
     for (size_t i = 0; i < objectsCount; i++) {
         const auto &objectKey = rawObjectKeys_[i];
         OffsetInfo offsetInfo;
@@ -340,6 +349,8 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
 {
     auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId_);
     bool shmEnabled = clientInfo != nullptr && clientInfo->ShmEnabled();
+    bool useUbGet = IsUrmaEnabled() && !shmEnabled && hasUbGetInfo_;
+    uint64_t ubWriteOffset = 0;
     if (shmEnabled && !rawObjectKeys_.empty()) {
         // avoid per key allocation. pre-allocate all the required space
         resp.mutable_objects()->Reserve(static_cast<int>(rawObjectKeys_.size()));
@@ -357,7 +368,8 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         }
         const auto &params = iter->second.params;
         totalSize += params->dataSize;
-        rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, resp, payloads);
+        rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, useUbGet, ubWriteOffset, resp,
+                                 payloads);
         if (shmEnabled
             && !(IsRemoteH2DEnabled() && params->shmUnit == nullptr && params->remoteH2DHostInfo
                  && !params->remoteH2DHostInfo->empty())) {
@@ -385,8 +397,39 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
     return lastRc;
 }
 
+Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSize, uint64_t readSize,
+                                 uint64_t readOffset, std::shared_ptr<ShmUnit> shmUnit, GetObjInfo &objectInfo,
+                                 size_t objectIndex, uint64_t &ubWriteOffset, GetRspPb &resp)
+{
+    bool hasCapacity = ubWriteOffset <= ubBufferSize_ && readSize <= ubBufferSize_ - ubWriteOffset;
+    if (hasCapacity) {
+        const uint64_t localObjectAddressBase = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
+        uint64_t localSegAddress;
+        uint64_t localSegSize;
+        GetSegmentInfoFromShmUnit(shmUnit, localObjectAddressBase, localSegAddress, localSegSize);
+        UrmaRemoteAddrPb urmaInfo = ubUrmaInfo_;
+        urmaInfo.set_seg_data_offset(ubUrmaInfo_.seg_data_offset() + ubWriteOffset);
+        std::vector<uint64_t> keys;
+        Status ubRc = UrmaWritePayload(urmaInfo, localSegAddress, localSegSize, localObjectAddressBase + readOffset, 0,
+                                       readSize, metaSize, true, keys);
+        if (ubRc.IsOk()) {
+            ubWriteOffset += readSize;
+            GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
+            SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);
+            return Status::OK();
+        }
+        LOG(WARNING) << "UB get write failed for object " << objectKeyUri
+                     << ", fallback to TCP payload: " << ubRc.ToString();
+        return ubRc;
+    }
+    LOG(WARNING) << "UB get comm buffer insufficient for object " << objectKeyUri << ", readSize " << readSize
+                 << ", used " << ubWriteOffset << ", capacity " << ubBufferSize_ << ", fallback to TCP payload.";
+    return Status(K_INVALID, "UB get comm buffer insufficient");
+}
+
 Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t objectIndex,
-                                       bool shmEnabled, GetRspPb &resp, std::vector<RpcMessage> &outPayloads)
+                                       bool shmEnabled, bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
+                                       std::vector<RpcMessage> &outPayloads)
 {
     const auto &params = objectInfo.params;
     if (shmEnabled
@@ -409,6 +452,13 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
             shmGuard.TryRLatch(),
             FormatString("Try read latch failed while getting object %s from shmUnit.", objectKeyUri));
     }
+
+    if (useUbGet) {
+        RETURN_OK_IF_TRUE(UbWriteHelper(objectKeyUri, metaSize, readSize, readOffset, params->shmUnit, objectInfo,
+                                        objectIndex, ubWriteOffset, resp)
+                              .IsOk());
+    }
+
     auto curIndex = outPayloads.size();
     LOG(INFO) << FormatString("CopyShmUnitToPayloads, objectKey: %s, read offset: %ld, read size: %ld", objectKeyUri,
                               readOffset, readSize);

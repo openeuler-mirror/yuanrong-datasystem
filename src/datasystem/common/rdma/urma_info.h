@@ -37,6 +37,7 @@ struct UrmaJfrInfo {
     std::vector<uint32_t> jfrIds;
     HostPort localAddress;
     std::string uniqueInstanceId;
+    std::string clientId;
 
     std::string ToString() const;
 
@@ -65,6 +66,7 @@ struct UrmaJfrInfo {
         }
         localAddress = HostPort(proto.address().host(), proto.address().port());
         uniqueInstanceId = proto.urma_instance_id();
+        clientId = proto.client_id();
         return Status::OK();
     }
 };

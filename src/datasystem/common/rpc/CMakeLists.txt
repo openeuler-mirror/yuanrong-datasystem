@@ -86,7 +86,7 @@ set(COMMON_RPC_ZMQ_CLIENT_DEPENDS_LIBS
 
 if (BUILD_WITH_URMA)
         list(APPEND COMMON_RPC_ZMQ_CLIENT_DEPENDS_LIBS
-                common_stub_rdma)
+                common_rdma)
 endif()
 
 add_library(common_rpc_zmq STATIC ${COMMON_RPC_ZMQ_SRCS} rpc_auth_key_manager_server.cpp)

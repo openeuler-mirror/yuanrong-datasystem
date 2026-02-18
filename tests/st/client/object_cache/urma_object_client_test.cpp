@@ -62,7 +62,7 @@ public:
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=false ";
 #endif
 #ifdef URMA_OVER_UB
-        opts.workerGflagParams += " -urma_mode=UB ";
+        opts.workerGflagParams += " -urma_mode=UB -ipc_through_shared_memory=false ";
 #endif
     }
 

@@ -85,6 +85,10 @@
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_manager.h"
+#endif
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
@@ -359,6 +363,7 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
+    // Payloads may be empty when req.use_ub() (phase1) or req.publish_complete_ub() (phase2); RPC layer accepts size=0.
     return publishProc_->Publish(req, resp, payloads);
 }
 

@@ -76,6 +76,12 @@ bool IsFastTransportEnabled();
 bool IsUrmaEnabled();
 
 /**
+ * @brief Set the fast transport mode for the client.
+ * @param[in] fastTransportMode The fast transport mode, e.g. UB.
+ */
+void SetClientFastTransportMode(FastTransportMode fastTransportMode);
+
+/**
  * @brief Check if Ucp is enabled.
  * @return True if Ucp logic is compiled and the flag is set, else false.
  */
@@ -218,6 +224,13 @@ Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize,
  * @return Status of the call.
  */
 Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
+
+/**
+ * @brief Shared logic for Urma handshake: ExchangeJfr then fill rsp if not already filled (Client–Worker or
+ * Worker–Worker). Used by WorkerOCService::ExchangeUrmaConnectInfo and
+ * WorkerWorkerTransportService::WorkerWorkerExchangeUrmaConnectInfo.
+ */
+Status DoExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
 
 /**
  * @brief Check if the connection is stable.

@@ -119,3 +119,7 @@ DS_DEFINE_bool(enable_rdma, false, "Option to turn on rdma for OC worker to work
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
 DS_DEFINE_bool(rdma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
+DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
+                "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
+DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
+                "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection");

@@ -60,7 +60,8 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_parallel
         client_mmap_static
         gRPC::grpc++
-        common_etcd_client)
+        common_etcd_client
+        worker_transport_api)
 
 if (ENABLE_PERF)
     file(GLOB_RECURSE PERF_CLIENT_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} perf_client/*.cpp )

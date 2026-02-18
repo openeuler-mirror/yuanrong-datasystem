@@ -35,6 +35,8 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -53,6 +55,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/version.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
@@ -294,6 +297,11 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_client_reconnect_wait_s(FLAGS_client_reconnect_wait_s);
     rsp.set_exclusive_conn_sockpath(exclusiveConnSockPath);
     rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
+#ifdef USE_URMA
+    if (IsUrmaEnabled() && GetUrmaMode() == UrmaMode::UB) {
+        rsp.set_fast_transport_mode(FastTransportMode::UB);
+    }
+#endif
 
     INJECT_POINT("worker.RegisterClient.end", [&rsp](int fd) {
         rsp.set_store_fd(fd);

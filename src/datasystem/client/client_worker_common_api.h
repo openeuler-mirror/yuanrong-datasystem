@@ -390,6 +390,13 @@ protected:
 
 private:
     /**
+     * @brief Called after RegisterClient succeeds.
+     * @param[in] timeoutMs Timeout used for register.
+     * @param[in] rsp Register response.
+     */
+    virtual void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
+
+    /**
      * @brief Registering the client with the worker
      * @param[in] req The register client request pb.
      * @param[in] timeoutMs Register request timeout interval.
@@ -430,8 +437,8 @@ private:
     void SaveStandbyWorker(const std::string standbyWorker,
                            const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
 
-    void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
     void SetHeatbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
+    Status FastTransportHandshake(const RegisterClientRspPb &rsp);
 };
 }  // namespace client
 }  // namespace datasystem

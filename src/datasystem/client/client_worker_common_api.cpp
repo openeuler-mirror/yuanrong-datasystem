@@ -36,6 +36,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
@@ -52,6 +53,7 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
 namespace datasystem {
 namespace client {
@@ -622,6 +624,43 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     SetHeatbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
+    LOG_IF_ERROR(FastTransportHandshake(rsp), "Fast transport handshake failed, fall back to TCP/IP communication.");
+}
+
+Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientRspPb &rsp)
+{
+    // Enable UB fast transport if client cannot use share memory while worker supports UB.
+    RETURN_OK_IF_TRUE(shmEnabled_);
+    SetClientFastTransportMode(rsp.fast_transport_mode());
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        // Initialize fast transport manager before the handshake.
+        RETURN_IF_NOT_OK(InitializeFastTransportManager(hostPort_));
+        // Perform handshake to set up jfr and segments.
+        using TbbTransportStubTable =
+            tbb::concurrent_hash_map<std::string,
+                                     std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi>>;
+        static TbbTransportStubTable tarnsportApiTable_;
+        std::string endPoint = hostPort_.ToString();
+        TbbTransportStubTable::const_accessor constAccApi;
+        while (!tarnsportApiTable_.find(constAccApi, endPoint)) {
+            TbbTransportStubTable::accessor acc;
+            if (tarnsportApiTable_.insert(acc, endPoint)) {
+                std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi> transportApi =
+                    std::make_shared<datasystem::object_cache::WorkerRemoteWorkerTransApi>(hostPort_);
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
+                acc->second = std::move(transportApi);
+            }
+        }
+        UrmaHandshakeRspPb handshakeRsp;
+        UrmaHandshakeRspPb dummyRsp;
+        RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(handshakeRsp));
+        if (handshakeRsp.has_hand_shake()) {
+            RETURN_IF_NOT_OK(ExchangeJfr(handshakeRsp.hand_shake(), dummyRsp));
+        }
+    }
+#endif
+    return Status::OK();
 }
 }  // namespace client
 }  // namespace datasystem
