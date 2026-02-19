@@ -6,6 +6,7 @@ list(APPEND CLIENT_SRCS
         listen_worker.cpp
         mmap_manager.cpp
         client_flags_monitor.cpp
+        service_discovery.cpp
         context/context.cpp
         object_cache/client_worker_api.cpp
         object_cache/object_client.cpp
@@ -57,7 +58,9 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_shared_memory
         common_rdma
         common_parallel
-        client_mmap_static)
+        client_mmap_static
+        gRPC::grpc++
+        common_etcd_client)
 
 if (ENABLE_PERF)
     file(GLOB_RECURSE PERF_CLIENT_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} perf_client/*.cpp )
