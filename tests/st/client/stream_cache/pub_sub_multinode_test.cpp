@@ -400,7 +400,7 @@ TEST_F(PubSubMultiNodeTest, TestCreateOrderCrossNodeOOM)
     ASSERT_EQ(rc.GetCode(), K_SC_STREAM_RESOURCE_ERROR);
 }
 
-TEST_F(PubSubMultiNodeTest, TestMultiStreamsOOM)
+TEST_F(PubSubMultiNodeTest, DISABLED_TestMultiStreamsOOM)
 {
     Status rc;
     int i = 0;

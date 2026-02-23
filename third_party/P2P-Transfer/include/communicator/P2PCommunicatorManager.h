@@ -235,6 +235,18 @@ public:
         return &bufferPool;
     }
 
+    void AddFailedIdentifier(const std::string &identifier)
+    {
+        std::lock_guard<std::mutex> lock(failedIdentifiersMut);
+        failedIdentifiers.insert(identifier);
+    }
+
+    bool IsFailedIdentifier(const std::string &identifier)
+    {
+        std::lock_guard<std::mutex> lock(failedIdentifiersMut);
+        return failedIdentifiers.find(identifier) != failedIdentifiers.end();
+    }
+
 private:
     // Port -> Communicator
     std::unordered_map<std::string, std::shared_ptr<P2PCommunicator>> unboundRootComms;
@@ -242,6 +254,8 @@ private:
     std::unordered_map<P2PComm, std::shared_ptr<P2PCommunicator>> comms;
     std::mutex commsMut;
     PingpongBufferPool bufferPool{ MAX_NUM_PINGPONG_BUFF };
+    std::unordered_set<std::string> failedIdentifiers;
+    std::mutex failedIdentifiersMut;
 };
 
 #endif
