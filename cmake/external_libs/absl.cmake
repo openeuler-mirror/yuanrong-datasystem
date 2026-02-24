@@ -5,7 +5,7 @@ if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
 else()
     set(absl_URL "https://gitee.com/mirrors/abseil-cpp/repository/archive/lts_2024_07_22.zip")
 endif()
-set(absl_SHA256 "c1e391c517790669dfcbbfda1278a61053679c303c0fb05018bf2266197f054e")
+set(absl_SHA256 "cf9f05c6e3216aa49d2fb3e0935ce736b1440e7879e1fde626f57f6610aa8b95")
 
 set(absl_CMAKE_OPTIONS
         -DCMAKE_BUILD_TYPE:STRING=Release
