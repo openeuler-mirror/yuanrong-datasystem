@@ -18,15 +18,31 @@ set -e
 readonly WORK_DIR=$(dirname "$(readlink -f "$0")")
 source ${WORK_DIR}/utils.sh
 
-if [ $# -lt 2 ]; then
-    wlog "invalid args, example ./file_check.sh startupProbe file1 file2"
-    exit
+if [ $# -ne 1 ]; then
+    wlog "invalid args, example ./file_check.sh startupProbe"
+    exit 1
 fi
 
 CHECK_TYPE=$1
-shift
+CHECK_FILES=()
+case "${CHECK_TYPE}" in
+    startupProbe)
+        CHECK_FILES=(`utils_get_worker_arg_value liveness_check_path`)
+        ;;
+    readinessProbe)
+        CHECK_FILES=(
+            `utils_get_worker_arg_value health_check_path`
+            `utils_get_worker_arg_value ready_check_path`
+        )
+        ;;
+    *)
+        wlog "unsupported check type: ${CHECK_TYPE}"
+        exit 1
+        ;;
+esac
+
 NOT_EXISTS_FILES=""
-for file in "$@"; do
+for file in "${CHECK_FILES[@]}"; do
     if [[ ! -e "${file}" ]]; then
         NOT_EXISTS_FILES="${NOT_EXISTS_FILES} ${file}"
     fi

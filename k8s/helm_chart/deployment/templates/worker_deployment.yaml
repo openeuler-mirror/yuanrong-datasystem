@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: kvcache-worker
+  name: kvcache-worker
+  namespace: {{ $.Values.global.namespace }}
+spec:
+  replicas: {{ $.Values.global.replicaNum }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 20%
+  selector:
+    matchLabels:
+      app: kvcache-worker
+  template:
+    metadata:
+      labels:
+        app: kvcache-worker
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: kvcache-worker
+              topologyKey: "kubernetes.io/hostname"
+      terminationGracePeriodSeconds: {{ $.Values.global.terminationGracePeriodSeconds }}
+      containers:
+        - name: kvcache-worker
+          startupProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - ${KVCACHE_DIR}/docker/file_check.sh startupProbe
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - ${KVCACHE_DIR}/docker/file_check.sh readinessProbe
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - ${KVCACHE_DIR}/docker/liveness_check.sh
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          env:
+            - name: WORKER_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+          image: "{{ $.Values.global.images.datasystem }}"
+          imagePullPolicy: IfNotPresent
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/bash
+                  - -c
+                  - ${KVCACHE_DIR}/docker/uninstall.sh
+          ports:
+            - containerPort: {{ $.Values.global.port.datasystemWorker }}
+              protocol: TCP
+          resources:
+            limits:
+              cpu: {{ $.Values.global.resources.datasystemWorker.limits.cpu }}
+              memory: {{ $.Values.global.resources.datasystemWorker.limits.memory }}
+            requests:
+              cpu: {{ $.Values.global.resources.datasystemWorker.requests.cpu }}
+              memory: {{ $.Values.global.resources.datasystemWorker.requests.memory }}
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: sharememory
+            - mountPath: /etc/localtime
+              name: time-zone
+              readOnly: true
+      restartPolicy: Always
+      volumes:
+        - name: time-zone
+          hostPath:
+            path: /etc/localtime
+        - name: sharememory
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $.Values.global.resources.datasystemWorker.requests.memory }}

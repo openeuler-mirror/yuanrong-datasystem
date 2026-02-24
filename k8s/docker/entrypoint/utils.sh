@@ -23,7 +23,6 @@ readonly UTILS_LOCK_FILE=${WORKER_LOG_DIR}/.loglock
 readonly UTILS_LOCK_DIR=${WORKER_LOG_DIR}/.loglockdir
 readonly UTILS_MAX_LOG_SIZE=10485760 # 10MB
 readonly UTILS_MAX_LOG_COUNT=9 # not include the current log file.
-readonly UTILS_POD_NAME=${POD_NAME:-$(hostname)}
 readonly UTILS_PREFIX=${UTILS_LOG_FILE%.*}
 readonly UTILS_SUFFIX=${UTILS_LOG_FILE##*.}
 alias ilog='utils_log I ${BASH_SOURCE##*/}:$LINENO'
@@ -31,7 +30,7 @@ alias wlog='utils_log W ${BASH_SOURCE##*/}:$LINENO'
 alias elog='utils_log E ${BASH_SOURCE##*/}:$LINENO'
 
 function utils_log_impl() {
-    echo -e "$(date -u '+%Y-%m-%dT%H:%M:%S.%6N') | $1 | $2 | ${UTILS_POD_NAME} | $$ |  |  | $3" >> ${UTILS_LOG_FILE}
+    echo -e "$(date -u '+%Y-%m-%dT%H:%M:%S.%6N') | $1 | $2 |  | $$ |  |  | $3" >> ${UTILS_LOG_FILE}
     if [ "$1" == "E" -o "$1" == "W" ]; then
         echo -e "$3" >&2
     fi
@@ -44,14 +43,14 @@ function utils_rm_logfile() {
         if [ ${to_del_count} -lt 1 ]; then
             break
         fi
-        to_del_count=$((to_del_count-1)) 
+        to_del_count=$((to_del_count-1))
         utils_log_impl I ${BASH_SOURCE##*/}:$LINENO "rm log file ${file}"
         rm ${file}
     done
 }
 
 # rotate the logs if log file exceeds the max size
-function utils_rotate_logfile() { 
+function utils_rotate_logfile() {
     local cur_time_str=$(date -u "+%Y%m%d%H%M%S")
     local new_log_file=${UTILS_PREFIX}.${cur_time_str}.${UTILS_SUFFIX}
     local file_size=$((du -b ${UTILS_LOG_FILE} 2>/dev/null || echo 0) | awk '{print $1}')
@@ -91,6 +90,20 @@ function utils_log() {
         utils_trylock_exec "bash ${UTILS_WORK_DIR}/utils.sh ROTATE_LOG" || true
     fi
     chmod 640 ${UTILS_LOG_FILE} 2>/dev/null || true
+}
+
+# get value from datasystem_worker args, like: --key=value
+function utils_get_worker_arg_value() {
+    local key="$1"
+    ps -ef | awk -v key="${key}" '/datasystem_worker/ {
+        for (i = 1; i <= NF; i++) {
+            idx = index($i, "=")
+            if(idx > 1 && substr($i, 0, idx - 1) == "--" key) {
+                print substr($i, idx + 1)
+                exit
+            }
+        }
+    }'
 }
 
 if [ "${1}" == "ROTATE_LOG" ]; then
