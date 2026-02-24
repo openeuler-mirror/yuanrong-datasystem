@@ -64,7 +64,8 @@ HcclResult P2PGetRootInfo(HcclRootInfo *rootInfo)
     return HCCL_SUCCESS;
 }
 
-HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm)
+HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
+                               std::function<int()> *p2pCallback)
 {
     if (rootInfo == nullptr) {
         std::cerr << "[P2P] P2PCommInitRootInfo: rootInfo is empty" << std::endl;
@@ -107,7 +108,7 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
                          P2P_QP_NUM };
 
     // Establish connection between root and client communicators
-    CHECK_STATUS_HCCL(p2pComm->EstablishConnection(args));
+    CHECK_STATUS_HCCL(p2pComm->EstablishConnection(args, p2pCallback));
 
     P2PComm resComm = p2pComm.get();
     commManager.addCommunicator(resComm, p2pComm);

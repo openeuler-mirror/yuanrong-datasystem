@@ -386,27 +386,10 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
 #ifdef BUILD_HETERO
     PerfPoint point(PerfKey::WORKER_REMOTE_GET_RH2D);
 
-    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_DEV_ID_FAST);
-    int32_t devId = -1;
-    {
-        // fast path: use const accessor
-        tbb::concurrent_hash_map<std::string, int32_t>::const_accessor cacc;
-        if (commDevIdMap_.find(cacc, commId)) {
-            devId = cacc->second;
-        }
-    }
-    if (devId == -1) {
-        // slow path
-        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_DEV_ID_SLOW);
-        std::vector<int32_t> devIds;
-        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetWorkerDeviceIds(&devIds));
-        tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;
-        commDevIdMap_.insert(acc, commId);
-        acc->second = devIds[nextDevIdIndex_.fetch_add(1, std::memory_order_relaxed) % devIds.size()];
-        devId = acc->second;
-    }
+    int32_t devId;
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetDevIdForComm(commId, devId));
 
-    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_SET_DEV);
+    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_P2P_SET_DEV);
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx(devId));
 
     // Send root info to client

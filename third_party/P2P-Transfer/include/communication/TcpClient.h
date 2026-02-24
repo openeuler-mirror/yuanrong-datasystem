@@ -24,7 +24,7 @@ public:
     std::string GetServerIp();
 
     // Connect client to server
-    Status Connect();
+    Status Connect(std::function<int()> *p2pCallback = nullptr);
 
     // Disconnect client
     Status Disconnect();

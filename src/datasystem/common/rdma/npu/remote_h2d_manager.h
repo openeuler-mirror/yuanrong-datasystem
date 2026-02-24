@@ -112,6 +112,13 @@ public:
     Status GetClientCommUuid(std::string &commId);
 
     /**
+     * @brief Get the client's device id stored in FLAGS_remote_h2d_device_ids
+     * @param[out] devId The clients device id
+     * @return Status of the call
+     */
+    Status GetClientDeviceId(int32_t &devId);
+
+    /**
      * @brief Get a vector of device ids the worker is allowed to use, as specified by the flag remote_h2d_device_ids.
      * @param[out] devIds The vector of device ids.
      * @return Status of the call.
@@ -122,6 +129,7 @@ public:
      * @brief Get the root info for communicator connection.
      * @param[in] key The client uuid for the connection.
      * @param[out] p2pRootInfo The p2p root info for communicator connection.
+     * @param[in] p2pCallback Function callback to check if client was disconnected
      * @return Status of the call.
      */
     Status P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo);
@@ -195,12 +203,21 @@ public:
      * @param[in] p2pComm The p2p communicator and stream.
      */
     Status ScatterBatch(P2pScatterEntry *entries, uint32_t size, std::shared_ptr<RemoteH2DContext> p2pComm);
+
+    /**
+     * @brief Gets the assigned device id for the passed commId. If there is no assigned devId, it is assigned one.
+     * @param[in] commId The commId to get the device id of
+     * @param[out] devId The retrieved devId
+     */
+    Status GetDevIdForComm(const std::string &commId, int32_t &devId);
+
     void AfterFork();
 
 private:
     RemoteH2DManager();
     Status HandleConnection(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
                             std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId);
+    void ManageHeartbeats();
 
     // Root info string to p2p communicator mapping.
     mutable std::shared_timed_mutex communicatorMutex_;
@@ -215,6 +232,17 @@ private:
     std::vector<int32_t> workerDeviceIds_;
     // Whether or not RemoteH2D is enabled
     static bool enableRemoteH2D_;
+    // CommId to device id mapping
+    tbb::concurrent_hash_map<std::string, int32_t> commDevIdMap_;
+    // Index for next devId to use in worker device ids
+    std::atomic<unsigned int> nextDevIdIndex_{0};
+    // Heartbeat variables
+    std::thread heartbeatThread_;
+    std::unordered_map<std::string, std::shared_ptr<std::function<int()>>> clientDisconnectChecks_;
+    std::unordered_map<std::string, std::shared_ptr<std::function<int()>>> clientPingFunctions_;
+    std::atomic<bool> interrupted_{false};
+    int64_t heartbeatIntervalS_{30};
+    int64_t heartbeatTimeoutS_{60};
 };
 }  // namespace datasystem
 

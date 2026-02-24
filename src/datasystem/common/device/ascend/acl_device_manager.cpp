@@ -572,11 +572,12 @@ Status AclDeviceManager::DSP2PGetRootInfo(HcclRootInfo *rootInfo)
     RETURN_HCCL_RESULT(DSP2PGetRootInfoFunc_(rootInfo));
 }
 
-Status AclDeviceManager::DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm)
+Status AclDeviceManager::DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
+                                               std::function<int()> *p2pCallback)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSP2PCommInitRootInfoFunc_);
-    RETURN_HCCL_RESULT(DSP2PCommInitRootInfoFunc_(rootInfo, kind, link, comm));
+    RETURN_HCCL_RESULT(DSP2PCommInitRootInfoFunc_(rootInfo, kind, link, comm, p2pCallback));
 }
 
 Status AclDeviceManager::DSP2PCommDestroy(P2PComm comm)

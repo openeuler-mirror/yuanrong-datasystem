@@ -93,7 +93,7 @@ uint16_t TCPServer::GetPort()
     return server_port;
 }
 
-Status TCPServer::Accept()
+Status TCPServer::Accept(std::function<int()> *p2pCallback)
 {
     // Set up connect timeout
     if (acceptTimeOut > 0) {
@@ -117,6 +117,24 @@ Status TCPServer::Accept()
             return Status::Error(ErrorCode::TCP_ERROR, "TCPServer accept failed");
             ;
         }
+    }
+
+    lastPingTime = std::chrono::steady_clock::now();
+    if (p2pCallback) {
+        *p2pCallback = [this]() {
+            size_t bufferSize = 4;
+            std::chrono::steady_clock::time_point currentTime = std::chrono::steady_clock::now();
+
+            // Receive ping from client
+            unsigned char buffer[bufferSize];
+            if (this->Read(buffer, bufferSize) == bufferSize) {
+                this->lastPingTime = currentTime;
+            }
+
+            // Return the number of seconds elapsed since reading the last ping
+            auto duration = currentTime - this->lastPingTime;
+            return static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(duration).count());
+        };
     }
 
     return Status::Success();
@@ -156,7 +174,7 @@ Status TCPServer::Close()
     this->Disconnect();
 
     if ((serverFd) != -1) {
-        if (close(client_fd) == -1) {
+        if (close(serverFd) == -1) {
             return Status::Error(ErrorCode::SOCKET_ERROR, std::string("Failed to close server fd ") + strerror(errno));
         }
         (serverFd) = -1;

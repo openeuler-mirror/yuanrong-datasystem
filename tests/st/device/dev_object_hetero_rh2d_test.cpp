@@ -69,6 +69,9 @@ public:
         opts.workerSpecifyGflagParams[1] += " -remote_h2d_device_ids=5 ";
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
+        opts.injectActions =
+            "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
+            "RH2D.ManageHeartbeats.heartbeat_timeout_s:call(10)";
         FLAGS_v = 0;
     }
 
@@ -114,6 +117,9 @@ class DevObjectHeteroRH2DMismatchTest : public DevObjectHeteroRH2DTest {
         opts.workerSpecifyGflagParams[0] += " -remote_h2d_device_ids=7 ";
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
+        opts.injectActions =
+            "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
+            "RH2D.ManageHeartbeats.heartbeat_timeout_s:call(10)";
         FLAGS_v = 0;
     }
 };
@@ -124,6 +130,9 @@ class DevObjectHeteroRH2DDistributedTest : public DevObjectHeteroRH2DTest {
         DevObjectHeteroRH2DTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams += " -enable_worker_worker_batch_get=true ";
         opts.enableDistributedMaster = "true";
+        opts.injectActions =
+            "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
+            "RH2D.ManageHeartbeats.heartbeat_timeout_s:call(10)";
     }
 };
 
@@ -136,6 +145,9 @@ class DevObjectHeteroRH2DNoNpuTest : public DevObjectHeteroRH2DTest {
             "-client_dead_timeout_s=15";
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
+        opts.injectActions =
+            "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
+            "RH2D.ManageHeartbeats.heartbeat_timeout_s:call(10)";
         FLAGS_v = 0;
     }
 };
@@ -148,6 +160,7 @@ void DevObjectHeteroRH2DTest::InitTestDsClientForRemoteH2D(uint32_t workerIndex,
     connectOptions.enableRemoteH2D = true;
     client = std::make_shared<DsClient>(connectOptions);
     DS_ASSERT_OK(client->Init());
+    datasystem::inject::Set("RH2D.ManageHeartbeats.heartbeat_interval_s", "call(5)");
 }
 
 void DevObjectHeteroRH2DTest::RunMGetH2DTest(const std::shared_ptr<DsClient> &client1,
@@ -619,6 +632,44 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
     for (auto &thread : threads) {
         thread.join();
     }
+}
+
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestReliability1)
+{
+    // Test that P2PComm data is cleared by creating over 100 connections
+    std::vector<size_t> clientBatches = { 33, 33, 34 };
+    std::vector<size_t> numObjChoices = { 5 };
+    std::vector<size_t> blkSzChoices = { 5 * 1024 };
+    std::vector<int> pids;
+
+    for (size_t j = 0; j < clientBatches.size(); j++) {
+        for (size_t i = 0; i < clientBatches[j]; i++) {
+            pids.emplace_back(ForkForTest([&, devId = (i % 8)]() {
+                InitAcl(devId);
+                
+                std::shared_ptr<DsClient> client1;
+                std::shared_ptr<DsClient> client2;
+                InitTestDsClientForRemoteH2D(0, client1);
+                InitTestDsClientForRemoteH2D(1, client2);
+
+                RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, devId);
+            }));
+        }
+        for (auto pid : pids) {
+            DS_ASSERT_TRUE(WaitForChildFork(pid), 0);
+        }
+        pids.clear();
+    }
+
+    // Create connection 101
+    InitAcl(deviceId_);
+
+    std::shared_ptr<DsClient> client1;
+    std::shared_ptr<DsClient> client2;
+    InitTestDsClientForRemoteH2D(0, client1);
+    InitTestDsClientForRemoteH2D(1, client2);
+
+    RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
 
 }  // namespace st
