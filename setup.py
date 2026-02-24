@@ -63,7 +63,8 @@ package_datas = {
         recursive_package_files('include') +
         recursive_package_files('helm_chart') +
         recursive_package_files('lib') +
-        recursive_package_files('cpp_template')
+        recursive_package_files('cpp_template') +
+        recursive_package_files('docker_entryfile')
     )
 }
 
