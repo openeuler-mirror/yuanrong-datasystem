@@ -1,0 +1,87 @@
+global:
+  namespace: "default"
+  images:
+    # Image name and tag in 'name:tag' format
+    datasystem: "openyuanrong-datasystem:0.7.0"
+
+  # Replica number configuration
+  replicaNum: 2
+
+  # Used to define how long Kubernetes will give a Pod a grace period before it is terminated.
+  # This grace period is intended to allow the Pod sufficient time to gracefully shut down its running processes and services.
+  terminationGracePeriodSeconds: 1800
+  # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
+  clusterName: ""
+
+  etcd:
+    # ETCD configuration
+    # Configure ETCD server address. Should not be empty.
+    etcdAddress: ""
+
+  # Port value (suggested range: 30000-32767).
+  port:
+    datasystemWorker: 31501
+
+  resources:
+    # Resource configuration for datasystem worker container.
+    # For cpu: "1" means 1 vCPU core, "500m" means 0.5 core.
+    # For memory: should specify unit like Mi/Gi(e.g. "4Gi", not just "4").
+    datasystemWorker:
+      # Max allowable CPU cores and memory.
+      limits:
+        cpu: "8"
+        memory: "32Gi"
+        urmaVfe: 1
+      # Minimum required resources.
+      requests:
+        cpu: "8"
+        memory: "32Gi"
+        urmaVfe: 1
+      # Upper limit of the shared memory, the default unit for shared memory is MB.
+      # To prevent being rendered as scientific notation by helm, numbers with more than 5 digits should be configured as strings.
+      sharedMemory: 30720
+  log:
+    # Log config.
+    # The directory where log files are stored.
+    logDir: /home/kvcache/logs
+    # Record performance and resource logs
+    logMonitor: true
+    # Log messages below this level will not actually be recorded anywhere. The value is between 0-2.
+    minLogLevel: 0
+
+  metadata:
+    # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
+    rocksdbWriteMode: "none"
+    # Enable query meta redirect when scale up or voluntary scale down, default is true
+    enableRedirect: "false"
+    # Allow data's replica to be cached locally, default is true
+    enableDataReplication: "false"
+    # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
+    clusterName: "AZ1"
+  rpc:
+    # Config rpc server thread number, must be greater than 0.
+    rpcThreadNum: 128
+    # The number of worker service for object cache.
+    ocThreadNum: 64
+
+  ipc:
+    # Determines whether the shared memory feature is enabled.
+    ipcThroughSharedMemory: false
+    # Unix domain socket (UDS) file directory with 80-character path limit
+    udsDir: /home/uds
+
+  reliability:
+    # Timeout interval of kubernetes liveness probe, default is 150 seconds.
+    livenessProbeTimeoutS: 150
+
+  performance:
+    # Enable worker->worker OC batch get, default false.
+    enableWorkerWorkerBatchGet: true
+    # Option to turn on urma for OC worker to worker data transfer, default false.
+    enableUrma: true
+    # Number of complete record to poll at a time, 16 is the max this device can poll.
+    urmaPollSize: 8
+    # Number of jfs and jfr pair.
+    urmaConnectionSize: 16
+    # The reserved memory (MB) is determined by min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400.
+    evictionReserveMemThresholdMB: 10240
