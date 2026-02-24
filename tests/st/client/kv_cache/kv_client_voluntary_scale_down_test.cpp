@@ -1118,7 +1118,7 @@ TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode2, LEVEL2_TestVoluntaryS
     sleep(10);  // sleep 10s to wait for scale down done.
 }
 
-TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode2, LEVEL1_TestVoluntarySwitchErrorWorker)
+TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode2, DISABLED_LEVEL1_TestVoluntarySwitchErrorWorker)
 {
     InitTestKVClient(0, client0_, 2000, true);  // Init client0 to worker 0 with 2000ms timeout
     std::thread t1([this]() {

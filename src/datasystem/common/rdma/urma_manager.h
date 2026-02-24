@@ -375,6 +375,22 @@ private:
     Status UnRegisterUrmaLog();
 
     /**
+     * @brief Gets Urma effective bonding device
+     * @param[out] urmaDevName Effective urma device name
+     * @return Status of the call.
+     */
+    Status UrmaGetEffectiveDevice(std::string &urmaDevName);
+
+    /**
+     * @brief Gets Urma effective device from devList
+     * @param[in] urmaDevName Urma device name
+     * @param[in] devList Urma device list
+     * @param[in] devCount Urma device list cout
+     * @return Device index.
+     */
+    int CompareDeviceName(const std::string &urmaDevName, urma_device_t **devList, int devCount);
+
+    /**
      * @brief Gets Urma device object
      * @param[in] deviceName name of the interface in local machine
      * @param[out] urmaDevice Urma device object

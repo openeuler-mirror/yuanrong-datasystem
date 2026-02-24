@@ -118,8 +118,11 @@ Status UrmaManager::Init(const HostPort &hostport)
             RETURN_STATUS(K_INVALID, "env DS_URMA_DEV_NAME is empty");
         }
     }
+    RETURN_IF_NOT_OK(UrmaInit()); // The urma api must be invoked after initialisation.
+    if (GetUrmaMode() == UrmaMode::UB) {
+        RETURN_IF_NOT_OK(UrmaGetEffectiveDevice(urmaDeviceName));
+    }
     LOG(INFO) << "urmaDeviceName = " << urmaDeviceName;
-    RETURN_IF_NOT_OK(UrmaInit());
     urma_device_t *urmaDevice = nullptr;
     RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
     RETURN_IF_NOT_OK(UrmaQueryDevice(urmaDevice));
@@ -215,6 +218,41 @@ Status UrmaManager::UnRegisterUrmaLog()
     }
     LOG(INFO) << "urma unRegister log success";
     urmaLogCallback_ = nullptr;
+    return Status::OK();
+}
+
+int UrmaManager::CompareDeviceName(const std::string &urmaDevName, urma_device_t **devList, int devCount)
+{
+    for (int i = 0; i < devCount; i++) {
+        if (devList[i] == nullptr) {
+            LOG(ERROR) << FormatString("Got empty device index %d from devList.", i);
+            continue;
+        }
+        if (strncmp(reinterpret_cast<const char *>(devList[i]->name), urmaDevName.c_str(), urmaDevName.length()) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+Status UrmaManager::UrmaGetEffectiveDevice(std::string &urmaDevName)
+{
+    LOG(INFO) << FormatString("Start UrmaGetEffectiveDevice() with %d", urmaDevName);
+    int devNums = 0;
+    urma_device_t **list = nullptr;
+    list = urma_get_device_list(&devNums);
+    if (list == nullptr) {
+        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
+                                FormatString("Got empty[%d] ub device list with errno = %d", devNums, errno));
+    }
+    int index = CompareDeviceName(urmaDevName, list, devNums);
+    if (index >= 0) {
+        return Status::OK();
+    }
+    std::string prefixName = "bonding";
+    index = CompareDeviceName(prefixName, list, devNums);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(index >= 0, K_RUNTIME_ERROR, "Cannot get effective bonding device");
+    urmaDevName = std::string(list[index]->name);
     return Status::OK();
 }
 
