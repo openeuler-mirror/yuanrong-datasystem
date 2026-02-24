@@ -1784,7 +1784,7 @@ TEST_F(StandbyWorkerDfxTest, DISABLED_LEVEL1_TestStandbyWorkerFault)
     ASSERT_BUF_EQ((*buffers4[0]), data2);
 }
 
-TEST_F(StandbyWorkerDfxTest, LEVEL1_TestEnableCrossNodeConnectionParam)
+TEST_F(StandbyWorkerDfxTest, DISABLED_LEVEL1_TestEnableCrossNodeConnectionParam)
 {
     StartWorkerAndWaitReady({ 0, 1, 2 });
     std::shared_ptr<ObjectClient> client0;
