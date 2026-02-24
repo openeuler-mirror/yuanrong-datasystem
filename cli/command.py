@@ -153,6 +153,7 @@ def main():
         "runscript",
         "generate_helm_chart",
         "generate_cpp_template",
+        "generate_docker_entryfile",
         "generate_config",
         "collect_log",
     ]

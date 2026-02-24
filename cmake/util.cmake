@@ -731,6 +731,11 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   # Copy cpp template to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli/cpp_template
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
+  # Copy docker entrypoint files to package lib path
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/k8s/docker/entrypoint/
+          DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile)
+  install(DIRECTORY ${CMAKE_SOURCE_DIR}/k8s/docker/exitpoint/
+          DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile)
   # Copy worker and worker_config to package lib path
   install(FILES ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_worker ${CMAKE_SOURCE_DIR}/cli/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/cluster_config.json
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
