@@ -225,7 +225,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .persistenceApi = persistenceApi_,
         .etcdCM = etcdCM_,
     };
-    createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, etcdCM_, akSkManager_);
+    createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, etcdCM_, akSkManager_, localAddress_);
 
     publishProc_ =
         std::make_shared<WorkerOcServicePublishImpl>(param, etcdCM_, memCpyThreadPool_, akSkManager_, localAddress_);
@@ -363,7 +363,6 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
-    // Payloads may be empty when req.use_ub() (phase1) or req.publish_complete_ub() (phase2); RPC layer accepts size=0.
     return publishProc_->Publish(req, resp, payloads);
 }
 

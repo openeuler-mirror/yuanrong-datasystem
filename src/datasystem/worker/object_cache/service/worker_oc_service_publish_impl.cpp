@@ -93,9 +93,7 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, Ob
 
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
 
-    return AttachShmUnitToObject(ClientShmEnabled(ClientKey::Intern(req.client_id())), objectKey,
-                                 ShmKey::Intern(req.shm_id()),
-
+    return AttachShmUnitToObject(ClientKey::Intern(req.client_id()), objectKey, ShmKey::Intern(req.shm_id()),
                                  req.data_size(), safeObj);
 }
 
@@ -328,66 +326,6 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     return Status::OK();
 }
 
-Status WorkerOcServicePublishImpl::PublishObjectWithLockForUbPhase1(const std::string &objectKey,
-                                                                    const PublishReqPb &req,
-                                                                    const std::vector<std::string> &nestedObjectKeys,
-                                                                    PublishRspPb &resp, std::future<Status> &future)
-{
-    (void)nestedObjectKeys;
-    (void)future;
-    std::shared_ptr<SafeObjType> entry;
-    bool isInsert;
-    RETURN_IF_NOT_OK(
-        objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, req.existence() == ExistenceOptPb::NX));
-    CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack({ objectKey }), K_OC_KEY_ALREADY_EXIST,
-                             "The object is being rolled back.");
-    Raii unlock([&entry]() { entry->WUnlock(); });
-    ObjectKV objectKV(objectKey, *entry);
-    RETURN_IF_NOT_OK(PrepareForPublish(req, objectKV));
-    auto *safeObj = entry->Get();
-    auto shmUnit = safeObj->GetShmUnit();
-    CHECK_FAIL_RETURN_STATUS(shmUnit != nullptr, K_RUNTIME_ERROR,
-                             "UB phase1: ShmUnit is null after PrepareForPublish.");
-    RETURN_IF_NOT_OK(
-        FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), GetMetadataSize(), resp));
-    resp.mutable_urma_info()->set_client_id(req.client_id());
-    LOG(INFO) << FormatString("[ObjectKey %s] Publish UB phase1: urma_info filled for Client UrmaWrite.", objectKey);
-    return Status::OK();
-}
-
-Status WorkerOcServicePublishImpl::PublishObjectWithLockForUbPhase2(const std::string &objectKey,
-                                                                    const PublishReqPb &req,
-                                                                    const std::vector<std::string> &nestedObjectKeys,
-                                                                    std::future<Status> &future)
-{
-    std::shared_ptr<SafeObjType> entry;
-    RETURN_IF_NOT_OK(objectTable_->GetAndLock(objectKey, entry));
-    CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack({ objectKey }), K_OC_KEY_ALREADY_EXIST,
-                             "The object is being rolled back.");
-    Raii unlock([&entry]() { entry->WUnlock(); });
-    ObjectKV objectKV(objectKey, *entry);
-    auto newLifeState = req.is_seal() ? ObjectLifeState::OBJECT_SEALED : ObjectLifeState::OBJECT_PUBLISHED;
-    const PublishParams params = { .lifeState = newLifeState,
-                                   .nestedObjectKeys = nestedObjectKeys,
-                                   .isRetry = req.is_retry(),
-                                   .ttlSecond = req.ttl_second(),
-                                   .existence = req.existence(),
-                                   .cacheType = static_cast<CacheType>(req.cache_type()) };
-    std::vector<RpcMessage> emptyPayloads;
-    auto rc = PublishObject(objectKV, params, emptyPayloads);
-    if (rc.IsError()) {
-        if ((*entry)->GetShmUnit() == nullptr) {
-            LOG_IF_ERROR(TryDeleteObjFromEvictionAndSpillFile(objectKV, false), "Try delete obj from evict fail");
-        }
-        return rc;
-    }
-    if ((*entry)->IsWriteBackMode() && IsSupportL2Storage(supportL2Storage_)) {
-        LOG(INFO) << "Asyn save binary object to l2cache (UB phase2)";
-        return asyncSendManager_->Add(objectKey, entry, future);
-    }
-    return Status::OK();
-}
-
 Status WorkerOcServicePublishImpl::TryDeleteObjFromEvictionAndSpillFile(ObjectKV &objectKV, bool isInsert)
 {
     const auto &objectKey = objectKV.GetObjKey();
@@ -411,38 +349,15 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     LOG(INFO) << FormatString("[ObjectKey %s] is being publishing [Sz: %zu].", req.object_key(), req.data_size());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    std::vector<ShmKey> shmUnits = (req.use_ub() && !req.publish_complete_ub())
-                                       ? std::vector<ShmKey>{}
-                                       : std::vector<ShmKey>{ ShmKey::Intern(req.shm_id()) };
+    std::vector<ShmKey> shmUnits = std::vector<ShmKey>{ ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, ClientKey::Intern(req.client_id()),
                                                                           shmUnits, memoryRefTable_));
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key());
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
     auto nestedObjectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.nested_keys());
 
-    std::future<Status> future;
-    // Phase 1: Put via UB - return urma_info for Client to UrmaWrite.
-    if (req.use_ub() && !req.publish_complete_ub() && IsUrmaEnabled()) {
-        Status rcPhase1 = RetryWhenDeadlock([this, &namespaceUri, &req, &nestedObjectKeys, &resp, &future] {
-            return PublishObjectWithLockForUbPhase1(namespaceUri, req, nestedObjectKeys, resp, future);
-        });
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rcPhase1,
-                                         FormatString("[ObjectKey %s] Publish UB phase1 failed.", namespaceUri));
-        resp.set_need_ub_write(true);
-        return Status::OK();
-    }
-
-    // Phase 2: Put via UB - Client has finished UrmaWrite; complete Publish with no payloads.
-    if (req.publish_complete_ub() && IsUrmaEnabled()) {
-        Status rcPhase2 = RetryWhenDeadlock([this, &namespaceUri, &req, &nestedObjectKeys, &future] {
-            return PublishObjectWithLockForUbPhase2(namespaceUri, req, nestedObjectKeys, future);
-        });
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rcPhase2,
-                                         FormatString("[ObjectKey %s] Publish UB phase2 failed.", namespaceUri));
-        return rcPhase2;
-    }
-
     // Step 2: Do create-or-get logic on object table, and get both locks.
+    std::future<Status> future;
     Status rc = RetryWhenDeadlock([this, &namespaceUri, &req, &nestedObjectKeys, &payloads, &future] {
         return PublishObjectWithLock(namespaceUri, req, nestedObjectKeys, payloads, future);
     });

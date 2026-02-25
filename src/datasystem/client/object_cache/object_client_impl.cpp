@@ -1052,20 +1052,26 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     buffer.reset();  // Decrease should precede increase to avoid worker lost (ref cnt will be clear) and then restart.
     std::shared_ptr<Buffer> newBuffer;
     uint32_t version = 0;
-    if (ShmCreateable(dataSize)) {
+    if (ShmCreateable(dataSize) || IsUrmaEnabled()) {
         uint64_t metadataSize = 0;
         auto shmBuf = std::make_shared<ShmUnitInfo>();
-        RETURN_IF_NOT_OK(
-            workerApi_[LOCAL_WORKER]->Create(objectKey, dataSize, version, metadataSize, shmBuf, param.cacheType));
-        PerfPoint mmapPoint(PerfKey::CLIENT_LOOK_UP_MMAP_FD);
-        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
-        auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-        CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-        mmapPoint.Record();
-
-        auto bufferInfo =
-            MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize,
-                                 param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+        std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;
+        RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Create(objectKey, dataSize, version, metadataSize, shmBuf,
+                                                          urmaDataInfo, param.cacheType));
+        std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
+        if (!urmaDataInfo) {
+            RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+            mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+            CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
+            bufferInfo =
+                MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize,
+                                     param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+        } else {
+            bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version, shmBuf->id);
+        }
+        // Store URMA info for later use in SendBufferViaUb.
+        bufferInfo->ubUrmaDataInfo = urmaDataInfo;
         RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
     } else {
@@ -1333,29 +1339,19 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 
     bufferInfo->isSeal = false;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, bufferInfo->existence),
+        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
         FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
     return Status::OK();
 }
 
-Status ObjectClientImpl::SendBufferViaUbAfterMemoryCopy(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
+Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                         uint64_t length)
 {
     auto api = std::dynamic_pointer_cast<ClientWorkerRemoteApi>(workerApi_[LOCAL_WORKER]);
-    if (api == nullptr) {
-        return Status::OK();
-    }
-    return api->SendBufferViaUbAfterMemoryCopy(bufferInfo);
-}
-
-void ObjectClientImpl::ReleaseBufferUbState(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
-{
-    if (bufferInfo == nullptr || bufferInfo->ubUrmaInfoOpaque == nullptr) {
-        return;
-    }
-    delete static_cast<UrmaRemoteAddrPb *>(bufferInfo->ubUrmaInfoOpaque);
-    bufferInfo->ubUrmaInfoOpaque = nullptr;
+    RETURN_RUNTIME_ERROR_IF_NULL(api);
+    return api->SendBufferViaUb(bufferInfo, data, length);
 }
 
 Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
@@ -1376,12 +1372,21 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     auto shmBuf = std::make_shared<ShmUnitInfo>();
     uint32_t version = 0;
     uint64_t metadataSize = 0;
-    RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, param.cacheType));
-    RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
-    auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-    CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-    auto objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
-                                        param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+    std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;  // For Create+MemoryCopy+Publish path with URMA
+    RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType));
+    std::shared_ptr<ObjectBufferInfo> objInfo = nullptr;
+    std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
+    if (!urmaDataInfo) {
+        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+        mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+        CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
+        objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
+                                       param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+    } else {
+        objInfo = MakeObjectBufferInfo(objectKey, nullptr, size, 0, param, false, version, shmBuf->id);
+    }
+    // Store URMA info for later use in SendBufferViaUb
+    objInfo->ubUrmaDataInfo = urmaDataInfo;
     std::shared_ptr<Buffer> buffer;
     // Acquire accessor to protect later publish.
     TbbMemoryRefTable::accessor accessor;
@@ -1390,14 +1395,18 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffer));
 
     // Copy user data into the shared memory buffer.
-    // no need call WLatch, the other thread cannot change before publish
+    // no need call WLatch, the other thread cannot change before publish.
+    reqTimeoutDuration.Init(requestTimeoutMs_);
     RETURN_IF_NOT_OK(buffer->MemoryCopy(data, size));
 
     // Start to send put request.
     // In this case buffer is local data, but rpc must be locked.:
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, true, false, nestedObjectKeys, ttlSecond, existence),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, !urmaDataInfo || objInfo->ubDataSentByMemoryCopy,
+                                                        false, nestedObjectKeys, ttlSecond, existence),
                                      FormatString("Put object %s", objectKey));
-    buffer->SetVisibility(true);
+    if (!urmaDataInfo) {
+        buffer->SetVisibility(true);
+    }
     accessor.release();  // avoid deadlock in buffer destroy.
     // Destruct buffer with async
     buffer.reset();
@@ -1477,19 +1486,16 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
 
     LOG(INFO) << "Begin to put and seal object, object_key: " << objectKey;
     bool isShm = workerApi->ShmCreateable(size);
-    if (isShm) {
+    // Process UB case and shm case together since they share the same Create + MemoryCopy + Publish flow.
+    if (isShm || IsUrmaEnabled()) {
         RETURN_IF_NOT_OK(
             ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence));
     } else {
-        // Put via Create + MemoryCopy + Publish (UB path is handled inside MemoryCopy).
-        FullParam createParam = param;
-        createParam.ttlSecond = ttlSecond;
-        std::shared_ptr<Buffer> buffer;
-        RETURN_IF_NOT_OK(Create(objectKey, size, createParam, buffer));
-        buffer->bufferInfo_->existence = existence;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->MemoryCopy(data, size),
-                                         FormatString("Put object %s MemoryCopy failed", objectKey));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->Publish(nestedObjectKeys), FormatString("Put object %s", objectKey));
+        // Construct info to put.
+        auto objInfo = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
+            FormatString("Put object %s", objectKey));
     }
     LOG(INFO) << "Finished putting and sealing object, object_key: " << objectKey;
     return Status::OK();
@@ -2246,7 +2252,7 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
     int i = 0;
     for (const auto &keyValue : kv) {
         // if is not transaction, the val  of object master less than 500KB, not ShmCreateable.
-        if (!workerApi->ShmCreateable(keyValue.second.size())) {
+        if (!workerApi->ShmCreateable(keyValue.second.size()) && !IsUrmaEnabled()) {
             // Transmit data with payload.
             bufferInfo[i] = MakeObjectBufferInfo(
                 keyValue.first, reinterpret_cast<uint8_t *>(const_cast<char *>(keyValue.second.data())),
@@ -2258,14 +2264,24 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
         auto shmBuf = std::make_shared<ShmUnitInfo>();
         uint32_t version = 0;
         uint64_t metadataSize = 0;
-        RETURN_IF_NOT_OK(
-            workerApi->Create(keyValue.first, keyValue.second.size(), version, metadataSize, shmBuf, param.cacheType));
-        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
-        auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-        CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-        auto objInfo =
-            MakeObjectBufferInfo(keyValue.first, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, keyValue.second.size(),
-                                 metadataSize, param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+        std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;  // For Create+MemoryCopy+Publish path with URMA
+        RETURN_IF_NOT_OK(workerApi->Create(keyValue.first, keyValue.second.size(), version, metadataSize, shmBuf,
+                                           urmaDataInfo, param.cacheType));
+        std::shared_ptr<ObjectBufferInfo> objInfo = nullptr;
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
+        if (!urmaDataInfo) {
+            RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+            mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+            CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
+            objInfo = MakeObjectBufferInfo(keyValue.first, (uint8_t *)(shmBuf->pointer) + shmBuf->offset,
+                                           keyValue.second.size(), metadataSize, param, false, version, shmBuf->id,
+                                           nullptr, std::move(mmapEntry));
+        } else {
+            objInfo = MakeObjectBufferInfo(keyValue.first, nullptr, keyValue.second.size(), 0, param, false, version,
+                                           shmBuf->id);
+        }
+        // Store URMA info for later use in SendBufferViaUb
+        objInfo->ubUrmaDataInfo = urmaDataInfo;
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffers[i]));
         RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id, accessor[i]));
         RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(keyValue.second.data(), keyValue.second.size()));

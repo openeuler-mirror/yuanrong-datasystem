@@ -31,7 +31,7 @@ namespace object_cache {
 class WorkerOcServiceCreateImpl : public WorkerOcServiceCrudCommonApi {
 public:
     WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-                              std::shared_ptr<AkSkManager> akSkManager);
+                              std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
     /**
      * @brief Create a new object, allocate memory and return the pointer. for shm use only.
      * @param[in] req The rpc request protobuf
@@ -92,6 +92,8 @@ private:
 
     std::atomic<uint64_t> shmIdCounter{0};
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+
+    HostPort localAddress_;
 };
 
 }  // namespace object_cache

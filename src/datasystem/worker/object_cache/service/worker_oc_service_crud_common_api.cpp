@@ -26,6 +26,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
@@ -196,21 +197,27 @@ size_t WorkerOcServiceCrudCommonApi::GetMetadataSize() const
     return metadataSize_;
 }
 
-Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const bool &shmEnabled, const std::string &objectKey,
+Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const ClientKey &clientId, const std::string &objectKey,
                                                            const ShmKey &shmUnitId, uint64_t dataSize,
                                                            SafeObjType &entry)
 {
     INJECT_POINT("AttachShmUnitToObject.error");
     std::shared_ptr<ShmUnit> shmUnit;
-    if (shmEnabled && ShmEnable() && !shmUnitId.Empty()) {
-        RETURN_IF_NOT_OK(memoryRefTable_->GetShmUnit(shmUnitId, shmUnit));
-    } else {
-        // non-shm case, create first
-        // Only create new shm if size changed or not exist.
+    bool gotShm = false;
+    if (!shmUnitId.Empty()) {
+        auto status = memoryRefTable_->GetShmUnit(shmUnitId, shmUnit);
+        if (ClientShmEnabled(clientId) && ShmEnable()) {
+            RETURN_IF_NOT_OK(status);
+            gotShm = true;
+        } else {
+            gotShm = status.IsOk();
+            if (gotShm) {
+                memoryRefTable_->RemoveShmUnit(clientId, shmUnitId);
+            }
+        }
+    }
+    if (!gotShm) {
         uint64_t metaDataSz = GetMetadataSize();
-        uint64_t cap = dataSize + metaDataSz;
-        bool szChanged = (entry->GetShmUnit() == nullptr) || (entry->GetShmUnit()->size != cap);
-        RETURN_OK_IF_TRUE(!szChanged);
         RETURN_IF_NOT_OK(AllocateNewShmUnit(objectKey, dataSize, metaDataSz, false, evictionManager_, shmUnit,
                                             entry->modeInfo.GetCacheType()));
     }
@@ -308,11 +315,12 @@ Status WorkerOcServiceCrudCommonApi::GetPrimaryReplicaAddr(const std::string &sr
 }
 
 Status WorkerOcServiceCrudCommonApi::RemoveMeta(const std::list<std::string> &objectKeysRemoveList,
-    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-    const master::RemoveMetaReqPb::Cause removeCause, const uint64_t version,
-    bool needRedirct, const std::string &localAddress,
-    const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
-    master::RemoveMetaRspPb &response)
+                                                const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                                                const master::RemoveMetaReqPb::Cause removeCause,
+                                                const uint64_t version, bool needRedirct,
+                                                const std::string &localAddress,
+                                                const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
+                                                master::RemoveMetaRspPb &response)
 {
     master::RemoveMetaReqPb request;
     request.set_address(localAddress);
@@ -327,18 +335,17 @@ Status WorkerOcServiceCrudCommonApi::RemoveMeta(const std::list<std::string> &ob
             objKeyVersionPb->set_version(objKeyVersion.second);
         }
     }
-    std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)> func = [workerMasterApi](
-        master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) { return workerMasterApi->RemoveMeta(req, rsp); };
+    std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)> func =
+        [workerMasterApi](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
+            return workerMasterApi->RemoveMeta(req, rsp);
+        };
     return WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, func);
 }
 
-Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(master::RemoveMetaRspPb &rsp,
-    const master::RemoveMetaReqPb::Cause removeCause,
-    const std::string &localAddress,
-    const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
-    std::vector<std::string> &failedIds,
-    std::vector<std::string> &needMigrateIds,
-    std::vector<std::string> &needWaitIds)
+Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
+    master::RemoveMetaRspPb &rsp, const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
+    const std::unordered_map<std::string, uint64_t> &batchKeyVersions, std::vector<std::string> &failedIds,
+    std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds)
 {
     for (const auto &redirectInfo : rsp.info()) {
         master::RemoveMetaReqPb redirectReq;
@@ -360,8 +367,8 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(master::Re
             LOG(ERROR) << "failed to get redirectWorkerMasterApi, masterAddr: " << redirectInfo.redirect_meta_address();
             continue;
         }
-        Status result = RemoveMeta(redirectIds, redirectWorkerMasterApi, removeCause, UINT64_MAX, false,
-                                  localAddress, batchKeyVersions, redirectRsp);
+        Status result = RemoveMeta(redirectIds, redirectWorkerMasterApi, removeCause, UINT64_MAX, false, localAddress,
+                                   batchKeyVersions, redirectRsp);
         // save the result to rsp and payload
         if (result.IsError()) {
             LOG(WARNING) << "remove meta failed: " << result.ToString();
@@ -445,12 +452,12 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
 }
 
 void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(const std::vector<std::string> &objKeys,
-    const master::RemoveMetaReqPb::Cause &removeCase,
-    const std::string &localAddress,
-    const std::unordered_map<std::string, uint64_t> &objKeyVersions,
-    std::vector<std::string> &failedIds,
-    std::vector<std::string> &needMigrateIds,
-    std::vector<std::string> &needWaitIds)
+                                                      const master::RemoveMetaReqPb::Cause &removeCase,
+                                                      const std::string &localAddress,
+                                                      const std::unordered_map<std::string, uint64_t> &objKeyVersions,
+                                                      std::vector<std::string> &failedIds,
+                                                      std::vector<std::string> &needMigrateIds,
+                                                      std::vector<std::string> &needWaitIds)
 {
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objKeys);
     for (const auto &item : objKeysGrpByMaster) {
@@ -472,8 +479,8 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(const std::vector<std::str
             }
         }
         LOG(INFO) << "remove meta req send to master: " << masterAddr.ToString() << ", removeCase: " << removeCase;
-        BatchRemoveMeta(currentObjectKeysRemove, workerMasterApi, removeCase, localAddress, batchKeyVersions,
-                        failedIds, needMigrateIds, needWaitIds);
+        BatchRemoveMeta(currentObjectKeysRemove, workerMasterApi, removeCase, localAddress, batchKeyVersions, failedIds,
+                        needMigrateIds, needWaitIds);
     }
 }
 }  // namespace object_cache

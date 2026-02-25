@@ -24,6 +24,7 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -37,8 +38,11 @@ namespace datasystem {
 namespace object_cache {
 
 WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-                                                     std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerOcServiceCrudCommonApi(initParam), etcdCM_(etcdCM), akSkManager_(std::move(akSkManager))
+                                                     std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
+    : WorkerOcServiceCrudCommonApi(initParam),
+      etcdCM_(etcdCM),
+      akSkManager_(std::move(akSkManager)),
+      localAddress_(localAddress)
 {
 }
 
@@ -105,6 +109,15 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     resp.set_offset(shmUnit->GetOffset());
     resp.set_shm_id(shmUnit->GetId());
     resp.set_metadata_size(metadataSize);
+
+#ifdef USE_URMA
+    // Fill urma_info for UB Put path (Create+MemoryCopy+Publish)
+    if (!ClientShmEnabled(clientId) && IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(
+            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metadataSize, resp));
+    }
+#endif
+
     INJECT_POINT("worker.Create.AllocateMemory");
     return Status::OK();
 }
@@ -139,7 +152,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
     point.RecordAndReset(PerfKey::WORKER_MULTI_CREATE_GET_SHM_UNITS);
     TbbMemoryClientRefTable::const_accessor clientAccessor;
     memoryRefTable_->ClientTableGetOrInsert(ClientKey::Intern(req.client_id()), clientAccessor);
-    auto createMeta = [&] (int start, int end) {
+    auto createMeta = [&](int start, int end) {
         std::vector<std::shared_ptr<ShmUnit>> shmUnits(end - start + 1);
         for (int i = start, j = 0; i < end; i++, j++) {
             if (!req.skip_check_existence() && resp.exists(i)) {
@@ -178,6 +191,16 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             subRsp[i].set_offset(shmUnit->GetOffset());
             subRsp[i].set_shm_id(shmUnit->GetId());
             subRsp[i].set_metadata_size(metadataSize);
+
+#ifdef USE_URMA
+            if (!ClientShmEnabled(ClientKey::Intern(req.client_id())) && IsUrmaEnabled()) {
+                Status urmaStatus = FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(),
+                                                        metadataSize, subRsp[i]);
+                if (urmaStatus.IsError()) {
+                    results[i] = urmaStatus;
+                }
+            }
+#endif
         }
         PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ADD_SHM_UNITS);
 

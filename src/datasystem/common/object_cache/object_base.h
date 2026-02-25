@@ -36,6 +36,7 @@
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 
@@ -347,13 +348,8 @@ struct ObjectBufferInfo {
     std::shared_ptr<RpcMessage> payloadPointer;
     std::shared_ptr<client::IMmapTableEntry> mmapEntry;
     std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr;
-
-    /** Create+MemoryCopy+Publish UB path: phase1 urma_info stored here (opaque UrmaRemoteAddrPb*); freed by client. */
-    void *ubUrmaInfoOpaque = nullptr;
-    /** True after MemoryCopy performed UrmaWrite to Worker; Publish then sends only phase2 (no phase1/payload). */
+    std::shared_ptr<UrmaRemoteAddrPb> ubUrmaDataInfo = nullptr;
     bool ubDataSentByMemoryCopy = false;
-    /** Existence option for Publish (e.g. NX); set by Put before Publish when using Create+MemoryCopy+Publish. */
-    int existence = 0;
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };

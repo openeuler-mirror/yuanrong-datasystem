@@ -113,6 +113,63 @@ TEST_F(UrmaObjectClientTest, UrmaPutGetDeleteShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
+TEST_F(UrmaObjectClientTest, TestParallelGetSameObject)
+{
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+    std::string objectKey = NewObjectKey();
+    std::string data = GenRandomString(SHM_SIZE);
+
+    std::vector<std::string> failedObjectKeys;
+    DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
+    DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), SHM_SIZE, CreateParam{}));
+    std::vector<std::future<void>> futs;
+    const int numThreads = 100;
+    ThreadPool threadPool(numThreads);
+    for (int i = 0; i < numThreads; i++) {
+        futs.emplace_back(threadPool.Submit([this, objectKey, data]() {
+            std::shared_ptr<ObjectClient> client;
+            InitTestClient(0, client);
+            std::vector<Optional<Buffer>> buffers;
+            const int numIterations = 10;
+            for (int j = 0; j < numIterations; j++) {
+                buffers.clear();
+                DS_ASSERT_OK(client->Get({ objectKey }, 0, buffers));
+                ASSERT_TRUE(NotExistsNone(buffers));
+                AssertBufferEqual(*buffers[0], data);
+            }
+        }));
+    }
+    for (auto &fut : futs) {
+        fut.get();
+    }
+
+    DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
+    ASSERT_EQ(failedObjectKeys.size(), size_t(0));
+}
+
+TEST_F(UrmaObjectClientTest, TestRepeatedSetOOM)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    const int numPuts = 1000;
+    const int half = numPuts / 2;
+    // Total 8GB which is larger than the 5GB URMA arena size.
+    const int sizePerPut = 8 * 1024 * 1024;
+    for (int i = 0; i < numPuts; i++) {
+        std::string objectKey = NewObjectKey();
+        std::string data = GenRandomString(sizePerPut);
+        SetParam param;
+        param.ttlSecond = 5;
+        DS_ASSERT_OK(client->Set(objectKey, data, param));
+        if (i == half) {
+            // Sleep for 5 seconds to make the first half of the objects expire,
+            // so then the second half of the puts can succeed without OOM.
+            sleep(5);
+        }
+    }
+}
+
 // bus error happen in aarch64
 TEST_F(UrmaObjectClientTest, TestBatchRemoteGet1)
 {
