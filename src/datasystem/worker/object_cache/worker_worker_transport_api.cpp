@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
@@ -31,7 +32,7 @@
 namespace datasystem {
 namespace object_cache {
 
-Status WorkerWorkerTransportApi::ExecOnceParrallelExchange()
+Status WorkerWorkerTransportApi::ExecOnceParrallelExchange(UrmaHandshakeRspPb &rsp)
 {
     std::unique_lock<std::mutex> lock(mtx_);
 
@@ -53,7 +54,7 @@ Status WorkerWorkerTransportApi::ExecOnceParrallelExchange()
     isExecuting_ = true;
     lock.unlock();
 
-    auto result = ExchangeUrmaConnectInfo();
+    auto result = ExchangeUrmaConnectInfo(rsp);
 
     lock.lock();
     isExecuting_ = false;
@@ -81,13 +82,12 @@ Status WorkerLocalWorkerTransApi::Init()
     return Status::OK();
 }
 
-Status WorkerLocalWorkerTransApi::ExchangeUrmaConnectInfo()
+Status WorkerLocalWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp)
 {
     UrmaHandshakeReqPb req;
-    UrmaHandshakeRspPb rsp;
     std::string localHost = localHost_.ToString();
     RETURN_IF_NOT_OK(ConstructHandshakePb(localHost, req));
-    return service_->ExchangeUrmaConnectInfo(req, rsp);
+    return service_->WorkerWorkerExchangeUrmaConnectInfo(req, rsp);
 }
 
 WorkerRemoteWorkerTransApi::WorkerRemoteWorkerTransApi(HostPort hostPort) : hostPort_(std::move(hostPort))
@@ -103,7 +103,7 @@ Status WorkerRemoteWorkerTransApi::Init()
     return Status::OK();
 }
 
-Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo()
+Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp)
 {
     RpcOptions opts;
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
@@ -115,10 +115,9 @@ Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo()
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
 
     UrmaHandshakeReqPb req;
-    UrmaHandshakeRspPb rsp;
     std::string senderAddStr = hostPort_.ToString();
     RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req));
-    RETURN_IF_NOT_OK(rpcSession_->ExchangeUrmaConnectInfo(opts, req, rsp));
+    RETURN_IF_NOT_OK(rpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
     return Status::OK();
 }
 }  // namespace object_cache

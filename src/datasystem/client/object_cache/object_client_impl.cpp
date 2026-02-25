@@ -54,6 +54,9 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_manager.h"
+#endif
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -68,6 +71,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/optional.h"
@@ -1329,11 +1333,29 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 
     bufferInfo->isSeal = false;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
+        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, bufferInfo->existence),
         FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
     return Status::OK();
+}
+
+Status ObjectClientImpl::SendBufferViaUbAfterMemoryCopy(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
+{
+    auto api = std::dynamic_pointer_cast<ClientWorkerRemoteApi>(workerApi_[LOCAL_WORKER]);
+    if (api == nullptr) {
+        return Status::OK();
+    }
+    return api->SendBufferViaUbAfterMemoryCopy(bufferInfo);
+}
+
+void ObjectClientImpl::ReleaseBufferUbState(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
+{
+    if (bufferInfo == nullptr || bufferInfo->ubUrmaInfoOpaque == nullptr) {
+        return;
+    }
+    delete static_cast<UrmaRemoteAddrPb *>(bufferInfo->ubUrmaInfoOpaque);
+    bufferInfo->ubUrmaInfoOpaque = nullptr;
 }
 
 Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
@@ -1459,11 +1481,15 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
         RETURN_IF_NOT_OK(
             ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence));
     } else {
-        // Construct info to put.
-        auto objInfo = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
-            FormatString("Put object %s", objectKey));
+        // Put via Create + MemoryCopy + Publish (UB path is handled inside MemoryCopy).
+        FullParam createParam = param;
+        createParam.ttlSecond = ttlSecond;
+        std::shared_ptr<Buffer> buffer;
+        RETURN_IF_NOT_OK(Create(objectKey, size, createParam, buffer));
+        buffer->bufferInfo_->existence = existence;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->MemoryCopy(data, size),
+                                         FormatString("Put object %s MemoryCopy failed", objectKey));
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(buffer->Publish(nestedObjectKeys), FormatString("Put object %s", objectKey));
     }
     LOG(INFO) << "Finished putting and sealing object, object_key: " << objectKey;
     return Status::OK();

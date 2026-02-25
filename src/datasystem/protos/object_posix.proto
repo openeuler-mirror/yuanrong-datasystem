@@ -23,6 +23,7 @@ package datasystem;
 import "rpc_option.proto";
 import "utils.proto";
 import "p2p_subscribe.proto";
+import "meta_transport.proto";
 
 option cc_enable_arenas = true;
 
@@ -106,6 +107,10 @@ message PublishReqPb {
   ExistenceOptPb existence = 13;
   string tenant_id = 14;
   uint32 cache_type = 15;
+  // When true, client requests Worker to return urma_info for Put via UB (phase 1).
+  bool use_ub = 16;
+  // When true, client has finished UrmaWrite and requests Worker to complete Publish (phase 2).
+  bool publish_complete_ub = 17;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -114,6 +119,10 @@ message PublishReqPb {
 }
 
 message PublishRspPb {
+  // Filled by Worker when need_ub_write is true (phase 1 response).
+  UrmaRemoteAddrPb urma_info = 1;
+  // When true, client must perform UrmaWrite then send publish_complete_ub (phase 2).
+  bool need_ub_write = 2;
 }
 
 message MultiPublishReqPb {
@@ -165,6 +174,8 @@ message GetReqPb {
   bool no_query_l2cache = 8 ;
   bool return_object_index = 9;
   string comm_id = 10;
+  UrmaRemoteAddrPb urma_info = 11;
+  uint64 ub_buffer_size = 12;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

@@ -133,8 +133,17 @@ void Buffer::Reset()
 
 void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 {
-    // At the condition of "non-shared memory Create or Put", free memory after destructor.
+    // Release UB state (e.g. phase1 urma_info) before releasing buffer.
     if (bufferInfo_ != nullptr) {
+        if (clientPtr != nullptr) {
+            clientPtr->ReleaseBufferUbState(bufferInfo_);
+        } else {
+            auto clientImpl = clientImpl_.lock();
+            if (clientImpl != nullptr) {
+                clientImpl->ReleaseBufferUbState(bufferInfo_);
+            }
+        }
+        // At the condition of "non-shared memory Create or Put", free memory after destructor.
         if (!isShm_ && bufferInfo_->payloadPointer == nullptr && bufferInfo_->pointer) {
             free(bufferInfo_->pointer);
             bufferInfo_->pointer = nullptr;
@@ -187,6 +196,13 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
                                              clientImpl->memoryCopyThreadPool_, clientImpl->memcpyParallelThreshold_);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
                                          FormatString("Copy data to buffer failed, err: %s", status.ToString()));
+    // Create+MemoryCopy+Publish path: send data via UB here so Publish only sends phase2.
+    if (!isShm_) {
+        auto rc = clientImpl->SendBufferViaUbAfterMemoryCopy(bufferInfo_);
+        if (rc.IsError()) {
+            return rc;
+        }
+    }
     return Status::OK();
 }
 
@@ -204,6 +220,11 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
+
+    // Set / any Publish of non-shm buffer: send data via UB first when enabled (same path as MemoryCopy).
+    if (!isShm_ && !bufferInfo_->ubDataSentByMemoryCopy) {
+        RETURN_IF_NOT_OK(clientImplSharedPtr->SendBufferViaUbAfterMemoryCopy(bufferInfo_));
+    }
 
     Status status = clientImplSharedPtr->Publish(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {

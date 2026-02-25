@@ -105,7 +105,7 @@ using ObjectKey = std::string;
 class WorkerRequestManager;
 class GetRequest : public std::enable_shared_from_this<GetRequest> {
 public:
-    GetRequest(AccessRecorderKey key) noexcept : recorder_(key){};
+    GetRequest(AccessRecorderKey key) noexcept : recorder_(key) {};
     /**
      * @brief Init GetRequst
      * @param[in] tenantId The tenantId.
@@ -196,13 +196,18 @@ private:
                              std::map<std::string, uint64_t> &needDeleteObjects);
 
     Status AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t index, bool shmEnable,
-                               GetRspPb &resp, std::vector<RpcMessage> &outPayloads);
+                               bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
+                               std::vector<RpcMessage> &outPayloads);
+
+    Status UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSize, uint64_t readSize, uint64_t readOffset,
+                         std::shared_ptr<ShmUnit> shmUnit, GetObjInfo &objectInfo, size_t objectIndex,
+                         uint64_t &ubWriteOffset, GetRspPb &resp);
 
     void SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
-                                   GetRspPb::ObjectInfoPb &info);
+                            GetRspPb::ObjectInfoPb &info);
 
     void SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
-                                     GetRspPb::PayloadInfoPb &info);
+                              GetRspPb::PayloadInfoPb &info);
     void SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info);
     bool Registered() const;
 
@@ -227,6 +232,9 @@ private:
     bool enableReturnObjectIndex_ = false;
     std::shared_ptr<ThreadPool> threadPool_;
     std::string clientCommId_;
+    bool hasUbGetInfo_ = false;
+    UrmaRemoteAddrPb ubUrmaInfo_;
+    uint64_t ubBufferSize_ = 0;
 };
 
 class WorkerRequestManager {

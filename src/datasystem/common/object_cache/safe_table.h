@@ -311,10 +311,6 @@ public:
     SafeTable &operator=(const SafeTable &) = delete;
     SafeTable &operator=(SafeTable &&other) noexcept = delete;
 
-private:
-    TbbTable tbbTable_;           // The implementation of the table itself.
-    WriterPrefRWLock tableLock_;  // A lock for use with iteration to make iteration exclusive and threadsafe.
-
     /**
      * @brief Fetches the safe object into a shared pointer and then lock it. This function will fetch the existing
      * entry, lock it first before returning it. If the key is not used by the table, this function returns K_NOT_FOUND
@@ -324,6 +320,10 @@ private:
      * @return Status of the call.
      */
     Status GetAndLock(const KeyType &key, std::shared_ptr<SafeObjType> &safeObjPtr);
+
+private:
+    TbbTable tbbTable_;           // The implementation of the table itself.
+    WriterPrefRWLock tableLock_;  // A lock for use with iteration to make iteration exclusive and threadsafe.
 
     /**
      * @brief Locates the object by key and then removes it from the table.

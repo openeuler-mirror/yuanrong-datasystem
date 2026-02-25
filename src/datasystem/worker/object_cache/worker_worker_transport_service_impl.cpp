@@ -51,10 +51,10 @@ Status WorkerWorkerTransportServiceImpl::Init()
     return WorkerWorkerTransportService::Init();
 }
 
-Status WorkerWorkerTransportServiceImpl::ExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
+Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req,
+                                                                             UrmaHandshakeRspPb &rsp)
 {
-    RETURN_IF_NOT_OK(ExchangeJfr(req, rsp));
-    return Status::OK();
+    return DoExchangeUrmaConnectInfo(req, rsp);
 }
 }  // namespace object_cache
 }  // namespace datasystem

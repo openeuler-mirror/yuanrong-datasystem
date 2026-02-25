@@ -35,10 +35,9 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-
-DS_DECLARE_string(urma_mode);
 
 namespace datasystem {
 static constexpr int RDMA_LOG_LEVEL = 3;

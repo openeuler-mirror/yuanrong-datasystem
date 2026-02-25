@@ -47,9 +47,11 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_counter.h"
 #include "datasystem/common/util/protobuf_util.h"
@@ -72,9 +74,7 @@
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
-#include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/worker/worker_liveness_check.h"
-#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
@@ -133,10 +133,6 @@ DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation ti
 DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
                "Control whether try to get data from other cluster's worker firstly.");
 DS_DECLARE_uint32(node_timeout_s);
-DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
-                "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
-DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
-                "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection");
 DS_DEFINE_bool(enable_hash_ring_self_healing, false,
                "Whether to support self-healing when the hash ring is in an abnormal state, default is false.");
 DS_DEFINE_string(liveness_check_path, "",
