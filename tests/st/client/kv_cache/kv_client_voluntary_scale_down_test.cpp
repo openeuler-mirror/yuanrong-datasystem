@@ -3301,5 +3301,67 @@ TEST_F(KVCacheClientWorkerNotExitTest, WorkerNotExit)
         sleep(1);
     }
 }
+
+TEST_F(KVClientVoluntaryScaleDownTest, CreateClientWithServiceDiscoveryDuringScaleDown)
+{
+    // write data into worker0.
+    int objectCnt = 10;
+    std::vector<std::string> objectKey(objectCnt);
+    std::vector<std::string> data(objectCnt);
+    SetNormalObject(client0_, 0, objectKey, data);
+
+    // Thread 1: scale down to have only worker3.
+    std::thread scaleDownThread([this] {
+        VoluntaryScaleDownInject(0);
+        VoluntaryScaleDownInject(1);
+        VoluntaryScaleDownInject(2);
+    });
+
+    // Thread 2: create client via Service Discovery and do some set/get.
+    std::thread clientCreateThread([this, &objectKey, &objectCnt, &data] {
+        sleep(1);
+
+        // initialize ServiceDiscovery and client.
+        std::string etcdAddress;
+        for (size_t i = 0; i < cluster_->GetEtcdNum(); ++i) {
+            std::pair<HostPort, HostPort> addrs;
+            cluster_->GetEtcdAddrs(i, addrs);
+            if (!etcdAddress.empty()) {
+                etcdAddress += ",";
+            }
+            etcdAddress += addrs.first.ToString();
+        }
+        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(etcdAddress);
+        DS_ASSERT_OK(serviceDiscovery->Init());
+
+        ConnectOptions connectOptions{ .connectTimeoutMs = 3000,
+                                       .requestTimeoutMs = 0,
+                                       .accessKey = "QTWAOYTTINDUT2QVKYUC",
+                                       .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
+                                       .serviceDiscovery = serviceDiscovery };
+        std::shared_ptr<KVClient> newClient = std::make_shared<KVClient>(connectOptions);
+        DS_ASSERT_OK(newClient->Init());
+
+        // do set/get with new client.
+        std::string newKey = "new_key_" + GetStringUuid();
+        std::string newVal = "new_val";
+        DS_ASSERT_OK(newClient->Set(newKey, newVal));
+        for (int i = 0; i < objectCnt; ++i) {
+            std::string getValue;
+            DS_ASSERT_OK(newClient->Get(objectKey[i], getValue));
+            ASSERT_EQ(data[i], getValue);
+        }
+        std::string readBack;
+        DS_ASSERT_OK(newClient->Get(newKey, readBack));
+        ASSERT_EQ(newVal, readBack);
+    });
+
+    scaleDownThread.join();
+    clientCreateThread.join();
+
+    // wait for 3 seconds and validate activate worker count.
+    sleep(3);
+    AssertWorkerNum(1);
+}
 }  // namespace st
 }  // namespace datasystem

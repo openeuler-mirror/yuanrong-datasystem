@@ -63,7 +63,15 @@ Status ServiceDiscovery::ObtainWorkers()
         std::lock_guard<std::shared_timed_mutex> lock(workerHostPortMutext_);
         activeWorkerAddrs_.clear();
         for (const auto &kv : outKeyValues) {
-            activeWorkerAddrs_.emplace(kv.first);
+            // value format : timestamp;event_type.
+            auto pos = kv.second.find(';');
+            if (pos == std::string::npos)
+                continue;
+            std::string state = kv.second.substr(pos + 1);
+            // select active state and filter out exiting/timeout/failed.
+            if (state == "ready" || state == "start" || state == "restart" || state == "recover") {
+                activeWorkerAddrs_.emplace(kv.first);
+            }
         }
     }
     return Status::OK();
