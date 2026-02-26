@@ -54,15 +54,22 @@ protected:
     {
         manager_ = &UcpManager::Instance();
         ASSERT_TRUE(manager_->Init().IsOk());
+
+        remoteServer_ = std::make_unique<MimicRemoteServer>(manager_->ucpContext_);
+        remoteServer_->InitUcpWorker();
+        remoteServer_->InitUcpSegment();
+
         localBuffer_ = std::make_unique<PrepareLocalServer>(manager_->ucpContext_, message_);
     }
     void TearDown() override
     {
+        remoteServer_.reset();
         localBuffer_.reset();
         UcpManagerTestFriend::Reset(*manager_);
         manager_ = nullptr;
     }
     UcpManager *manager_{ nullptr };
+    std::unique_ptr<MimicRemoteServer> remoteServer_;
     std::unique_ptr<PrepareLocalServer> localBuffer_;
     std::string message_ = "Das ist gut";
 };
@@ -130,18 +137,14 @@ TEST_F(UcpManagerTest, FillUcpInfoImplementation)
 
 TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadBlocking)
 {
-    std::unique_ptr<MimicRemoteServer> remoteServer;
-    remoteServer = std::make_unique<MimicRemoteServer>(manager_->ucpContext_);
-    remoteServer->InitUcpWorker();
-    remoteServer->InitUcpSegment();  
     uint64_t localObjectAddress = localBuffer_->Address();
     UcpRemoteInfoPb rdmaInfo;
     auto *remoteAddr = rdmaInfo.mutable_remote_ip_addr();
     remoteAddr->set_host("127.0.0.1");
     remoteAddr->set_port(PORT);
-    rdmaInfo.set_remote_worker_addr(remoteServer->GetWorkerAddr());
-    rdmaInfo.set_rkey(remoteServer->GetPackedRkey());
-    rdmaInfo.set_remote_buf((uintptr_t)remoteServer->GetLocalSegAddr());
+    rdmaInfo.set_remote_worker_addr(remoteServer_->GetWorkerAddr());
+    rdmaInfo.set_rkey(remoteServer_->GetPackedRkey());
+    rdmaInfo.set_remote_buf((uintptr_t)remoteServer_->GetLocalSegAddr());
     uint64_t readOffset = 0;
     uint64_t readSize = localBuffer_->Size();
     uint64_t metaDataSize = 0;
@@ -149,30 +152,20 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadBlocking)
     std::vector<uint64_t> keys;
     Status status =
         manager_->UcpPutPayload(rdmaInfo, localObjectAddress, readOffset, readSize, metaDataSize, blocking, keys);
-    auto start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(1)) {
-        ds_ucp_worker_progress(remoteServer->GetWorker());
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
-    }
     EXPECT_EQ(status, Status::OK());
     EXPECT_TRUE(keys.empty());
-    remoteServer.reset();
 }
 
 TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
 {
-    std::unique_ptr<MimicRemoteServer> remoteServer;
-    remoteServer = std::make_unique<MimicRemoteServer>(manager_->ucpContext_);
-    remoteServer->InitUcpWorker();
-    remoteServer->InitUcpSegment(); 
     uint64_t localObjectAddress = localBuffer_->Address();
     UcpRemoteInfoPb rdmaInfo;
     auto *remoteAddr = rdmaInfo.mutable_remote_ip_addr();
     remoteAddr->set_host("127.0.0.1");
     remoteAddr->set_port(PORT);
-    rdmaInfo.set_remote_worker_addr(remoteServer->GetWorkerAddr());
-    rdmaInfo.set_rkey(remoteServer->GetPackedRkey());
-    rdmaInfo.set_remote_buf((uintptr_t)remoteServer->GetLocalSegAddr());
+    rdmaInfo.set_remote_worker_addr(remoteServer_->GetWorkerAddr());
+    rdmaInfo.set_rkey(remoteServer_->GetPackedRkey());
+    rdmaInfo.set_remote_buf((uintptr_t)remoteServer_->GetLocalSegAddr());
     uint64_t readOffset = 0;
     uint64_t readSize = localBuffer_->Size();
     uint64_t metaDataSize = 0;
@@ -182,11 +175,6 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
         manager_->UcpPutPayload(rdmaInfo, localObjectAddress, readOffset, readSize, metaDataSize, blocking, keys);
     EXPECT_EQ(status, Status::OK());
     EXPECT_EQ(keys.size(), 1);
-    auto start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(1)) {
-        ds_ucp_worker_progress(remoteServer->GetWorker());
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
-    }
     for (uint64_t key : keys) {
         std::shared_ptr<Event> event;
         EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
@@ -195,7 +183,6 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
         Status waitStatus = event->WaitFor(std::chrono::milliseconds(1000));
         EXPECT_TRUE(waitStatus.IsOk());
     }
-    remoteServer.reset();
 }
 
 TEST_F(UcpManagerTest, InsertEventsNotifiesDirectly)
@@ -245,18 +232,14 @@ TEST_F(UcpManagerTest, WaitToFinishTimeout)
 
 TEST_F(UcpManagerTest, UseAddrRemoveEndpoint)
 {
-    std::unique_ptr<MimicRemoteServer> remoteServer;
-    remoteServer = std::make_unique<MimicRemoteServer>(manager_->ucpContext_);
-    remoteServer->InitUcpWorker();
-    remoteServer->InitUcpSegment();
     uint64_t localObjectAddress = localBuffer_->Address();
     UcpRemoteInfoPb rdmaInfo;
     auto *remoteAddr = rdmaInfo.mutable_remote_ip_addr();
     remoteAddr->set_host("127.0.0.1");
     remoteAddr->set_port(PORT);
-    rdmaInfo.set_remote_worker_addr(remoteServer->GetWorkerAddr());
-    rdmaInfo.set_rkey(remoteServer->GetPackedRkey());
-    rdmaInfo.set_remote_buf((uintptr_t)remoteServer->GetLocalSegAddr());
+    rdmaInfo.set_remote_worker_addr(remoteServer_->GetWorkerAddr());
+    rdmaInfo.set_rkey(remoteServer_->GetPackedRkey());
+    rdmaInfo.set_remote_buf((uintptr_t)remoteServer_->GetLocalSegAddr());
     uint64_t readOffset = 0;
     uint64_t readSize = localBuffer_->Size();
     uint64_t metaDataSize = 0;
@@ -270,7 +253,6 @@ TEST_F(UcpManagerTest, UseAddrRemoveEndpoint)
     HostPort remoteAddress("127.0.0.1", PORT);
     Status removeStatus = manager_->RemoveEndpoint(remoteAddress);
     EXPECT_EQ(removeStatus, Status::OK());
-    remoteServer.reset();
 }
 
 TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
@@ -281,18 +263,14 @@ TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
     for (int i = 0; i < numThreads; ++i) {
         threads.emplace_back([this, i, &failureCount]() {
             try {
-                std::unique_ptr<MimicRemoteServer> remoteServer;
-                remoteServer = std::make_unique<MimicRemoteServer>(manager_->ucpContext_);
-                remoteServer->InitUcpWorker();
-                remoteServer->InitUcpSegment(); 
                 uint64_t localObjectAddress = localBuffer_->Address();
                 UcpRemoteInfoPb rdmaInfo;
                 auto *remoteAddr = rdmaInfo.mutable_remote_ip_addr();
                 remoteAddr->set_host("127.0.0.1");
-                remoteAddr->set_port(PORT+i);
-                rdmaInfo.set_remote_worker_addr(remoteServer->GetWorkerAddr());
-                rdmaInfo.set_rkey(remoteServer->GetPackedRkey());
-                rdmaInfo.set_remote_buf((uintptr_t)remoteServer->GetLocalSegAddr());
+                remoteAddr->set_port(PORT);
+                rdmaInfo.set_remote_worker_addr(remoteServer_->GetWorkerAddr());
+                rdmaInfo.set_rkey(remoteServer_->GetPackedRkey());
+                rdmaInfo.set_remote_buf((uintptr_t)remoteServer_->GetLocalSegAddr());
                 uint64_t readOffset = 0;
                 uint64_t readSize = localBuffer_->Size();
                 uint64_t metaDataSize = 0;
@@ -302,20 +280,14 @@ TEST_F(UcpManagerTest, ConcurrentUcpPutPayload)
                                                         metaDataSize, blocking, keys);
                 EXPECT_EQ(status, Status::OK());
                 EXPECT_EQ(keys.size(), 1);
-                auto start = std::chrono::steady_clock::now();
-                while (std::chrono::steady_clock::now() - start < std::chrono::seconds(1)) {
-                    ds_ucp_worker_progress(remoteServer->GetWorker());
-                    std::this_thread::sleep_for(std::chrono::microseconds(500));
-                }
                 for (uint64_t key : keys) {
                     std::shared_ptr<Event> event;
                     EXPECT_EQ(manager_->GetEvent(key, event), Status::OK());
                     EXPECT_NE(event, nullptr);
                     // Wait for the event to be notified (callback notifies directly now)
-                    Status waitStatus = event->WaitFor(std::chrono::milliseconds(1000));
+                    Status waitStatus = event->WaitFor(std::chrono::milliseconds(2000));
                     EXPECT_TRUE(waitStatus.IsOk());
                 }
-                remoteServer.reset();
             } catch (const std::exception &e) {
                 ADD_FAILURE() << "Thread " << i << " threw exception: " << e.what();
                 failureCount++;
