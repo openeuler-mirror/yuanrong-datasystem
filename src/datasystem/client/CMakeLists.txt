@@ -7,7 +7,6 @@ list(APPEND CLIENT_SRCS
         mmap_manager.cpp
         client_flags_monitor.cpp
         embedded_client_worker_api.cpp
-        service_discovery.cpp
         context/context.cpp
         object_cache/client_worker_api/client_worker_base_api.cpp
         object_cache/client_worker_api/client_worker_local_api.cpp
@@ -62,8 +61,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_parallel
         dl
         client_mmap_static
-        gRPC::grpc++
-        common_etcd_client
         worker_transport_api)
 
 if (ENABLE_PERF)

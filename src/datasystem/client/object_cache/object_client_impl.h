@@ -65,7 +65,6 @@
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
-#include "datasystem/utils/service_discovery.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -1277,8 +1276,6 @@ private:
     bool clientEnableP2Ptransfer_ = false;
     int parallismNum_ = 0;
     uint64_t memcpyParallelThreshold_ = 0;
-
-    std::shared_ptr<ServiceDiscovery> serviceDiscovery_ = nullptr;
 };
 }  // namespace object_cache
 }  // namespace datasystem
