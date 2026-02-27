@@ -63,6 +63,7 @@ message UrmaHandshakeReqPb {
     string urma_instance_id = 5;
     repeated UrmaImportSegmentPb seg_infos = 6;
     string client_id = 7;
+    string client_entity_id = 8;
 }
 
 message UrmaHandshakeRspPb {

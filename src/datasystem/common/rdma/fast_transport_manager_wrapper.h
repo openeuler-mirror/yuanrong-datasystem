@@ -95,11 +95,18 @@ bool IsUcpEnabled();
 Status InitializeFastTransportManager(const HostPort &hostport);
 
 /**
- * @brief Remove remote fast transport node in urma and ucp
- * @param[in] remoteAddress Remote Worker Address
+ * @brief Remove remote fast transport node in urma and ucp.
+ * @param[in] remoteAddress Remote Worker Address.
  * @return Status of the call.
  */
 Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress);
+
+/**
+ * @brief Remove remote fast transport client in urma.
+ * @param[in] clientId The client id.
+ * @return Status of the call.
+ */
+Status RemoveRemoteFastTransportClient(const ClientKey &clientId);
 
 /**
  * @brief Check if the whole arena needs to be registered.
@@ -214,8 +221,8 @@ Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObject
  * @param[out] eventKeys The new request id to wait for if not blocking.
  * @return Status of the call.
  */
-Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize,
-                    const std::vector<LocalSgeInfo> &objInfos, bool blocking, std::vector<uint64_t> &eventKeys);
+Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize, const std::vector<LocalSgeInfo> &objInfos,
+                    bool blocking, std::vector<uint64_t> &eventKeys);
 
 /**
  * @brief Trigger UcpManager logic to import segment and write payload.
@@ -251,9 +258,11 @@ Status GetLocalTransportInstanceId(std::string &instanceId);
  * @brief Construct local transport request info.
  * @param[in] sendAddr The sender address.
  * @param[out] req The handshake request.
+ * @param[in] clientEntityId The client entity id.
  * @return Status of the call.
  */
-Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req);
+Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
+                            const std::string &clientEntityId = "");
 
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H

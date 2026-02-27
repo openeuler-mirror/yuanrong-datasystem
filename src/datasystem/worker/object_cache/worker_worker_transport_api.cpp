@@ -90,7 +90,8 @@ Status WorkerLocalWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rs
     return service_->WorkerWorkerExchangeUrmaConnectInfo(req, rsp);
 }
 
-WorkerRemoteWorkerTransApi::WorkerRemoteWorkerTransApi(HostPort hostPort) : hostPort_(std::move(hostPort))
+WorkerRemoteWorkerTransApi::WorkerRemoteWorkerTransApi(HostPort hostPort, const std::string &firstClientEntityId)
+    : hostPort_(std::move(hostPort)), firstClientEntityId_(firstClientEntityId)
 {
 }
 
@@ -116,7 +117,7 @@ Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &r
 
     UrmaHandshakeReqPb req;
     std::string senderAddStr = hostPort_.ToString();
-    RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req));
+    RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req, firstClientEntityId_));
     RETURN_IF_NOT_OK(rpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
     return Status::OK();
 }

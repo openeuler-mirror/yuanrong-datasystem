@@ -126,13 +126,27 @@ Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress)
     (void)remoteAddress;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(remoteAddress));
+        RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(remoteAddress.ToString()));
     }
 #endif
 
 #ifdef USE_RDMA
     if (UcpManager::IsUcpEnabled()) {
         RETURN_IF_NOT_OK(UcpManager::Instance().RemoveEndpoint(remoteAddress));
+    }
+#endif
+    return Status::OK();
+}
+
+Status RemoveRemoteFastTransportClient(const ClientKey &clientId)
+{
+    (void)clientId;
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        const std::string &urmaClientId = UrmaManager::Instance().GetRemoteDevicesByClientId(clientId);
+        if (!urmaClientId.empty()) {
+            RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(urmaClientId));
+        }
     }
 #endif
     return Status::OK();
@@ -380,10 +394,11 @@ Status GetLocalTransportInstanceId(std::string &instanceId)
     RETURN_STATUS(K_URMA_ERROR, "Disabled fast transport, cannot get local instance id");
 }
 
-Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req)
+Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req, const std::string &clientEntityId)
 {
     (void)senderAddr;
     (void)req;
+    (void)clientEntityId;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         uint32_t jfrIndex = UrmaManager::Instance().GetJfrIndex(senderAddr);
@@ -391,6 +406,9 @@ Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &r
         RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(req));
         if (!UrmaManager::Instance().GetClientId().empty()) {
             req.set_client_id(UrmaManager::Instance().GetClientId());
+        }
+        if (!clientEntityId.empty()) {
+            req.set_client_entity_id(clientEntityId);
         }
     }
 #endif
