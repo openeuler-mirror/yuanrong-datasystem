@@ -372,11 +372,11 @@ public:
                            std::vector<uint64_t> &eventKeys);
 
     /**
-     * @brief Remove Remote Device and all associated segments
-     * @param[in] remoteAddress Remote Worker Address
+     * @brief Remove Remote Device and all associated segments.
+     * @param[in] deviceId The device id to remove.
      * @return Status of the call.
      */
-    Status RemoveRemoteDevice(const HostPort &remoteAddress);
+    Status RemoveRemoteDevice(const std::string &deviceId);
 
     /**
      * @brief Register remote jfr
@@ -454,6 +454,8 @@ public:
      * @return Index of local jfrs.
      */
     uint32_t GetJfrIndex(const std::string &senderAddr);
+
+    std::string GetRemoteDevicesByClientId(ClientKey clientEntityId);
 
 private:
     UrmaManager();
@@ -720,6 +722,8 @@ private:
     static uint64_t clientMemoryBufferNum_;
     void *memoryBuffer_ = nullptr;
     std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
+    std::mutex clientIdMutex_;
+    std::unordered_map<ClientKey, std::string> clientIdMapping_;
 };
 
 }  // namespace datasystem
