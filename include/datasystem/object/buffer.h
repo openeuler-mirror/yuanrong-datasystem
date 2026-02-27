@@ -150,10 +150,16 @@ private:
     static Status CreateBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
                                std::shared_ptr<object_cache::ObjectClientImpl> clientImpl,
                                std::shared_ptr<Buffer> &buffer);
+
     /// \brief Initialize the buffer information.
     ///
     /// \return K_OK if the initialization succeeds, K_RUNTIME_ERROR otherwise.
     Status Init();
+
+    /// \brief Helper function to malloc buffer for non-shared memory scenario.
+    ///
+    /// \return K_OK if the malloc succeeds, error code otherwise.
+    Status MallocBufferHelper();
 
     /// \brief Check if buffer is deprecated. If worker is down and buffer is shm buffer, this check would
     ///         return error, means the buffer is useless, user should destruct it as fast as possible.

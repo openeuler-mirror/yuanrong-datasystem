@@ -59,10 +59,8 @@ Status WorkerDeviceOcManager::PublishDeviceObject(const std::string &devObjectKe
         devObj->SetOffset(req.offset());
         devObj->stateInfo.SetDataFormat(DataFormat::HETERO);
         entry->SetRealObject(std::move(devObj));
-        workerOcImpl_->publishProc_->AttachShmUnitToObject(
-            WorkerOcServiceCreateImpl::ClientShmEnabled(ClientKey::Intern(req.client_id())), req.dev_object_key(),
-            ShmKey::Intern(req.shm_id()),
-                                                           req.data_size(), *entry);
+        workerOcImpl_->publishProc_->AttachShmUnitToObject(ClientKey::Intern(req.client_id()), req.dev_object_key(),
+                                                           ShmKey::Intern(req.shm_id()), req.data_size(), *entry);
     } else {
         CHECK_FAIL_RETURN_STATUS(!(*entry)->IsHetero(), K_INVALID,
                                  "The key you publish already exists, which is not published as a device object");

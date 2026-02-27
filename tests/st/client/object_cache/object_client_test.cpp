@@ -2273,11 +2273,11 @@ TEST_F(ObjectClientTest, TestCreateBufferFailed)
         std::shared_ptr<Buffer> buffer;
         DS_ASSERT_NOT_OK(client->Create(obj2, dataSize, CreateParam{}, buffer));
 
-        // Put also calls Buffer::CreateBuffer for no shm for client-UB workaround logic.
+        // Put not call Buffer::CreateBuffer for no shm.
         if (isShm) {
             DS_ASSERT_NOT_OK(client->Put(obj3, reinterpret_cast<const uint8_t *>(data.data()), data.size(), {}));
         } else {
-            DS_ASSERT_NOT_OK(client->Put(obj3, reinterpret_cast<const uint8_t *>(data.data()), data.size(), {}));
+            DS_ASSERT_OK(client->Put(obj3, reinterpret_cast<const uint8_t *>(data.data()), data.size(), {}));
         }
     };
     size_t noShmSize = 100;

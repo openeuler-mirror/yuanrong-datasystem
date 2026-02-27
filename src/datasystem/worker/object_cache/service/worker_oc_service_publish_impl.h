@@ -90,32 +90,6 @@ private:
                                  std::future<Status> &future);
 
     /**
-     * @brief UB Put phase 1: reserve entry, prepare (allocate ShmUnit), fill resp.urma_info for Client to UrmaWrite.
-     * @param[in] objectKey The object key.
-     * @param[in] req Publish request (use_ub=true, no payload).
-     * @param[in] nestedObjectKeys Nested object keys (namespace URI form).
-     * @param[out] resp Response; urma_info and need_ub_write are set on success.
-     * @param[out] future Async send future (unused for phase1).
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status PublishObjectWithLockForUbPhase1(const std::string &objectKey, const PublishReqPb &req,
-                                            const std::vector<std::string> &nestedObjectKeys, PublishRspPb &resp,
-                                            std::future<Status> &future);
-
-    /**
-     * @brief UB Put phase 2: same entry, no PrepareForPublish, PublishObject with empty payloads (data already in
-     * ShmUnit).
-     * @param[in] objectKey The object key.
-     * @param[in] req Publish request (publish_complete_ub=true, no payload).
-     * @param[in] nestedObjectKeys Nested object keys (namespace URI form).
-     * @param[out] future Async send future if write back to L2 cache.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status PublishObjectWithLockForUbPhase2(const std::string &objectKey, const PublishReqPb &req,
-                                            const std::vector<std::string> &nestedObjectKeys,
-                                            std::future<Status> &future);
-
-    /**
      * @brief Verify the validity of the object release.
      * @param[in] req Publish request meta.
      * @param[in] safeObj The object to be sealed.

@@ -63,7 +63,8 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFd)
     uint32_t version;
     uint64_t metaSize = 0;
     auto shmUnitInfo = std::make_shared<ShmUnitInfo>();
-    clientApi->Create("objectKey", dataSize, version, metaSize, shmUnitInfo);
+    std::shared_ptr<UrmaRemoteAddrPb> dummy;
+    clientApi->Create("objectKey", dataSize, version, metaSize, shmUnitInfo, dummy);
 
     std::vector<int> workerFds{ shmUnitInfo->fd };
     std::vector<int> clientFds;
@@ -87,7 +88,8 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
     uint32_t version;
     uint64_t metaSize = 0;
     auto shmUnitInfo = std::make_shared<ShmUnitInfo>();
-    DS_ASSERT_OK(clientApi->Create("objectKey", dataSize, version, metaSize, shmUnitInfo));
+    std::shared_ptr<UrmaRemoteAddrPb> dummy;
+    DS_ASSERT_OK(clientApi->Create("objectKey", dataSize, version, metaSize, shmUnitInfo, dummy));
 
     auto clientApi2 = std::make_shared<ClientWorkerRemoteApi>(
         workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "tenant2");
@@ -112,9 +114,10 @@ TEST_F(ClientCommonWorkerApiTest, TestGetMultiClientFd)
     auto shm1 = std::make_shared<ShmUnitInfo>();
     auto shm2 = std::make_shared<ShmUnitInfo>();
     auto shm3 = std::make_shared<ShmUnitInfo>();
-    DS_ASSERT_OK(clientApi->Create("objectKey1", dataSize, version, metaSize, shm1));
-    DS_ASSERT_OK(clientApi->Create("objectKey2", dataSize, version, metaSize, shm2));
-    DS_ASSERT_OK(clientApi->Create("objectKey3", dataSize, version, metaSize, shm3));
+    std::shared_ptr<UrmaRemoteAddrPb> dummy;
+    DS_ASSERT_OK(clientApi->Create("objectKey1", dataSize, version, metaSize, shm1, dummy));
+    DS_ASSERT_OK(clientApi->Create("objectKey2", dataSize, version, metaSize, shm2, dummy));
+    DS_ASSERT_OK(clientApi->Create("objectKey3", dataSize, version, metaSize, shm3, dummy));
 
     std::vector<int> workerFds{ shm1->fd, shm2->fd, shm3->fd };
     std::vector<int> clientFds;

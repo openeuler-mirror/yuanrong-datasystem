@@ -131,8 +131,9 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
 
 Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                      uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
-                                     const CacheType &cacheType)
+                                     std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
 {
+    (void)urmaDataInfo;
     LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
                               hostPort_.ToString(), objectKey);
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
@@ -167,6 +168,17 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     shmBuf->id = ShmKey::Intern(rsp.shm_id());
     metadataSize = rsp.metadata_size();
     version = workerVersion_.load(std::memory_order_relaxed);
+
+#ifdef USE_URMA
+    // Extract URMA info from response when enabled (for Create+MemoryCopy+Publish path).
+    if (IsUrmaEnabled() && rsp.has_urma_info()) {
+        if (urmaDataInfo == nullptr) {
+            urmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+        }
+        urmaDataInfo->CopyFrom(rsp.urma_info());
+    }
+#endif
+
     return Status::OK();
 }
 
@@ -473,56 +485,23 @@ Status ClientWorkerRemoteApi::PreparePublishReq(const std::shared_ptr<ObjectBuff
     return Status::OK();
 }
 
-static constexpr uint64_t UB_PUT_ALIGN = 4096u;
-
-Status ClientWorkerRemoteApi::PublishPhase1Only(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
-{
-    PublishReqPb req;
-    RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, false, {}, bufferInfo->ttlSecond, bufferInfo->existence, req));
-    req.set_use_ub(true);
-    std::vector<MemView> emptyPayloads;
-    PublishRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(stub_->Publish(opts, req, rsp, emptyPayloads), "PublishPhase1Only RPC failed");
-    if (!rsp.need_ub_write() || !rsp.has_urma_info()) {
-        return Status(StatusCode::K_RUNTIME_ERROR,
-                      "Worker did not return UB path for PublishPhase1Only (need_ub_write or urma_info missing).");
-    }
-    if (bufferInfo->ubUrmaInfoOpaque != nullptr) {
-        delete static_cast<UrmaRemoteAddrPb *>(bufferInfo->ubUrmaInfoOpaque);
-        bufferInfo->ubUrmaInfoOpaque = nullptr;
-    }
-    auto *stored = new UrmaRemoteAddrPb();
-    stored->CopyFrom(rsp.urma_info());
-    bufferInfo->ubUrmaInfoOpaque = stored;
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::SendBufferViaUbAfterMemoryCopy(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
+Status ClientWorkerRemoteApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                              uint64_t length)
 {
     (void)bufferInfo;
+    (void)data;
+    (void)length;
 #ifdef USE_URMA
-    if (!IsUrmaEnabled() || bufferInfo->ubDataSentByMemoryCopy) {
-        return Status::OK();
-    }
-    if (bufferInfo->ubUrmaInfoOpaque == nullptr) {
-        LOG(INFO) << "[UB Put] PublishPhase1Only to get urma_info for object_key (if present).";
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(PublishPhase1Only(bufferInfo), "PublishPhase1Only failed");
-    }
-    const UrmaRemoteAddrPb *urmaInfo = static_cast<const UrmaRemoteAddrPb *>(bufferInfo->ubUrmaInfoOpaque);
     std::vector<uint64_t> keys;
     const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
     std::shared_ptr<UrmaManager::BufferHandle> handle;
     if (UrmaManager::Instance().GetMemoryBufferHandle(handle).IsOk() && handle && totalSize <= handle->GetSlotSize()) {
         void *poolBuf = handle->GetPointer();
         if (poolBuf != nullptr) {
-            memcpy(poolBuf, bufferInfo->pointer, totalSize);
-            Status st = UrmaWritePayload(*urmaInfo, handle->GetSegmentAddress(), handle->GetSegmentSize(),
-                                         reinterpret_cast<uint64_t>(poolBuf), 0, bufferInfo->dataSize,
-                                         bufferInfo->metadataSize, true, keys);
+            memcpy(poolBuf, data, totalSize);
+            Status st = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), handle->GetSegmentAddress(),
+                                         handle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
+                                         bufferInfo->dataSize, bufferInfo->metadataSize, true, keys);
             if (st.IsOk()) {
                 bufferInfo->ubDataSentByMemoryCopy = true;
                 LOG(INFO) << "[UB Put] UrmaWritePayload done (memory pool path), dataSize=" << bufferInfo->dataSize;
@@ -531,52 +510,19 @@ Status ClientWorkerRemoteApi::SendBufferViaUbAfterMemoryCopy(const std::shared_p
         }
     }
 #endif
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::SendPublishPhase2(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
-                                                const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
-                                                int existence)
-{
-    PublishReqPb req2;
-    RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req2));
-    req2.set_publish_complete_ub(true);
-    req2.set_use_ub(false);
-    req2.set_is_retry(false);
-    std::vector<MemView> emptyPayloads;
-    PublishRspPb rsp2;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RetryOnError(
-            requestTimeoutMs_,
-            [this, &req2, &rsp2, &emptyPayloads](int32_t realRpcTimeout) {
-                RpcOptions opts;
-                opts.SetTimeout(realRpcTimeout);
-                reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
-                RETURN_IF_NOT_OK(signature_->GenerateSignature(req2));
-                return stub_->Publish(opts, req2, rsp2, emptyPayloads);
-            },
-            []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_),
-        "Send Publish phase2 request error");
-    return Status::OK();
+    return Status(K_INVALID, "Failed to send buffer via UB");
 }
 
 Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
                                       const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                       int existence)
 {
-    // Create+MemoryCopy+Publish path: data already sent via UB in MemoryCopy, only send phase2.
-    if (!isShm && bufferInfo->ubDataSentByMemoryCopy) {
-        LOG(INFO) << "[UB Put] Publish phase2 only (data already sent via UrmaWrite), object_key="
-                  << bufferInfo->objectKey;
-        return SendPublishPhase2(bufferInfo, isSeal, nestedKeys, ttlSecond, existence);
-    }
-
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
 
-    // UB path is only used via Create+MemoryCopy+Publish (handled in MemoryCopy -> SendBufferViaUbAfterMemoryCopy).
     std::vector<MemView> payloads;
-    if (!isShm) {
+    // Send payload if data is not already sent via shm or UB.
+    if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
         payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
     }
 
@@ -627,7 +573,7 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     std::vector<MemView> payloads;
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
-        if (bufferInfo[i]->shmId.Empty()) {
+        if (bufferInfo[i]->shmId.Empty() || (bufferInfo[i]->ubUrmaDataInfo && !bufferInfo[i]->ubDataSentByMemoryCopy)) {
             payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
         }
         MultiPublishReqPb::ObjectInfoPb objectInfoPb;

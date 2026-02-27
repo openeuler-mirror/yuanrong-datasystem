@@ -89,8 +89,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_info_size()),
-                                         StatusCode::K_INVALID, "The objectKeys size exceed " +
-                                         std::to_string(OBJECT_KEYS_MAX_SIZE_LIMIT));
+                                         StatusCode::K_INVALID,
+                                         "The objectKeys size exceed " + std::to_string(OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::vector<ShmKey> shmUnits;
     shmUnits.reserve(req.object_info_size());
     for (const auto &info : req.object_info()) {
@@ -291,7 +291,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
 {
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_NTX_SAVE_ENTRY);
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
-    const bool shmEnabled = ClientShmEnabled(ClientKey::Intern(req.client_id()));
+    const auto &clientId = ClientKey::Intern(req.client_id());
     for (size_t i = 0; i < entries.size(); i++) {
         PerfPoint pointIn(PerfKey::WORKER_MULTI_PUBLISH_NTX_SET_ENTRY);
         if (entries[i] == nullptr) {
@@ -313,7 +313,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
         }
 
         pointIn.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_ATTACH_TO_ENTRY);
-        lastRc = AttachShmUnitToObject(shmEnabled, objectKeys[i], ShmKey::Intern(req.object_info(i).shm_id()),
+        lastRc = AttachShmUnitToObject(clientId, objectKeys[i], ShmKey::Intern(req.object_info(i).shm_id()),
                                        req.object_info(i).data_size(), *entries[i]);
         pointIn.Record();
         if (lastRc.IsError()) {
@@ -357,7 +357,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
                                                            std::vector<RpcMessage> &payloads)
 {
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
-    const bool shmEnabled = ClientShmEnabled(ClientKey::Intern(req.client_id()));
+    const auto &clientId = ClientKey::Intern(req.client_id());
     size_t idx = 0;
     for (size_t i = 0; i < objectKeys.size(); ++i) {
         if (entries[i]->Get() != nullptr) {
@@ -370,8 +370,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
                               static_cast<CacheType>(req.cache_type()), req.object_info(i).data_size(),
                               GetMetadataSize(), *entries[i]);
         }
-        RETURN_IF_NOT_OK(AttachShmUnitToObject(shmEnabled, objectKeys[i],
-                                               ShmKey::Intern(req.object_info(i).shm_id()),
+        RETURN_IF_NOT_OK(AttachShmUnitToObject(clientId, objectKeys[i], ShmKey::Intern(req.object_info(i).shm_id()),
                                                req.object_info(i).data_size(), *entries[i]));
         // Small object use payload to transfer the value, the object and RpcMessage is one-to-one.
         if (req.object_info(i).shm_id().empty()) {

@@ -170,15 +170,15 @@ public:
     }
 
     /**
-     * @brief Attach shmUnit to object entry
-     * @param[in] shmEnabled Enable shm or not.
-     * @param[in] objectKey The object key
+     * @brief Attach shmUnit to object entry.
+     * @param[in] clientId The client id.
+     * @param[in] objectKey The object key.
      * @param[in] shmUnitId The shm unit id.
-     * @param[in] dataSize The size of data
-     * @param[out] entry The object entry
+     * @param[in] dataSize The size of data.
+     * @param[out] entry The object entry.
      * @return OK if attach success.
      */
-    Status AttachShmUnitToObject(const bool &shmEnabled, const std::string &objectKey, const ShmKey &shmUnitId,
+    Status AttachShmUnitToObject(const ClientKey &clientId, const std::string &objectKey, const ShmKey &shmUnitId,
                                  uint64_t dataSize, SafeObjType &entry);
 
     /**

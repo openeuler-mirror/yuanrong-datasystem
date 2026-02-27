@@ -29,6 +29,7 @@
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/status_helper.h"
@@ -49,26 +50,22 @@ Status Buffer::Init()
 {
     auto clientImpl = clientImpl_.lock();
     if (clientImpl == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     RETURN_IF_NOT_OK(CheckDeprecated());
 
-    // Special check for Remote H2D. If the remote host info exists,
-    // then the data is neither in local shared memory nor in payload, but rather still on remote worker.
-    if (bufferInfo_->remoteHostInfo != nullptr) {
+    // Special check for Remote H2D or client UB.
+    // If the remote host info exists, then the data is neither in local shared memory nor in payload, but rather still
+    // on a remote worker.
+    // Or if the urma info exists, then the data is in the direct worker's shm.
+    if (bufferInfo_->remoteHostInfo != nullptr || bufferInfo_->ubUrmaDataInfo != nullptr) {
         bufferInfo_->pointer = nullptr;
         isShm_ = false;
         latch_ = std::make_shared<object_cache::CommonLock>();
     } else if (bufferInfo_->pointer == nullptr
                && bufferInfo_->payloadPointer == nullptr) {  // non-shared memory Create or Put
-        auto mallocSize = bufferInfo_->dataSize + 1;
-        auto memPtr = static_cast<uint8_t *>(malloc(mallocSize));
-        if (memPtr == nullptr) {
-            RETURN_STATUS(K_RUNTIME_ERROR, "Memory allocation failed");
-        }
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(HugeMemset(memPtr, mallocSize, '\0', mallocSize),
-                                         FormatString("Buffer memset failed"));
-        bufferInfo_->pointer = memPtr;
+        RETURN_IF_NOT_OK(MallocBufferHelper());
         latch_ = std::make_shared<object_cache::CommonLock>();
     } else if (bufferInfo_->pointer == nullptr && bufferInfo_->payloadPointer != nullptr) {  // non-shared memory Get.
         bufferInfo_->pointer = static_cast<uint8_t *>(bufferInfo_->payloadPointer->Data());
@@ -80,6 +77,19 @@ Status Buffer::Init()
     }
     INJECT_POINT("buffer.init");
     return latch_->Init();
+}
+
+Status Buffer::MallocBufferHelper()
+{
+    auto mallocSize = bufferInfo_->dataSize + 1;
+    auto memPtr = static_cast<uint8_t *>(malloc(mallocSize));
+    if (memPtr == nullptr) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Memory allocation failed");
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(HugeMemset(memPtr, mallocSize, '\0', mallocSize),
+                                     FormatString("Buffer memset failed"));
+    bufferInfo_->pointer = memPtr;
+    return Status::OK();
 }
 
 Status Buffer::CreateBuffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
@@ -133,17 +143,7 @@ void Buffer::Reset()
 
 void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 {
-    // Release UB state (e.g. phase1 urma_info) before releasing buffer.
     if (bufferInfo_ != nullptr) {
-        if (clientPtr != nullptr) {
-            clientPtr->ReleaseBufferUbState(bufferInfo_);
-        } else {
-            auto clientImpl = clientImpl_.lock();
-            if (clientImpl != nullptr) {
-                clientImpl->ReleaseBufferUbState(bufferInfo_);
-            }
-        }
-        // At the condition of "non-shared memory Create or Put", free memory after destructor.
         if (!isShm_ && bufferInfo_->payloadPointer == nullptr && bufferInfo_->pointer) {
             free(bufferInfo_->pointer);
             bufferInfo_->pointer = nullptr;
@@ -181,28 +181,27 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
 {
     auto clientImpl = clientImpl_.lock();
     if (clientImpl == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
-    uint8_t *dstData = bufferInfo_->pointer + bufferInfo_->metadataSize;
     uint64_t dataSize = GetSize();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(data != nullptr, K_INVALID, "Can't put null pointer.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
+    if (bufferInfo_->ubUrmaDataInfo) {
+        RETURN_OK_IF_TRUE(clientImpl->SendBufferViaUb(bufferInfo_, data, length).IsOk());
+        // fallback to TCP if UB send fails, allocate buffer for that purpose.
+        RETURN_IF_NOT_OK(MallocBufferHelper());
+    }
+    uint8_t *dstData = bufferInfo_->pointer + bufferInfo_->metadataSize;
     Status status = ::datasystem::MemoryCopy(dstData, dataSize, static_cast<const uint8_t *>(data), length,
                                              clientImpl->memoryCopyThreadPool_, clientImpl->memcpyParallelThreshold_);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(status.IsOk(), K_RUNTIME_ERROR,
                                          FormatString("Copy data to buffer failed, err: %s", status.ToString()));
-    // Create+MemoryCopy+Publish path: send data via UB here so Publish only sends phase2.
-    if (!isShm_) {
-        auto rc = clientImpl->SendBufferViaUbAfterMemoryCopy(bufferInfo_);
-        if (rc.IsError()) {
-            return rc;
-        }
-    }
     return Status::OK();
 }
 
@@ -215,16 +214,12 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
 {
     auto clientImplSharedPtr = clientImpl_.lock();
     if (clientImplSharedPtr == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
-
-    // Set / any Publish of non-shm buffer: send data via UB first when enabled (same path as MemoryCopy).
-    if (!isShm_ && !bufferInfo_->ubDataSentByMemoryCopy) {
-        RETURN_IF_NOT_OK(clientImplSharedPtr->SendBufferViaUbAfterMemoryCopy(bufferInfo_));
-    }
 
     Status status = clientImplSharedPtr->Publish(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {
@@ -237,7 +232,8 @@ Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
 {
     auto clientImpl = clientImpl_.lock();
     if (clientImpl == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
@@ -305,7 +301,8 @@ Status Buffer::InvalidateBuffer()
 {
     auto clientImpl = clientImpl_.lock();
     if (clientImpl == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
@@ -322,7 +319,8 @@ Status Buffer::CheckDeprecated()
 {
     auto clientImpl = clientImpl_.lock();
     if (clientImpl == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client already destroyed or Shutdown() invoked, buffer invalidated.");
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     RETURN_OK_IF_TRUE(!isShm_);
 

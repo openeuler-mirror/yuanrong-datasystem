@@ -298,7 +298,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_exclusive_conn_sockpath(exclusiveConnSockPath);
     rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
 #ifdef USE_URMA
-    if (IsUrmaEnabled() && GetUrmaMode() == UrmaMode::UB) {
+    if (!shmEnabled && IsUrmaEnabled() && GetUrmaMode() == UrmaMode::UB) {
         rsp.set_fast_transport_mode(FastTransportMode::UB);
     }
 #endif

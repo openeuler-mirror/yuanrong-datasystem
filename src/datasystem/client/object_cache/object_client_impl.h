@@ -130,16 +130,12 @@ public:
 
     /**
      * @brief Send buffer data via UB after MemoryCopy (Create+MemoryCopy+Publish path). No-op if UB disabled.
-     * @param[in] bufferInfo The buffer info; phase1 + UrmaWrite are done inside, ubDataSentByMemoryCopy set on success.
-     * @return K_OK on success or when worker is not ClientWorkerRemoteApi; the error code otherwise.
+     * @param[in] bufferInfo The buffer info.
+     * @param[in] data The data to be sent.
+     * @param[in] length The length of the data to be sent.
+     * @return K_OK on success; the error code otherwise.
      */
-    Status SendBufferViaUbAfterMemoryCopy(const std::shared_ptr<ObjectBufferInfo> &bufferInfo);
-
-    /**
-     * @brief Release UB state stored in bufferInfo (e.g. ubUrmaInfoOpaque). Called from Buffer::Release.
-     * @param[in] bufferInfo The buffer info; ubUrmaInfoOpaque is freed and set to nullptr if non-null.
-     */
-    void ReleaseBufferUbState(const std::shared_ptr<ObjectBufferInfo> &bufferInfo);
+    Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data, uint64_t length);
 
     /**
      * @brief Invoke worker client to publish all buffers of all the given object keys.
