@@ -21,7 +21,6 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
-#include "datasystem/utils/service_discovery.h"
 
 namespace datasystem {
 struct ConnectOptions {
@@ -46,7 +45,6 @@ struct ConnectOptions {
     bool enableCrossNodeConnection = false;
     bool enableExclusiveConnection = false;
     bool enableRemoteH2D = false;
-    std::shared_ptr<ServiceDiscovery> serviceDiscovery = nullptr;
 };
 }  // namespace datasystem
 
