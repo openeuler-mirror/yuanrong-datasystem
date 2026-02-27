@@ -27,7 +27,7 @@ namespace ffts {
 using HcclRtSignal = void *;
 using HcclRtNotify = void *;
 using rtStream_t = void *;
-#ifndef BUILD_HETERO
+#ifndef USE_NPU
 class FftsDispatcher {
 public:
     FftsDispatcher(uint32_t, acl::AclDeviceManager *){};

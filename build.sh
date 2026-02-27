@@ -553,7 +553,12 @@ function build_datasystem()
     strip_symbols "${INSTALL_DIR}/datasystem/sdk/cpp/lib" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     strip_symbols "${INSTALL_DIR}/cpp/lib" "${INSTALL_DIR}/cpp/DATASYSTEM_SYM"
     if is_on "${BUILD_HETERO}"; then
-      cp ${BUILD_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
+      IF_SYM_FILE="${BUILD_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so.sym"
+      if [ -f "${IF_SYM_FILE}" ]; then
+        cp "${IF_SYM_FILE}" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
+      else
+        echo "Notice: libacl_plugin.so.sym not found, skipping (Normal for GPU build)."
+      fi
     fi
     if is_on "${PACKAGE_JAVA}"; then
       cp ${BUILD_DIR}/java/jni_lib/*.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"

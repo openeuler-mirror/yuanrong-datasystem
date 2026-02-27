@@ -24,10 +24,10 @@ foreach(FILE ${FILE_LIST})
 endforeach()
 
 find_program(CMAKE_STRIP NAMES strip)
-file(GLOB SO_FILES "${DATASYSTEM_WHEEL_PATH}/lib/*.so*" EXCLUDE REGEX "libacl_plugin.so")
-#libacl_plugin.so need check sha256, can not strip
+file(GLOB SO_FILES "${DATASYSTEM_WHEEL_PATH}/lib/*.so*")
+# acl_plugin and cuda_plugin need check sha256 at runtime, can not strip
 foreach(SO_FILE ${SO_FILES})
-    if (NOT SO_FILE MATCHES "libacl_plugin.so$")
+    if (NOT SO_FILE MATCHES "lib(acl|cuda)_plugin\\.so$")
         execute_process(COMMAND ${CMAKE_STRIP} ${SO_FILE})
     endif()
 endforeach()

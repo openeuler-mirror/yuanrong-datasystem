@@ -26,13 +26,19 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/device/device_manager_factory.h"
 
 namespace datasystem {
 namespace acl {
 namespace {
 bool EnableMerge(const std::vector<Blob> blobs)
 {
-    if (blobs.size() <= 1 || USE_GPU) {
+    // Only NPU supports merge
+    if (DeviceManagerFactory::ProbeBackend() != DeviceBackend::NPU) {
+        return false;
+    }
+
+    if (blobs.size() <= 1) {
         return false;
     }
 

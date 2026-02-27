@@ -16,6 +16,8 @@ if(EXISTS "${BASE_DIR}/config.cmake")
     include(${BASE_DIR}/config.cmake)
 endif()
 
+include(${BASE_DIR}/cmake/options.cmake)
+
 if(NOT EXISTS "${INSTALL_DIR}/datasystem/sdk/cpp")
     file(ARCHIVE_EXTRACT
         INPUT ${INSTALL_DIR}/yr-datasystem-v${version}.tar.gz
@@ -33,17 +35,36 @@ if (BUILD_HETERO)
     # The environment variable ASCEND_CUSTOM_PATH is used to locate the Ascend install path.
     # So cmake can find the header files and libraries in the compile stage.
     # If user don't set ASCEND_CUSTOM_PATH, find Ascend in `/usr/local/Ascend` in default.
-    if (DEFINED ENV{ASCEND_HOME_PATH})
-        set(Ascend_ROOT $ENV{ASCEND_HOME_PATH})
-    elseif(DEFINED ENV{ASCEND_CUSTOM_PATH})
-        set(Ascend_ROOT $ENV{ASCEND_CUSTOM_PATH}/latest)
-    else()
-        set(Ascend_ROOT /usr/local/Ascend/ascend-toolkit/latest)
-    endif()
-    include_directories(${Ascend_ROOT}/include)
+    if (BUILD_HETERO_NPU)
+        if (DEFINED ENV{ASCEND_HOME_PATH})
+            set(Ascend_ROOT $ENV{ASCEND_HOME_PATH})
+        elseif(DEFINED ENV{ASCEND_CUSTOM_PATH})
+            set(Ascend_ROOT $ENV{ASCEND_CUSTOM_PATH}/latest)
+        else()
+            set(Ascend_ROOT /usr/local/Ascend/ascend-toolkit/latest)
+        endif()
+        include_directories(${Ascend_ROOT}/include)
 
-    add_executable(hetero_client_example hetero_client_example.cpp)
-    target_link_libraries(hetero_client_example datasystem ${Ascend_ROOT}/lib64/libascendcl.so)
+        add_executable(hetero_client_example hetero_client_example.cpp)
+        target_link_libraries(hetero_client_example datasystem ${Ascend_ROOT}/lib64/libascendcl.so)
+    endif()
+
+    # The environment variable CUDA_HOME is used to locate the CUDA install path.
+    # So cmake can find the header files and libraries in the compile stage.
+    # If user don't set CUDA_HOME, find CUDA in `/usr/local/cuda` in default.
+    if (BUILD_HETERO_GPU)
+        if (DEFINED ENV{CUDA_HOME_PATH})
+            set(CUDA_ROOT $ENV{CUDA_HOME_PATH})
+        elseif(DEFINED ENV{CUDA_CUSTOM_PATH})
+            set(CUDA_ROOT $ENV{CUDA_CUSTOM_PATH})
+        else()
+            set(CUDA_ROOT /usr/local/cuda)
+        endif()
+        include_directories(${CUDA_ROOT}/include)
+
+        add_executable(hetero_client_gpu_example hetero_client_gpu_example.cpp)
+        target_link_libraries(hetero_client_gpu_example datasystem ${CUDA_ROOT}/lib64/libcudart.so)
+    endif()
 endif()
 
 add_executable(datasystem_example datasystem_example.cpp)

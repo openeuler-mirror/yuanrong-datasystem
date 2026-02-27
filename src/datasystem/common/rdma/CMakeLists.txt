@@ -18,9 +18,11 @@ if (BUILD_WITH_URMA)
 endif()
 
 if (BUILD_HETERO)
-    list(APPEND URMA_DEPEND_LIBS
-        common_acl_device
-        common_shared_memory)
+    list(APPEND URMA_DEPEND_LIBS common_acl_device)
+    if (BUILD_HETERO_GPU)
+        list(APPEND URMA_DEPEND_LIBS common_cuda_device)
+    endif()
+    list(APPEND URMA_DEPEND_LIBS common_shared_memory)
     list(APPEND URMA_SRCS npu/remote_h2d_manager.cpp)
 endif()
 

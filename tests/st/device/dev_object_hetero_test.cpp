@@ -56,6 +56,7 @@ using AllocateType = datasystem::memory::CacheType;
 
 namespace datasystem {
 using namespace acl;
+using namespace cuda;
 namespace st {
 
 class DevObjectHeteroTest : public DevTestHelper {
@@ -357,6 +358,44 @@ TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetInSameRank)
     client.reset();
 }
 
+#ifdef USE_GPU
+TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetInSameRankGPU)
+{
+    size_t deviceId = 0;
+    size_t blkSz = 100, numOfObjs = 10, blksPerObj = 5;
+    std::vector<std::string> objectIds, failedIdList;
+    std::vector<DeviceBlobList> devGetBlobList, devSetBlobList;
+    std::shared_ptr<HeteroClient> client;
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        objectIds.emplace_back(GetStringUuid());
+    }
+    auto initCudaDev = [this, blksPerObj, numOfObjs, &blkSz, &devGetBlobList, &devSetBlobList](int id) {
+        this->deviceId_ = id;
+        InitDevice(CudaDeviceManager::Instance(), deviceId_);
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, id,
+                       CudaDeviceManager::Instance());
+    };
+    
+    initCudaDev(deviceId);
+    InitTestHeteroClient(0, client);
+    DS_ASSERT_OK(client->DevMSet(objectIds, devSetBlobList, failedIdList));
+    ASSERT_EQ(failedIdList.size(), 0);
+    auto getRes = client->DevMGet(objectIds, devGetBlobList, failedIdList, RPC_TIMEOUT);
+    ASSERT_EQ(failedIdList.size(), 0);
+    std::string value(devSetBlobList[0].blobs[0].size, 'b');
+    for (size_t j = 0; j < numOfObjs; j++) {
+        for (size_t k = 0; k < blksPerObj; k++) {
+            CheckDevPtrContent(devGetBlobList[j].blobs[k].pointer, devGetBlobList[j].blobs[k].size, value,
+                               CudaDeviceManager::Instance());
+        }
+    }
+    
+    CudaDeviceManager::Instance()->cudartResetDevice(deviceId_);
+    CudaDeviceManager::Instance()->cudaFinalize();
+    client.reset();
+}
+#endif // USE_GPU
+
 TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetCrossDeviceInSameNode)
 {
     size_t setDeviceId = 0;
@@ -413,6 +452,67 @@ TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetCrossDeviceInSameNode)
     setClient.reset();
     getClient.reset();
 }
+
+#ifdef USE_GPU
+TEST_F(DevObjectHeteroTest, TestDevMSetAndDevMGetCrossDeviceInSameNodeGPU)
+{
+    size_t setDeviceId = 0;
+    size_t getDeviceId = 1;
+    size_t blkSz = 100, numOfObjs = 10, blksPerObj = 5;
+    std::vector<std::string> objectIds;
+    std::vector<std::string> failedIdList;
+    std::vector<DeviceBlobList> devSetBlobList;
+    std::vector<DeviceBlobList> devGetBlobList;
+    std::shared_ptr<HeteroClient> getClient;
+    std::shared_ptr<HeteroClient> setClient;
+
+    for (auto j = 0ul; j < numOfObjs; j++) {
+        objectIds.emplace_back(GetStringUuid());
+    }
+
+    // Step 1: Initialize Device 0 and DevMSet
+    this->deviceId_ = setDeviceId;
+    InitDevice(CudaDeviceManager::Instance(), deviceId_);
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, deviceId_,
+                   CudaDeviceManager::Instance());
+    InitTestHeteroClient(0, setClient);
+
+    DS_ASSERT_OK(setClient->DevMSet(objectIds, devSetBlobList, failedIdList));
+    ASSERT_EQ(failedIdList.size(), 0);
+    LOG(INFO) << "DevMSet completed on device " << setDeviceId;
+
+    // Step 2: Cleanup Device 0 and switch to Device 1
+    devGetBlobList.clear();
+    devSetBlobList.clear();
+
+    // Step 3: Initialize Device 1 and DevMGet
+    this->deviceId_ = getDeviceId;
+    InitDevice(CudaDeviceManager::Instance(), deviceId_);
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, deviceId_,
+                   CudaDeviceManager::Instance());
+    InitTestHeteroClient(1, getClient);
+
+    DS_ASSERT_OK(getClient->DevMGet(objectIds, devGetBlobList, failedIdList, RPC_TIMEOUT));
+    ASSERT_EQ(failedIdList.size(), 0);
+    LOG(INFO) << "DevMGet completed on device " << getDeviceId;
+
+    // Step 4: Verify content
+    std::string expectedValue(blkSz, 'b');
+    for (size_t j = 0; j < numOfObjs; j++) {
+        for (size_t k = 0; k < blksPerObj; k++) {
+            CheckDevPtrContent(devGetBlobList[j].blobs[k].pointer, devGetBlobList[j].blobs[k].size, expectedValue,
+                               CudaDeviceManager::Instance());
+        }
+    }
+
+    // Step 5: Cleanup
+    setClient.reset();
+    getClient.reset();
+    CudaDeviceManager::Instance()->cudartResetDevice(setDeviceId);
+    CudaDeviceManager::Instance()->cudartResetDevice(getDeviceId);
+    CudaDeviceManager::Instance()->cudaFinalize();
+}
+#endif // USE_GPU
 
 TEST_F(DevObjectHeteroTest, DISABLED_TestDevMGetPartDataFromTwoKey)
 {

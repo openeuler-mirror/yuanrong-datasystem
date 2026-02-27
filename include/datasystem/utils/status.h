@@ -99,7 +99,9 @@ enum StatusCode : uint32_t {
     // Heterogeneous error code, range: [5000, 6000]
     K_ACL_ERROR = 5000,
     K_HCCL_ERROR = 5001,
-    K_FUTURE_TIMEOUT = 5002
+    K_FUTURE_TIMEOUT = 5002,
+    K_CUDA_ERROR = 5003,
+    K_NCCL_ERROR = 5004
 };
 
 /**

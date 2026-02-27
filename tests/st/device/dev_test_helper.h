@@ -34,7 +34,9 @@
 #include <unistd.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/nvidia/cuda_device_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/queue/queue.h"
@@ -50,6 +52,7 @@
 
 namespace datasystem {
 using namespace acl;
+using namespace cuda;
 namespace st {
 constexpr int DEFAULT_WORKER_NUM = 2;
 constexpr int DEFAULT_GET_TIMEOUT = 60000;
@@ -63,6 +66,9 @@ constexpr int PRINT_STR_LIMIT = 100;
 
 class DevPtrQueue {
 public:
+    explicit DevPtrQueue(DeviceManagerBase *mgr = nullptr)
+        : mgr_(mgr ? mgr : static_cast<DeviceManagerBase *>(AclDeviceManager::Instance())) {}
+
     // per object dataType [3], count [262144], list len : 64 DATA_TYPE_FP16
     void Fill(uint32_t objectCount, uint32_t infoCount, DataType dataType, uint32_t count, int32_t deviceIdx = -1,
               char fillChar = 'a')
@@ -73,8 +79,8 @@ public:
             std::vector<DataInfo> dataInfoList;
             for (uint32_t j = 0; j < infoCount; j++) {
                 void *devPtr = nullptr;
-                DS_ASSERT_OK(AclDeviceManager::Instance()->MallocDeviceMemory(size, devPtr));
-                DS_ASSERT_OK(AclDeviceManager::Instance()->MemCopyH2D(devPtr, size, dataStr.data(), size));
+                DS_ASSERT_OK(mgr_->MallocDeviceMemory(size, devPtr));
+                DS_ASSERT_OK(mgr_->MemCopyH2D(devPtr, size, dataStr.data(), size));
                 DataInfo info{ devPtr, dataType, count, size, deviceIdx };
                 dataInfoList.push_back(std::move(info));
             }
@@ -91,8 +97,8 @@ public:
         for (uint32_t i = 0; i < objectCount; i++) {
             std::vector<DataInfo> dataInfoList;
             void *objectPtr = nullptr;
-            DS_ASSERT_OK(AclDeviceManager::Instance()->MallocDeviceMemory(objectSize, objectPtr));
-            DS_ASSERT_OK(AclDeviceManager::Instance()->MemCopyH2D(objectPtr, objectSize, dataStr.data(), objectSize));
+            DS_ASSERT_OK(mgr_->MallocDeviceMemory(objectSize, objectPtr));
+            DS_ASSERT_OK(mgr_->MemCopyH2D(objectPtr, objectSize, dataStr.data(), objectSize));
             for (uint32_t j = 0; j < infoCount; j++) {
                 void *devPtr = static_cast<char *>(objectPtr) + j * size;
                 DataInfo info{ devPtr, dataType, count, size, deviceIdx };
@@ -113,6 +119,7 @@ public:
     }
 
 private:
+    DeviceManagerBase *mgr_;
     BlockingQueue<std::vector<DataInfo>> dataInfoQueue_;
 };
 
@@ -156,10 +163,12 @@ public:
         ExternalClusterTest::TearDown();
     }
 
-    static void CheckDevPtrContent(const void *devPtr, size_t size, std::string content)
+    static void CheckDevPtrContent(const void *devPtr, size_t size, std::string content,
+                                    DeviceManagerBase *mgr = nullptr)
     {
+        if (!mgr) mgr = AclDeviceManager::Instance();
         void *hostPtr = malloc(size);
-        DS_ASSERT_OK(AclDeviceManager::Instance()->MemCopyD2H(hostPtr, size, devPtr, size));
+        DS_ASSERT_OK(mgr->MemCopyD2H(hostPtr, size, devPtr, size));
         auto result = std::string(static_cast<char *>(hostPtr), size);
         auto isEqual = content == result;
         if (!isEqual) {
@@ -171,9 +180,10 @@ public:
         free(hostPtr);
     }
 
-    void SetContentToDevPtr(void *devPtr, size_t size, std::string content)
+    void SetContentToDevPtr(void *devPtr, size_t size, std::string content, DeviceManagerBase *mgr = nullptr)
     {
-        DS_ASSERT_OK(AclDeviceManager::Instance()->MemCopyH2D(devPtr, size, content.data(), size));
+        if (!mgr) mgr = AclDeviceManager::Instance();
+        DS_ASSERT_OK(mgr->MemCopyH2D(devPtr, size, content.data(), size));
     }
 
     int WaitForChildFork(pid_t pid)
@@ -198,12 +208,17 @@ public:
         }
     }
 
-    void InitAcl(int32_t deviceId)
+    void InitDevice(DeviceManagerBase *mgr, int32_t deviceId)
     {
-        DS_ASSERT_OK(AclDeviceManager::Instance()->aclInit(nullptr));
-        DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtSetDevice(deviceId));
+        DS_ASSERT_OK(mgr->Init(nullptr));
+        DS_ASSERT_OK(mgr->SetDevice(deviceId));
+        mgr_ = mgr;
         deviceIdx_ = deviceId;
     }
+
+    // Convenience wrappers for backward compatibility.
+    void InitAcl(int32_t deviceId) { InitDevice(AclDeviceManager::Instance(), deviceId); }
+    void InitCuda(int32_t deviceId) { InitDevice(CudaDeviceManager::Instance(), deviceId); }
 
     void GetAllFuture(std::vector<Future> &futVec)
     {
@@ -231,17 +246,18 @@ public:
 
     static void PrePareDevData(size_t numOfObjs, size_t blksPerObj, size_t blkSz,
                                std::vector<DeviceBlobList> &swapOutBlobList,
-                               std::vector<DeviceBlobList> &swapInBlobList, int32_t deviceId)
+                               std::vector<DeviceBlobList> &swapInBlobList, int32_t deviceId,
+                               DeviceManagerBase *mgr = nullptr)
     {
         std::vector<std::vector<DataInfo>> swapOutDataInfoList;
         std::vector<std::vector<DataInfo>> swapInDatInfoList;
 
         // Swap Out HBM.
-        DevPtrQueue swapOutDataInfoQueue;
+        DevPtrQueue swapOutDataInfoQueue(mgr);
         swapOutDataInfoQueue.Fill(numOfObjs, blksPerObj, DataType::DATA_TYPE_INT8, blkSz, deviceId);
 
         // Swap In HBM.
-        DevPtrQueue resultDataInfoQueue;
+        DevPtrQueue resultDataInfoQueue(mgr);
         resultDataInfoQueue.Fill(numOfObjs, blksPerObj, DataType::DATA_TYPE_INT8, blkSz, deviceId, 'b');
 
         for (auto i = 0uL; i < numOfObjs; i++) {
@@ -259,8 +275,10 @@ public:
 
     static void PrePareRandomData(size_t numOfObjs, size_t blksPerObj, size_t blkSz, int32_t deviceIdx,
                                   std::vector<DeviceBlobList> &swapBlobList,
-                                  std::vector<std::vector<std::string>> &verifyList)
+                                  std::vector<std::vector<std::string>> &verifyList,
+                                  DeviceManagerBase *mgr = nullptr)
     {
+        if (!mgr) mgr = AclDeviceManager::Instance();
         swapBlobList.clear();
         verifyList.clear();
         for (uint32_t i = 0; i < numOfObjs; i++) {
@@ -270,8 +288,8 @@ public:
             for (uint32_t j = 0; j < blksPerObj; j++) {
                 std::string dataStr = RandomData().GetRandomString(blkSz);
                 void *devPtr = nullptr;
-                AclDeviceManager::Instance()->MallocDeviceMemory(blkSz, devPtr);
-                AclDeviceManager::Instance()->MemCopyH2D(devPtr, blkSz, dataStr.data(), blkSz);
+                mgr->MallocDeviceMemory(blkSz, devPtr);
+                mgr->MemCopyH2D(devPtr, blkSz, dataStr.data(), blkSz);
                 Blob blob{ devPtr, blkSz };
                 blobList.blobs.emplace_back(std::move(blob));
                 blobInfos.emplace_back(std::move(dataStr));
@@ -303,11 +321,12 @@ public:
     }
 
     static Status IsSameContent(std::vector<DeviceBlobList> &testBlobList, std::vector<DeviceBlobList> &reference,
-                                char fillChar)
+                                char fillChar, DeviceManagerBase *mgr = nullptr)
     {
-        auto contentEqual = [](const void *devPtr, size_t size, std::string content) -> Status {
+        if (!mgr) mgr = AclDeviceManager::Instance();
+        auto contentEqual = [mgr](const void *devPtr, size_t size, std::string content) -> Status {
             void *hostPtr = malloc(size);
-            RETURN_IF_NOT_OK(AclDeviceManager::Instance()->MemCopyD2H(hostPtr, size, devPtr, size));
+            RETURN_IF_NOT_OK(mgr->MemCopyD2H(hostPtr, size, devPtr, size));
             auto result = std::string(reinterpret_cast<char *>(hostPtr), size);
             auto isEqual = content == result;
             if (!isEqual) {
@@ -355,8 +374,10 @@ public:
     }
 
     static void RandomFill(const uint32_t objectCount, const std::function<int()> gen, const int deviceId,
-                           std::vector<DeviceBlobList> &devBlobList, const char fillChar = 'a')
+                           std::vector<DeviceBlobList> &devBlobList, const char fillChar = 'a',
+                           DeviceManagerBase *mgr = nullptr)
     {
+        if (!mgr) mgr = AclDeviceManager::Instance();
         auto rn = gen();
         for (auto i = 0u; i < objectCount; i++) {
             DeviceBlobList deviceBlobs{ {}, deviceId };
@@ -365,8 +386,8 @@ public:
                 auto size = static_cast<std::uint64_t>(gen() % sizeLimit + 1);
                 auto dataStr = std::string(size, fillChar);
                 void *devPtr = nullptr;
-                AclDeviceManager::Instance()->MallocDeviceMemory(size, devPtr);
-                AclDeviceManager::Instance()->MemCopyH2D(devPtr, size, dataStr.data(), size);
+                mgr->MallocDeviceMemory(size, devPtr);
+                mgr->MemCopyH2D(devPtr, size, dataStr.data(), size);
                 Blob blob{ devPtr, size };
                 deviceBlobs.blobs.push_back(blob);
             }
@@ -375,13 +396,14 @@ public:
     }
 
     static void AllocAsBlobSize(const std::vector<std::vector<uint64_t>> blobSizes, const int deviceId,
-                                std::vector<DeviceBlobList> &devBlobList)
+                                std::vector<DeviceBlobList> &devBlobList, DeviceManagerBase *mgr = nullptr)
     {
+        if (!mgr) mgr = AclDeviceManager::Instance();
         for (auto sizes : blobSizes) {
             DeviceBlobList deviceBlobs{ {}, deviceId };
             for (auto size : sizes) {
                 void *devPtr = nullptr;
-                AclDeviceManager::Instance()->MallocDeviceMemory(size, devPtr);
+                mgr->MallocDeviceMemory(size, devPtr);
                 Blob blob{ devPtr, size };
                 deviceBlobs.blobs.push_back(blob);
             }
@@ -408,6 +430,7 @@ public:
             << costVec[count * p90 / pmax] << "," << costVec[count * p99 / pmax];
         return oss.str();
     }
+    DeviceManagerBase *mgr_ = nullptr;
     size_t deviceIdx_ = 0;
 
 protected:
@@ -415,7 +438,9 @@ protected:
 };
 class DeviceBlobListHelper {
 public:
-    DeviceBlobListHelper(size_t operatorCount, size_t keysCountPerOp, size_t blobNum, size_t blobSize = 0)
+    DeviceBlobListHelper(size_t operatorCount, size_t keysCountPerOp, size_t blobNum, size_t blobSize = 0,
+                         DeviceManagerBase *mgr = nullptr)
+        : mgr_(mgr ? mgr : static_cast<DeviceManagerBase *>(AclDeviceManager::Instance()))
     {
         this->operatorCount = operatorCount;
         this->keysCountPerOp = keysCountPerOp;
@@ -454,9 +479,9 @@ public:
                 for (size_t k = 0; k < blobNum; k++) {
                     void *devPtr = nullptr;
                     auto data = dataVecs[i][j][k];
-                    acl::AclDeviceManager::Instance()->MallocDeviceMemory(data.size(), devPtr);
+                    mgr_->MallocDeviceMemory(data.size(), devPtr);
                     if (needCopyDataToDevice) {
-                        acl::AclDeviceManager::Instance()->MemCopyH2D(devPtr, data.size(), data.data(), data.size());
+                        mgr_->MemCopyH2D(devPtr, data.size(), data.data(), data.size());
                     }
                     Blob blob{ .pointer = devPtr, .size = data.size() };
                     tmpBlobList.emplace_back(std::move(blob));
@@ -474,7 +499,7 @@ public:
         for (auto &blob2D : blobListVec) {
             for (auto &blob1D : blob2D) {
                 for (auto &blob : blob1D.blobs) {
-                    acl::AclDeviceManager::Instance()->MallocDeviceMemory(blob.size, blob.pointer);
+                    mgr_->MallocDeviceMemory(blob.size, blob.pointer);
                 }
             }
         }
@@ -483,6 +508,7 @@ public:
     size_t operatorCount;
     size_t keysCountPerOp;
     size_t blobNum;
+    DeviceManagerBase *mgr_;
     std::vector<std::vector<std::vector<std::string>>> dataVecs;
     std::vector<std::vector<std::string>> keyVecs;
 };

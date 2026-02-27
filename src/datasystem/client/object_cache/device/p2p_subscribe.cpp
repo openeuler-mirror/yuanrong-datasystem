@@ -42,6 +42,14 @@
 namespace datasystem {
 const uint32_t ONE_SECOND_MS = 1000;
 
+namespace {
+bool IsAsyncEventInProgress(const Status &rc)
+{
+    const auto code = rc.GetCode();
+    return code == K_ACL_ERROR || code == K_CUDA_ERROR;
+}
+}  // namespace
+
 P2PSubscribe::P2PSubscribe(int32_t deviceId, std::shared_ptr<object_cache::IClientWorkerApi> workerApi,
                            std::shared_ptr<CommFactory> commFactory, bool enableP2Ptransfer, int32_t timeoutMs)
     : ClientDeviceCurd(std::move(workerApi)),
@@ -252,7 +260,7 @@ void P2PSubscribe::P2PAckPut(std::shared_ptr<P2PAckReq> &p2pAckReq)
         }
         p2pPutRequest->DestroyEvent();
         VLOG(1) << FormatString("Object key %s completed the sending procedure", objId);
-    } else if (rc.GetCode() == K_ACL_ERROR) {
+    } else if (IsAsyncEventInProgress(rc)) {
         p2pAckQueue_.Push(p2pAckReq);
     } else {
         const auto &bufferInfo = p2pPutRequest->GetBufferInfo();
@@ -301,7 +309,7 @@ void P2PSubscribe::RunP2PAckLoop()
             auto rc = p2pGetRequest->GetEvent()->QueryEventStatus();
             if (rc.IsOk()) {
                 P2PAckGet(p2pGetRequest);
-            } else if (rc.GetCode() == K_ACL_ERROR) {
+            } else if (IsAsyncEventInProgress(rc)) {
                 p2pAckQueue_.Push(p2pAckReq);
             } else {
                 const auto &bufferInfo = p2pGetRequest->GetBufferInfo();

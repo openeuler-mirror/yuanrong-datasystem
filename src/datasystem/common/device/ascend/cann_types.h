@@ -21,7 +21,7 @@
 #ifndef DATASYSTEM_COMMON_DEVICE_CANN_TYPES_H
 #define DATASYSTEM_COMMON_DEVICE_CANN_TYPES_H
 
-#ifdef BUILD_HETERO
+#if defined(USE_NPU)
 #include <acl/acl.h>
 #include <hccl/hccl.h>
 #include <runtime/dev.h>

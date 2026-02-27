@@ -58,7 +58,7 @@ install_datasystem_target(datasystem EXPORT_NAME DatasystemTargets)
 set(datasystem_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
 install_datasystem_target(datasystem)
 
-if (BUILD_HETERO)
+if (BUILD_HETERO AND BUILD_HETERO_NPU)
     # Set the permission of acl_plugin to 440
     install(TARGETS acl_plugin
             DESTINATION  ${DATASYSTEM_SDK_USER_LIBPATH}
@@ -69,6 +69,16 @@ if (BUILD_HETERO)
 endif()
 
 set(etcdapi_proto_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
+if (BUILD_HETERO AND BUILD_HETERO_GPU)
+    # Set the permission of cuda_plugin to 440
+    install(TARGETS cuda_plugin
+            DESTINATION  ${DATASYSTEM_SDK_USER_LIBPATH}
+            PERMISSIONS OWNER_READ GROUP_READ)
+    install(TARGETS cuda_plugin
+            DESTINATION  ${DATASYSTEM_SDK_USER_NEW_LIBPATH}
+            PERMISSIONS OWNER_READ GROUP_READ)
+endif()
+
 set(ds_router_client_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
 install_datasystem_target(etcdapi_proto EXPORT_NAME DatasystemTargets)
 install_datasystem_target(ds_router_client EXPORT_NAME DatasystemTargets)
@@ -144,8 +154,11 @@ if (BUILD_PYTHON_API)
             ds_client_py
             rpc_option_protos)
 
-    if (BUILD_HETERO)
+    if (BUILD_HETERO AND BUILD_HETERO_NPU)
         list(APPEND DEPEND_TARGETS acl_plugin)
+    endif()
+    if (BUILD_HETERO AND BUILD_HETERO_GPU)
+        list(APPEND DEPEND_TARGETS cuda_plugin)
     endif()
 
     set(PYTHON_LIBPATH ${CMAKE_BINARY_DIR}/python_lib)
@@ -332,9 +345,12 @@ if (BUILD_PYTHON_API)
         datasystem
         ds_client_py)
 
-    if (BUILD_HETERO)
-        list(APPEND DEPEND_TARGETS acl_plugin)
-    endif()
+        if (BUILD_HETERO AND BUILD_HETERO_NPU)
+            list(APPEND DEPEND_TARGETS acl_plugin)
+        endif()
+        if (BUILD_HETERO AND BUILD_HETERO_GPU)
+            list(APPEND DEPEND_TARGETS cuda_plugin)
+        endif()
 
     set(PYTHON_LIBPATH ${CMAKE_BINARY_DIR}/python_lib)
 
