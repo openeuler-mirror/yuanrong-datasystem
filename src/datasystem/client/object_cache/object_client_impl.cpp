@@ -1177,12 +1177,11 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     auto version = 0u;
     // This variable is the output from MultiCreate, indicates whether shared memory was actually used
     auto useShmTransfer = false;
-    // Pre-condition check for whether we should attempt shared memory
+    // Pre-condition check for whether we should attempt shared memory or UB
     bool canUseShm = workerApi_[LOCAL_WORKER]->shmEnabled_ && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_;
-
-    if (canUseShm || !skipCheckExistence) {
-        // Call MultiCreate if: 1) using shared memory, OR 2) need to check existence
-        // When shmEnabled_ is false but we need to check existence, MultiCreate will use RPC to check
+    if (canUseShm || IsUrmaEnabled() || !skipCheckExistence) {
+        // Call MultiCreate if: 1) using shared memory, OR 2) UB enabled (need urma_info), OR 3) need to check existence
+        // When shmEnabled_ is false but UB is enabled or we need to check existence, MultiCreate will use RPC
         RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
                                                                exists, useShmTransfer));
     } else {
@@ -2347,38 +2346,11 @@ Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence, const
                                             std::vector<MultiCreateParam> &multiCreateParamList,
                                             std::vector<std::shared_ptr<Buffer>> &bufferList)
 {
-    Status injectRC = Status::OK();
     const int sz = static_cast<int>(multiCreateParamList.size());
     auto multicreate = [&, this](size_t start, size_t end) {
-        for (auto i = start; i < end; i++) {
-            auto &createParam = multiCreateParamList[i];
-            if (!skipCheckExistence && exists[createParam.index]) {
-                continue;
-            }
-            PerfPoint mmapPoint(PerfKey::CLIENT_MULTI_CREATE_GET_MMAP);
-            auto &shmBuf = createParam.shmBuf;
-            RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
-            auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-            CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-            mmapPoint.Record();
-
-            auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset,
-                                                   createParam.dataSize, createParam.metadataSize, param, false,
-                                                   version, shmBuf->id, nullptr, std::move(mmapEntry));
-            PerfPoint refPoint(PerfKey::CLIENT_MEMORY_REF_ADD);
-            RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
-            refPoint.Record();
-            INJECT_POINT("ObjectClientImpl.MultiCreate.mmapFailed", [&bufferList, &injectRC](int failedIndex) {
-                if (bufferList[failedIndex] != nullptr) {
-                    injectRC = Status(StatusCode::K_RUNTIME_ERROR, "Set runtime error");
-                }
-                return Status::OK();
-            });
-            RETURN_IF_NOT_OK(injectRC);
-            PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_BUFFER_CREATE);
-            std::shared_ptr<Buffer> newBuffer;
-            RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
-            bufferList[createParam.index] = std::move(newBuffer);
+        for (size_t i = start; i < end; i++) {
+            RETURN_IF_NOT_OK(CreateBufferForMultiCreateParamAtIndex(i, skipCheckExistence, param, version, exists,
+                                                                    multiCreateParamList, bufferList));
         }
         return Status::OK();
     };
@@ -2389,6 +2361,54 @@ Status ObjectClientImpl::MutiCreateParallel(const bool skipCheckExistence, const
     }
     static const int parallism = 4;
     return Parallel::ParallelFor<size_t>(0, multiCreateParamList.size(), multicreate, 0, parallism);
+}
+
+Status ObjectClientImpl::CreateBufferForMultiCreateParamAtIndex(size_t index, bool skipCheckExistence,
+                                                                const FullParam &param, uint32_t version,
+                                                                const std::vector<bool> &exists,
+                                                                std::vector<MultiCreateParam> &multiCreateParamList,
+                                                                std::vector<std::shared_ptr<Buffer>> &bufferList)
+{
+    Status injectRC = Status::OK();
+    auto &createParam = multiCreateParamList[index];
+    if (!skipCheckExistence && exists[createParam.index]) {
+        return Status::OK();
+    }
+    auto &shmBuf = createParam.shmBuf;
+    std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
+#ifdef USE_URMA
+    if (createParam.urmaDataInfo) {
+        bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, createParam.dataSize, 0, param, false,
+                                          version, shmBuf->id);
+        bufferInfo->ubUrmaDataInfo = createParam.urmaDataInfo;
+    } else
+#endif
+    {
+        PerfPoint mmapPoint(PerfKey::CLIENT_MULTI_CREATE_GET_MMAP);
+        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+        auto mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+        CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
+        mmapPoint.Record();
+
+        bufferInfo = MakeObjectBufferInfo(createParam.objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset,
+                                          createParam.dataSize, createParam.metadataSize, param, false, version,
+                                          shmBuf->id, nullptr, std::move(mmapEntry));
+    }
+    PerfPoint refPoint(PerfKey::CLIENT_MEMORY_REF_ADD);
+    RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
+    refPoint.Record();
+    INJECT_POINT("ObjectClientImpl.MultiCreate.mmapFailed", [&bufferList, &injectRC](int failedIndex) {
+        if (bufferList[failedIndex] != nullptr) {
+            injectRC = Status(StatusCode::K_RUNTIME_ERROR, "Set runtime error");
+        }
+        return Status::OK();
+    });
+    RETURN_IF_NOT_OK(injectRC);
+    PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_BUFFER_CREATE);
+    std::shared_ptr<Buffer> newBuffer;
+    RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
+    bufferList[createParam.index] = std::move(newBuffer);
+    return Status::OK();
 }
 
 Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,

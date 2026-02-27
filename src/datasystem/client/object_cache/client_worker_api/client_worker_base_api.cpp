@@ -226,25 +226,44 @@ void ClientWorkerBaseApi::PostMultiCreate(bool skipCheckExistence, const MultiCr
                                           std::vector<MultiCreateParam> &createParams, bool &useShmTransfer,
                                           PerfPoint &point, uint32_t &version, std::vector<bool> &exists)
 {
-    auto checkUseShm = [this, &rsp, &skipCheckExistence]() {
-        if (!shmEnabled_) {
-            return false;
-        }
+    useShmTransfer = CheckUseTransferForMultiCreateRsp(rsp, skipCheckExistence);
+    if (!useShmTransfer) {
+        return;
+    }
+    point.RecordAndReset(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
+    FillCreateParamsFromMultiCreateRsp(rsp, skipCheckExistence, createParams, exists);
+    version = workerVersion_.load(std::memory_order_relaxed);
+}
+
+bool ClientWorkerBaseApi::CheckUseTransferForMultiCreateRsp(const MultiCreateRspPb &rsp,
+                                                            bool skipCheckExistence) const
+{
+    if (shmEnabled_) {
         if (skipCheckExistence) {
-            return shmEnabled_;
+            return true;
         }
         for (const auto &res : rsp.results()) {
             if (!res.shm_id().empty()) {
                 return true;
             }
         }
-        return false;
-    };
-    useShmTransfer = checkUseShm();
-    if (!useShmTransfer) {
-        return;
     }
-    point.RecordAndReset(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
+#ifdef USE_URMA
+    if (IsUrmaEnabled()) {
+        for (const auto &res : rsp.results()) {
+            if (res.has_urma_info()) {
+                return true;
+            }
+        }
+    }
+#endif
+    return false;
+}
+
+void ClientWorkerBaseApi::FillCreateParamsFromMultiCreateRsp(const MultiCreateRspPb &rsp, bool skipCheckExistence,
+                                                             std::vector<MultiCreateParam> &createParams,
+                                                             const std::vector<bool> &exists)
+{
     for (auto i = 0ul; i < createParams.size(); i++) {
         if (!skipCheckExistence && exists[i]) {
             continue;
@@ -256,8 +275,13 @@ void ClientWorkerBaseApi::PostMultiCreate(bool skipCheckExistence, const MultiCr
         shmBuf->offset = static_cast<ptrdiff_t>(subRsp.offset());
         shmBuf->id = ShmKey::Intern(subRsp.shm_id());
         createParams[i].metadataSize = subRsp.metadata_size();
+#ifdef USE_URMA
+        if (IsUrmaEnabled() && subRsp.has_urma_info()) {
+            createParams[i].urmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+            createParams[i].urmaDataInfo->CopyFrom(subRsp.urma_info());
+        }
+#endif
     }
-    version = workerVersion_.load(std::memory_order_relaxed);
 }
 }  // namespace object_cache
 }  // namespace datasystem
