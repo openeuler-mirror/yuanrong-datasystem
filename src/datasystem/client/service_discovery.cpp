@@ -69,7 +69,7 @@ Status ServiceDiscovery::ObtainWorkers()
                 continue;
             std::string state = kv.second.substr(pos + 1);
             // select active state and filter out exiting/timeout/failed.
-            if (state == "ready" || state == "start" || state == "restart" || state == "recover") {
+            if (state == "ready") {
                 activeWorkerAddrs_.emplace(kv.first);
             }
         }
