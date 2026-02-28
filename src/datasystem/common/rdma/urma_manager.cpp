@@ -47,7 +47,7 @@ DS_DECLARE_bool(urma_event_mode);
 namespace datasystem {
 constexpr uint32_t DEFAULT_TOKEN = 0xACFE;
 static const std::string ENV_URMA_CLIENT_MEMORY_BUFFER_NUM = "URMA_CLIENT_MEMORY_BUFFER_NUM";
-constexpr uint64_t CLIENT_MEMORY_BUFFER_SIZE = 8 * 1024 * 1024;  // 8MB
+constexpr uint64_t CLIENT_MEMORY_BUFFER_SIZE = 9 * 1024 * 1024;  // 9MB
 constexpr uint64_t CLIENT_MEMORY_BUFFER_NUM = 100;
 constexpr uint64_t MAX_STUB_CACHE_NUM = 2048;
 bool UrmaManager::clientMode_ = false;
@@ -1223,15 +1223,15 @@ Status UrmaManager::UnimportSegment(const HostPort &remoteAddress, const uint64_
     RETURN_STATUS(K_NOT_FOUND, "Cannot unimport jfr, jfr is not imported");
 }
 
-Status UrmaManager::RemoveRemoteDevice(const HostPort &remoteAddress)
+Status UrmaManager::RemoveRemoteDevice(const std::string &deviceId)
 {
     TbbRemoteDeviceMap::accessor accessor;
-    if (tbbRemoteDeviceMap_.find(accessor, remoteAddress.ToString())) {
+    if (tbbRemoteDeviceMap_.find(accessor, deviceId)) {
         tbbRemoteDeviceMap_.erase(accessor);
         return Status::OK();
     }
-    RETURN_STATUS(K_NOT_FOUND, FormatString("Cannot remove RemoteDevice, RemoteDevice for %s does not exist",
-                                            remoteAddress.ToString()));
+    RETURN_STATUS(K_NOT_FOUND,
+                  FormatString("Cannot remove RemoteDevice, RemoteDevice for %s does not exist", deviceId));
 }
 
 Status UrmaManager::StrToEid(const std::string &eid, urma_eid_t &out)
@@ -1295,6 +1295,9 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
             uint32_t jfrIndex = GetJfrIndex(req.client_id());
             GetLocalUrmaInfo().ToProto(*rsp.mutable_hand_shake(), jfrIndex);
             RETURN_IF_NOT_OK(GetSegmentInfo(rsp));
+            // Also record the client entity id for clean up purposes.
+            std::lock_guard<std::mutex> lock(clientIdMutex_);
+            clientIdMapping_.emplace(ClientKey::Intern(req.client_entity_id()), req.client_id());
         }
     }
     return Status::OK();
@@ -1309,6 +1312,17 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode)
         UrmaManager::clientMode_ = true;
         FLAGS_urma_connection_size = 1;
     }
+}
+
+std::string UrmaManager::GetRemoteDevicesByClientId(ClientKey clientEntityId)
+{
+    std::lock_guard<std::mutex> lock(clientIdMutex_);
+    auto it = clientIdMapping_.find(clientEntityId);
+    if (it != clientIdMapping_.end()) {
+        return it->second;
+    }
+    LOG(INFO) << "Cannot find remote device for client entity id: " << clientEntityId;
+    return "";
 }
 
 const std::string &UrmaManager::GetClientId()

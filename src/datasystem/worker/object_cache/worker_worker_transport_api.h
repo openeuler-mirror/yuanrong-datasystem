@@ -81,7 +81,7 @@ private:
 
 class WorkerRemoteWorkerTransApi : public WorkerWorkerTransportApi {
 public:
-    WorkerRemoteWorkerTransApi(HostPort hostPort);
+    WorkerRemoteWorkerTransApi(HostPort hostPort, const std::string &firstClientEntityId = "");
 
     ~WorkerRemoteWorkerTransApi() override = default;
 
@@ -91,8 +91,8 @@ public:
 
 private:
     HostPort hostPort_;
-
     std::shared_ptr<WorkerWorkerTransportService_Stub> rpcSession_{ nullptr };
+    std::string firstClientEntityId_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

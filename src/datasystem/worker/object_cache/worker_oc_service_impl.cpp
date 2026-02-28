@@ -1042,6 +1042,11 @@ Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)
     // 3rd: Clean up directory metadata
     Status rc = ClearDeviceMetaData(clientId);
     LOG(INFO) << "release metadata " << clientId;
+
+#ifdef USE_URMA
+    // 4th: Clean up client urma info, assuming there is only one client in the process.
+    LOG_IF_ERROR_EXCEPT(RemoveRemoteFastTransportClient(clientId), "", K_NOT_FOUND);
+#endif
     return rc;
 }
 
