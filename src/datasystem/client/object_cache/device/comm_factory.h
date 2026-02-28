@@ -25,7 +25,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/device/hccl_comm_magr.h"
 #include "datasystem/common/device/ascend/cann_types.h"

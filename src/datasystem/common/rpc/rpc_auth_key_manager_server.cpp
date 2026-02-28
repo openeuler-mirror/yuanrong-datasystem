@@ -29,10 +29,7 @@
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_bool(enable_curve_zmq);
-DS_DEFINE_string(curve_key_dir, "",
-                 "The directory to find ZMQ curve key files. This path must be specified "
-                 "when zmq authentication is enabled. Path must be less than 4095 characters (PATH_MAX).");
-DS_DEFINE_validator(curve_key_dir, &Validator::ValidatePathString);
+DS_DECLARE_string(curve_key_dir);
 
 namespace datasystem {
 const std::unordered_map<std::string, RawSvcToKeyMapping> DEFAULT_SERVICE_MAPPINGS{

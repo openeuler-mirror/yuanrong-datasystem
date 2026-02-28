@@ -16,6 +16,7 @@ set(LOG_LIBS
         ds_spdlog
         absl::symbolize
         absl::failure_signal_handler
+        common_flags
         )
 
 add_library(common_log STATIC ${LOG_SRCS})

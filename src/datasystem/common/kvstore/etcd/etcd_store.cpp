@@ -39,8 +39,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 
-DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
-DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);
+DS_DECLARE_string(etcd_address);
 DS_DEFINE_string(other_cluster_names, "", "Specify other az names using the same etcd. Split by ','");
 DS_DEFINE_validator(other_cluster_names, &Validator::ValidateOtherAzNames);
 DS_DECLARE_uint32(node_timeout_s);

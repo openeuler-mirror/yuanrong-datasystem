@@ -34,7 +34,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/comm_factory.h"
 #include "datasystem/common/device/device_pointer_wrapper.h"

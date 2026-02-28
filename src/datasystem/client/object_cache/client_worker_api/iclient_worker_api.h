@@ -50,6 +50,8 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
+
+#include "datasystem/client/embedded_client_worker_api.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_manager.h"
@@ -89,19 +91,19 @@ struct GetParam {
 
 class IClientWorkerApi : virtual public client::IClientWorkerCommonApi {
 public:
-    explicit IClientWorkerApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection)
-        : client::IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection)
+    explicit IClientWorkerApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
+                              Signature *signature)
+        : client::IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature)
     {
     }
 
     ~IClientWorkerApi() = default;
 
-    virtual std::shared_ptr<IClientWorkerApi> CloneWith(HostPort hostPort, RpcCredential cred,
-                                                        HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                                        SensitiveValue token = "", Signature *signature = nullptr,
-                                                        std::string tenantId = "",
-                                                        bool enableCrossNodeConnection = false,
-                                                        bool enableExclusiveConnection = false) const = 0;
+    virtual std::shared_ptr<IClientWorkerApi> CloneWith(
+        HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+        SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
+        bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false,
+        std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api = nullptr, void *worker = nullptr) const = 0;
 
     /**
      * @brief Create an object in the store-server, will only be called in shm case.
@@ -416,147 +418,11 @@ public:
     {
         return shmEnabled_ && decShmUnit_->fd > 0;
     }
-};
 
-class ClientWorkerRemoteApi : public IClientWorkerApi, public client::ClientWorkerRemoteCommonApi {
-public:
-    /**
-     * @brief Construct ClientWorkerApi.
-     * @param[in] hostPort The address of the worker node.
-     * @param[in] cred The authentication credentials.
-     * @param[in] heartbeatType The type of heartbeat.
-     * @param[in] signature Used to do AK/SK authenticate.
-     * @param[in] tenantId The tenant id.
-     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
-     * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
-     */
-    explicit ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred,
-                                   HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                   SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-                                   bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
+    virtual Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                   uint64_t length) = 0;
 
-    ~ClientWorkerRemoteApi() = default;
-
-    /**
-     * @brief Initialize ClientWorkerApi.
-     * @param[in] requestTimeoutMs Request Timeout milliseconds.
-     * @param[in] connectTimeoutMs Connect Timeout milliseconds.
-     * @return K_OK on success; the error code otherwise.
-     *         K_INVALID: the input ip or port is invalid.
-     */
-    Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
-
-    std::shared_ptr<IClientWorkerApi> CloneWith(HostPort hostPort, RpcCredential cred,
-                                                HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                                SensitiveValue token = "", Signature *signature = nullptr,
-                                                std::string tenantId = "", bool enableCrossNodeConnection = false,
-                                                bool enableExclusiveConnection = false) const override
-    {
-        return std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), cred, heartbeatType, std::move(token),
-                                                       signature, tenantId, enableCrossNodeConnection,
-                                                       enableExclusiveConnection);
-    };
-
-    Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
-                  std::shared_ptr<ShmUnitInfo> &shmBuf, std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo,
-                  const CacheType &cacheType = CacheType::MEMORY) override;
-    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
-                   const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
-                   int existence = 0) override;
-    Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
-                        MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {}) override;
-    Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
-    Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads) override;
-    Status InvalidateBuffer(const std::string &objectKey) override;
-    Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys,
-                              const std::string &remoteClientId = "") override;
-    Status ReleaseGRefs(const std::string &remoteClientId) override;
-    Status GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds, std::vector<std::string> &failedObjectKeys,
-                              const std::string &remoteClientId = "") override;
-    Status Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
-                  bool areDeviceObjects = false) override;
-    Status QueryGlobalRefNum(
-        const std::vector<std::string> &objectKeys,
-        std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap) override;
-    Status PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize, bool isShm,
-                               void *nonShmPointer) override;
-    Status GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize, int32_t timeoutMs,
-                           GetDeviceObjectRspPb &rsp, std::vector<RpcMessage> &payloads) override;
-    Status SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp) override;
-    Status PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs) override;
-    Status GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
-                      std::vector<DeviceBlobList> &devBlobList, GetP2PMetaRspPb &resp,
-                      int64_t subTimeoutMs = 500) override;
-    Status SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp) override;
-    Status RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp) override;
-    Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs) override;
-    Status AckRecvFinish(AckRecvFinishReqPb &req) override;
-    Status RemoveP2PLocation(const std::string &objectKey, int32_t deviceId) override;
-    Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
-                          std::vector<ObjMetaInfo> &objMetas) override;
-    Status MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams, uint32_t &version,
-                       std::vector<bool> &exists, bool &useShmTransfer) override;
-    Status QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp) override;
-    Status HealthCheck(ServerState &state) override;
-    Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
-                 const bool isLocal) override;
-    Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
-                  std::vector<std::string> &failedKeys) override;
-    Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
-    Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
-    Status PrepairForDecreaseShmRef(
-        std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
-    Status CleanUpForDecreaseShmRefAfterWorkerLost() override;
-    Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
-                          std::shared_timed_mutex &mtx) override;
-
-    /**
-     * @brief Send buffer via UB when applicable.
-     * @param[in] bufferInfo Buffer information; must have valid pointer and dataSize/metadataSize.
-     * @param[in] data The buffer data to be sent.
-     * @param[in] length The length of the buffer data to be sent.
-     * @return K_OK on success or when UB disabled / already sent; the error code otherwise.
-     */
-    Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data, uint64_t length);
-
-private:
-    void ParseGlbRefPb(QueryGlobalRefNumRspCollectionPb &rsp,
-                       std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap);
-
-    /**
-     * @brief Try to get Shm lock for decrease buffer.
-     * @param[in] timeoutStruct Time out for futex wait.
-     * @param[out] retryCount Wait and retry using second intervals to avoid excessive time spent reconnecting to the
-     * worker.And add retryCount to control retry nums.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status AddShmLockForClient(const struct timespec &timeoutStruct, int64_t &retryCount);
-
-    /**
-     * @brief Waiting to be woken up by worker, via shm futex
-     * @param[in] waitFlag The flag ptr in shm.
-     * @param[in] waitNum Wake up flag.
-     * @param[in] timeoutStruct Time out for futex wait.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status CheckShmFutexResult(uint32_t *waitFlag, uint32_t waitNum, struct timespec &timeoutStruct);
-
-    /**
-     * @brief Check if get response all failed.
-     * @param[in] rsp The response getting from worker.
-     * @return Return true if all get failed.
-     */
-    bool IsAllGetFailed(GetRspPb &rsp);
-
-    /**
-     * @brief Fill device object meta to Pb.
-     * @param[in] bufferInfo The info of device buffer.
-     * @param[in] blobs The list of blob info.
-     * @param[out] metaPb The device object meta pb.
-     */
-    void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs,
-                        DeviceObjectMetaPb *metaPb);
-
+protected:
     /**
      * @brief Prepare the put request.
      * @param[in] bufferInfo Buffer information.
@@ -572,27 +438,21 @@ private:
                              const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
                              PublishReqPb &req);
 
+    void ParseGlbRefPb(QueryGlobalRefNumRspCollectionPb &rsp,
+                       std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap);
+
     /**
-     * @brief Create communication circular queue based on shared memory.
-     * @return K_OK on success; the error code otherwise.
+     * @brief Fill device object meta to Pb.
+     * @param[in] bufferInfo The info of device buffer.
+     * @param[in] blobs The list of blob info.
+     * @param[out] metaPb The device object meta pb.
      */
-    Status InitDecreaseQueue();
+    void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs,
+                        DeviceObjectMetaPb *metaPb);
 
     void PostMultiCreate(bool skipCheckExistence, const MultiCreateRspPb &rsp,
                          std::vector<MultiCreateParam> &createParams, bool &useShmTransfer, PerfPoint &point,
                          uint32_t &version, std::vector<bool> &exists);
-    Status PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req, int64_t &rpcTimeout);
-#ifdef USE_URMA
-    void PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
-                           uint8_t *&ubBufferPtr, uint64_t &ubBufferSize);
-    Status FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, GetRspPb &rsp,
-                          std::vector<RpcMessage> &payloads, uint8_t *ubBufferPtr, uint64_t ubBufferSize);
-#endif
-    // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.
-    mutable std::mutex mtx_;
-    std::unordered_map<int, uint8_t *> waitRespMap_;
-    std::shared_ptr<ShmCircularQueue> decreaseRPCQ_{ nullptr };
-    std::unique_ptr<WorkerOCService::Stub> stub_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

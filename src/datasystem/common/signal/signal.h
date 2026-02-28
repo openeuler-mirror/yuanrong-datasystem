@@ -26,12 +26,7 @@
 namespace datasystem {
 extern std::condition_variable g_termSignalCv;
 extern std::mutex g_termSignalMutex;
-
-/**
- * @brief The signal handler
- * @param[in] signum The signal number.
- */
-void SignalHandler(int signum);
+extern volatile sig_atomic_t g_exitFlag;
 
 /**
  * @brief Is current process received term signal.

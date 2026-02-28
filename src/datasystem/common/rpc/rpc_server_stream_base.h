@@ -279,12 +279,12 @@ public:
         return std::visit([](auto &pimpl) { return pimpl->EnableMsgQ(); }, pimpl_);
     }
 
-    void SetRequestInProgress()
+    virtual void SetRequestInProgress()
     {
         return std::visit([](auto &pimpl) { return pimpl->SetRequestInProgress(); }, pimpl_);
     }
 
-    void SetRequestComplete()
+    virtual void SetRequestComplete()
     {
         return std::visit([](auto &pimpl) { return pimpl->SetRequestComplete(); }, pimpl_);
     }
@@ -371,8 +371,8 @@ public:
 
     Status SendPayload(std::vector<RpcMessage> &buffer) override
     {
-        (void)buffer;
-        return {StatusCode::K_INVALID, "LocalServerUnaryWriterReader doesn't support SendPayload()!"};
+        payloads_ = std::move(buffer);
+        return Status::OK();
     }
 
     Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame)
@@ -390,8 +390,8 @@ public:
 
     Status ReceivePayload(std::vector<RpcMessage> &payload)
     {
-        (void)payload;
-        return {StatusCode::K_INVALID, "LocalServerUnaryWriterReader doesn't support ReceivePayload()!"};
+        payload = std::move(payloads_);
+        return Status::OK();
     }
 
     Status Finish() override
@@ -399,11 +399,27 @@ public:
         return {StatusCode::K_INVALID, "LocalServerUnaryWriterReader doesn't support Finish()!"};
     }
 
+    void SetRequestInProgress() override
+    {
+        return;
+    }
+
+    void SetRequestComplete() override
+    {
+        return;
+    }
+
+    bool EnableMsgQ() override
+    {
+        return false;
+    }
+
 private:
     R pb_;
     std::promise<std::pair<W, Status>> promise_;
     std::atomic<bool> writeOnce_;
     std::atomic<bool> readOnce_;
+    std::vector<RpcMessage> payloads_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_SERVER_STREAM_BASE_H

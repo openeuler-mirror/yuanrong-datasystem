@@ -20,7 +20,7 @@
 #include <memory>
 #include <gtest/gtest.h>
 
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/uuid_generator.h"

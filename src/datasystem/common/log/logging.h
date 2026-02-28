@@ -77,7 +77,7 @@ public:
      * @param[in] logProcessInterval Log rolling or compress interval seconds.
      */
     void Start(const std::string logFilename = "", bool isClient = false,
-               uint32_t logProcessInterval = LOG_ROLLING_COMPRESS_SECS);
+               uint32_t logProcessInterval = LOG_ROLLING_COMPRESS_SECS, bool isEmbeddedClient = false);
 
     /**
      * @brief  Check and create the log dir.
@@ -170,6 +170,7 @@ private:
     std::atomic<bool> init_{ false };
     static std::string podName_;
     bool isClient_;
+    bool isEmbeddedClient_ = false;
     bool isLoggingInitialized_ = false;
 };
 

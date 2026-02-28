@@ -409,6 +409,8 @@ protected:
     // Msg between ds_llt and control process.
     int32_t message_;
 };
+
+std::string SearchPath(const std::string &exec);
 }  // namespace st
 }  // namespace datasystem
 

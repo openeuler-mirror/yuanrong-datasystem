@@ -23,7 +23,6 @@ set(MASTER_OC_DEPEND_LIBS
         common_etcd
         common_log
         common_rpc_zmq
-        common_inject
         common_ref
         common_event_loop
         common_immutable_string

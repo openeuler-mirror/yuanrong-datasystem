@@ -19,7 +19,6 @@
 
 #include "datasystem/common/flags/flags.h"
 
-DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_int32(zmq_client_io_context);
 DS_DECLARE_int32(zmq_chunk_sz);
 DS_DECLARE_uint32(node_timeout_s);
@@ -37,6 +36,20 @@ DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_string(urma_mode);
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
+DS_DECLARE_bool(enable_remote_h2d);
+DS_DECLARE_string(l2_cache_type);
+DS_DECLARE_string(log_dir);
+DS_DECLARE_string(monitor_config_file);
+DS_DECLARE_string(unix_domain_socket_dir);
+DS_DECLARE_string(log_filename);
+DS_DECLARE_string(curve_key_dir);
+DS_DECLARE_string(shared_disk_directory);
+DS_DECLARE_string(encrypt_kit);
+DS_DECLARE_string(cluster_name);
+DS_DECLARE_string(log_monitor_exporter);
+DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
+DS_DECLARE_string(urma_mode);
+DS_DECLARE_string(etcd_address);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(sc_worker_worker_direct_port);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

@@ -33,10 +33,13 @@
 #include <re2/re2.h>
 
 #include "datasystem/client/client_state_manager.h"
+#include "datasystem/client/embedded_client_worker_api.h"
 #include "datasystem/client/listen_worker.h"
 #include "datasystem/client/mmap_manager.h"
 #include "datasystem/client/object_cache/client_memory_ref_table.h"
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/client_worker_local_api.h"
+#include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -58,6 +61,7 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
+#include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
@@ -99,13 +103,22 @@ public:
     Status ShutDown(bool &needRollbackState, bool isDestruct = false);
 
     /**
+     * @brief Init embedded client.
+     * @param[in] config Config for embedded client.
+     * @param[in] needRollbackState If the client status is successfully changed to INTERMEDIATE,
+     * the status needs to be rolled back based on the completion status when the request is completed.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status InitEmbedded(const EmbeddedConfig &config, bool &needRollbackState);
+
+    /**
      * @brief Init a object client instance.
      * @param[in] enableHeartbeat If resources do not need to be released, set this parameter to false.
      * @param[out] needRollbackState If the client status is successfully changed to INTERMEDIATE,
      * the status needs to be rolled back based on the completion status when the request is completed.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Init(bool &needRollbackState, bool enableHeartbeat = true, bool initWithWorker = false);
+    Status Init(bool &needRollbackState, bool enableHeartbeat = true);
 
     /**
      * @brief  Invoke worker client to seal the object.
@@ -1138,6 +1151,12 @@ private:
         return clientStateManager_->GetState();
     }
 
+    void ConstructTreadPool();
+
+    Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker);
+
+    Status InitListenWorker();
+
     /**
      * @brief Convert a list of devBlobList to a list of device buffer pointers.
      * @param[in] keys A list of keys, each corresponding to a 2D device blob.
@@ -1182,8 +1201,6 @@ private:
                               std::vector<std::shared_ptr<Buffer>> &bufferList,
                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
 
-    Status InitListenWorker(HeartbeatType heartbeatType);
-
     /**
      * @brief Decrease the object reference count by one and if no one holds its ref, release it.
      * @param[in] shmId The ID of the object to decrease ref
@@ -1200,6 +1217,13 @@ private:
      */
     Status HandleShmRefCountAfterMultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList,
                                               const MultiPublishRspPb &rsp);
+    
+    /**
+     * @brief Parse embedded config.
+     * @param[in] config Embedded config.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status ParseEmbeddedConfig(const EmbeddedConfig &config);
 
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
@@ -1228,7 +1252,8 @@ private:
     TbbGlobalRefTable globalRefCount_;
 
     std::unique_ptr<ClientStateManager> clientStateManager_{ nullptr };
-
+    std::shared_ptr<datasystem::client::EmbeddedClientWorkerApi> embeddedClientWorkerApi_{ nullptr };
+    void *worker_;
     std::shared_ptr<ThreadPool> memoryCopyThreadPool_;
     std::shared_ptr<ThreadPool> asyncSetRPCPool_;
     std::shared_ptr<ThreadPool> asyncGetRPCPool_;

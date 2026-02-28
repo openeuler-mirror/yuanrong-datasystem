@@ -22,7 +22,7 @@
 
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "oc_client_common.h"
 #include "zmq_curve_test_common.h"
 

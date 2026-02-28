@@ -61,7 +61,6 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         common_buffer
         common_ref
         common_iam
-        common_inject
         common_rpc_zmq
         common_event_loop
         common_shared_memory

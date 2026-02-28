@@ -45,6 +45,8 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 
+#include "datasystem/client/embedded_client_worker_api.h"
+
 namespace datasystem {
 static constexpr int MIN_HEARTBEAT_TIMEOUT_MS = 15 * 1000;
 static constexpr int MAX_HEARTBEAT_TIMEOUT_MS = 60 * 1000;  // 60s, Maintain compatibility of EDA scenarios.
@@ -55,11 +57,13 @@ enum class HeartbeatType { NO_HEARTBEAT = 0, RPC_HEARTBEAT = 1, UDS_HEARTBEAT = 
 namespace client {
 
 struct ClientWorkerCommonApiAttribute {
-    ClientWorkerCommonApiAttribute(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection)
+    ClientWorkerCommonApiAttribute(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
+                                   Signature *signature)
         : socketFd_(-1),
           heartbeatType_(heartbeatType),
           hostPort_(std::move(hostPort)),
           enableCrossNodeConnection_(enableCrossNodeConnection),
+          signature_(signature),
           workerSupportMultiShmRefCount_(true)
     {
     }
@@ -113,6 +117,18 @@ struct ClientWorkerCommonApiAttribute {
         return invokeCount_.load(std::memory_order_relaxed);
     }
 
+    /**
+     * @brief Set healthy state.
+     * @param[in] health state.
+     */
+    void SetHealthy(bool healthy)
+    {
+        bool prev = healthy_.exchange(healthy, std::memory_order_relaxed);
+        if (prev != healthy) {
+            LOG(INFO) << FormatString("client %s health state: (%d) -> (%d)", clientId_, prev, healthy);
+        }
+    }
+
     std::atomic<int32_t> socketFd_{ -1 };
     std::string clientId_;
     bool shmEnabled_{ false };
@@ -133,7 +149,13 @@ struct ClientWorkerCommonApiAttribute {
     bool enableCrossNodeConnection_{ false };
     bool workerEnableP2Ptransfer_ = false;
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
+    Signature *signature_;
     bool workerSupportMultiShmRefCount_;
+
+protected:
+    void SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
+
+    int64_t heartBeatTimeoutMs_{ 0 };
 
 private:
     std::atomic<uint64_t> invokeCount_{ 0 };
@@ -141,8 +163,9 @@ private:
 
 class IClientWorkerCommonApi : public ClientWorkerCommonApiAttribute {
 public:
-    IClientWorkerCommonApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection)
-        : ClientWorkerCommonApiAttribute(std::move(hostPort), heartbeatType, enableCrossNodeConnection)
+    IClientWorkerCommonApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
+                           Signature *signature)
+        : ClientWorkerCommonApiAttribute(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature)
     {
     }
 
@@ -213,6 +236,81 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     virtual Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) = 0;
+
+protected:
+    virtual Status SetToken(std::string &token) = 0;
+    virtual void SetTenantId(std::string &tenantId) = 0;
+    template <class ReqType>
+    Status SetTokenAndTenantId(ReqType &req)
+    {
+        std::string &tenantId = *req.mutable_tenant_id();
+        std::string &token = *req.mutable_token();
+        SetTenantId(tenantId);
+        return SetToken(token);
+    }
+
+    /**
+     * @brief Compute a timeout value that will result in a new timeout that is a bit smaller than the input timeout
+     * based on an adjustment algorithm.
+     * @param[in] timeout The original timeout to adjust
+     * @return The adjusted/new timeout value
+     */
+    static int64_t ClientGetRequestTimeout(int32_t timeout)
+    {
+        const int64_t CLIENT_TIMEOUT_MINUS_MILLISECOND = 1000;
+        const float CLIENT_TIMEOUT_DESCEND_FACTOR = 0.9;
+        return std::max(int64_t(timeout * CLIENT_TIMEOUT_DESCEND_FACTOR), timeout - CLIENT_TIMEOUT_MINUS_MILLISECOND);
+    }
+
+    /**
+     * @brief Create connection with worker and register the client.
+     * @param[in] req Register request.
+     * @param[in] timeoutMs Timeout milliseconds.
+     * @param[in] reconnection Check whether the connection is reconnection..
+     * @return Status of the call.
+     */
+    virtual Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false) = 0;
+};
+
+class ClientWorkerLocalCommonApi : virtual public IClientWorkerCommonApi {
+public:
+    explicit ClientWorkerLocalCommonApi(HostPort hostPort,
+                                        std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api,
+                                        void *worker, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
+                                        bool enableCrossNodeConnection = false, Signature *signature = nullptr);
+
+    virtual ~ClientWorkerLocalCommonApi() = default;
+
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+    Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
+                         const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
+    Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                       const std::string &tenantId) override;
+    Status Disconnect(bool isDestruct) override;
+    Status Reconnect() override;
+    std::vector<HostPort> GetStandbyWorkers() override;
+    Status UpdateToken(SensitiveValue &token) override;
+    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
+
+protected:
+    Status SetToken(std::string &tokenRef) override
+    {
+        (void)tokenRef;
+        return Status::OK();
+    }
+
+    void SetTenantId(std::string &tenantId) override
+    {
+        (void)tenantId;
+    }
+
+    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false) override;
+
+    std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api_{ nullptr };
+    void *worker_{ nullptr };
+
+private:
+    void *workerService_{ nullptr };
 };
 
 class ClientWorkerRemoteCommonApi : virtual public IClientWorkerCommonApi {
@@ -251,11 +349,6 @@ public:
     }
 
 protected:
-    /**
-     * @brief Set valid client access token for request.
-     * @param[in] req any type of request.
-     * @return Status of the call.
-     */
     template <class ReqType>
     Status SetToken(ReqType &req)
     {
@@ -267,27 +360,22 @@ protected:
         return Status::OK();
     }
 
-    template <class ReqType>
-    void SetTenantId(ReqType &req)
+    Status SetToken(std::string &tokenRef) override
     {
-        req.set_tenant_id(g_ContextTenantId);
+        SensitiveValue token;
+        RETURN_IF_NOT_OK(clientAccessToken_->UpdateAccessToken(token));
+        if (!token.Empty()) {
+            tokenRef = { token.GetData(), token.GetSize() };
+        }
+        return Status::OK();
     }
 
-    template <class ReqType>
-    Status SetTokenAndTenantId(ReqType &req)
+    void SetTenantId(std::string &tenantId) override
     {
-        SetTenantId(req);
-        return SetToken(req);
+        tenantId = g_ContextTenantId;
     }
 
-    /**
-     * @brief Create connection with worker and register the client.
-     * @param[in] req Register request.
-     * @param[in] timeoutMs Timeout milliseconds.
-     * @param[in] reconnection Check whether the connection is reconnection..
-     * @return Status of the call.
-     */
-    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false);
+    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false) override;
 
     /**
      * @brief Used to receive the fd of the shared memory.
@@ -301,28 +389,9 @@ protected:
     void SetRpcTimeout(int32_t timeout);
 
     /**
-     * @brief Compute a timeout value that will result in a new timeout that is a bit smaller than the input timeout
-     * based on an adjustment algorithm.
-     * @param[in] timeout The original timeout to adjust
-     * @return The adjusted/new timeout value
-     */
-    static int64_t ClientGetRequestTimeout(int32_t timeout)
-    {
-        const int64_t CLIENT_TIMEOUT_MINUS_MILLISECOND = 1000;
-        const float CLIENT_TIMEOUT_DESCEND_FACTOR = 0.9;
-        return std::max(int64_t(timeout * CLIENT_TIMEOUT_DESCEND_FACTOR), timeout - CLIENT_TIMEOUT_MINUS_MILLISECOND);
-    }
-
-    /**
      * @brief close socket fd.
      */
     void CloseSocketFd();
-
-    /**
-     * @brief Set healthy state.
-     * @param[in] health state.
-     */
-    void SetHealthy(bool healthy);
 
     /**
      * @brief Receive client fds after notify worker sending fds.
@@ -352,22 +421,18 @@ protected:
     // Protect 'standbyWorkerAddrs_'
     std::shared_timed_mutex standbyWorkerMutex_;
     std::unordered_set<HostPort> standbyWorkerAddrs_;
-    uint32_t pageSize_{ 0 };  // The page size used when reading files.
     HostPort masterAddress_;
     std::string workerStartId_;  // To judge whether the worker is restarted.
 
     std::unique_ptr<WorkerService_Stub> commonWorkerSession_{ nullptr };
-    double workerTimeoutMult_{ 0.0 };  // Used for changing the default timeout in some cases.
 
     std::atomic_bool storeNotifyReboot_{ false };
     Thread recvPageThread_;
-    Signature *signature_;
     std::string tenantId_;
     std::unique_ptr<ClientAccessToken> clientAccessToken_;
     int32_t requestTimeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };
     bool enableExclusiveConnection_{ false };
-    int64_t heartBeatTimeoutMs_{ 0 };
     struct RecvClientFdState {
         std::unique_ptr<WaitPost> recvPageWaitPost{ nullptr };
         std::unique_ptr<WaitPost> recvPageNotify{ nullptr };
@@ -437,7 +502,6 @@ private:
     void SaveStandbyWorker(const std::string standbyWorker,
                            const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
 
-    void SetHeatbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
     Status FastTransportHandshake(const RegisterClientRspPb &rsp);
 };
 }  // namespace client

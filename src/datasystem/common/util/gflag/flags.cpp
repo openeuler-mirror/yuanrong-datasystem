@@ -38,10 +38,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 
-DS_DEFINE_string(monitor_config_file, "~/datasystem/config/datasystem.config",
-                 "Path of the flag configuration file. The application code dynamically modifies the configuration by "
-                 "monitoring whether the flagfile is updated.");
-DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
+DS_DECLARE_string(monitor_config_file);
 
 namespace datasystem {
 GFlagsMap Flags::GetAllFlagsToMap()

@@ -4,8 +4,7 @@ set(QUEUE_SRCS
 set(QUEUE_LIBS
         ${ZLIB_LIBRARIES}
         ${SECUREC_LIBRARY}
-        common_log
-        common_inject)
+        common_log)
 
 add_library(common_util_queue STATIC ${QUEUE_SRCS})
 target_link_libraries(common_util_queue PRIVATE ${QUEUE_LIBS})

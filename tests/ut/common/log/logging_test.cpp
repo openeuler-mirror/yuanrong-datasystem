@@ -324,7 +324,7 @@ TEST_F(LoggingTest, DISABLED_TestMultiTimeCostLoggerRecord)
     FLAGS_max_log_size = 10;
     FLAGS_log_compress = false;
     (void)MultiTimeCostLogger();
-    Logging::AccessRecorderManagerInstance()->ResetWriteLogger();
+    Logging::AccessRecorderManagerInstance()->ResetWriteLogger(false);
 
     std::stringstream ssTimeCostFile;
     ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*";

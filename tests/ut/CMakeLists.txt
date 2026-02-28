@@ -28,7 +28,7 @@ set(DS_UT_DEPEND_LIBS
         worker_object_cache
         worker_hash_ring
         worker_client_manager
-        ds_worker
+        datasystem_worker_static
         )
 
 #include dirs
@@ -61,7 +61,7 @@ add_executable(ds_ut_stream ${DS_UT_STREAM_SRCS} ${UT_COMMON_SRCS})
 add_executable(ds_ut_object ${DS_UT_OBJECT_SRCS} ${UT_COMMON_SRCS})
 
 target_link_libraries(ds_ut PRIVATE ${DS_UT_DEPEND_LIBS})
-target_link_libraries(ds_ut_stream PRIVATE ${DS_UT_DEPEND_LIBS} worker_stream_cache ds_worker)
+target_link_libraries(ds_ut_stream PRIVATE ${DS_UT_DEPEND_LIBS} worker_stream_cache datasystem_worker_static)
 target_link_libraries(ds_ut_object PRIVATE ${DS_UT_DEPEND_LIBS})
 
 set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
@@ -71,10 +71,10 @@ target_compile_definitions(ds_ut_stream PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_object PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)
-    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
         CACHE STRING "")
 else()
-    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
         CACHE STRING "")
 endif()
 
@@ -89,3 +89,9 @@ add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
 target_link_libraries(flags_ut ds_flags GTest::gtest GTest::gmock)
 add_datasystem_test(flags_ut)
+
+set(EMBEDDED_CLIENT_WORKER_API_UT_DEPEND_LIBS
+        GTest::gtest
+        GTest::gmock
+        embedded_client_worker_api
+        common_util)

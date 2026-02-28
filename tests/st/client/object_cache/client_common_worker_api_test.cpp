@@ -19,7 +19,8 @@
  */
 
 #include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/inject/inject_point.h"

@@ -28,10 +28,8 @@
 #include "datasystem/protos/rpc_option.pb.h"
 #include "datasystem/common/log/log.h"
 
-DS_DEFINE_string(
-    unix_domain_socket_dir, "~/datasystem/unix_domain_socket_dir",
-    "The directory to store unix domain socket file. The UDS generates temporary files in this path. Max lenth: 80");
-DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);
+DS_DECLARE_string(unix_domain_socket_dir);
+
 namespace datasystem {
 RpcServiceCfg::RpcServiceCfg()
     : numRegularSockets_(RPC_NUM_BACKEND),

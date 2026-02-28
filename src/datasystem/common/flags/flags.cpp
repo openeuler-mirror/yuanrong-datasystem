@@ -29,6 +29,11 @@ void ParseCommandLineFlags(int argc, char **argv)
     FlagManager::GetInstance()->ParseCommandLineFlags(argc, argv);
 }
 
+bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
+{
+    return FlagManager::GetInstance()->ParseCommandLineFlags(config, errMsg);
+}
+
 std::string ProgramInvocationShortName()
 {
     return FlagManager::GetInstance()->ProgramInvocationShortName();

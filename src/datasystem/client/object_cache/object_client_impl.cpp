@@ -40,7 +40,7 @@
 
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/mmap/immap_table_entry.h"
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -218,7 +218,6 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 
     // Step0: notify wait post.
     switchPost_.Set();
-
     // Step1: Shutdown heartbeat.
     for (size_t i = 0; i < listenWorker_.size(); i++) {
         if (listenWorker_[i] != nullptr) {
@@ -241,12 +240,93 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     // The destructor of devOcImpl_ should occur after the client disconnect request so that the device asynchronous
     // threads can exit quickly.
     devOcImpl_.reset();
-
+    if (worker_ && embeddedClientWorkerApi_) {
+        embeddedClientWorkerApi_->WorkerDestroy(worker_);
+        worker_ = nullptr;
+    }
     return rc;
 }
 
-Status ObjectClientImpl::InitListenWorker(HeartbeatType heartbeatType)
+Status ObjectClientImpl::ParseEmbeddedConfig(const EmbeddedConfig &config)
 {
+    const auto &args = config.GetArgs();
+    if (args.find("system_access_key") != args.end() && args.find("system_secret_key") != args.end()) {
+        signature_->SetClientAkSk(args.at("system_access_key"), args.at("system_secret_key"));
+    }
+    if (args.find("connectTimeoutMs") != args.end()) {
+        int result = 0;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Uri::StrToInt(args.at("connectTimeoutMs").c_str(), result),
+                                             K_RUNTIME_ERROR, "connectTimeoutMs to int failed");
+        connectTimeoutMs_ = result;
+    }
+    return Status::OK();
+}
+
+Status ObjectClientImpl::InitEmbedded(const EmbeddedConfig &config, bool &needRollbackState)
+{
+    auto rc = clientStateManager_->ProcessInit(needRollbackState);
+    if (!needRollbackState) {
+        return rc;
+    }
+    RETURN_IF_NOT_OK(ParseEmbeddedConfig(config));
+    embeddedClientWorkerApi_ = std::make_shared<datasystem::client::EmbeddedClientWorkerApi>();
+    RETURN_IF_NOT_OK(embeddedClientWorkerApi_->LoadPlugin());
+    worker_ = embeddedClientWorkerApi_->CreateWorker();
+    CHECK_FAIL_RETURN_STATUS(worker_ != nullptr, K_RUNTIME_ERROR, "create worker failed");
+    RETURN_IF_NOT_OK(embeddedClientWorkerApi_->InitEmbeddedWorker(config, worker_));
+    RETURN_IF_NOT_OK(ipAddress_.ParseString(config.GetArgs().at("worker_address")));
+    FlagsMonitor::GetInstance()->Start();
+    LOG(INFO) << "Start to init embedded client";
+    RETURN_IF_NOT_OK(InitClientWorkerConnect(false, true));
+    return Status::OK();
+}
+
+void ObjectClientImpl::ConstructTreadPool()
+{
+    const size_t threadCount = 8;
+    asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
+    asyncGetCopyPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_copy");
+    asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
+    asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
+    asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
+    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
+}
+
+Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker)
+{
+    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
+    workerApi_.resize(STANDBY2_WORKER + 1);
+    auto &workerApi = workerApi_[LOCAL_WORKER];
+    if (!initWithWorker) {
+        workerApi =
+            std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
+                                                    tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
+    } else {
+        workerApi_[LOCAL_WORKER] = std::make_shared<ClientWorkerLocalApi>(ipAddress_, embeddedClientWorkerApi_, worker_,
+                                                                          heartbeatType, signature_.get(), false);
+    }
+    RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_));
+    mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
+    ConstructTreadPool();
+
+    RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
+        &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
+    clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
+    // Start worker down listen.
+    heartbeatType = workerApi->heartbeatType_;
+    RETURN_IF_NOT_OK(InitListenWorker());
+    devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
+    RETURN_IF_NOT_OK(devOcImpl_->Init());
+    memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
+    StartPerfThread();
+    InitParallelFor();
+    return Status::OK();
+}
+
+Status ObjectClientImpl::InitListenWorker()
+{
+    auto heartbeatType = workerApi_[LOCAL_WORKER]->heartbeatType_;
     listenWorker_.resize(STANDBY2_WORKER + 1);
     listenWorker_[LOCAL_WORKER] = std::make_shared<client::ListenWorker>(workerApi_[LOCAL_WORKER], heartbeatType,
                                                                          LOCAL_WORKER, asyncSwitchWorkerPool_.get());
@@ -258,10 +338,11 @@ Status ObjectClientImpl::InitListenWorker(HeartbeatType heartbeatType)
             [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
     }
     listenWorker_[LOCAL_WORKER]->SetIsLocalWorker(true);
-    return listenWorker_[LOCAL_WORKER]->StartListenWorker();
+    RETURN_IF_NOT_OK(listenWorker_[LOCAL_WORKER]->StartListenWorker());
+    return Status::OK();
 }
 
-Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, bool initWithWorker)
+Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
 {
     Logging::GetInstance()->Start(LOG_FILENAME, true);
     FlagsMonitor::GetInstance()->Start();
@@ -281,38 +362,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, boo
 
     LOG(INFO) << "Start to init worker client at address: " << hostPortStr;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
-    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
-    HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
-    workerApi_.resize(STANDBY2_WORKER + 1);
-    auto &workerApi = workerApi_[LOCAL_WORKER];
-    if (!initWithWorker) {
-        workerApi =
-            std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
-                                                    tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
-    } else {
-        // local worker api
-    }
-    RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_));
-    mmapManager_ = std::make_unique<client::MmapManager>(workerApi, false);
-    const size_t threadCount = 8;
-    asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
-    asyncGetCopyPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_copy");
-    asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
-    asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
-    asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
-    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
-    asyncReleasePool_->SetWarnLevel(ThreadPool::WarnLevel::NO_WARN);
-    RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
-        &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
-    clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
-    // Start worker down listen.
-    heartbeatType = workerApi->heartbeatType_;
-    RETURN_IF_NOT_OK(InitListenWorker(heartbeatType));
-    devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
-    RETURN_IF_NOT_OK(devOcImpl_->Init());
-    memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
-    StartPerfThread();
-    InitParallelFor();
+    RETURN_IF_NOT_OK(InitClientWorkerConnect(enableHeartbeat, false));
     return Status::OK();
 }
 
@@ -506,7 +556,8 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
         }
         HeartbeatType heartbeatType = currentApi->heartbeatType_;
         workerApi_[next] = currentApi->CloneWith(standbyWorker, cred_, heartbeatType, token_, signature_.get(),
-                                                 tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
+                                                 tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_,
+                                                 embeddedClientWorkerApi_, worker_);
         workerApi_[next]->isUseStandbyWorker_ = true;
         Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_);
         if (rc.IsError()) {
@@ -1344,7 +1395,7 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                          uint64_t length)
 {
-    auto api = std::dynamic_pointer_cast<ClientWorkerRemoteApi>(workerApi_[LOCAL_WORKER]);
+    auto api = std::dynamic_pointer_cast<IClientWorkerApi>(workerApi_[LOCAL_WORKER]);
     RETURN_RUNTIME_ERROR_IF_NULL(api);
     return api->SendBufferViaUb(bufferInfo, data, length);
 }
@@ -2901,7 +2952,9 @@ void ObjectClientImpl::ShutdownPerfThread()
         perfExitFlag_ = true;
         perfCv_.notify_all();
     }
-    perfThread_->join();
+    if (perfThread_->joinable()) {
+        perfThread_->join();
+    }
 #endif
 }
 

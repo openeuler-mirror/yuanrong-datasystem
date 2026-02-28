@@ -57,6 +57,24 @@
 
 namespace datasystem {
 namespace client {
+void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
+{
+    std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
+    uint64_t clientDeadTimeoutMs = rsp.client_dead_timeout_s() * TO_MILLISECOND;
+    // Compatible with old versions of worker
+    clientDeadTimeoutMs_ = clientDeadTimeoutMs == 0ul ? MIN_HEARTBEAT_TIMEOUT_MS : clientDeadTimeoutMs;
+    if (clientDeadTimeoutMs > 0) {
+        const int32_t retryNum = 3;  // Make sure the heartbeat is retried twice before worker timeout.
+        heartBeatTimeoutMsOptions.emplace_back(clientDeadTimeoutMs / retryNum);
+    }
+    heartBeatTimeoutMs_ = *std::min_element(heartBeatTimeoutMsOptions.begin(), heartBeatTimeoutMsOptions.end());
+    uint64_t clientReconnectWaitMs = rsp.client_reconnect_wait_s() * TO_MILLISECOND;
+    const int32_t reduceRatio = 5;
+    heartBeatIntervalMs_ =
+        std::min({ std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
+                   static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS),
+                   clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
+}
 
 // Static/global id generator init
 std::atomic<int32_t> ClientWorkerRemoteCommonApi::exclusiveIdGen_ = 0;
@@ -64,14 +82,132 @@ std::atomic<int32_t> ClientWorkerRemoteCommonApi::exclusiveIdGen_ = 0;
 IClientWorkerCommonApi::~IClientWorkerCommonApi() = default;
 ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
 
+ClientWorkerLocalCommonApi::ClientWorkerLocalCommonApi(
+    HostPort hostPort, std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api, void *worker,
+    HeartbeatType heartbeatType, bool enableCrossNodeConnection, Signature *signature)
+    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, false, signature),
+      api_(std::move(api)),
+      worker_(worker)
+{
+    (void)enableCrossNodeConnection;
+}
+
+Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+{
+    (void)requestTimeoutMs;
+    connectTimeoutMs_ = connectTimeoutMs;
+    workerService_ = api_->GetWorkerService(worker_);
+    RegisterClientReqPb req;
+    RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs));
+    return Status::OK();
+}
+
+Status ClientWorkerLocalCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime,
+                                                 bool &isWorkerVoluntaryScaleDown,
+                                                 const std::vector<int64_t> &releasedFds,
+                                                 std::vector<int64_t> &expiredWorkerFds)
+{
+    (void)remainTime;
+    (void)releasedFds;
+    (void)expiredWorkerFds;
+    HeartbeatReqPb req;
+    HeartbeatRspPb rsp;
+    req.set_client_id(clientId_);
+    req.set_removable(removable_.load(std::memory_order_relaxed));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    Status status = api_->WorkerHeartbeat(workerService_, req, rsp);
+    workerReboot = false;
+    clientRemoved = false;
+    isWorkerVoluntaryScaleDown = false;
+    if (status.IsOk()) {
+        clientRemoved = rsp.client_removed();
+        isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
+        SetHealthy(!rsp.unhealthy());
+    }
+    return status;
+}
+
+Status ClientWorkerLocalCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                                               const std::string &tenantId)
+{
+    (void)workerFds;
+    (void)clientFds;
+    (void)tenantId;
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support GetClientFd in embedded scenario");
+}
+
+Status ClientWorkerLocalCommonApi::UpdateToken(SensitiveValue &token)
+{
+    (void)token;
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support UpdateToken in embedded scenario");
+}
+
+Status ClientWorkerLocalCommonApi::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+{
+    (void)accessKey;
+    (void)secretKey;
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support UpdateAkSk in embedded scenario");
+}
+
+std::vector<HostPort> ClientWorkerLocalCommonApi::GetStandbyWorkers()
+{
+    LOG(ERROR) << "Not support GetStandbyWorkers in embedded scenario";
+    return {};
+}
+
+Status ClientWorkerLocalCommonApi::Disconnect(bool isDestruct)
+{
+    (void)isDestruct;
+    LOG(INFO) << FormatString("Client %s sends exit notice to worker.", clientId_);
+    DisconnectClientReqPb req;
+    DisconnectClientRspPb rsp;
+    req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    return api_->WorkerDisconnectClient(workerService_, req, rsp);
+}
+
+Status ClientWorkerLocalCommonApi::Reconnect()
+{
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support Reconnect in embedded scenario");
+}
+
+Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection)
+{
+    (void)reconnection;
+    shmEnabled_ = true;
+    heartbeatType_ = HeartbeatType::RPC_HEARTBEAT;
+    req.set_server_fd(INVALID_SOCKET_FD);
+    req.set_version(DATASYSTEM_VERSION);
+    req.set_git_hash(GetGitHash());
+    req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
+    req.set_shm_enabled(shmEnabled_);
+    req.set_tenant_id("");
+    req.set_enable_cross_node(enableCrossNodeConnection_);
+    req.set_enable_exclusive_connection(false);
+    req.set_pod_name(Logging::PodName());
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    RegisterClientRspPb rsp;
+    Status status;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api_->WorkerRegisterClient(workerService_, req, rsp), "Register client failed");
+    VLOG(1) << "Register response: " << rsp.DebugString();
+    enableHugeTlb_ = rsp.enable_huge_tlb();
+    clientId_ = rsp.client_id();
+    lockId_ = rsp.lock_id();
+    (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
+    shmThreshold_ = rsp.shm_threshold();
+    workerId_ = rsp.worker_uuid();
+    workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
+    SetHealthy(!rsp.unhealthy());
+    SetHeartbeatProperties(timeoutMs, rsp);
+    return Status::OK();
+}
+
 ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred,
                                                          HeartbeatType heartbeatType, SensitiveValue token,
                                                          Signature *signature, std::string tenantId,
                                                          bool enableCrossNodeConnection, bool enableExclusiveConnection)
-    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection),
+    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature),
       cred_(cred),
-      pageSize_(0),
-      signature_(signature),
       tenantId_(std::move(tenantId)),
       enableExclusiveConnection_(enableExclusiveConnection)
 {
@@ -124,7 +260,7 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
     CHECK_FAIL_RETURN_STATUS(TimerQueue::GetInstance()->Initialize(), K_RUNTIME_ERROR, "TimerQueue init failed!");
     RegisterClientReqPb req;
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs));
-    VLOG(1) << "The new client id is: " << clientId_ << ", Received pageSize= " << pageSize_ << " from worker.";
+    VLOG(1) << "The new client id is: " << clientId_;
     return Status::OK();
 }
 
@@ -336,14 +472,6 @@ void ClientWorkerRemoteCommonApi::CloseSocketFd()
     INJECT_POINT("client.CloseSocketFd",
                  [](int delayMs) { std::this_thread::sleep_for(std::chrono::milliseconds(delayMs)); });
     socketFd_ = INVALID_SOCKET_FD;
-}
-
-void ClientWorkerRemoteCommonApi::SetHealthy(bool healthy)
-{
-    bool prev = healthy_.exchange(healthy, std::memory_order_relaxed);
-    if (prev != healthy) {
-        LOG(INFO) << FormatString("client %s health state: (%d) -> (%d)", clientId_, prev, healthy);
-    }
 }
 
 Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs)
@@ -583,32 +711,11 @@ Status ClientWorkerRemoteCommonApi::Reconnect()
     return Status::OK();
 }
 
-void ClientWorkerRemoteCommonApi::SetHeatbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
-{
-    std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
-    uint64_t clientDeadTimeoutMs = rsp.client_dead_timeout_s() * TO_MILLISECOND;
-    // Compatible with old versions of worker
-    clientDeadTimeoutMs_ = clientDeadTimeoutMs == 0ul ? MIN_HEARTBEAT_TIMEOUT_MS : clientDeadTimeoutMs;
-    if (clientDeadTimeoutMs > 0) {
-        const int32_t retryNum = 3;  // Make sure the heartbeat is retried twice before worker timeout.
-        heartBeatTimeoutMsOptions.emplace_back(clientDeadTimeoutMs / retryNum);
-    }
-    heartBeatTimeoutMs_ = *std::min_element(heartBeatTimeoutMsOptions.begin(), heartBeatTimeoutMsOptions.end());
-    uint64_t clientReconnectWaitMs = rsp.client_reconnect_wait_s() * TO_MILLISECOND;
-    const int32_t reduceRatio = 5;
-    heartBeatIntervalMs_ =
-        std::min({ std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
-                   static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS),
-                   clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
-}
-
 void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
     enableHugeTlb_ = rsp.enable_huge_tlb();
-    workerTimeoutMult_ = rsp.quorum_timeout_mult();
     clientId_ = rsp.client_id();
     workerStartId_ = rsp.worker_start_id();
-    pageSize_ = static_cast<uint32_t>(rsp.page_size());
     lockId_ = rsp.lock_id();
     (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
     shmThreshold_ = rsp.shm_threshold();
@@ -621,7 +728,7 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
         enableExclusiveConnection_ = false;
     }
     workerSupportMultiShmRefCount_ = rsp.support_multi_shm_ref_count();
-    SetHeatbeatProperties(timeoutMs, rsp);
+    SetHeartbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
     LOG_IF_ERROR(FastTransportHandshake(rsp), "Fast transport handshake failed, fall back to TCP/IP communication.");

@@ -372,6 +372,36 @@ FlagManager *FlagManager::GetInstance()
     return &manager;
 }
 
+bool FlagManager::ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
+{
+    for (const auto &flagKv : config.GetArgs()) {
+        if (flagKv.first == "connectTimeoutMs") {
+            continue;
+        }
+        auto it = flagMap_.find(flagKv.first);
+        if (it == flagMap_.end()) {
+            (void)unknownFlags_.emplace(flagKv.first, "ERROR: unknown command line flag '" + flagKv.first + "'\n");
+            continue;
+        }
+        auto &flag = it->second;
+        if (flagKv.second.empty()) {
+            errorFlags_[flagKv.first] =
+                "Error: flag '" + flagKv.first + "' is missing its argument; flag description: " + flag.meaning_ + "\n";
+            continue;
+        }
+        (void)AssignFlagValue(flag, flagKv.second);
+    }
+
+    // 3. Validate the default value.
+    ValidateDefaultFlagsLocked();
+
+    // 4. Report error and exit if need.
+    if (CheckAndReportErrors(errMsg)) {
+        return false;
+    }
+    return true;
+}
+
 void FlagManager::ParseCommandLineFlags(int argc, char **argv)
 {
     if (argc == 0 || argv == nullptr || *argv == nullptr) {
@@ -433,7 +463,8 @@ void FlagManager::ParseCommandLineFlags(int argc, char **argv)
     ValidateDefaultFlagsLocked();
 
     // 4. Report error and exit if need.
-    if (CheckAndReportErrors()) {
+    std::string unUseErrMsg;
+    if (CheckAndReportErrors(unUseErrMsg)) {
         ugly_exit(1);
     }
 }
@@ -623,7 +654,7 @@ void FlagManager::AssignFlagValue(Flag &flag, const std::string &value)
     }
 }
 
-bool FlagManager::CheckAndReportErrors() const
+bool FlagManager::CheckAndReportErrors(std::string &errMsg) const
 {
     bool error = false;
     std::stringstream ss;
@@ -640,7 +671,7 @@ bool FlagManager::CheckAndReportErrors() const
             error = true;
         }
     }
-
+    errMsg = ss.str();
     if (error) {
         ReportError("%s", ss.str().c_str());
     }

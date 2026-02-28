@@ -18,7 +18,9 @@
  * Description: Client mmap management.
  */
 #include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap/shm_mmap_table.h"
 
+#include "datasystem/client/mmap/embedded_mmap_table.h"
 #include "datasystem/client/mmap/embedded_mmap_table.h"
 #include "datasystem/client/mmap/shm_mmap_table.h"
 
@@ -76,6 +78,7 @@ Status MmapManager::LookupUnitsAndMmapFds(const std::string &tenantId, std::vect
     }
 
     if (!toRecvFds.empty()) {
+        // Notify worker to send fds and receive the client fd.
         if (!enableEmbeddedClient_) {
             RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
             // Mmap the new client fd.
@@ -84,7 +87,7 @@ Status MmapManager::LookupUnitsAndMmapFds(const std::string &tenantId, std::vect
             }
         } else {
             for (size_t i = 0; i < toRecvFds.size(); i++) {
-                static const int unusedClientFd = 0;  // for embeddedclient, no need mmap client fd.
+                static const int unusedClientFd = 0; // for embeddedclient, no need mmap client fd.
                 RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(unusedClientFd, toRecvFds[i], mmapSizes[i], tenantId));
             }
         }

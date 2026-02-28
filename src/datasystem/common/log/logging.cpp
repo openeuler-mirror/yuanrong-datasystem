@@ -58,8 +58,6 @@ constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, erro
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
 constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;  // Maximum allowed by spdlog's rotating_file_sink.
 
-DS_DEFINE_string(log_filename, "",
-                 "Prefix of log filename, default is program invocation short name. Use standard characters only.");
 DS_DEFINE_bool(log_async, DEFAULT_LOG_ASYNC_FLAG, "Enable asynchronous writing to log files.");
 DS_DEFINE_uint32(
     max_log_file_num, DEFAULT_MAX_LOG_FILE_NUM,
@@ -73,8 +71,6 @@ DS_DEFINE_uint32(log_retention_day, DEFAULT_LOG_RETENTION_DAY,
                  "greater than log_retention_day days will be "
                  "unlink()ed. If log_retention_day is equal 0, will not unlink log file by time.");
 DS_DEFINE_int32(logbufsecs, DEFAULT_LOG_BUF_SECS, "Buffer log messages for at most this many seconds.");
-DS_DEFINE_string(log_dir, GetStringFromEnv("GOOGLE_LOG_DIR", ""),
-                 "If specified, logfiles are written into this directory instead of the default logging directory.");
 DS_DEFINE_int32(logfile_mode, 0640, "Log file mode/permissions.");
 DS_DEFINE_uint32(max_log_size, DEFAULT_MAX_LOG_SIZE_MB,
                  "approx. maximum log file size (in MB). A value of 0 will be silently overridden to 1.");
@@ -87,10 +83,11 @@ DS_DEFINE_uint32(stderrthreshold, 2,
                  "addition to logfiles.  This flag obsoletes --alsologtostderr.");
 DS_DEFINE_int32(minloglevel, 0, "Messages logged at a lower level than this don't actually get logged anywhere.");
 DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of async logger's message queue.");
-DS_DEFINE_validator(log_filename, &Validator::ValidateEligibleChar);
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(cluster_name);
+DS_DECLARE_string(log_dir);
+DS_DECLARE_string(log_filename);
 
 using namespace std::chrono;
 
@@ -158,7 +155,6 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
         CHECK_STRNE(programName.c_str(), "UNKNOWN") << ": must initialize flags before logging";
         FLAGS_log_filename = std::move(programName);
     }
-
     std::vector<std::string> fileNamePatterns = { (FLAGS_log_filename + ".INFO").c_str(),
                                                   (FLAGS_log_filename + ".WARNING").c_str(),
                                                   (FLAGS_log_filename + ".ERROR").c_str() };
@@ -202,7 +198,7 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
     }
 
     accessRecorderManagerInstance_ = std::make_unique<AccessRecorderManager>();
-    auto rc = accessRecorderManagerInstance_->Init(isClient_);
+    auto rc = accessRecorderManagerInstance_->Init(isClient_, isEmbeddedClient_);
     if (rc.IsError()) {
         return false;
     }
@@ -322,7 +318,7 @@ Logging::~Logging()
     }
 }
 
-void Logging::Start(const std::string logFilename, bool isClient, uint32_t logProcessInterval)
+void Logging::Start(const std::string logFilename, bool isClient, uint32_t logProcessInterval, bool isEmbeddedClient)
 {
     WriteLock lock(&mux_);
     if (IsLoggingInitialized()) {
@@ -330,7 +326,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     }
 
     isClient_ = isClient;
-
+    isEmbeddedClient_ = isEmbeddedClient;
     std::string clientLogName;
     if (isClient_) {
         GetInstance()->InitClientConfig();
@@ -345,7 +341,6 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     } else {
         clientLogName = logFilename;
     }
-
     std::string errMsg;
     (void)SetCommandLineOption("log_filename", clientLogName, errMsg);
     if (GetInstance()->InitLoggingWrapper(logProcessInterval)) {

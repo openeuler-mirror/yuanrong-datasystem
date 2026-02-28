@@ -22,7 +22,7 @@
 #include "oc_client_common.h"
 
 #include "datasystem/client/mmap_manager.h"
-#include "datasystem/client/object_cache/client_worker_api.h"
+#include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
 
 namespace datasystem {

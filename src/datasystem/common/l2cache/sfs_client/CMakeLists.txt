@@ -7,7 +7,6 @@ set(SFS_CLIENT_DEPEND_LIBS
         common_util
         common_log
         l2cache
-        common_inject
         )
 
 target_link_libraries(common_sfs_client PRIVATE ${SFS_CLIENT_DEPEND_LIBS})

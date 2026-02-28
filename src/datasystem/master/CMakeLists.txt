@@ -15,7 +15,6 @@ set(MASTER_SRCS
 set(MASTER_DEPEND_LIBS
         common_ak_sk
         common_encrypt
-        common_inject
         common_log
         common_perf
         common_rocksdb
