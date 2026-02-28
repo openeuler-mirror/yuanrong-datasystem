@@ -21,9 +21,11 @@
 
 #include "common/rdma/mimic_remote_server.h"
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
+#include "datasystem/common/log/log.h"
 
 #include <cstdint>
 #include <cstring>
+#include <poll.h>
 
 namespace datasystem {
 
@@ -33,6 +35,8 @@ MimicRemoteServer::MimicRemoteServer(ucp_context_h &context) : context_(context)
 
 MimicRemoteServer::~MimicRemoteServer()
 {
+    StopProgressThread();
+
     if (localWorkerAddr_) {
         ds_ucp_worker_release_address(worker_, localWorkerAddr_);
         localWorkerAddr_ = nullptr;
@@ -57,7 +61,7 @@ void MimicRemoteServer::InitUcpWorker()
 {
     ucp_worker_params_t workerParams = {};
     workerParams.field_mask = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-    workerParams.thread_mode = UCS_THREAD_MODE_SINGLE;
+    workerParams.thread_mode = UCS_THREAD_MODE_MULTI;
 
     ds_ucp_worker_create(context_, &workerParams, &worker_);
     size_t workerAddrLen;
@@ -65,6 +69,68 @@ void MimicRemoteServer::InitUcpWorker()
     ds_ucp_worker_get_address(worker_, &localWorkerAddr_, &workerAddrLen);
 
     localWorkerAddrStr_ = std::string(reinterpret_cast<const char *>(localWorkerAddr_), workerAddrLen);
+
+    StartProgressThread();
+}
+
+void MimicRemoteServer::StartProgressThread()
+{
+    if (running_.load()) {
+        return;
+    }
+    running_.store(true);
+    progressThread_ = std::make_unique<Thread>(&MimicRemoteServer::ProgressLoop, this);
+}
+
+void MimicRemoteServer::StopProgressThread()
+{
+    if (!running_.load()) {
+        return;
+    }
+
+    running_.store(false);
+    if (progressThread_ && progressThread_->joinable()) {
+        progressThread_->join();
+        progressThread_.reset();
+    }
+}
+
+void MimicRemoteServer::ProgressLoop()
+{
+    int fd;
+    ucs_status_t status = ds_ucp_worker_get_efd(worker_, &fd);
+    if (status != UCS_OK) {
+        LOG(ERROR) << " Failed to get efd. Status: " << ds_ucs_status_string(status);
+    }
+
+    while (running_.load()) {
+        bool innerBreak = false;
+        while (ds_ucp_worker_progress(worker_)) {
+            if (!running_.load()) {
+                innerBreak = true;
+                break;
+            }
+        };
+
+        if (innerBreak) {
+            break;
+        }
+
+        status = ds_ucp_worker_arm(worker_);
+        if (status == UCS_ERR_BUSY) {
+            // meaning there are new jobs in QP again, just restart the while loop
+            continue;
+        }
+        if (status != UCS_OK) {
+            LOG(ERROR) << " Failed to arm worker. Status: " << ds_ucs_status_string(status);
+        }
+
+        struct pollfd pfd = { fd, POLLIN, 0 };
+        int ret = poll(&pfd, 1, 5);
+        if (ret < 0 && errno != EINTR) {
+            LOG(ERROR) << " Progress thread failed to poll. Error: " << strerror(errno);
+        }
+    }
 }
 
 void MimicRemoteServer::InitUcpSegment()

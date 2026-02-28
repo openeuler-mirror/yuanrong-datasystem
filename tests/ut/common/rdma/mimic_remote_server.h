@@ -25,9 +25,11 @@
 #include <cstdlib>
 #include <string>
 #include <memory>
+#include <atomic>
 
 #include "ucp/api/ucp.h"
 #include "ucp/api/ucp_def.h"
+#include "datasystem/common/util/thread.h"
 
 namespace datasystem {
 
@@ -63,6 +65,9 @@ public:
     }
 
 private:
+    void StartProgressThread();
+    void ProgressLoop();
+    void StopProgressThread();
     ucp_context_h context_;
 
     ucp_worker_h worker_ = nullptr;
@@ -75,6 +80,9 @@ private:
 
     // utility variables
     std::string packedRkey_;
+
+    std::unique_ptr<datasystem::Thread> progressThread_;
+    std::atomic<bool> running_{false}; 
 };
 
 }  // namespace datasystem
