@@ -37,6 +37,7 @@ const char *HOST_IP = "127.0.0.1";
 constexpr int WORKER_NUM = 3;
 const int K_2 = 2, K_5 = 5, K_10 = 10, K_100 = 100;
 constexpr int64_t SHM_SIZE = 500 * 1024;
+constexpr int ABNORMAL_EXIT_CODE = -2;
 }  // namespace
 class UrmaObjectClientTest : public OCClientCommon {
 public:
@@ -76,6 +77,40 @@ public:
     void TearDown() override
     {
         ExternalClusterTest::TearDown();
+    }
+
+    static pid_t ForkForTest(std::function<void()> func)
+    {
+        pid_t child = fork();
+        if (child == 0) {
+            // avoid zmq problem when fork.
+            std::thread thread(func);
+            thread.join();
+            exit(0);
+        }
+        return child;
+    }
+
+    int WaitForChildFork(pid_t pid)
+    {
+        if (pid == 0) {
+            return 0;
+        }
+        int statLoc;
+        if (waitpid(pid, &statLoc, 0) < 0) {
+            LOG(ERROR) << FormatString("waitpid: %d error!", pid);
+            return -1;
+        }
+        if (WIFEXITED(statLoc)) {
+            const int exitStatus = WEXITSTATUS(statLoc);
+            if (exitStatus != 0) {
+                LOG(ERROR) << FormatString("Non-zero exit status %d from test!", exitStatus);
+            }
+            return exitStatus;
+        } else {
+            LOG(ERROR) << FormatString("Non-normal exit %d from child!, status: %d", pid, statLoc);
+            return ABNORMAL_EXIT_CODE;
+        }
     }
 };
 
@@ -167,6 +202,40 @@ TEST_F(UrmaObjectClientTest, TestRepeatedSetOOM)
             // so then the second half of the puts can succeed without OOM.
             sleep(5);
         }
+    }
+}
+
+TEST_F(UrmaObjectClientTest, TestRepeatedForkGet)
+{
+    const int sizePerPut = 8 * 1024 * 1024;
+    const int numObjects = 10;
+    std::vector<std::string> objectKeys;
+    for (int i = 0; i < numObjects; i++) {
+        objectKeys.emplace_back(NewObjectKey());
+    }
+    std::string data = GenRandomString(sizePerPut);
+
+    auto child = ForkForTest([this, objectKeys, data]() {
+        std::shared_ptr<KVClient> client;
+        InitTestKVClient(0, client);
+        for (const auto &objectKey : objectKeys) {
+            DS_ASSERT_OK(client->Set(objectKey, data));
+        }
+    });
+    DS_ASSERT_TRUE(WaitForChildFork(child), 0);
+    const int numSubprocesses = 5;
+    for (int i = 0; i < numSubprocesses; i++) {
+        child = ForkForTest([this, objectKeys, data]() {
+            for (int j = 0; j < numObjects; j++) {
+                std::shared_ptr<KVClient> client;
+                InitTestKVClient(0, client);
+                std::vector<Optional<Buffer>> buffers;
+                DS_ASSERT_OK(client->Get({ objectKeys[j] }, buffers));
+                ASSERT_TRUE(NotExistsNone(buffers));
+                AssertBufferEqual(*buffers[0], data);
+            }
+        });
+        DS_ASSERT_TRUE(WaitForChildFork(child), 0);
     }
 }
 
@@ -494,7 +563,6 @@ TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
 
     DS_ASSERT_NOT_OK(client1->Get(keys, valuesGet));
 }
-
 
 TEST_F(UrmaObjectClientDisableDataReplicationTest, TestMultiLocalGet)
 {

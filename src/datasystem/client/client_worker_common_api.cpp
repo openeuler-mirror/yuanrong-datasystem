@@ -647,7 +647,7 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientR
             TbbTransportStubTable::accessor acc;
             if (tarnsportApiTable_.insert(acc, endPoint)) {
                 std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi> transportApi =
-                    std::make_shared<datasystem::object_cache::WorkerRemoteWorkerTransApi>(hostPort_);
+                    std::make_shared<datasystem::object_cache::WorkerRemoteWorkerTransApi>(hostPort_, clientId_);
                 RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
                 acc->second = std::move(transportApi);
             }
