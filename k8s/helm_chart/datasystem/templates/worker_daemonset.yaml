@@ -249,6 +249,14 @@ spec:
           {{- if $.Values.global.performance.enableRdma }}
           privileged: true
           runAsUser: 0
+          {{- else if $.Values.global.performance.enableHugeTlb }}
+          runAsUser: 0
+          capabilities:
+            add:
+              - IPC_LOCK
+            drop:
+              - ALL
+          allowPrivilegeEscalation: false
           {{- else }}
           allowPrivilegeEscalation: false
           capabilities:
@@ -393,9 +401,15 @@ spec:
           limits:
             cpu: {{ $spec.resources.limits.cpu }}
             memory: {{ $spec.resources.limits.memory }}
+            {{- if $.Values.global.performance.enableHugeTlb }}
+            hugepages-2Mi: {{ $.Values.global.resources.hugepages2Mi}}
+            {{- end }}
           requests:
             cpu: {{ $spec.resources.requests.cpu }}
             memory: {{ $spec.resources.requests.memory }}
+            {{- if $.Values.global.performance.enableHugeTlb }}
+            hugepages-2Mi: {{ $.Values.global.resources.hugepages2Mi}}
+            {{- end }}
         volumeMounts:
         {{- if $.Values.global.rpc.enableCurveZmq }}
         - mountPath: {{ $.Values.global.rpc.curveKeyDir }}
@@ -416,6 +430,10 @@ spec:
           name: dev-ib
         - mountPath: /sys/class/infiniband
           name: sys-class-ib
+        {{- end }}
+        {{- if $.Values.global.performance.enableHugeTlb }}
+        - mountPath: /dev/hugepages
+          name: hugepage
         {{- end }}
         - mountPath: /dev/shm
           name: sharememory
@@ -662,4 +680,9 @@ spec:
           hostPath:
             path: /sys/class/infiniband
             type: Directory
+        {{- end }}
+        {{- if $.Values.global.performance.enableHugeTlb }}
+        - name: hugepage
+          emptyDir:
+            medium: HugePages-2Mi
         {{- end }}
