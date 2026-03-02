@@ -52,10 +52,13 @@ public:
      * @param[in] etcdCert Etcd certificate chain, optional parameters.
      * @param[in] etcdKey Etcd private key, optional parameters.
      * @param[in] etcdDNSName Etcd DNS name, optional parameters.
+     * @param[in] username Username for etcd authentication, optional parameters.
+     * @param[in] password Password for etcd authentication, optional parameters.
      */
     ServiceDiscovery(const std::string &etcdAddress, const std::string &clusterName = "",
                      const SensitiveValue &etcdCa = "", const SensitiveValue &etcdCert = "",
-                     const SensitiveValue &etcdKey = "", const std::string &etcdDNSName = "");
+                     const SensitiveValue &etcdKey = "", const std::string &etcdDNSName = "",
+                     const std::string &username = "", const SensitiveValue &password = "");
 
     ~ServiceDiscovery() = default;
 
@@ -85,6 +88,8 @@ private:
     SensitiveValue etcdCert_;
     SensitiveValue etcdKey_;
     std::string etcdDNSName_;
+    std::string username_;
+    SensitiveValue password_;
     std::set<std::string> activeWorkerAddrs_;
     std::shared_ptr<RandomData> randomData_;
     // workerHostPortMutext_ is used to protect the read and write of activeWorkerAddrs_.
