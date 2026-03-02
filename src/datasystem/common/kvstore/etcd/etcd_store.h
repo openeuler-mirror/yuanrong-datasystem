@@ -49,7 +49,7 @@ namespace datasystem {
 static constexpr char ETCD_ADDR_PATTREN[] = ",";
 const int64_t MIN_RPC_TIMEOUT_MS = 5000;  // 5s
 
-enum class PrefixType { OTHER, RING, CLUSTER};
+enum class PrefixType { OTHER, RING, CLUSTER };
 struct WatchElement {
     std::string tableName;
     std::string key;
@@ -204,8 +204,8 @@ public:
      * @param[in] asyncElapse The time this object being in the async queue.
      * @return Status of the call.
      */
-    Status Put(const std::string &tableName, const std::string &key, const std::string &value,
-               int32_t timeoutMs, uint64_t asyncElapse = 0);
+    Status Put(const std::string &tableName, const std::string &key, const std::string &value, int32_t timeoutMs,
+               uint64_t asyncElapse = 0);
 
     /**
      * @brief Put a new key-value into a table.
@@ -576,6 +576,12 @@ private:
      * @return Status of the call.
      */
     Status PrefixSearch(const std::string &prefixKey, EtcdRangeGetVector &outKeyValues, int64_t &revision);
+    // Retrieves the token in a thread-safe manner
+    std::string GetAuthToken();
+    // Executes the actual RPC call to fetch a new token
+    Status PerformAuthRequest();
+    // Background loop that refreshes the token
+    void TokenRefreshLoop();
     std::string address_;             // etcd address
     std::string keepAliveTableName_;  // The table on etcd for the leased kv's
     std::string keepAliveKey_;        // The key that is associated with the lease
@@ -595,9 +601,18 @@ private:
     std::atomic<bool> watchExit_{ false };
     std::unique_ptr<GrpcSession<etcdserverpb::Auth>> authSession_;
     std::string authToken_;
-    RandomData randomData_ {RandomData::GetRandomSeed()};
+    RandomData randomData_{ RandomData::GetRandomSeed() };
     WriterPrefRWLock keepAliveLock_;  // protects the leaseKeepAlive_ ptr
     WriterPrefRWLock watchLock_;      // protects the watchEvents_ ptr
+
+    std::string username_;
+    SensitiveValue password_;  // Ensure it supports safe copy or assignment for background use
+
+    // Thread safety and control mechanisms
+    std::shared_mutex tokenMutex_;                 // Protects concurrent read/write to authToken_
+    std::thread tokenRefreshThread_;               // Background thread for token refresh
+    std::atomic<bool> stopTokenRefresh_{ false };  // Flag to terminate the refresh thread
+    uint32_t tokenRefreshInterval_{ 30 };          // default to refresh token every 30 seconds
 
     // Router client connect paras
     RouterClientCurveKit clientCurveKit_;
