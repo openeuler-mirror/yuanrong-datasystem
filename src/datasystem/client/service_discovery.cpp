@@ -29,13 +29,16 @@
 namespace datasystem {
 ServiceDiscovery::ServiceDiscovery(const std::string &etcdAddress, const std::string &clusterName,
                                    const SensitiveValue &etcdCa, const SensitiveValue &etcdCert,
-                                   const SensitiveValue &etcdKey, const std::string &etcdDNSName)
+                                   const SensitiveValue &etcdKey, const std::string &etcdDNSName,
+                                   const std::string &username, const SensitiveValue &password)
     : etcdAddress_(etcdAddress),
       clusterName_(clusterName),
       etcdCa_(etcdCa),
       etcdCert_(etcdCert),
       etcdKey_(etcdKey),
-      etcdDNSName_(etcdDNSName)
+      etcdDNSName_(etcdDNSName),
+      username_(username),
+      password_(password)
 {
 }
 
@@ -45,6 +48,7 @@ Status ServiceDiscovery::Init()
     etcdStore_ = std::make_shared<EtcdStore>(etcdAddress_, etcdCa_.GetData(), etcdCert_, etcdKey_, etcdDNSName_);
     auto traceId = Trace::Instance().GetTraceID();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Init(), "Failed to connect to etcd.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Authenticate(username_, password_), "Failed to connect to etcd.");
 
     std::string etcdTablePrefix = clusterName_.empty() ? "" : "/" + clusterName_;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(

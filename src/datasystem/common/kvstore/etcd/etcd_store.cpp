@@ -50,6 +50,9 @@ DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_bool(auto_del_dead_node);
 DS_DECLARE_string(cluster_name);
 
+DS_DEFINE_string(etcd_username, "", "Username for etcd authentication");
+DS_DEFINE_string(etcd_password, "", "Password for etcd authentication");
+
 namespace datasystem {
 EtcdStore::EtcdStore(const std::string &address) : address_(address)
 {
@@ -85,9 +88,14 @@ Status EtcdStore::Init()
 
 Status EtcdStore::Authenticate(std::string username, const SensitiveValue &password)
 {
+    if (username.empty() && password.Empty()) {
+        return Status::OK();
+    }
+
     if (authSession_ != nullptr) {
         return Status::OK();
     }
+
     RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Auth>::CreateSession(address_, authSession_));
 
     etcdserverpb::AuthenticateRequest req;
@@ -907,7 +915,8 @@ Status EtcdStore::Delete(const std::string &tableName, const std::string &key, u
 }
 
 namespace {
-Status DoTransaction(const std::string &realKey, int64_t version, const std::string &value, const std::string &authToken)
+Status DoTransaction(const std::string &realKey, int64_t version, const std::string &value,
+                     const std::string &authToken)
 {
     Transaction txn(authToken);
     txn.StartTransaction();

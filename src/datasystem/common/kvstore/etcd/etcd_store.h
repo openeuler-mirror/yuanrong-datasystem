@@ -615,7 +615,7 @@ private:
 
 class Transaction {
 public:
-    Transaction(std::string authToken);
+    Transaction(std::string authToken = "");
 
     ~Transaction();
 
