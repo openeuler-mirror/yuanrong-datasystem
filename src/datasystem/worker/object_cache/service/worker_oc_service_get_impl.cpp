@@ -1659,8 +1659,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                                                                 std::unordered_set<std::string> &failedIds,
                                                                 std::set<ReadKey> &needRetryIds)
 {
-    // The current parallel logic has a memory leak, we'll skip it for now.
-    const size_t kMinParallelRequests = SIZE_MAX;
+    const size_t kMinParallelRequests = 2;
     if (queryMetas.size() < kMinParallelRequests) {
         return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
@@ -1690,9 +1689,10 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
 
         Timer timer;
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-        futures.emplace_back(remoteGetThreadPool_->Submit([=, &lockedEntries, &commonMutex, &abortAllTasks, &request,
-                                                           &payloads, &lastRc, &successIds, &needRetryIds, &failedIds,
-                                                           &traceId]() {
+        futures.emplace_back(remoteGetThreadPool_->Submit([=,
+                                                           &queryMetas, &lockedEntries, &commonMutex, &abortAllTasks,
+                                                           &request, &payloads, &lastRc, &successIds, &needRetryIds,
+                                                           &failedIds, &traceId]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
