@@ -668,6 +668,9 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
                 return Status(K_RUNTIME_ERROR, FormatString("Failed to register segment, address %llu, size %llu.",
                                                             segAddress, segSize));
             }
+            auto tokenId = segment->token_id != nullptr ? segment->token_id->token_id : 0;
+            auto tokenId2 = segment->seg.token_id;
+            LOG(INFO) << "register segment success, token_id:" << tokenId << ", token_id2:" << tokenId2;
             accessor.entry->data.Set(segment, true);
         }
         accessor.Release();
@@ -1401,7 +1404,7 @@ Status RemoteDevice::ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImpo
             // Import segment
             UrmaSeg remoteSegment;
             RETURN_IF_NOT_OK(remoteSegment.FromProto(importSegmentInfo.seg()));
-            LOG(INFO) << "import remote seg info: " << remoteSegment.ToString();
+            LOG(INFO) << "import remote seg info: " << remoteSegment.ToString() << ", client_id:" << urmaInfo_.clientId;
             auto *segment = UrmaManager::Instance().ImportSegment(remoteSegment.raw);
             CHECK_FAIL_RETURN_STATUS(segment != nullptr, K_RUNTIME_ERROR,
                                      FormatString("Failed to import segment %s.", remoteSegment.ToString()));
