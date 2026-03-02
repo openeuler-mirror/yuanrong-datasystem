@@ -51,7 +51,7 @@ Status EtcdElector::Campaign(const std::string &name, int64_t lease, const std::
     req.set_lease(lease);
     req.set_value(value);
     RETURN_IF_NOT_OK(
-        electionSession_->AsyncSendRpc("Campaign", req, rsp, &v3electionpb::Election::Stub::AsyncCampaign));
+        electionSession_->AsyncSendRpc("Campaign", req, rsp, &v3electionpb::Election::Stub::AsyncCampaign, ""));
     FillEtcdHeader(rsp, response);
     response.name = rsp.leader().name();
     response.key = rsp.leader().key();
@@ -76,7 +76,7 @@ Status EtcdElector::Leader(const std::string &name, EtcdResponse &response)
     v3electionpb::LeaderRequest req;
     v3electionpb::LeaderResponse rsp;
     req.set_name(name);
-    RETURN_IF_NOT_OK(electionSession_->AsyncSendRpc("Leader", req, rsp, &v3electionpb::Election::Stub::AsyncLeader));
+    RETURN_IF_NOT_OK(electionSession_->AsyncSendRpc("Leader", req, rsp, &v3electionpb::Election::Stub::AsyncLeader, ""));
     ParseLeaderRsp(rsp, response);
     return Status::OK();
 }
@@ -91,7 +91,7 @@ Status EtcdElector::Resign(const std::string &name, const std::string &key, int6
     leader->set_key(key);
     leader->set_rev(revision);
     leader->set_lease(lease);
-    RETURN_IF_NOT_OK(electionSession_->AsyncSendRpc("Resign", req, rsp, &v3electionpb::Election::Stub::AsyncResign));
+    RETURN_IF_NOT_OK(electionSession_->AsyncSendRpc("Resign", req, rsp, &v3electionpb::Election::Stub::AsyncResign, ""));
     FillEtcdHeader(rsp, response);
     return Status::OK();
 }
@@ -113,7 +113,7 @@ std::unique_ptr<EtcdKeepAlive> EtcdElector::LeaseKeepAlive(int ttl)
     etcdserverpb::LeaseGrantResponse rsp;
     req.set_ttl(ttl);
     req.set_id(0);
-    if (leaseSession_->AsyncSendRpc("LeaseGrant", req, rsp, &etcdserverpb::Lease::Stub::AsyncLeaseGrant).IsError()) {
+    if (leaseSession_->AsyncSendRpc("LeaseGrant", req, rsp, &etcdserverpb::Lease::Stub::AsyncLeaseGrant, "").IsError()) {
         LOG(ERROR) << "LeaseGrant error: " << rsp.error();
         return nullptr;
     }

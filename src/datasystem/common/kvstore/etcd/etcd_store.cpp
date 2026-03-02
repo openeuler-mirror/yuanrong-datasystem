@@ -38,6 +38,8 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
+#include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
+#include "etcd/api/etcdserverpb/rpc.pb.h"
 
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);
@@ -78,6 +80,23 @@ Status EtcdStore::Init()
                                    std::make_unique<ThreadPool>(NUM_KEEPALIVE_THREADS, 0, "EtcdKeepAlive"));
     RETURN_IF_EXCEPTION_OCCURS(watchRunPool_ = std::make_unique<ThreadPool>(NUM_WATCH_THREADS, 0, "EtcdWatch"));
     GrpcSessionBase::SetIsKeepAliveTimeoutHandler(std::bind(&EtcdStore::IsKeepAliveTimeout, this));
+    return Status::OK();
+}
+
+Status EtcdStore::Authenticate(std::string username, const SensitiveValue &password)
+{
+    if (authSession_ != nullptr) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Auth>::CreateSession(address_, authSession_));
+
+    etcdserverpb::AuthenticateRequest req;
+    req.set_name(username);
+    req.set_password(password.GetData(), password.GetSize());
+    etcdserverpb::AuthenticateResponse rsp;
+
+    RETURN_IF_NOT_OK(authSession_->SendRpc("Authenticate", req, rsp, &etcdserverpb::Auth::Stub::Authenticate, ""));
+    authToken_ = rsp.token();
     return Status::OK();
 }
 
@@ -185,8 +204,8 @@ Status EtcdStore::DropTable(const std::string &tableName)
     req.set_key(etcdKey);
     req.set_range_end(StringPlusOne(etcdKey));
     etcdserverpb::DeleteRangeResponse rsp;
-    RETURN_IF_NOT_OK(
-        rpcSession_->SendRpc("DropTable::etcd_kv_DeleteRange", req, rsp, &etcdserverpb::KV::Stub::DeleteRange));
+    RETURN_IF_NOT_OK(rpcSession_->SendRpc("DropTable::etcd_kv_DeleteRange", req, rsp,
+                                          &etcdserverpb::KV::Stub::DeleteRange, authToken_));
     iter = tableMap_.erase(iter);
     return Status::OK();
 }
@@ -211,7 +230,7 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
                              "The table does not exist. tableName:" + tableName);
     CHECK_FAIL_RETURN_STATUS(
         !(keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
-            && FLAGS_auto_del_dead_node),
+          && FLAGS_auto_del_dead_node),
         K_RUNTIME_ERROR,
         FormatString("local node is failed, keepAliveTimeoutTimer ElapsedMilliSecond %ld,  not put data to etcd",
                      keepAliveTimeoutTimer_.ElapsedMilliSecond()));
@@ -221,8 +240,8 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
     req.set_value(value);
     etcdserverpb::PutResponse rsp;
     VLOG(1) << "Calling rpc to put object with key " << etcdKey;
-    RETURN_IF_NOT_OK(rpcSession_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, value.size(),
-                                          timeoutMs, asyncElapse));
+    RETURN_IF_NOT_OK(rpcSession_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, authToken_,
+                                          value.size(), timeoutMs, asyncElapse));
     if (version != nullptr) {
         *version = rsp.prev_kv().version() + 1;
     }
@@ -232,7 +251,7 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
 Status EtcdStore::BatchPut(const std::unordered_map<std::string, BatchInfoPutToEtcd> &metaInfos)
 {
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    Transaction txn;
+    Transaction txn(authToken_);
     txn.StartTransaction();
     for (const auto &info : metaInfos) {
         const auto &tableName = info.second.tableName;
@@ -264,7 +283,7 @@ Status EtcdStore::PutWithLeaseId(const std::string &tableName, const std::string
     req.set_value(value);
     req.set_lease(leaseId);
     etcdserverpb::PutResponse rsp;
-    return rpcSession_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, value.size());
+    return rpcSession_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, authToken_, value.size());
 }
 
 Status EtcdStore::GetLeaseID(const int64_t ttlInSec, std::atomic<int64_t> &leaseId)
@@ -278,7 +297,8 @@ Status EtcdStore::GetLeaseID(const int64_t ttlInSec, std::atomic<int64_t> &lease
     const int secToMs = 1000;
     auto timeoutMs = std::min<uint64_t>(ttlInSec * secToMs, MIN_RPC_TIMEOUT_MS);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        leaseSession_->AsyncSendRpc("LeaseGrant", req, rsp, &etcdserverpb::Lease::Stub::AsyncLeaseGrant, timeoutMs),
+        leaseSession_->AsyncSendRpc("LeaseGrant", req, rsp, &etcdserverpb::Lease::Stub::AsyncLeaseGrant, authToken_,
+                                    timeoutMs),
         "LeaseGrant error: " + rsp.error());
     leaseId = rsp.id();
     return Status::OK();
@@ -648,7 +668,7 @@ Status EtcdStore::RawGet(const std::string &etcdKey, RangeSearchResult &res, int
     etcdserverpb::RangeResponse rsp;
     VLOG(1) << "Calling rpc to get object with key " << etcdKey;
     RETURN_IF_NOT_OK(
-        rpcSession_->SendRpc("Get::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, 0, timeoutMs));
+        rpcSession_->SendRpc("Get::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, authToken_, 0, timeoutMs));
     VLOG(1) << "Return from rpc after get object of key " << etcdKey << ". Value size: " << rsp.kvs_size();
     if (rsp.kvs_size() == 0) {
         RETURN_STATUS(K_NOT_FOUND, "The key does not exist in etcd. key:" + etcdKey);
@@ -729,7 +749,8 @@ Status EtcdStore::GetAll(const std::string &tableName, int64_t reqRevision,
     req.set_range_end(StringPlusOne(etcdKey));
     req.set_revision(reqRevision);
     etcdserverpb::RangeResponse rsp;
-    RETURN_IF_NOT_OK(rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range));
+    RETURN_IF_NOT_OK(
+        rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, authToken_));
     for (auto &result : rsp.kvs()) {
         std::string key = RemovePrefix(result.key(), iter->second + "/");
         outKeyValues.emplace_back(std::make_pair(key, result.value()));
@@ -757,7 +778,8 @@ Status EtcdStore::GetOtherAzAllHashRing(int64_t revision,
         req.set_range_end(StringPlusOne(etcdKey));
         req.set_revision(revision);
         etcdserverpb::RangeResponse rsp;
-        RETURN_IF_NOT_OK(rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range));
+        RETURN_IF_NOT_OK(
+            rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, authToken_));
         for (auto &result : rsp.kvs()) {
             std::string key;
             size_t pos = result.key().find(ETCD_RING_PREFIX);
@@ -792,7 +814,8 @@ Status EtcdStore::GetOtherAzAllValue(const std::string &tableName, int64_t revis
         req.set_range_end(StringPlusOne(etcdKey));
         req.set_revision(revision);
         etcdserverpb::RangeResponse rsp;
-        RETURN_IF_NOT_OK(rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range));
+        RETURN_IF_NOT_OK(
+            rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, authToken_));
         for (auto &result : rsp.kvs()) {
             std::string key = RemovePrefix(result.key(), prefix + "/");
             outKeyValues.emplace_back(std::make_pair(key, result.value()));
@@ -813,7 +836,7 @@ Status EtcdStore::PrefixSearch(const std::string &prefixKey, EtcdRangeGetVector 
     req.set_key(prefixKey);
     req.set_range_end(StringPlusOne(prefixKey));
     etcdserverpb::RangeResponse rsp;
-    auto rc = rpcSession_->SendRpc("PrefixSearch::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range);
+    auto rc = rpcSession_->SendRpc("PrefixSearch::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, authToken_);
     if (rc.IsOk()) {
         for (const auto &result : rsp.kvs()) {
             RangeSearchResult outResult;
@@ -844,7 +867,8 @@ Status EtcdStore::RangeSearch(const std::string &tableName, const std::string &b
     req.set_key(keyBegin);
     req.set_range_end(StringPlusOne(keyEnd));
     etcdserverpb::RangeResponse rsp;
-    RETURN_IF_NOT_OK(rpcSession_->SendRpc("PrefixSearch::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range));
+    RETURN_IF_NOT_OK(
+        rpcSession_->SendRpc("PrefixSearch::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, authToken_));
     if (rsp.kvs_size() == 0) {
         RETURN_STATUS(K_NOT_FOUND, FormatString("The key does not exist in etcd. range[ %s, %s ]", keyBegin, keyEnd));
     }
@@ -872,7 +896,7 @@ Status EtcdStore::Delete(const std::string &tableName, const std::string &key, u
     etcdserverpb::DeleteRangeResponse rsp;
     VLOG(1) << "Calling rpc to remove object with key " << etcdKey;
     RETURN_IF_NOT_OK(rpcSession_->SendRpc("Delete::etcd_kv_DeleteRange", req, rsp, &etcdserverpb::KV::Stub::DeleteRange,
-                                          0, timeoutMs, asyncElapse));
+                                          authToken_, 0, timeoutMs, asyncElapse));
     VLOG(1) << "After calling rpc to remove object with key " << etcdKey << ", num: " << rsp.deleted();
     RETURN_OK_IF_TRUE(rsp.deleted() == 1);
     if (rsp.deleted() == 0) {
@@ -883,9 +907,9 @@ Status EtcdStore::Delete(const std::string &tableName, const std::string &key, u
 }
 
 namespace {
-Status DoTransaction(const std::string &realKey, int64_t version, const std::string &value)
+Status DoTransaction(const std::string &realKey, int64_t version, const std::string &value, const std::string &authToken)
 {
-    Transaction txn;
+    Transaction txn(authToken);
     txn.StartTransaction();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.CompareKeyVersion(realKey, version), "CompareKeyVersion failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.Put(realKey, value), "Transaction Put failed");
@@ -952,7 +976,7 @@ Status EtcdStore::CAS(const std::string &tableName, const std::string &key, cons
             return Status::OK();
         }
         // 4. Execute a transaction. If the key-value is not changed, the transaction is successfully written.
-        if (status = DoTransaction(realKey, res.version, *newValue), status.IsError()) {
+        if (status = DoTransaction(realKey, res.version, *newValue, authToken_), status.IsError()) {
             lastErr = status;
             errorRetryNum++;
             continue;
@@ -977,7 +1001,7 @@ Status EtcdStore::CAS(const std::string &tableName, const std::string &key, cons
     std::string realKey = iter->second + "/" + key;
     RangeSearchResult res;
     Status status = Get(tableName, key, res);
-    Transaction txn;
+    Transaction txn(authToken_);
     txn.StartTransaction();
     if (status.IsError() && status.GetCode() == K_NOT_FOUND) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.CompareKeyVersion(realKey, 0), "CompareKeyVersion failed");
@@ -1019,7 +1043,7 @@ std::unique_ptr<GrpcSession<etcdserverpb::KV>> Transaction::rpcSession_ = nullpt
 std::once_flag Transaction::flag_;
 std::atomic<int> Transaction::num_{ 0 };
 
-Transaction::Transaction()
+Transaction::Transaction(std::string authToken) : authToken_(std::move(authToken))
 {
     (void)num_.fetch_add(1);
     std::call_once(flag_, []() {
@@ -1051,7 +1075,7 @@ Status Transaction::Commit()
     AutoDereference autoDef(this);
     INJECT_POINT("etcd.txn.commit");
     etcdserverpb::TxnResponse rsp;
-    RETURN_IF_NOT_OK(rpcSession_->AsyncSendRpc("Txn", *txnReq_, rsp, &etcdserverpb::KV::Stub::AsyncTxn));
+    RETURN_IF_NOT_OK(rpcSession_->AsyncSendRpc("Txn", *txnReq_, rsp, &etcdserverpb::KV::Stub::AsyncTxn, authToken_));
     if (!rsp.succeeded()) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Transaction comparison failed, maybe need to update req and try again");
     }
