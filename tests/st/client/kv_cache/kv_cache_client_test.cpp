@@ -2485,7 +2485,9 @@ public:
             }
             etcdAddress += addrs.first.ToString();
         }
-        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(etcdAddress);
+        ServiceDiscoveryOptions opts;
+        opts.etcdAddress = etcdAddress;
+        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
         DS_ASSERT_OK(serviceDiscovery->Init());
 
         ConnectOptions connectOptions{

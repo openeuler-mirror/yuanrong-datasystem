@@ -27,24 +27,23 @@
 #include "datasystem/protos/hash_ring.pb.h"
 
 namespace datasystem {
-ServiceDiscovery::ServiceDiscovery(const std::string &etcdAddress, const std::string &clusterName,
-                                   const SensitiveValue &etcdCa, const SensitiveValue &etcdCert,
-                                   const SensitiveValue &etcdKey, const std::string &etcdDNSName,
-                                   const std::string &username, const SensitiveValue &password)
-    : etcdAddress_(etcdAddress),
-      clusterName_(clusterName),
-      etcdCa_(etcdCa),
-      etcdCert_(etcdCert),
-      etcdKey_(etcdKey),
-      etcdDNSName_(etcdDNSName),
-      username_(username),
-      password_(password)
+ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
+    : etcdAddress_(opts.etcdAddress),
+      clusterName_(opts.clusterName),
+      etcdCa_(opts.etcdCa),
+      etcdCert_(opts.etcdCert),
+      etcdKey_(opts.etcdKey),
+      etcdDNSName_(opts.etcdDNSName),
+      username_(opts.username),
+      password_(opts.password)
 {
 }
 
 Status ServiceDiscovery::Init()
 {
     randomData_ = std::make_shared<RandomData>();
+    CHECK_FAIL_RETURN_STATUS(Validator::ValidateEtcdAddresses("EtcdAddress", etcdAddress_), K_INVALID,
+                             FormatString("Invalid etcd address: %s", etcdAddress_));
     etcdStore_ = std::make_shared<EtcdStore>(etcdAddress_, etcdCa_.GetData(), etcdCert_, etcdKey_, etcdDNSName_);
     auto traceId = Trace::Instance().GetTraceID();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Init(), "Failed to connect to etcd.");
