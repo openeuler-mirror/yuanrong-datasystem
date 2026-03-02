@@ -15,12 +15,43 @@
 
 set -e
 readonly WORK_DIR=$(dirname "$(readlink -f "$0")")
+
+extract_json_value() {
+    local file=$1
+    local key=$2
+
+    grep -A2 "\"${key}\":" "${file}" | \
+        grep '"value":' | \
+        sed -E 's/.*"value": *"([^"]*)".*/\1/' | \
+        head -1
+}
+CONFIG_FILE="${KVCACHE_DIR}/worker.config"
+
+WORKER_LOG_DIR=$(extract_json_value "${CONFIG_FILE}" "log_dir")
+export WORKER_LOG_DIR=${WORKER_LOG_DIR}
+
+STATUS_FILE_PATH=$(extract_json_value "${CONFIG_FILE}" "log_dir")/worker/worker-status
+export STATUS_FILE_PATH=${STATUS_FILE_PATH}
+
 source ${WORK_DIR}/utils.sh
 
 if [ -n "${WORKER_LOG_DIR}" ] && [ ! -d "${WORKER_LOG_DIR}" ]; then
     umask 0027
     mkdir -p ${WORKER_LOG_DIR}
 fi
+
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+    elog "ERROR: Config file not found: ${CONFIG_FILE}"
+    exit 1
+fi
+
+ilog "Loading configuration from: ${CONFIG_FILE}"
+
+WORKER_ADDR=$(extract_json_value ${CONFIG_FILE} "worker_address" | cut -d':' -f1)
+
+sed -i \
+    -e "s|${WORKER_ADDR}|${!WORKER_ADDR}|g" \
+    "${CONFIG_FILE}"
 
 if [ -n "${POD_MEMORY_LIMIT_MB}" ]; then
     POD_MEMORY_MB="${POD_MEMORY_LIMIT_MB}"
@@ -45,6 +76,8 @@ else
 fi
 
 ilog "check pod memory limit"
+
+SHARE_MEMORY_SIZE=$(extract_json_value "${CONFIG_FILE}" "shared_memory_size_mb")
 if [[ "${SHARE_MEMORY_SIZE}" -gt "${POD_MEMORY_MB}" ]]; then
     elog "The pod memory (resources.datasystemWorker.limits.memory) is less than\
     the shared memory (resources.datasystemWorker.sharedMemory).\
@@ -54,6 +87,7 @@ fi
 
 ilog "container start."
 
+LIVENESS_CHECK_PATH=$(extract_json_value "${CONFIG_FILE}" "liveness_check_path")
 if [[ -f "${LIVENESS_CHECK_PATH}" ]]; then
     # the startup probe will start after 5sec
     # remove the existing liveness probe file before startup probe start.
@@ -74,8 +108,6 @@ BASE_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
     [[ -d "${D_DIR}" ]] && rm -rf "${D_DIR:?}/"*
 ) &
 
-bash "${HOME}"/install.sh
-source /home/yuanrong/.bashrc
 umask 0027
 
 if [[ "${ENABLE_RDMA}" == "true" ]]; then
@@ -83,8 +115,15 @@ if [[ "${ENABLE_RDMA}" == "true" ]]; then
 fi
 
 ilog "start worker"
-LD_LIBRARY_PATH="${HOME}/datasystem/lib:${LD_LIBRARY_PATH}" datasystem_worker "$@" &
-WORKER_PID=$!
+
+WORKER_PID=$(dscli start -f ${CONFIG_FILE} 2>&1 | tee /dev/stderr | grep -oP 'PID: \K\d+' | tail -1)
+
+if [ -z "$WORKER_PID" ]; then
+    echo "[ERROR] Failed to extract worker PID"
+    exit 1
+fi
+
+echo "[INFO] Captured WORKER_PID: $WORKER_PID"
 
 if [ ! -d "${STATUS_FILE_PATH%/*}" ]; then
     echo -e "create ${STATUS_FILE_PATH%/*}"
@@ -99,20 +138,13 @@ fi
 
 function handle_term() {
     wlog "receive signal TERM"
-    bash "${HOME}"/check_taint.sh -p ${WORKER_PID} -f on -n HANDLE_TERM
+    kill -TERM ${WORKER_PID}
 }
 
 trap handle_term TERM
 
-CHECK_TAINT_INTERVAL_S=5
-COUNT=1
 while kill -0 ${WORKER_PID}; do
-    if [[ $COUNT -eq $CHECK_TAINT_INTERVAL_S ]]; then
-        bash "${HOME}"/check_taint.sh -p ${WORKER_PID} -n ROUTINE_INSPECTION || true
-        COUNT=1
-    else
-        COUNT=$((COUNT+1))
-    fi
     sleep 1
 done
+
 ilog "worker pid ${WORKER_PID} not exists, container exit"

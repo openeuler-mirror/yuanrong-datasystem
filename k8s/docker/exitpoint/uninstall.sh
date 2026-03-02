@@ -54,21 +54,8 @@ function liveness_check() {
 
 function main() {
   ilog "container prestop start"
-  PROBE_TIMEOUT=30
-  while getopts 'f:t:' OPT; do
-    case "${OPT}" in
-    f)
-      STATUS_FILE_PATH="${OPTARG}"
-      ;;
-    t)
-      PROBE_TIMEOUT="${OPTARG}"
-      ;;
-    ?)
-      echo -e "${USAGE}"
-      exit 1
-      ;;
-    esac
-  done
+  PROBE_PATH=`utils_get_worker_arg_value liveness_check_path`
+  PROBE_TIMEOUT=`utils_get_worker_arg_value liveness_probe_timeout_s`
 
   liveness_check ${LIVENESS_CHECK_PATH} ${PROBE_TIMEOUT} || force_kill_worker
 
@@ -84,6 +71,8 @@ function main() {
   done
 
   ilog "delete health check file..."
+  HEALTH_CHECK_PATH=`utils_get_worker_arg_value health_check_path`
+  READY_CHECK_PATH=`utils_get_worker_arg_value ready_check_path`
   [[ -f "${HEALTH_CHECK_PATH}" ]] && rm "${HEALTH_CHECK_PATH:?}"
   [[ -f "${READY_CHECK_PATH}" ]] && rm "${READY_CHECK_PATH:?}"
   ilog "ready to exit, byebye"

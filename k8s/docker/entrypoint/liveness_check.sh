@@ -15,32 +15,12 @@
 
 set -e
 
-readonly USAGE="
-Options:
-    -f Location of the liveness probe file, it must be set.
-       For example, set to '~/.datasystem/liveness'.
-    -t liveness probe timeout in seconds.
-"
 readonly WORK_DIR=$(dirname "$(readlink -f "$0")")
 source ${WORK_DIR}/utils.sh
 
 function main() {
-	PROBE_PATH=~/.datasystem/liveness
-	PROBE_TIMEOUT=30
-	while getopts 'f:t:' OPT; do
-		case "${OPT}" in
-		f)
-			PROBE_PATH="${OPTARG}"
-			;;
-		t)
-			PROBE_TIMEOUT="${OPTARG}"
-			;;
-		?)
-			echo -e "${USAGE}"
-			exit 1
-			;;
-		esac
-	done
+    PROBE_PATH=`utils_get_worker_arg_value liveness_check_path`
+	PROBE_TIMEOUT=`utils_get_worker_arg_value liveness_probe_timeout_s`
 	if [[ ! -e "${PROBE_PATH}" ]]; then
 		elog "liveness probe file ${PROBE_PATH} not exists!"
 		exit 1
