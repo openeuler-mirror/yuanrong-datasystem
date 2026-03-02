@@ -24,6 +24,8 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
 namespace datasystem {

@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
 
