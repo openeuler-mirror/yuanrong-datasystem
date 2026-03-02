@@ -118,7 +118,7 @@ dscli generate_helm_chart -o /tmp
 
 # 通过源码获取helm chart包
 git clone -b ${version} https://gitcode.com/openeuler/yuanrong-datasystem.git
-cp -r yuanrong-datasystem/docker/chart/datasystem /tmp
+cp -r yuanrong-datasystem/k8s/helm_chart/datasystem /tmp
 ```
 
 命令运行成功后会在"/tmp"目录下生成helm chart目录。
@@ -132,6 +132,7 @@ global:
 
   imageRegistry: ""
   images:
+    # 镜像名称
     datasystem: "openyuanrong-datasystem:0.6.0"
   
   # （可选）UCX RDMA日志配置
@@ -235,7 +236,16 @@ print("[OK] Get value")
 
 ### 开启大页内存
 
-开启大页内存可有效提升内存的分配与拷贝性能，开启大页内存可参考附录文档：[大页内存配置指南](../appendix/hugepage_guide.md)。
+开启大页内存可有效提升内存的分配与拷贝性能，首先需要在运行服务的物理节点上手动预留大页内存，否则应用将无法使用大页功能。 开启大页内存可参考附录文档：[大页内存配置指南](../appendix/hugepage_guide.md)。
+
+若使用Kubernetes，还需重启kubelet以使节点上报大页资源：
+
+```bash
+sudo systemctl restart kubelet
+
+# 验证节点是否识别大页：
+kubectl describe node <node-name> | grep -i huge
+```
 
 运行环境开启大页内存之后，启动数据系统服务端组件时需要启用大页内存配置项：
 
@@ -257,12 +267,15 @@ dscli start -w \
 
 :::{tab-item}  K8s部署
 
+编辑 `/tmp/datasystem/values.yaml` 开启大页内存：
+
 ```yaml
 global:
   # 其他配置项...
 
   imageRegistry: ""
   images:
+    # 镜像名称
     datasystem: "openyuanrong-datasystem:0.6.0"
   
   etcd:
@@ -279,8 +292,9 @@ global:
     ucxTransportLayerSelection: "rc_x"
     # 开启大页内存
     enableHugeTlb: true
+    # 指定分配的 2MiB 大页内存总量（例如 "16Gi" 表示 16 GiB，即 8192 个 2MiB 页面）
+    hugepages2Mi: "16Gi"
 ```
-
 
 :::
 
