@@ -46,7 +46,8 @@ public:
      * @param[in] localAddress The local worker address.
      */
     WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-        std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
+                               std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
+                               HostPort &localAddress);
 
     /**
      * @brief Handle Put/Publish/Seal request from the client.
@@ -80,14 +81,16 @@ private:
      * @brief Reserve/get and lock a object from ObjectTable and publish/seal it.
      * @param[in] objectKey The object key.
      * @param[in] req Publish request meta.
+     * @param[in] clientId Client id.
+     * @param[in] shmUnitId Shm id used by client.
      * @param[in] nestedObjectKeys Objects that depend on objectKey.
      * @param[in] payloads The object data to be saved.
      * @param[out] future Async send future if write back to L2 cache, can't get during entry locked.
      * @return Status of the call.
      */
-    Status PublishObjectWithLock(const std::string &objectKey, const PublishReqPb &req,
-                                 const std::vector<std::string> &nestedObjectKey, std::vector<RpcMessage> &payloads,
-                                 std::future<Status> &future);
+    Status PublishObjectWithLock(const std::string &objectKey, const PublishReqPb &req, const ClientKey &clientId,
+                                 const ShmKey &shmUnitId, const std::vector<std::string> &nestedObjectKey,
+                                 std::vector<RpcMessage> &payloads, std::future<Status> &future);
 
     /**
      * @brief Verify the validity of the object release.
@@ -101,10 +104,13 @@ private:
      * @brief Prepare entry for immediate PublishObject call. Include set/update object entry,
      * allocate/get shared memory, and set params in entry.
      * @param[in] req Publish request meta.
+     * @param[in] clientId Client id.
+     * @param[in] shmUnitId Shm id used by client.
      * @param[in/out] objectKV The object to be sealed and its corresponding objectKey.
      * @return Status of the call.
      */
-    Status PrepareForPublish(const PublishReqPb &req, ObjectKV &objectKV);
+    Status PrepareForPublish(const PublishReqPb &req, const ClientKey &clientId, const ShmKey &shmUnitId,
+                             ObjectKV &objectKV);
 
     /**
      * @brief Create a new object metadata to master.

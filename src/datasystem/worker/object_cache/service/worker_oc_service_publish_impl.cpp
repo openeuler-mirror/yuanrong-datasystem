@@ -75,7 +75,8 @@ Status WorkerOcServicePublishImpl::VertifyObjectReleaseValidity(const PublishReq
     return Status::OK();
 }
 
-Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, ObjectKV &objectKV)
+Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, const ClientKey &clientId,
+                                                     const ShmKey &shmUnitId, ObjectKV &objectKV)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &safeObj = objectKV.GetObjEntry();
@@ -93,8 +94,7 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, Ob
 
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
 
-    return AttachShmUnitToObject(ClientKey::Intern(req.client_id()), objectKey, ShmKey::Intern(req.shm_id()),
-                                 req.data_size(), safeObj);
+    return AttachShmUnitToObject(clientId, objectKey, shmUnitId, req.data_size(), safeObj);
 }
 
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
@@ -284,6 +284,7 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
 }
 
 Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &objectKey, const PublishReqPb &req,
+                                                         const ClientKey &clientId, const ShmKey &shmUnitId,
                                                          const std::vector<std::string> &nestedObjectKeys,
                                                          std::vector<RpcMessage> &payloads, std::future<Status> &future)
 {
@@ -298,7 +299,7 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     int64_t elapsed = timer.ElapsedMilliSecond();
     Raii unlock([&entry]() { entry->WUnlock(); });
     ObjectKV objectKV(objectKey, *entry);
-    RETURN_IF_NOT_OK(PrepareForPublish(req, objectKV));
+    RETURN_IF_NOT_OK(PrepareForPublish(req, clientId, shmUnitId, objectKV));
     LOG(INFO) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %zu ms.", req.client_id(),
                               objectKey, elapsed);
 
@@ -358,9 +359,19 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
 
     // Step 2: Do create-or-get logic on object table, and get both locks.
     std::future<Status> future;
-    Status rc = RetryWhenDeadlock([this, &namespaceUri, &req, &nestedObjectKeys, &payloads, &future] {
-        return PublishObjectWithLock(namespaceUri, req, nestedObjectKeys, payloads, future);
-    });
+    auto shmUnitId = ShmKey::Intern(req.shm_id());
+    auto clientId = ClientKey::Intern(req.client_id());
+    Status rc =
+        RetryWhenDeadlock([this, &namespaceUri, &req, &clientId, &shmUnitId, &nestedObjectKeys, &payloads, &future] {
+            return PublishObjectWithLock(namespaceUri, req, clientId, shmUnitId, nestedObjectKeys, payloads, future);
+        });
+
+    // If worker diable shared-memory transfer but the request still carries shmUnitId, client-to-worker data transfer
+    // is through UB; we need clean memoryRefTable to avoid memory leak.
+    if (!ShmEnable() && !shmUnitId.Empty()) {
+        memoryRefTable_->RemoveShmUnit(clientId, shmUnitId);
+    }
+
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("[ObjectKey %s] Publish failed.", namespaceUri));
     Status futureRc = Status::OK();
     INJECT_POINT("worker.async_send_wait_future", [&future, &futureRc]() {
