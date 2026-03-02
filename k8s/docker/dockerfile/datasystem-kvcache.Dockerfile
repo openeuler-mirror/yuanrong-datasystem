@@ -15,6 +15,7 @@
 ######################## Usage ########################
  # docker build --build-arg no_proxy \
  #              --build-arg DS_BASE_IMAGE=xxx \
+ #              --build-arg CONFIG_NAME=worker.config \
  #              -t datasystem:version \
  #              -f datasystem-kvcache.Dockerfile .
 #######################################################
@@ -22,7 +23,10 @@
 ARG DS_BASE_IMAGE
 FROM ${DS_BASE_IMAGE}
 
-ENV KVCACHE_DIR=/home/kvcache
+ARG CONFIG_NAME
+
+ENV KVCACHE_DIR=/home/kvcache \
+    CONFIG_FILE=/home/kvcache/${CONFIG_NAME}
 
 ######################## Modify yum source ########################
 RUN sed -i 's|repo.openeuler.org|mirrors.huaweicloud.com/openeuler|g' /etc/yum.repos.d/*.repo
@@ -33,7 +37,7 @@ RUN mkdir -p ${KVCACHE_DIR} && \
     mkdir -p ${KVCACHE_DIR}/docker
 
 COPY ./openyuanrong_datasystem-*.whl ${KVCACHE_DIR}
-COPY ./worker.config ${KVCACHE_DIR}
+COPY ./${CONFIG_NAME} ${KVCACHE_DIR}
 
 RUN python3 -m pip install ${KVCACHE_DIR}/openyuanrong_datasystem-*.whl --force-reinstall && \
     rm ${KVCACHE_DIR}/openyuanrong_datasystem-*.whl && \

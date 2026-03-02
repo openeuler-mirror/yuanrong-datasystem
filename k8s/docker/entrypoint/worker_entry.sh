@@ -25,7 +25,6 @@ extract_json_value() {
         sed -E 's/.*"value": *"([^"]*)".*/\1/' | \
         head -1
 }
-CONFIG_FILE="${KVCACHE_DIR}/worker.config"
 
 WORKER_LOG_DIR=$(extract_json_value "${CONFIG_FILE}" "log_dir")
 export WORKER_LOG_DIR=${WORKER_LOG_DIR}
