@@ -91,7 +91,7 @@ TEST_F(GrpcSessionTest, TestPutClusterTableWithoutLeaseId)
     leaseReq.set_ttl(ttlInSec);
     leaseReq.set_id(0);
     DS_ASSERT_OK(leaseSession->AsyncSendRpc("LeaseGrant", leaseReq, leaseRsp,
-                                            &etcdserverpb::Lease::Stub::AsyncLeaseGrant, timeoutMs));
+                                            &etcdserverpb::Lease::Stub::AsyncLeaseGrant, "", timeoutMs));
     auto leaseId = leaseRsp.id();
 
     putReq.set_lease(leaseId);

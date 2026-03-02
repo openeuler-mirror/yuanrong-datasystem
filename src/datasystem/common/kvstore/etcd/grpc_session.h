@@ -115,8 +115,7 @@ public:
         auto targetName = !targetNameOverride.empty() ? targetNameOverride : FLAGS_etcd_target_name_override;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SecretManager::Instance()->GetTlsInfo(config, info),
                                          "etcd get tls info failed");
-        RETURN_IF_NOT_OK(
-            CreateSessionWithTls(addresses, info.ca, info.cert, info.key, targetName, rpcSession));
+        RETURN_IF_NOT_OK(CreateSessionWithTls(addresses, info.ca, info.cert, info.key, targetName, rpcSession));
         return Status::OK();
     }
 
@@ -190,7 +189,7 @@ public:
     }
 
     GrpcSession(const std::string &addresses, std::unique_ptr<typename T::Stub> stub)
-        : addresses_(addresses), stub_(std::move(stub)){};
+        : addresses_(addresses), stub_(std::move(stub)) {};
 
     ~GrpcSession() = default;
 
@@ -200,6 +199,7 @@ public:
     }
 
     DEFINE_MEMBER_FUNCTION_CHECKER(lease);
+    DEFINE_MEMBER_FUNCTION_CHECKER(key);
 
     /**
      * @brief Send RPC messages synchronously.
@@ -214,7 +214,8 @@ public:
     template <typename Request, typename Response,
               typename StubFunc = grpc::Status (*)(grpc::ClientContext *, const Request &, Response *)>
     Status SendRpc(const std::string &methodName, const Request &req, Response &rsp, StubFunc stubFunc,
-                   int dataSize = 0, int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT, uint64_t asyncElapse = 0)
+                   const std::string &authToken = "", int dataSize = 0, int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT,
+                   uint64_t asyncElapse = 0)
     {
         INJECT_POINT("etcd.sendrpc", [&timeoutMs](int32_t timeout) {
             timeoutMs = timeout;
@@ -233,6 +234,9 @@ public:
             RETURN_IF_NOT_OK(checker());
             std::string preMsg = "[" + methodName + "] ";
             grpc::ClientContext context;
+            if (!authToken.empty()) {
+                context.AddMetadata("token", authToken);
+            }
             context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(rpcTimeoutMs));
             contextMap_.emplace(&context, false);
             AccessRecorder requestOutPoint(GetEtcdReqRecorderKey(methodName));
@@ -242,7 +246,9 @@ public:
                 return Status::OK();
             });
             RequestParam reqParam;
-            reqParam.outReq = req.key();
+            if constexpr (HasMemberFunc_key<Request>::value) {
+                reqParam.outReq = req.key();
+            }
             auto returnCode = static_cast<int>(status.error_code());
             requestOutPoint.Record(returnCode, std::to_string(dataSize), reqParam, status.error_message(), asyncElapse);
             requestStatusVec_.BlockingEmplaceBackCode(returnCode);
@@ -278,7 +284,7 @@ public:
     template <typename Request, typename Response,
               typename StubFunc = grpc::Status (*)(grpc::ClientContext *, const Request &, Response *)>
     Status AsyncSendRpc(const std::string &methodName, const Request &req, Response &rsp, StubFunc stubFunc,
-                        uint64_t timeoutMs = 0)
+                        const std::string &authToken = "", uint64_t timeoutMs = 0)
     {
         std::string preMsg = "[" + addresses_ + "," + methodName + "] ";
         grpc::ClientContext context;
@@ -286,6 +292,9 @@ public:
         grpc::Status status;
         if (timeoutMs > 0) {
             context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(timeoutMs));
+        }
+        if (!authToken.empty()) {
+            context.AddMetadata("token", authToken);
         }
         cqMap_.emplace(&cq, &context);
 
@@ -389,7 +398,8 @@ private:
             { "GetAll::etcd_kv_Range", AccessRecorderKey::DS_ETCD_GETALL },
             { "PrefixSearch::etcd_kv_Range", AccessRecorderKey::DS_ETCD_PREFIXSEARCH },
             { "Delete::etcd_kv_DeleteRange", AccessRecorderKey::DS_ETCD_DELETE },
-            { "LeaseGrant", AccessRecorderKey::DS_ETCD_LEASE_GRANT }
+            { "LeaseGrant", AccessRecorderKey::DS_ETCD_LEASE_GRANT },
+            { "Authenticate", AccessRecorderKey::DS_ETCD_AUTHENTICATE }
         };
         auto iter = requestMethods.find(methodName);
         if (iter == requestMethods.end()) {

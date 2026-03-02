@@ -28,6 +28,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include "datasystem/utils/sensitive_value.h"
 #include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 #include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
@@ -86,6 +87,8 @@ public:
     ~EtcdStore() override;
 
     Status Init();
+
+    Status Authenticate(std::string username, const SensitiveValue &password);
 
     /**
      * @brief Close the database.
@@ -590,6 +593,8 @@ private:
     std::shared_ptr<EtcdWatch> watchEvents_;
     std::atomic<bool> keepAliveExit_{ false };
     std::atomic<bool> watchExit_{ false };
+    std::unique_ptr<GrpcSession<etcdserverpb::Auth>> authSession_;
+    std::string authToken_;
     RandomData randomData_ {RandomData::GetRandomSeed()};
     WriterPrefRWLock keepAliveLock_;  // protects the leaseKeepAlive_ ptr
     WriterPrefRWLock watchLock_;      // protects the watchEvents_ ptr
@@ -610,7 +615,7 @@ private:
 
 class Transaction {
 public:
-    Transaction();
+    Transaction(std::string authToken);
 
     ~Transaction();
 
@@ -692,6 +697,9 @@ private:
 
     // Txn request to record the ops and need to send to ETCD cluster.
     std::unique_ptr<etcdserverpb::TxnRequest> txnReq_;
+
+    // The auth token
+    std::string authToken_;
 
     // Initialize flag.
     static std::once_flag flag_;
