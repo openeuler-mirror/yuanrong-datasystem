@@ -171,6 +171,7 @@ DS_DECLARE_string(log_dir);
 
 DS_DECLARE_string(etcd_username);
 DS_DECLARE_string(etcd_password);
+DS_DECLARE_uint32(etcd_token_refresh_interval_s);
 
 namespace datasystem {
 namespace worker {
@@ -816,7 +817,8 @@ Status WorkerOCServer::Init()
     LOG(INFO) << "etcd connect address: " << FLAGS_etcd_address;
     etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
     RETURN_IF_NOT_OK(etcdStore_->Init());
-    RETURN_IF_NOT_OK(etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password));
+    RETURN_IF_NOT_OK(
+        etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
     etcdStore_->SetUpdateClusterInfoInRocksDbHandler(
         std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up

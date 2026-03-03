@@ -88,7 +88,14 @@ public:
 
     Status Init();
 
-    Status Authenticate(std::string username, const SensitiveValue &password);
+    /**
+     * @brief Authenticate to etcd using username/password
+     * @param[in] username etcd username
+     * @param[in] password etcd password
+     * @param[in] tokenRefreshInterval token refresh interval in seconds
+     * @return Status of the call
+     */
+    Status Authenticate(std::string username, const SensitiveValue &password, uint32_t tokenRefreshInterval);
 
     /**
      * @brief Close the database.

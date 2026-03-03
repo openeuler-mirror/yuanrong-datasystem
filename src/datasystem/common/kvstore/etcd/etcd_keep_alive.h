@@ -101,9 +101,10 @@ public:
 
     /**
      * @brief Init lease stub and stream client, connect to ETCD server.
+     * @param[in] authToken Token for etcd server.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Init();
+    Status Init(const std::string &authToken);
 
     /**
      * @brief The main loop for periodically talking with ETCD server.
