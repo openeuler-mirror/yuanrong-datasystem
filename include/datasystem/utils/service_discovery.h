@@ -41,21 +41,28 @@ class RandomData;
 }  // namespace datasystem
 
 namespace datasystem {
+struct ServiceDiscoveryOptions {
+    std::string etcdAddress;
+    std::string clusterName = "";
+
+    // TLS - optional
+    SensitiveValue etcdCa = "";
+    SensitiveValue etcdCert = "";
+    SensitiveValue etcdKey = "";
+    std::string etcdDNSName = "";
+
+    // Auth - optional
+    std::string username = "";
+    SensitiveValue password = "";
+};
 class __attribute((visibility("default"))) ServiceDiscovery {
 public:
     /**
      * @brief Construct ServiceDiscovery. If certificate authentication is enabled for the etcd to be connected, must
      *        specify etcdCa, etcdCert, etcdKey and etcdNameOverride.
-     * @param[in] etcdAddress The Etcd address.
-     * @param[in] clusterName The cluster name of the worker address to be monitored.
-     * @param[in] etcdCa Root etcd certificate, optional parameters.
-     * @param[in] etcdCert Etcd certificate chain, optional parameters.
-     * @param[in] etcdKey Etcd private key, optional parameters.
-     * @param[in] etcdDNSName Etcd DNS name, optional parameters.
+     * @param[in] opts ServiceDiscoveryOptions.
      */
-    ServiceDiscovery(const std::string &etcdAddress, const std::string &clusterName = "",
-                     const SensitiveValue &etcdCa = "", const SensitiveValue &etcdCert = "",
-                     const SensitiveValue &etcdKey = "", const std::string &etcdDNSName = "");
+    ServiceDiscovery(const ServiceDiscoveryOptions &opts);
 
     ~ServiceDiscovery() = default;
 
@@ -85,6 +92,8 @@ private:
     SensitiveValue etcdCert_;
     SensitiveValue etcdKey_;
     std::string etcdDNSName_;
+    std::string username_;
+    SensitiveValue password_;
     std::set<std::string> activeWorkerAddrs_;
     std::shared_ptr<RandomData> randomData_;
     // workerHostPortMutext_ is used to protect the read and write of activeWorkerAddrs_.
