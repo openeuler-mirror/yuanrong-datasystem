@@ -617,7 +617,7 @@ private:
 
     // Thread safety and control mechanisms
     std::shared_mutex tokenMutex_;                 // Protects concurrent read/write to authToken_
-    std::thread tokenRefreshThread_;               // Background thread for token refresh
+    std::unique_ptr<Thread> tokenRefreshThread_;               // Background thread for token refresh
     std::atomic<bool> stopTokenRefresh_{ false };  // Flag to terminate the refresh thread
     uint32_t tokenRefreshInterval_{ 30 };          // default to refresh token every 30 seconds
 

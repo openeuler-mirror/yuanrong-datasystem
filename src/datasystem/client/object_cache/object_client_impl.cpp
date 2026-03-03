@@ -119,7 +119,7 @@ inline void ReadParamFromEnv(ConnectOptions &connectOptions)
 inline void ReadOptFromEnv(ConnectOptions &connectOptions)
 {
     ReadFromEnv(connectOptions.host, "DATASYSTEM_HOST");
-    if (connectOptions.port == 0) {
+    if (connectOptions.port == 0 && connectOptions.serviceDiscovery == nullptr) {
         int32_t envPort;
         if (std::getenv("DATASYSTEM_PORT") != nullptr && Uri::StrToInt32(std::getenv("DATASYSTEM_PORT"), envPort)) {
             connectOptions.port = envPort;

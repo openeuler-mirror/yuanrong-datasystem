@@ -105,9 +105,9 @@ Status EtcdStore::Authenticate(std::string username, const SensitiveValue &passw
     RETURN_IF_NOT_OK(PerformAuthRequest());
 
     // Start the background token refresh thread if not already running
-    if (!tokenRefreshThread_.joinable()) {
+    if (tokenRefreshThread_ == nullptr) {
         stopTokenRefresh_.store(false);
-        tokenRefreshThread_ = std::thread(&EtcdStore::TokenRefreshLoop, this);
+        tokenRefreshThread_ = std::make_unique<Thread>(&EtcdStore::TokenRefreshLoop, this);
     }
 
     return Status::OK();
@@ -135,14 +135,17 @@ void EtcdStore::TokenRefreshLoop()
 {
     LOG(INFO) << "Etcd token background refresh thread started. The interval is " << tokenRefreshInterval_
               << " seconds.";
+    Timer timer;
+    const uint32_t sleepIntervalMs = 10;
     while (!stopTokenRefresh_.load()) {
-        for (uint32_t i = 0; i < tokenRefreshInterval_ && !stopTokenRefresh_.load(); ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        while (timer.ElapsedSecond() < tokenRefreshInterval_ && !stopTokenRefresh_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepIntervalMs));
         }
 
         if (stopTokenRefresh_.load()) {
             break;
         }
+        timer.Reset();
 
         // Proactively refresh the token
         LOG_IF_ERROR(PerformAuthRequest(), "Failed to refresh etcd auth token.");
@@ -223,6 +226,11 @@ Status EtcdStore::Shutdown()
 
     watchExit_ = true;
     LOG_IF_ERROR(WatchShutdown(), "EtcdStore WatchShutdown failed");
+
+    if (tokenRefreshThread_ != nullptr && tokenRefreshThread_->joinable()) {
+        stopTokenRefresh_ = true;
+        tokenRefreshThread_->join();
+    }
 
     return Status::OK();
 }
