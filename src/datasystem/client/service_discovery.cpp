@@ -17,10 +17,12 @@
 
 #include <arpa/inet.h>
 
-#include "datasystem/common/log/log.h"
-#include "datasystem/common/log/trace.h"
+#include "datasystem/common/constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
@@ -42,6 +44,7 @@ ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
 
 Status ServiceDiscovery::Init()
 {
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
     randomData_ = std::make_shared<RandomData>();
     CHECK_FAIL_RETURN_STATUS(Validator::ValidateEtcdAddresses("EtcdAddress", etcdAddress_), K_INVALID,
                              FormatString("Invalid etcd address: %s", etcdAddress_));

@@ -50,8 +50,8 @@ DS_DEFINE_string(bind_address, "",
                  "Address of ds worker to bind socket and must under this format <ip>:<port>, the same with "
                  "worker_address if not provide");
 DS_DECLARE_string(master_address);
-DS_DEFINE_validator(worker_address, &Validator::ValidateHostPortString);
-DS_DEFINE_validator(bind_address, &Validator::ValidateHostPortString);
+DS_DEFINE_validator(worker_address, &Validator::ValidateHostPortStringWithLog);
+DS_DEFINE_validator(bind_address, &Validator::ValidateHostPortStringWithLog);
 DS_DECLARE_uint64(shared_memory_size_mb);
 DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(log_filename);
@@ -283,7 +283,7 @@ static Status WorkerMain(int argc, char **argv)
         std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
         while (!IsTermSignalReceived()) {
             bool signalReceived = g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
-                [] { return IsTermSignalReceived(); });
+                                                          [] { return IsTermSignalReceived(); });
             if (signalReceived) {
                 break;
             }

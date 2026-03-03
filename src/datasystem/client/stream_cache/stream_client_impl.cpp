@@ -41,8 +41,6 @@
 #include "datasystem/stream/consumer.h"
 #include "datasystem/stream/producer.h"
 
-const std::string LOG_FILENAME = "ds_client";
-
 namespace datasystem {
 namespace client {
 namespace stream_cache {
@@ -108,7 +106,7 @@ Status StreamClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 
 Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &needRollbackState, bool reportWorkerLost)
 {
-    Logging::GetInstance()->Start(LOG_FILENAME, true);
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
     FlagsMonitor::GetInstance()->Start();
     auto rc = clientStateManager_->ProcessInit(needRollbackState);
     if (!needRollbackState) {

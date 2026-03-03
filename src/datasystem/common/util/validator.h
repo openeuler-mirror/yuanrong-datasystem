@@ -174,14 +174,14 @@ public:
         std::string word;
         while (std::getline(sstream, word, delimiter)) {
             // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
-            if (ValidateHostPortString("etcd_address", word) || ValidateDomainNamePort("etcd_address", word)) {
+            if (ValidateHostPortString("etcd_address", word, false)
+                || ValidateDomainNamePort("etcd_address", word, false)) {
                 continue;
-            } else {
-                LOG(ERROR) << FormatString(
-                    "The value of %s flag is %s, which contains some illegal IP address or domain name formats.",
-                    flagName, value);
-                return false;
             }
+            LOG(ERROR) << FormatString(
+                "The value of %s flag is %s, which contains some illegal IP address or domain name formats.", flagName,
+                value);
+            return false;
         }
         return true;
     }
@@ -191,25 +191,38 @@ public:
      * ipv6 formats are also allowed, with format: [ipv6_format]:port
      * @param[in] flagName IP address with port flag.
      * @param[in] value The string to be checked.
+     * @param[in] printLog Whether to print log if validation failed.
      * @return True if valid.
      */
-    static bool ValidateHostPortString(const char *flagName, const std::string &value)
+    static bool ValidateHostPortString(const char *flagName, const std::string &value, bool printLog = true)
     {
         // If the first character is not a [, then validate this as an IPv4 address. Otherwise, it must be IPv6
         if (value[0] != '[') {
-            return IsValidIPv4HostPortString(flagName, value);
-        } else {
-            return IsValidIPv6HostPortString(flagName, value);
+            return IsValidIPv4HostPortString(flagName, value, printLog);
         }
+        return IsValidIPv6HostPortString(flagName, value, printLog);
+    }
+
+    /**
+     * @brief Validate a string is a valid ip address with port as the format ipv4_format:port.
+     * ipv6 formats are also allowed, with format: [ipv6_format]:port
+     * @param[in] flagName IP address with port flag.
+     * @param[in] value The string to be checked.
+     * @return True if valid.
+     */
+    static bool ValidateHostPortStringWithLog(const char *flagName, const std::string &value)
+    {
+        return ValidateHostPortString(flagName, value, true);
     }
 
     /**
      * @brief Validate a string is a valid IPv4 address with port as the format ipv4_format:port.
      * @param[in] flagName IP address with port flag.
      * @param[in] value The string to be checked.
+     * @param[in] printLog Whether to print log if validation failed.
      * @return True if valid and its an IPv6
      */
-    static bool IsValidIPv4HostPortString(const char *flagName, const std::string &value)
+    static bool IsValidIPv4HostPortString(const char *flagName, const std::string &value, bool printLog = true)
     {
         // Regex to match ipv4 address with port from 0.0.0.0:0 to 255.255.255.255:65535
         // or localhost:<port>.
@@ -222,8 +235,8 @@ public:
         if (re2::RE2::FullMatch(value, re) || value.empty()) {
             return true;
         }
-        LOG(INFO) << FormatString("Value of %s flag is %s. Illegal [IPv6]:port or IPv4:Port address format.", flagName,
-                                  value);
+        LOG_IF(INFO, printLog) << FormatString(
+            "Value of %s flag is %s. Illegal [IPv6]:port or IPv4:Port address format.", flagName, value);
         return false;
     }
 
@@ -231,9 +244,10 @@ public:
      * @brief Validate a string is a valid IPv6 address with port as the format [ipv6_format]:port.
      * @param[in] flagName IP address with port flag.
      * @param[in] value The string to be checked.
+     * @param[in] printLog Whether to print log if validation failed.
      * @return True if valid and its an IPv6
      */
-    static bool IsValidIPv6HostPortString(const char *flagName, const std::string &value)
+    static bool IsValidIPv6HostPortString(const char *flagName, const std::string &value, bool printLog = true)
     {
         // Future: A regex can be created to make a more comprehensive IPv6 validator
         // For now, do some simpler condition checks that catch most of the cases.
@@ -246,26 +260,27 @@ public:
         // Don't actually dive into the IPv6_addr structure itself for validation.
         auto pos = value.find_last_of(':');
         if (pos == std::string::npos) {
-            LOG(INFO) << FormatString("The value of %s flag is %s, which is an illegal [IPv6]:Port address format.",
-                                      flagName, value);
+            LOG_IF(INFO, printLog) << FormatString(
+                "The value of %s flag is %s, which is an illegal [IPv6]:Port address format.", flagName, value);
             return false;
         }
         if (value[pos - 1] != ']') {
-            LOG(INFO) << FormatString("The value of %s flag is %s, which is an illegal [IPv6]:Port address format.",
-                                      flagName, value);
+            LOG_IF(INFO, printLog) << FormatString(
+                "The value of %s flag is %s, which is an illegal [IPv6]:Port address format.", flagName, value);
             return false;
         }
         const int addrPrefixLen = 4;
         std::string addrPrefix = value.substr(1, addrPrefixLen);
         if ((addrPrefix == "fe80" || addrPrefix == "FE80") && value.find('%') == std::string::npos) {
-            LOG(INFO) << "The value of " << flagName << " flag is " << value
-                      << ", is an illegal [IPv6]:Port address format. Link local address require %interface_name.";
+            LOG_IF(INFO, printLog)
+                << "The value of " << flagName << " flag is " << value
+                << ", is an illegal [IPv6]:Port address format. Link local address require %interface_name.";
             return false;
         }
 
         // extract the port piece and validate it.
         std::string portNumStr = value.substr(pos + 1);
-        if (!IsInPortRange(portNumStr, false)) {
+        if (!IsInPortRange(portNumStr, false, printLog)) {
             return false;
         }
 
@@ -643,9 +658,11 @@ public:
     /**
      * @brief Check passed in string is a valid port in range.
      * @param[in] value The string to be checked.
+     * @param[in] allowEmpty Whether the value can be empty.
+     * @param[in] printLog Whether to print log if validation failed.
      * @return True if param is a valid port number. Otherwise false.
      */
-    static bool IsInPortRange(const std::string &value, bool allowEmpty = true)
+    static bool IsInPortRange(const std::string &value, bool allowEmpty = true, bool printLog = true)
     {
         // Regex to match port from 0 to 65535.
         static const re2::RE2 re(
@@ -653,13 +670,13 @@ public:
             ")$");
         // Allow value size 0 due to certain circumstances that indicates default or function disabled.
         if (allowEmpty == false && value.empty()) {
-            LOG(ERROR) << value << " empty is not a valid port.";
+            LOG_IF(ERROR, printLog) << value << " empty is not a valid port.";
             return false;
         }
         if (re2::RE2::FullMatch(value, re)) {
             return true;
         }
-        LOG(ERROR) << value << " is not a valid port.";
+        LOG_IF(ERROR, printLog) << value << " is not a valid port.";
         return false;
     }
 
@@ -902,7 +919,7 @@ public:
      * @param[in] value The string to be checked.
      * @return True if valid.
      */
-    static bool ValidateDomainNamePort(const char *flagName, const std::string &value)
+    static bool ValidateDomainNamePort(const char *flagName, const std::string &value, bool printLog = true)
     {
         // Regex to match domain name with port.
         // The rule of domain name:
@@ -919,8 +936,10 @@ public:
         if ((re2::RE2::FullMatch(value, re) && value.size() >= 3 && value.size() <= 255) || value.empty()) {
             return true;
         }
-        LOG(ERROR) << FormatString("The value of %s flag is %s, which is a illegal DomainName:Port address format.",
-                                   flagName, value);
+        if (printLog) {
+            LOG(ERROR) << FormatString("The value of %s flag is %s, which is a illegal DomainName:Port address format.",
+                                       flagName, value);
+        }
         return false;
     }
 

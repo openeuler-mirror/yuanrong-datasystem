@@ -80,7 +80,6 @@
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
 
-const std::string LOG_FILENAME = "ds_client";
 const size_t MSET_MAX_KEY_COUNT = 8;
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 static constexpr size_t QUERY_SIZE_OBJECT_LIMIT = 10000;
@@ -264,7 +263,7 @@ Status ObjectClientImpl::InitListenWorker(HeartbeatType heartbeatType)
 
 Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, bool initWithWorker)
 {
-    Logging::GetInstance()->Start(LOG_FILENAME, true);
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
     FlagsMonitor::GetInstance()->Start();
 
     auto rc = clientStateManager_->ProcessInit(needRollbackState);

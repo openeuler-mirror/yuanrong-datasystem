@@ -105,6 +105,8 @@ struct CreateDeviceParam {
 static const std::string ENV_UB_DEVICE_NAME = "DS_UB_DEV_NAME";
 static const std::string ENV_UB_DEVICE_EID = "DS_UB_DEV_EID";
 static const std::string DEFAULT_UB_DEVICE_NAME = "bonding_dev_0";
+
+static const std::string CLIENT_LOG_FILENAME = "ds_client";
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_CONSTANTS_H
