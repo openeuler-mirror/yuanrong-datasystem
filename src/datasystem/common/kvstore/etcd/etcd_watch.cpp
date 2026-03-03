@@ -133,7 +133,7 @@ void EtcdWatch::SetCheckEtcdStateHandler(std::function<Status()> checkEtcdStateH
     checkEtcdStateHandler_ = std::move(checkEtcdStateHandler);
 }
 
-Status EtcdWatch::Init()
+Status EtcdWatch::Init(const std::string &authToken)
 {
     cq_ = std::make_unique<grpc::CompletionQueue>();
     context_ = std::make_unique<grpc::ClientContext>();
@@ -145,6 +145,9 @@ Status EtcdWatch::Init()
             clientCurveKit_.etcdNameOverride));
     }
     CHECK_FAIL_RETURN_STATUS(watchSession_ != nullptr, K_KVSTORE_ERROR, "GRPC watch session could not be created");
+    if (!authToken.empty()) {
+        context_->AddMetadata("token", authToken);
+    }
     stream_ = watchSession_->Stub()->AsyncWatch(context_.get(), cq_.get(), (void *)WATCH_CREATE);
     CHECK_FAIL_RETURN_STATUS(stream_ != nullptr, K_KVSTORE_ERROR,
                              "GRPC stream connection for watch could not be created");

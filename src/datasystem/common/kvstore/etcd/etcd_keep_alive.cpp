@@ -202,9 +202,12 @@ Status EtcdKeepAlive::SendKeepAliveMessage(int64_t &timeTakenMilliseconds)
     return keepAliveResponse.first;
 }
 
-Status EtcdKeepAlive::Init()
+Status EtcdKeepAlive::Init(const std::string &authToken)
 {
     RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Lease>::CreateSession(address_, leaseSession_));
+    if (!authToken.empty()) {
+        context_.AddMetadata("token", authToken);
+    }
     stream_ = leaseSession_->Stub()->AsyncLeaseKeepAlive(&context_, &cq_, (void *)KEEPALIVE_CREATE);
     void *tag = nullptr;
     bool ok = false;

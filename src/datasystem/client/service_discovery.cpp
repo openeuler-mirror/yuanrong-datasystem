@@ -35,7 +35,8 @@ ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
       etcdKey_(opts.etcdKey),
       etcdDNSName_(opts.etcdDNSName),
       username_(opts.username),
-      password_(opts.password)
+      password_(opts.password),
+      tokenRefreshInterval_(opts.tokenRefreshIntervalSec)
 {
 }
 
@@ -47,7 +48,8 @@ Status ServiceDiscovery::Init()
     etcdStore_ = std::make_shared<EtcdStore>(etcdAddress_, etcdCa_.GetData(), etcdCert_, etcdKey_, etcdDNSName_);
     auto traceId = Trace::Instance().GetTraceID();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Init(), "Failed to connect to etcd.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Authenticate(username_, password_), "Failed to connect to etcd.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Authenticate(username_, password_, tokenRefreshInterval_),
+                                     "Failed to connect to etcd.");
 
     std::string etcdTablePrefix = clusterName_.empty() ? "" : "/" + clusterName_;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
