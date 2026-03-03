@@ -361,15 +361,14 @@ public:
         // Apparently addresses can contain more than one address since this is a loop.
         // If at least one of the address is in the IPv6 format, return v6 prefix.
         while (std::getline(sstream, word, delimiter)) {
-            if (Validator::ValidateHostPortString("GrpcAddress", word)) {
+            if (Validator::ValidateHostPortString("GrpcAddress", word, false)) {
                 // Host is valid. Check if it was a IPv6.
-                if (Validator::IsValidIPv6HostPortString("GrpcAddress", word)) {
+                if (Validator::IsValidIPv6HostPortString("GrpcAddress", word, false)) {
                     ++numIPv6;
                 }
                 continue;
-            } else {
-                return "";
             }
+            return "";
         }
         return (numIPv6 == 0) ? "ipv4:///" : "ipv6:///";
     }
