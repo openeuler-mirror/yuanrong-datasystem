@@ -34,6 +34,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/flags/string_to_long.h"
 
 namespace datasystem {
 const uint32_t LOG_MAX_SIZE_LIMIT = 25000;  // log max size is 30000.
@@ -174,51 +175,6 @@ inline bool StringToInt(const std::string &str, int &num)
         return false;
     }
     return true;
-}
-
-/**
- * @brief Check if the string contains the negative sign.
- * @param[in] str string to be checked.
- * @return true if has negative sign, else false.
- */
-inline bool IsNegative(const std::string &str)
-{
-    size_t idx = 0;
-    while (idx < str.size() && std::isspace(str[idx])) {
-        ++idx;
-    }
-    if (idx < str.size() && str[idx] == '-') {
-        return true;
-    }
-    return false;
-}
-
-/**
- * @brief Convert string to unsigned long, using stoull directly will interpret negative number as extremely large
- * positive values, therefore it’s necessary to check if the string contains a negative sign.
- * @param[in] str string to be interpreted.
- * @return Converted number.
- */
-inline unsigned long StrToUnsignedLong(const std::string &str)
-{
-    if (IsNegative(str)) {
-        throw std::out_of_range("The string " + str + " is out of range for unsigned long type.");
-    }
-    return std::stoul(str);
-}
-
-/**
- * @brief Convert string to unsigned long long, using stoull directly will interpret negative number as extremely
- * large positive values, therefore it’s necessary to check if the string contains a negative sign.
- * @param[in] str string to be interpreted.
- * @return Converted number.
- */
-inline unsigned long long StrToUnsignedLongLong(const std::string &str)
-{
-    if (IsNegative(str)) {
-        throw std::out_of_range("The string " + str + " is out of range for unsigned long long type.");
-    }
-    return std::stoull(str);
 }
 
 /**
