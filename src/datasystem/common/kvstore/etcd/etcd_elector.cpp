@@ -118,7 +118,7 @@ std::unique_ptr<EtcdKeepAlive> EtcdElector::LeaseKeepAlive(int ttl)
         return nullptr;
     }
     auto keepAlive = std::make_unique<EtcdKeepAlive>(address_, rsp.id());
-    if (keepAlive->Init().IsError()) {
+    if (keepAlive->Init("").IsError()) {
         return nullptr;
     }
     return keepAlive;

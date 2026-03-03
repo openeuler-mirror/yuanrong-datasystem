@@ -23,6 +23,7 @@
 #define DATASYSTEM_SERVICE_DISCOVERY_H
 
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <set>
@@ -41,6 +42,7 @@ class RandomData;
 }  // namespace datasystem
 
 namespace datasystem {
+const uint32_t DEFAULT_ETCD_TOKEN_REFRESH_INTERVAL = 30;  // seconds
 struct ServiceDiscoveryOptions {
     std::string etcdAddress;
     std::string clusterName = "";
@@ -54,7 +56,9 @@ struct ServiceDiscoveryOptions {
     // Auth - optional
     std::string username = "";
     SensitiveValue password = "";
+    uint32_t tokenRefreshIntervalSec = DEFAULT_ETCD_TOKEN_REFRESH_INTERVAL;
 };
+
 class __attribute((visibility("default"))) ServiceDiscovery {
 public:
     /**
@@ -94,6 +98,7 @@ private:
     std::string etcdDNSName_;
     std::string username_;
     SensitiveValue password_;
+    uint32_t tokenRefreshInterval_;
     std::set<std::string> activeWorkerAddrs_;
     std::shared_ptr<RandomData> randomData_;
     // workerHostPortMutext_ is used to protect the read and write of activeWorkerAddrs_.

@@ -52,6 +52,7 @@ DS_DECLARE_string(cluster_name);
 
 DS_DEFINE_string(etcd_username, "", "Username for etcd authentication");
 DS_DEFINE_string(etcd_password, "", "Password for etcd authentication");
+DS_DEFINE_uint32(etcd_token_refresh_interval_s, 30, "etcd authentication token refresh interval in seconds");
 
 namespace datasystem {
 EtcdStore::EtcdStore(const std::string &address) : address_(address)
@@ -86,20 +87,16 @@ Status EtcdStore::Init()
     return Status::OK();
 }
 
-Status EtcdStore::Authenticate(std::string username, const SensitiveValue &password)
+Status EtcdStore::Authenticate(std::string username, const SensitiveValue &password, uint32_t tokenRefreshInterval)
 {
     if (username.empty() || password.Empty()) {
         return Status::OK();
     }
 
     // Save credentials for the background refresh loop
-    username_ = username;
+    username_ = std::move(username);
     password_ = password;
-
-    const char *interval_env = std::getenv("ETCD_TOKEN_REFRESH_INTERVAL_S");
-    if (interval_env != nullptr) {
-        tokenRefreshInterval_ = std::stoi(interval_env);
-    }
+    tokenRefreshInterval_ = tokenRefreshInterval;
 
     if (authSession_ == nullptr) {
         RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Auth>::CreateSession(address_, authSession_));
@@ -401,7 +398,7 @@ Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTim
         leaseKeepAlive_ = std::make_unique<EtcdKeepAlive>(address_, leaseId_);
         LOG(INFO) << "Creating new lease KeepAlive object for lease " << leaseId_
                   << " with heartbeat interval timeout: " << leaseKeepAlive_->GetLeaseRenewIntervalMs();
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(leaseKeepAlive_->Init(), "Could not initialize lease keepalive");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(leaseKeepAlive_->Init(GetAuthToken()), "Could not initialize lease keepalive");
         keepAliveTimeout_ = false;
         RETURN_IF_NOT_OK(AutoCreate());
         // Now invoke keep alive thread main loop
@@ -596,7 +593,7 @@ Status EtcdStore::InitWatch(std::unique_ptr<std::unordered_map<std::string, int6
                                                    std::placeholders::_1, std::placeholders::_2,
                                                    std::placeholders::_3));
     watchEvents_->SetUpdateClusterInfoInRocksDbHandler(updateClusterInfoInRocksDbHandler_);
-    LOG_IF_ERROR(watchEvents_->Init(), "Could not initiate watch for monitoring events");
+    LOG_IF_ERROR(watchEvents_->Init(GetAuthToken()), "Could not initiate watch for monitoring events");
     return Status::OK();
 }
 
@@ -604,7 +601,7 @@ Status EtcdStore::ReInitWatch()
 {
     RETURN_IF_NOT_OK(watchEvents_->RetrieveEventActively());
     // Create a new watch stream
-    auto rc = watchEvents_->Init();
+    auto rc = watchEvents_->Init(GetAuthToken());
     if (rc.IsError()) {
         watchEvents_->ShutdownEtcd();
     }
