@@ -211,9 +211,6 @@ Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const ClientKey &clie
             gotShm = true;
         } else {
             gotShm = status.IsOk();
-            if (gotShm) {
-                memoryRefTable_->RemoveShmUnit(clientId, shmUnitId);
-            }
         }
     }
     if (!gotShm) {

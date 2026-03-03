@@ -513,6 +513,24 @@ TEST_F(UrmaObjectClientTest, TestBatchGetSplitPayload)
     ASSERT_EQ(memcmp(data.data(), buffer[0]->MutableData(), MB_10), 0);
 }
 
+TEST_F(UrmaObjectClientTest, TestDeadLock)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMetadataToMaster", "1*return(K_WORKER_DEADLOCK)"));
+    const size_t dataSize = 1024UL * 1024UL;
+    std::string key = "key";
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client->Set(key, value));
+
+    std::string value2;
+    DS_ASSERT_OK(client->Get(key, value2));
+
+    ASSERT_EQ(value, value2);
+}
+
 class UrmaObjectClientDisableDataReplicationTest : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
