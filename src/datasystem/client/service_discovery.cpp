@@ -43,6 +43,8 @@ ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
 Status ServiceDiscovery::Init()
 {
     randomData_ = std::make_shared<RandomData>();
+    CHECK_FAIL_RETURN_STATUS(!etcdAddress_.empty(), K_INVALID,
+                             FormatString("The value of EtcdAddress should not be empty."));
     CHECK_FAIL_RETURN_STATUS(Validator::ValidateEtcdAddresses("EtcdAddress", etcdAddress_), K_INVALID,
                              FormatString("Invalid etcd address: %s", etcdAddress_));
     etcdStore_ = std::make_shared<EtcdStore>(etcdAddress_, etcdCa_.GetData(), etcdCert_, etcdKey_, etcdDNSName_);
