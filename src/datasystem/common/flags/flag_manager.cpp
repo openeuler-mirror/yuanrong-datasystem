@@ -26,7 +26,7 @@
 #include <utility>
 #include <iostream>
 
-#include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/flags/string_to_long.h"
 
 DS_DECLARE_bool(help);
 DS_DECLARE_bool(version);

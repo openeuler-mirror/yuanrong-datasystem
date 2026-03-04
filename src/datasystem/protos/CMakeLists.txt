@@ -73,7 +73,7 @@ GEN_GLOBAL_PROTO_LIB_DEPEND_SHARED(
         NAME rpc_option_protos
         SOURCE ${RPC_OPTION_PROTO_SRCS}
         DEPEND proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES})
+        LINK protobuf::libprotobuf)
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME zmq_meta_protos
         SOURCE ${META_PROTO_SRCS}
