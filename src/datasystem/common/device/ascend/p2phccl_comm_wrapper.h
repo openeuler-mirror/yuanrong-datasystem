@@ -27,7 +27,7 @@ namespace datasystem {
 class P2PHcclCommWrapper : public CommWrapperBase {
 public:
     explicit P2PHcclCommWrapper(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                                std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr);
+                                std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr);
 
     ~P2PHcclCommWrapper();
 

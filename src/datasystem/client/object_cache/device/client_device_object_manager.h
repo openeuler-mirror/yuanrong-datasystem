@@ -27,7 +27,7 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/constants.h"
-#include "datasystem/common/device/ascend/acl_resource_manager.h"
+#include "datasystem/common/device/device_resource_manager.h"
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/device_manager_base.h"
@@ -39,125 +39,6 @@
 namespace datasystem {
 namespace object_cache {
 class ObjectClientImpl;
-
-struct DeviceBatchCopyHelper {
-    bool is64BitAligned(void *ptr)
-    {
-        constexpr uintptr_t alignmentMask = 0x7;
-        uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
-        return (address & alignmentMask) == 0;
-    }
-
-    Status Prepare(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList,
-                   MemcpyKind copyKind)
-    {
-        std::vector<void *> hostPointerList;
-        std::vector<void *> devPointerList;
-        std::vector<BufferView> hostBuffers;
-        std::vector<BufferView> deviceBuffers;
-        hostBuffers.reserve(devBlobList.size());
-        deviceBuffers.reserve(devBlobList.size());
-        CHECK_FAIL_RETURN_STATUS(!devBlobList.empty(), K_INVALID, "The devBlobList is empty.");
-        CHECK_FAIL_RETURN_STATUS(!bufferList.empty(), K_INVALID, "The bufferList is empty.");
-        size_t keyStartInBlobs = 0;
-        for (size_t i = 0; i < devBlobList.size(); i++) {
-            auto &blobs = devBlobList[i].blobs;
-            if (bufferList[i] == nullptr) {
-                continue;
-            }
-            auto &buffer = bufferList[i];
-            auto offsetArrPtr = reinterpret_cast<uint64_t *>(buffer->MutableData());
-            auto hostRawPointer = reinterpret_cast<uint8_t *>(buffer->MutableData());
-            auto sz = *offsetArrPtr;
-            auto offsets = offsetArrPtr + 1;
-            CHECK_FAIL_RETURN_STATUS(
-                sz == blobs.size() && sz > 0, K_INVALID,
-                FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
-                             "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
-                             sz, blobs.size(), i, i));
-            size_t dataSize = buffer->GetSize() - offsets[0];
-            bufferMetas.emplace_back(
-                BufferMetaInfo{ .blobCount = blobs.size(), .firstBlobOffset = keyStartInBlobs, .size = dataSize });
-            hostBuffers.emplace_back(BufferView{ .ptr = hostRawPointer + offsets[0], .size = dataSize });
-            for (size_t j = 0; j < blobs.size(); j++) {
-                auto hostDataSize = offsets[j + 1] - offsets[j];
-                auto devicePointer = blobs[j].pointer;
-                auto deviceDataSize = blobs[j].size;
-                auto hostPointer = hostRawPointer + offsets[j];
-                if (!is64BitAligned(hostPointer)) {
-                    LOG(WARNING) << "host memory is not 64 aligned: " << hostRawPointer;
-                }
-                if (!is64BitAligned(devicePointer)) {
-                    LOG(WARNING) << "deivce memory is not 64 aligned: " << devicePointer;
-                }
-                CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
-                                         "The data size of device and host is not equal.");
-                deviceBuffers.emplace_back(BufferView{ .ptr = devicePointer, .size = hostDataSize });
-                hostPointerList.emplace_back(hostPointer);
-                devPointerList.emplace_back(devicePointer);
-                dataSizeList.emplace_back(hostDataSize);
-                batchSize++;
-            }
-            keyStartInBlobs += blobs.size();
-        }
-        if (copyKind == MemcpyKind::HOST_TO_DEVICE) {
-            srcBuffers = std::move(hostBuffers);
-            dstBuffers = std::move(deviceBuffers);
-
-            srcList = std::move(hostPointerList);
-            dstList = std::move(devPointerList);
-        } else if (copyKind == MemcpyKind::DEVICE_TO_HOST) {
-            srcBuffers = std::move(deviceBuffers);
-            dstBuffers = std::move(hostBuffers);
-
-            srcList = std::move(devPointerList);
-            dstList = std::move(hostPointerList);
-        } else {
-            RETURN_STATUS(K_INVALID, "Invalid MemcpyKind");
-        }
-        return Status::OK();
-    }
-    size_t batchSize = 0;
-    std::vector<size_t> dataSizeList;
-    std::vector<void *> srcList;
-    std::vector<void *> dstList;
-
-    std::vector<BufferView> srcBuffers;
-    std::vector<BufferView> dstBuffers;
-    std::vector<BufferMetaInfo> bufferMetas;
-};
-class AsyncAclMemCopyPool {
-public:
-    AsyncAclMemCopyPool(AclResourceManager *aclResourceMgr);
-
-    /**
-     * @brief Perform a batch memory copy operation on the NPU.
-     *
-     * @param[in] copyKind   Type of memory copy.
-     * @param[in] helper     Helper object that holds the batch copy tasks.
-     * @param[in] deviceId   Target device ID.
-     * @return Status K_OK on success; an error code otherwise.
-     */
-    Status AclMemcpyBatch(const MemcpyKind &copyKind, DeviceBatchCopyHelper &helper, int32_t deviceId);
-    Status AclMemcpyBatchD2H(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                             const std::vector<BufferView> &deviceBuffers,
-                             const std::vector<BufferMetaInfo> &metaInfos);
-
-    Status AclMemcpyBatchH2D(uint32_t deviceId, const std::vector<BufferView> &hostBuffers,
-                             const std::vector<BufferView> &deviceBuffers,
-                             const std::vector<BufferMetaInfo> &metaInfos);
-
-    ~AsyncAclMemCopyPool();
-
-private:
-    std::unique_ptr<ThreadPool> copyPool_;
-    std::unique_ptr<ThreadPool> h2hCopyPool_;
-    std::unique_ptr<ThreadPool> fftsCopyPool_;
-    std::vector<void *> copyStreams_;
-    int32_t deviceNow_ = -1;
-    DeviceManagerBase *devInterImpl_;
-    AclResourceManager *aclResourceMgr_;
-};
 
 class ClientDeviceObjectManager {
 public:
@@ -272,12 +153,6 @@ public:
                                     MemcpyKind copyKind, bool enableHugeTlb);
 
     /**
-     * @brief Print MSetD2H detail info
-     * @param[in] helper Helper that stores information about src data.
-     */
-    void PrintGetPerfInfo(DeviceBatchCopyHelper &helper);
-
-    /**
      * @brief Set the interrupt flag of the thread to true.
      */
     void SetThreadInterruptFlag2True();
@@ -291,13 +166,11 @@ public:
 private:
     DeviceManagerBase *devInterImpl_;
     ObjectClientImpl *objClientImpl_;
-    AclResourceManager aclResourceMgr_;
+    std::unique_ptr<DeviceResourceManager> resourceMgr_;
     std::shared_ptr<CommFactory> commFactory_;
     tbb::concurrent_hash_map<int, std::shared_ptr<P2PSubscribe>> subscribeTable_;
     tbb::concurrent_hash_map<std::string, DeviceMemoryUnit> memUnitTable_;
     int32_t clientDevOJTimeoutMs_;
-    std::unique_ptr<AsyncAclMemCopyPool> swapOutPool_;
-    std::unique_ptr<AsyncAclMemCopyPool> swapInPool_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

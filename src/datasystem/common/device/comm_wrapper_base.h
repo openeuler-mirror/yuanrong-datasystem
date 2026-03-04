@@ -39,7 +39,7 @@ constexpr int WARM_UP_DATA_COUNT = 1;
 class CommWrapperBase : public DevicePointerWrapper {
 public:
     explicit CommWrapperBase(const std::string &commId, int localDeviceId, int remoteDeviceId,
-                             std::shared_ptr<HcclCommMagr> &threadControl, AclResourceManager *aclResourceMgr);
+                             std::shared_ptr<HcclCommMagr> &threadControl, DeviceResourceManager *resourceMgr);
 
     ~CommWrapperBase();
 
@@ -148,8 +148,7 @@ public:
      * @param[in] stream[in] The stream of acl context.
      * @return Status of the call
      */
-    virtual Status P2PSend(const std::vector<Blob> &blobs,
-                           const std::shared_ptr<DeviceRtEventWrapper> &event,
+    virtual Status P2PSend(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
                            aclrtStream stream) = 0;
 
     /**
@@ -159,8 +158,7 @@ public:
      * @param[in] stream The stream of acl context.
      * @return Status of the call
      */
-    virtual Status P2PRecv(const std::vector<Blob> &blobs,
-                           const std::shared_ptr<DeviceRtEventWrapper> &event,
+    virtual Status P2PRecv(const std::vector<Blob> &blobs, const std::shared_ptr<DeviceRtEventWrapper> &event,
                            aclrtStream stream) = 0;
 
     /**
@@ -219,7 +217,7 @@ private:
     Status CheckTranPointer(const void *pointer, const std::string &pointerName);
 
     DeviceManagerBase *deviceImpl_;
-    AclResourceManager *aclResourceMgr_;
+    DeviceResourceManager *resourceMgr_;
     std::shared_ptr<acl::TwoPhaseAclPipeLineResource> resource_;
     std::unique_ptr<acl::PipeLineP2PSend> sender_;
     std::unique_ptr<acl::PipeLineP2PRecv> receiver_;
@@ -230,13 +228,13 @@ private:
     std::chrono::steady_clock::time_point commConnectTimestamp_;
     std::atomic<CommState> commState_;
     Status commDetailState_;
-    mutable std::mutex commDetailStateMutex_; // protect commDetailState_
+    mutable std::mutex commDetailStateMutex_;  // protect commDetailState_
     std::shared_ptr<HcclCommMagr> commThreadControl_;
     int bindThreadId_;
     std::mutex mutex_;
     bool hasShutDown_ = false;
 
-    std::atomic<bool> commReady_{false};
+    std::atomic<bool> commReady_{ false };
     std::mutex callbackMutex_;  // Mutex ensuring callbacks are executed in the order they were added
     std::vector<std::function<void()>> readyCallbacks_;
 
