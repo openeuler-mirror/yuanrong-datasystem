@@ -180,6 +180,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     LOG_IF_ERROR(authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey),
                  "RpcAuthKeys SetServerKey failed");
     enableRemoteH2D_ = connectOptions.enableRemoteH2D;
+    serviceDiscovery_ = connectOptions.serviceDiscovery;
 }
 
 ObjectClientImpl::~ObjectClientImpl()
@@ -352,10 +353,14 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         return rc;
     }
 
-    // Validate the port number individually first, then validate entire host port.
-    CHECK_FAIL_RETURN_STATUS(Validator::ValidatePort("Port", ipAddress_.Port()), K_INVALID,
-                             FormatString("Invalid port number: %d", ipAddress_.Port()));
+    if (serviceDiscovery_ != nullptr) {
+        std::string workerIp;
+        int workerPort;
+        RETURN_IF_NOT_OK(serviceDiscovery_->SelectWorker(workerIp, workerPort));
+        ipAddress_ = HostPort(workerIp, workerPort);
+    }
     std::string hostPortStr = ipAddress_.ToString();
+
     CHECK_FAIL_RETURN_STATUS(
         Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
         FormatString("Invalid IP address/port. Host %s, port: %d", ipAddress_.Host(), ipAddress_.Port()));
