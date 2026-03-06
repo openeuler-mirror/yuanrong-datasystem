@@ -54,8 +54,9 @@ public:
             workerAddress_.emplace_back(addr.ToString());
         }
         // Enable worker->worker batch get by default.
+        opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -v=2 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true"
+            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true"
             " -batch_get_threshold_mb=20";
 #ifdef USE_URMA
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=true ";
@@ -657,23 +658,27 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteGetSmall)
 
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetBig)
 {
-    std::shared_ptr<ObjectClient> client1;
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(0, client1);
-    InitTestClient(1, client2);
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
     const uint64_t KB = 1024;
+    const uint64_t MB = KB * KB;
     const uint64_t GB = KB * KB * KB;
-    const uint64_t size = 2 * GB + 1 * KB;
-    const std::string objectKey = NewObjectKey();
-    const std::string data = GenRandomString(size);
+    const std::vector<uint64_t> sizes{ 10 * MB, 100 * MB, 800 * MB, 2 * GB + 1 * KB };
+    for (const auto &size : sizes) {
+        LOG(INFO) << "Data size of the iteration: " << size;
+        const std::string objectKey = NewObjectKey();
+        const std::string data = GenRandomString(size);
+        DS_ASSERT_OK(client2->Set(objectKey, data));
 
-    DS_ASSERT_OK(client2->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), data.size(), CreateParam{}));
+        std::vector<Optional<Buffer>> buffers1;
+        DS_ASSERT_OK(client1->Get({ objectKey }, buffers1));
 
-    std::vector<Optional<Buffer>> buffers1;
-    DS_ASSERT_OK(client1->Get({ objectKey }, 0, buffers1));
-
-    ASSERT_EQ(buffers1[0]->GetSize(), size);
-    ASSERT_EQ(memcmp(data.data(), buffers1[0]->MutableData(), size), 0);
+        ASSERT_EQ(buffers1[0]->GetSize(), size);
+        ASSERT_EQ(data, std::string(reinterpret_cast<const char *>(buffers1[0]->ImmutableData()), size));
+        DS_ASSERT_OK(client2->Del(objectKey));
+    }
 }
 
 TEST_F(UrmaObjectClientTest, UrmaPutAndRemoteGetTest)
@@ -983,8 +988,9 @@ public:
             workerAddress_.emplace_back(addr.ToString());
         }
         // Enable worker->worker batch get by default.
+        opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -v=2 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true "
+            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true "
             "-arena_per_tenant=1";
         // Specify mismatching enable_urma setting for the workers.
         opts.workerSpecifyGflagParams[0] += " -enable_urma=true ";

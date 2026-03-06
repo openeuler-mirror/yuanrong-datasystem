@@ -48,9 +48,45 @@ inline custom_unique_ptr<T> MakeCustomUnique(T *p, std::function<void(T *)> cust
     return nullptr;
 }
 
-class Event {
+class Event;
+class EventWaiter {
 public:
-    explicit Event(uint64_t requestId) : requestId_(requestId) {}
+    EventWaiter() = default;
+    ~EventWaiter() = default;
+
+    void Notify(std::shared_ptr<Event> event)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            ready_.push(event);
+        }
+        cv_.notify_one();
+    }
+
+    Status WaitAny(std::chrono::milliseconds timeout, std::shared_ptr<Event> &event)
+    {
+        std::unique_lock<std::mutex> lock(mtx_);
+        if (!cv_.wait_for(lock, timeout, [&] { return !ready_.empty(); })) {
+            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
+                                    FormatString("Timed out waiting for any event"));
+        }
+        event = ready_.front();
+        ready_.pop();
+        return Status::OK();
+    }
+
+private:
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    std::queue<std::shared_ptr<Event>> ready_;
+};
+
+class Event : public std::enable_shared_from_this<Event> {
+public:
+    explicit Event(uint64_t requestId, std::shared_ptr<EventWaiter> waiter = nullptr)
+        : requestId_(requestId), waiter_(waiter)
+    {
+    }
     ~Event() = default;
 
     Status WaitFor(std::chrono::milliseconds timeout)
@@ -59,15 +95,20 @@ public:
         bool gotNotification = cv_.wait_for(lock, timeout, [this] { return ready_; });
         if (!gotNotification && !ready_) {
             RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
-                                    FormatString("timedout waiting for request: %d", requestId_));
+                                    FormatString("Timed out waiting for request: %d", requestId_));
         }
         return Status::OK();
     }
 
     void NotifyAll()
     {
-        std::unique_lock<std::mutex> lock(eventMutex_);
-        ready_ = true;
+        {
+            std::unique_lock<std::mutex> lock(eventMutex_);
+            ready_ = true;
+        }
+        if (waiter_) {
+            waiter_->Notify(shared_from_this());
+        }
         cv_.notify_all();
     }
 
@@ -81,12 +122,18 @@ public:
         return failed_;
     }
 
+    uint64_t GetRequestId()
+    {
+        return requestId_;
+    }
+
 private:
     std::condition_variable cv_;
     mutable std::mutex eventMutex_;
     uint64_t requestId_;
     bool ready_{ false };
     bool failed_{ false };
+    std::shared_ptr<EventWaiter> waiter_;
 };
 
 struct LocalSgeInfo {

@@ -324,7 +324,7 @@ public:
      * @brief Does a RDMA write to remote worker memory location
      * 1. Registers the segment if address is not already registered
      * 2. Imports remote segment
-     * 3. does a urma write
+     * 3. Does a urma write
      * @param[in] UrmaRemoteAddrPb Protobuf contians remote host address, remote urma segment address and data offset
      * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address)
      * @param[in] localSegSize Total size of the segment (e.g. Arena size)
@@ -334,18 +334,19 @@ public:
      * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of object)
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The new request id to wait for if not blocking.
+     * @param[in] waiter The optional event waiter.
      * @return Status of the call.
      */
     Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                             const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                            bool blocking, std::vector<uint64_t> &keys);
+                            bool blocking, std::vector<uint64_t> &keys, std::shared_ptr<EventWaiter> waiter = nullptr);
 
     /**
      * @brief Does a RDMA read from remote worker memory location
      * 1. Registers the segment if address is not already registered
      * 2. Imports remote segment
-     * 3. does a urma read
+     * 3. Does a urma read
      * @param[in] UrmaRemoteAddrPb Protobuf contians remote host address, remote urma segment address and data offset
      * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address)
      * @param[in] localSegSize Total size of the segment (e.g. Arena size)
@@ -666,12 +667,14 @@ private:
     Status GetEvent(uint64_t requestId, std::shared_ptr<Event> &event);
 
     /**
-     * @brief Create Event object for the request
-     * @param[in] requestId unique id for the Urma request
-     * @param[out] event event object for the request
+     * @brief Create Event object for the request.
+     * @param[in] requestId Unique id for the Urma request.
+     * @param[out] event Event object for the request.
+     * @param[in] waiter Optional event waiter.
      * @return Status of the call.
      */
-    Status CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event);
+    Status CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event,
+                       std::shared_ptr<EventWaiter> waiter = nullptr);
 
     /**
      * @brief Deletes the Event object for the request

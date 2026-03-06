@@ -753,7 +753,7 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
     RETURN_STATUS(K_NOT_FOUND, FormatString("Request id %d doesnt exist in event map", requestId));
 }
 
-Status UrmaManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event)
+Status UrmaManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event, std::shared_ptr<EventWaiter> waiter)
 {
     (void)event;
     TbbEventMap::accessor mapAccessor;
@@ -762,7 +762,7 @@ Status UrmaManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &even
         // If this happens that means requestId is duplicated.
         RETURN_STATUS_LOG_ERROR(K_DUPLICATED, FormatString("Request id %d already exists in event map", requestId));
     } else {
-        mapAccessor->second = std::make_shared<Event>(requestId);
+        mapAccessor->second = std::make_shared<Event>(requestId, waiter);
     }
     return Status::OK();
 }
@@ -999,7 +999,7 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeRspPb &rsp)
 Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                                      const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                     bool blocking, std::vector<uint64_t> &keys)
+                                     bool blocking, std::vector<uint64_t> &keys, std::shared_ptr<EventWaiter> waiter)
 {
     // Note that the returned keys only contain the new key(s).
     keys.clear();
@@ -1061,7 +1061,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         writtenSize += writeSize;
 
         std::shared_ptr<Event> event;
-        RETURN_IF_NOT_OK(CreateEvent(key, event));
+        RETURN_IF_NOT_OK(CreateEvent(key, event, waiter));
     }
     point4.Record();
     // If it is blocking wait, we will wait for the write to finish here.

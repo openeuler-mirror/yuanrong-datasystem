@@ -30,7 +30,9 @@ using datasystem::client::ClientWorkerRemoteCommonApi;
 
 namespace datasystem {
 namespace object_cache {
+static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint64_t MAX_PUB_SIZE = 256 * 1024 * 1024 * 1024uL;
+static constexpr uint64_t CHUNK_SIZE = 1024 * 1024;
 
 Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
                                               const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
@@ -116,6 +118,76 @@ Status ClientWorkerBaseApi::FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHa
     }
     return Status::OK();
 }
+
+Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                                       const void *data, uint64_t totalSize,
+                                                       std::shared_ptr<UrmaManager::BufferHandle> &bufHandle,
+                                                       uint64_t slotSize)
+{
+    // Use credit-based pipeline for large data
+    uint32_t pipelineDepth = slotSize / CHUNK_SIZE;
+    VLOG(DEBUG_LOG_LEVEL) << FormatString("[UB Put Pipeline]: total_size=%llu, chunk_size=%llu, pipeline_depth=%u",
+                                          totalSize, CHUNK_SIZE, pipelineDepth);
+
+    // Free chunk queue
+    std::deque<uint32_t> freeChunks(pipelineDepth);
+    std::iota(freeChunks.begin(), freeChunks.end(), 0);
+
+    // eventId -> chunkIndex
+    std::unordered_map<uint64_t, uint32_t> eventToChunkMap;
+    std::shared_ptr<EventWaiter> waiter = std::make_shared<EventWaiter>();
+
+    uint64_t processedSize = 0;
+    while (processedSize < totalSize || freeChunks.size() < pipelineDepth) {
+        // Submit writes while there are free chunks
+        while (processedSize < totalSize && !freeChunks.empty()) {
+            uint32_t chunkIndex = freeChunks.front();
+            freeChunks.pop_front();
+            uint8_t *chunkPtr = static_cast<uint8_t *>(bufHandle->GetPointer()) + chunkIndex * CHUNK_SIZE;
+            uint64_t writeSize = std::min(totalSize - processedSize, CHUNK_SIZE);
+            const uint8_t *srcPtr = static_cast<const uint8_t *>(data) + processedSize;
+            memcpy_s(chunkPtr, CHUNK_SIZE, srcPtr, writeSize);
+            std::vector<uint64_t> eventKeys;
+            Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
+                                                  bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(chunkPtr), 0,
+                                                  writeSize, 0, false, eventKeys, waiter);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
+                                             FormatString("Failed to submit UrmaWritePayload, chunkIndex=%u, "
+                                                          "writeSize=%llu, processedSize=%llu, totalSize=%llu",
+                                                          chunkIndex, writeSize, processedSize, totalSize));
+
+            uint64_t eventKey = eventKeys[0];
+            eventToChunkMap[eventKey] = chunkIndex;
+            VLOG(DEBUG_LOG_LEVEL) << FormatString("[UB Put] Submitted chunk %u, event_key=%llu, size=%llu", chunkIndex,
+                                                  eventKey, writeSize);
+            processedSize += writeSize;
+            bufferInfo->ubUrmaDataInfo->set_seg_data_offset(bufferInfo->ubUrmaDataInfo->seg_data_offset() + writeSize);
+        }
+
+        // Wait for any event if inflight exists
+        if (freeChunks.size() < pipelineDepth) {
+            std::shared_ptr<Event> event = nullptr;
+            Status rc = waiter->WaitAny(std::chrono::milliseconds(reqTimeoutDuration.CalcRealRemainingTime()), event);
+            CHECK_FAIL_RETURN_STATUS(rc.IsOk(), K_RUNTIME_ERROR, rc.ToString());
+            uint64_t eventId = event->GetRequestId();
+            // Event should be ready
+            RETURN_IF_NOT_OK(UrmaManager::Instance().WaitToFinish(eventId, RPC_POLL_TIME));
+
+            auto it = eventToChunkMap.find(eventId);
+            CHECK_FAIL_RETURN_STATUS(it != eventToChunkMap.end(), K_RUNTIME_ERROR,
+                                     FormatString("Urma event id invalid, eventId=%llu", eventId));
+            uint32_t chunkIndex = it->second;
+            // Release chunk
+            freeChunks.push_back(chunkIndex);
+            eventToChunkMap.erase(it);
+            VLOG(DEBUG_LOG_LEVEL) << FormatString("[UB Put] Completed event %llu, release chunk %u", eventId,
+                                                  chunkIndex);
+        }
+    }
+    bufferInfo->ubDataSentByMemoryCopy = true;
+    VLOG(DEBUG_LOG_LEVEL) << FormatString("[UB Put Pipeline] Success, total_size=%llu", totalSize);
+    return Status::OK();
+}
 #endif
 
 Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
@@ -125,25 +197,34 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
     (void)data;
     (void)length;
 #ifdef USE_URMA
-    std::vector<uint64_t> keys;
     const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
-    std::shared_ptr<UrmaManager::BufferHandle> handle;
-    if (UrmaManager::Instance().GetMemoryBufferHandle(handle).IsOk() && handle && totalSize <= handle->GetSlotSize()) {
-        void *poolBuf = handle->GetPointer();
-        if (poolBuf != nullptr) {
-            memcpy(poolBuf, data, totalSize);
-            Status st = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), handle->GetSegmentAddress(),
-                                         handle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
-                                         bufferInfo->dataSize, bufferInfo->metadataSize, true, keys);
-            if (st.IsOk()) {
-                bufferInfo->ubDataSentByMemoryCopy = true;
-                LOG(INFO) << "[UB Put] UrmaWritePayload done (memory pool path), dataSize=" << bufferInfo->dataSize;
-                return Status::OK();
-            }
-        }
+    std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle));
+    if (!bufHandle || !bufHandle->GetPointer()) {
+        return Status(K_RUNTIME_ERROR, "Failed to get memory buffer handle");
     }
-#endif
+    // Check if data fits in a single buffer slot (fallback to old logic)
+    uint64_t slotSize = bufHandle->GetSlotSize();
+    if (totalSize <= slotSize) {
+        std::vector<uint64_t> keys;
+        void *poolBuf = bufHandle->GetPointer();
+        memcpy_s(poolBuf, slotSize, data, totalSize);
+        Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
+                                              bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
+                                              bufferInfo->dataSize, bufferInfo->metadataSize, true, keys);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
+                                         FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
+        bufferInfo->ubDataSentByMemoryCopy = true;
+        VLOG(DEBUG_LOG_LEVEL) << "[UB Put] UrmaWritePayload done (single buffer), dataSize = " << bufferInfo->dataSize;
+        return Status::OK();
+    }
+
+    // Use pipeline transfer for large data
+    RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, slotSize));
+    return Status::OK();
+#else
     return Status(K_INVALID, "Failed to send buffer via UB");
+#endif
 }
 
 Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req)

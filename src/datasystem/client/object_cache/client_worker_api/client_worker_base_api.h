@@ -91,6 +91,10 @@ protected:
                            uint64_t length) override;
 
 #ifdef USE_URMA
+    Status PipelineDataTransferHelper(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                      uint64_t totalSize, std::shared_ptr<UrmaManager::BufferHandle> &bufHandle,
+                                      uint64_t slotSize);
+
     void PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
                            uint8_t *&ubBufferPtr, uint64_t &ubBufferSize);
     Status FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, GetRspPb &rsp,
