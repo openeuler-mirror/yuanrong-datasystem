@@ -13,19 +13,6 @@ body:
         - label: 3. 请注意，如果您提交的Bug描述缺少相应的环境信息和最小可复现的demo，我们将很难复现和解决该问题，从而降低收到反馈的可能性，甚至该问题将被关闭。
     validations:
       required: true
-  - type: dropdown        # 控件类型：下拉选择框
-    id: issue_type        # 控件唯一标识（不可重复）
-    name: Issue类型       # 显示在页面上的控件名称
-    description: 选择Issue的类型  # 控件的描述说明
-    options:              # 下拉框的可选选项列表
-      - 任务
-      - Bug
-      - 功能请求
-      - 疑问
-    default: Bug          # 默认选中的选项（必须匹配options中的值）
-    validations:          # 验证规则配置
-      required: true      # 设为true表示该字段为必填项，不选无法提交Issue
-         
   - type: textarea
     attributes:
       label: 🐞 问题详细描述
