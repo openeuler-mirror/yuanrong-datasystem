@@ -66,7 +66,7 @@ std::string TCPClient::GetServerIp()
     return server_address;
 }
 
-Status TCPClient::Connect()
+Status TCPClient::Connect(std::function<int()> *p2pCallback)
 {
     if (!initialized) {
         return Status::Error(ErrorCode::NOT_INITIALIZED, "Client not yet initialized");
@@ -90,6 +90,19 @@ Status TCPClient::Connect()
         } else {
             return Status::Error(ErrorCode::SOCKET_ERROR, "TCPClient connect failed");
         }
+    }
+
+    if (p2pCallback) {
+        *p2pCallback = [this]() {
+            // Send ping to server
+            const char *ping = "PING";
+            const unsigned char* buffer = reinterpret_cast<const unsigned char*>(ping);
+            size_t bufferSize = strlen(ping);
+            if (this->Write(buffer, bufferSize) == bufferSize) {
+                return 0;
+            }
+            return 1;
+        };
     }
 
     return Status::Success();

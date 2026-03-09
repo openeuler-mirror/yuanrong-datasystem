@@ -339,10 +339,12 @@ public:
      * @param kind Identifies whether the current device is a sender and receiver.
      * @param link Identifies the communication channel type.
      * @param comm A pointer identifying the initialized communication resource.
+     * @param p2pCallback Function callback to check if client was disconnected
      * @return HcclResult
      * @see HcclCommDestroy()
      */
-    virtual Status DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm);
+    virtual Status DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
+                                         std::function<int()> *p2pCallback = nullptr);
 
     /**
      * @brief Destroy P2P comm
@@ -555,7 +557,7 @@ private:
     REG_METHOD(DSAclrtFreeHost, int, void *);
 
     REG_METHOD(DSP2PGetRootInfo, int, HcclRootInfo *);
-    REG_METHOD(DSP2PCommInitRootInfo, int, const HcclRootInfo *, P2pKind, P2pLink, P2PComm *);
+    REG_METHOD(DSP2PCommInitRootInfo, int, const HcclRootInfo *, P2pKind, P2pLink, P2PComm *, std::function<int()> *);
     REG_METHOD(DSP2PCommDestroy, int, P2PComm);
     REG_METHOD(DSP2PSend, int, void *, uint64_t, HcclDataType, P2PComm, aclrtStream);
     REG_METHOD(DSP2PRecv, int, void *, uint64_t, HcclDataType, P2PComm, aclrtStream);

@@ -90,13 +90,7 @@ Status RemoteH2DManager::SetDeviceIdx(std::optional<int32_t> specifiedDevId)
 
     // Assume one process works with only one device index.
     if (!specifiedDevId || *specifiedDevId < 0) {
-        try {
-            devId = stoi(FLAGS_remote_h2d_device_ids);
-        } catch (const std::invalid_argument &e) {
-            RETURN_STATUS(StatusCode::K_INVALID, "Invalid Remote H2D device ids set: " + FLAGS_remote_h2d_device_ids);
-        } catch (const std::out_of_range &e) {
-            RETURN_STATUS(StatusCode::K_INVALID, "Remote H2D device id out of range: " + FLAGS_remote_h2d_device_ids);
-        }
+        RETURN_IF_NOT_OK(GetClientDeviceId(devId));
     } else {
         devId = *specifiedDevId;
     }
@@ -118,6 +112,18 @@ Status RemoteH2DManager::GetClientCommUuid(std::string &commId)
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
     // Assume client works with one device id, so only one uuid to identify the client process.
     commId = commId_;
+    return Status::OK();
+}
+
+Status RemoteH2DManager::GetClientDeviceId(int32_t &devId)
+{
+    try {
+        devId = stoi(FLAGS_remote_h2d_device_ids);
+    } catch (const std::invalid_argument& e) {
+        RETURN_STATUS(StatusCode::K_INVALID, "Invalid RemoteH2D dev ids set: " + FLAGS_remote_h2d_device_ids);
+    } catch (const std::out_of_range &e) {
+        RETURN_STATUS(StatusCode::K_INVALID, "RemoteH2D dev id out of range: " + FLAGS_remote_h2d_device_ids);
+    }
     return Status::OK();
 }
 
@@ -229,18 +235,19 @@ Status RemoteH2DManager::HandleConnection(const std::string &key, const RemoteH2
     p2pComm->waitPost.Clear();
     accessor.Release();
     P2pLink link = P2P_LINK_ROCE;
-    Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&rootInfo, kind, link, &p2pComm->p2pComm);
+    std::shared_ptr<std::function<int()>> p2pCallback = std::make_shared<std::function<int()>>();
+    Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&rootInfo, kind, link, &p2pComm->p2pComm,
+                                                                         p2pCallback.get());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
+    if (kind == P2P_RECEIVER) {
+        clientPingFunctions_.insert({key, p2pCallback});
+    } else if (kind == P2P_SENDER) {
+        clientDisconnectChecks_.insert({key, p2pCallback});
+    }
     p2pComm->stream = std::make_shared<aclrtStream>();
     RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get()));
     if (devId == -1) {
-        try {
-            p2pComm->devId = stoi(FLAGS_remote_h2d_device_ids);
-        } catch (const std::invalid_argument& e) {
-            RETURN_STATUS(StatusCode::K_INVALID, "Invalid RemoteH2D dev ids set: " + FLAGS_remote_h2d_device_ids);
-        } catch (const std::out_of_range &e) {
-            RETURN_STATUS(StatusCode::K_INVALID, "RemoteH2D dev id out of range: " + FLAGS_remote_h2d_device_ids);
-        }
+        RETURN_IF_NOT_OK(GetClientDeviceId(p2pComm->devId));
     } else {
         p2pComm->devId = devId;
     }
@@ -387,6 +394,7 @@ Status RemoteH2DManager::FillDataInfo(uint64_t *dataPtr, RemoteH2DDataInfoPb &da
 Status RemoteH2DManager::Init()
 {
     RETURN_OK_IF_TRUE(!IsRemoteH2DEnabled());
+    heartbeatThread_ = std::thread(&RemoteH2DManager::ManageHeartbeats, this);
     // It could have been initialized already on client side.
     Status rc = acl::AclDeviceManager::Instance()->aclInit(nullptr);
     if (rc.IsError()) {
@@ -399,6 +407,10 @@ Status RemoteH2DManager::Init()
 
 Status RemoteH2DManager::Uninit()
 {
+    interrupted_.store(true);
+    if (heartbeatThread_.joinable()) {
+        heartbeatThread_.join();
+    }
     LOG_IF_ERROR(SetDeviceIdx(), "Set device index failed at RemoteH2DManager uninitialization");
     {
         std::lock_guard<std::shared_timed_mutex> l(communicatorMutex_);
@@ -463,6 +475,30 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
     return Status::OK();
 }
 
+Status RemoteH2DManager::GetDevIdForComm(const std::string &commId, int32_t &devId)
+{
+    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_DEV_ID_FAST);
+    devId = -1;
+    {
+        // fast path: use const accessor
+        tbb::concurrent_hash_map<std::string, int32_t>::const_accessor cacc;
+        if (commDevIdMap_.find(cacc, commId)) {
+            devId = cacc->second;
+        }
+    }
+    if (devId == -1) {
+        // slow path
+        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_DEV_ID_SLOW);
+        std::vector<int32_t> devIds;
+        RETURN_IF_NOT_OK(GetWorkerDeviceIds(&devIds));
+        tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;
+        commDevIdMap_.insert(acc, commId);
+        acc->second = devIds[nextDevIdIndex_.fetch_add(1, std::memory_order_relaxed) % devIds.size()];
+        devId = acc->second;
+    }
+    return Status::OK();
+}
+
 void RemoteH2DChildAfterFork()
 {
     RemoteH2DManager::Instance().AfterFork();
@@ -474,6 +510,44 @@ void RemoteH2DManager::AfterFork()
     LOG(ERROR) << "Note: fork happens with RemoteH2DManager initialized";
     LOG_IF_ERROR(Uninit(), "Uninitialize acl for Remote H2D at fork failed.");
     LOG_IF_ERROR(Init(), "Initialize acl for Remote H2D at fork failed.");
+}
+
+void RemoteH2DManager::ManageHeartbeats()
+{
+    INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_interval_s", [this](int32_t interval) {
+        this->heartbeatIntervalS_ = interval;
+    });
+    INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_timeout_s", [this](int32_t timeout) {
+        this->heartbeatTimeoutS_ = timeout;
+    });
+    while (!interrupted_.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(heartbeatIntervalS_));
+        // Send pings
+        for (const auto& [_, pingFunc] : clientPingFunctions_) {
+            if (pingFunc) {
+                (*pingFunc)();
+            }
+        }
+        // Check if any clients have been disconnected
+        std::vector<std::string> disconnected;
+        for (const auto& [commId, callback] : clientDisconnectChecks_) {
+            if (callback && ((*callback)() > heartbeatTimeoutS_)) {
+                disconnected.push_back(commId);
+            }
+        }
+        // Clear related data for disconnected clients
+        for (const std::string &commId : disconnected) {
+            clientDisconnectChecks_.erase(commId);
+            tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;
+            if (commDevIdMap_.find(acc, commId)) {
+                commDevIdMap_.erase(acc);
+            }
+            CommunicatorMap::Accessor accessor;
+            if (communicatorMap_->Find(accessor, commId)) {
+                communicatorMap_->BlockingErase(accessor);
+            }
+        }
+    }
 }
 
 RemoteH2DManager::RemoteH2DManager()

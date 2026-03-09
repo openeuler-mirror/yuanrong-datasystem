@@ -5,6 +5,7 @@
 #define P2P_TCP_SERVER_H
 
 #include <unistd.h>
+#include <chrono>
 #include "TcpCommunicator.h"
 #include "Serializer.h"
 #include "../tools/Status.h"
@@ -31,7 +32,7 @@ public:
     uint16_t GetPort();
 
     // Accept connection
-    Status Accept();
+    Status Accept(std::function<int()> *p2pCallback = nullptr);
 
     // Get IP the server is listening on
     std::string GetIp();
@@ -48,6 +49,9 @@ public:
     // Close server fd
     Status Close();
 
+    // Read pings from TCPClient
+    void HeartbeatService();
+
 private:
     int serverFd;
     int server_port;
@@ -56,6 +60,7 @@ private:
     struct sockaddr_in address;
     bool initialized;
     uint32_t acceptTimeOut;  // Seconds
+    std::chrono::steady_clock::time_point lastPingTime;
 };
 
 // TCPObjectServer supports communication of arbitrary objects with a server

@@ -52,16 +52,16 @@ public:
     Status StartClient(P2PRootHandle &rootHandle);
     Status GetRootHandle(P2PRootHandle &rootHandle);
     Status GetChannelType(P2PCommChannelType &channelType);
-    Status EstablishConnection(P2PCommArgs &args);
+    Status EstablishConnection(P2PCommArgs &args, std::function<int()> *p2pCallback = nullptr);
     Status Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
     Status Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
     Status Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream);
 
 private:
     Status CreateServer();
-    Status AcceptClient();
+    Status AcceptClient(std::function<int()> *p2pCallback = nullptr);
     Status CreateClient(std::string ip, uint16_t port);
-    Status ConnectServer();
+    Status ConnectServer(std::function<int()> *p2pCallback = nullptr);
     P2PCommChannelType DetermineChannelType(const P2PCommArgs &args);
 
     bool isRoot;

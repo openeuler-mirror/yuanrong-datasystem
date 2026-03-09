@@ -109,12 +109,12 @@ P2PCommChannelType P2PCommunicator::DetermineChannelType(const P2PCommArgs &args
     }
 }
 
-Status P2PCommunicator::EstablishConnection(P2PCommArgs &args)
+Status P2PCommunicator::EstablishConnection(P2PCommArgs &args, std::function<int()> *p2pCallback)
 {
     if (isRoot) {
-        CHECK_STATUS(AcceptClient());
+        CHECK_STATUS(AcceptClient(p2pCallback));
     } else {
-        CHECK_STATUS(ConnectServer());
+        CHECK_STATUS(ConnectServer(p2pCallback));
     }
 
     P2PCommChannelType channelType = DetermineChannelType(args);
@@ -212,13 +212,13 @@ Status P2PCommunicator::CreateServer()
     return Status::Success();
 }
 
-Status P2PCommunicator::AcceptClient()
+Status P2PCommunicator::AcceptClient(std::function<int()> *p2pCallback)
 {
     if (!server) {
         return Status::Error(ErrorCode::TCP_ERROR, "TCP Server not yet created");
     }
 
-    CHECK_STATUS(server->Accept());
+    CHECK_STATUS(server->Accept(p2pCallback));
 
     AuthData authData;
     CHECK_STATUS(server->ReceiveObject(authData));
@@ -258,9 +258,9 @@ Status P2PCommunicator::CreateClient(std::string ip, uint16_t port)
     return Status::Success();
 }
 
-Status P2PCommunicator::ConnectServer()
+Status P2PCommunicator::ConnectServer(std::function<int()> *p2pCallback)
 {
-    CHECK_STATUS(client->Connect());
+    CHECK_STATUS(client->Connect(p2pCallback));
 
     AuthData authData;
     authData.set_identifier(identifier);

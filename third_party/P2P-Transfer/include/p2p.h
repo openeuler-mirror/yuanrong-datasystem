@@ -77,11 +77,12 @@ P2P_TRANSFER_EXPORT HcclResult UnwarmHccp();
  * @param kind Identifies whether the current device is a sender and receiver
  * @param link Identifies the communication channel type
  * @param comm A pointer identifying the initialized communication resource.
+ * @param p2pCallback Function callback to check if client was disconnected
  * @return HcclResult
  * @see P2PCommDestroy()
  */
 P2P_TRANSFER_EXPORT HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link,
-                                                   P2PComm *comm);
+                                                   P2PComm *comm, std::function<int()> *p2pCallback = nullptr);
 
 /**
  * @brief Destroy P2P comm
