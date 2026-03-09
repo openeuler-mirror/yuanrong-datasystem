@@ -8,6 +8,9 @@ file(GLOB BENCH_SRC
     src/kv/kv_bench.cpp
 )
 
+set_source_files_properties(src/kv/kv_args.cpp PROPERTIES
+    COMPILE_DEFINITIONS "GIT_HASH=\"${GIT_HASH}\"")
+
 add_executable(dsbench_cpp ${BENCH_SRC})
 target_include_directories(dsbench_cpp PRIVATE src)
 

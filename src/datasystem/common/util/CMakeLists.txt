@@ -36,5 +36,8 @@ set(UTIL_LIBS
         common_util_gflag
         common_rdma_util)
 
+set_source_files_properties(version.cpp PROPERTIES
+        COMPILE_DEFINITIONS "GIT_HASH=\"${GIT_HASH}\"")
+
 add_library(common_util STATIC ${UTIL_SRCS})
 target_link_libraries(common_util PRIVATE ${UTIL_LIBS})

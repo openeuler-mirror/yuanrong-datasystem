@@ -131,8 +131,6 @@ set(GIT_BRANCH "Unknown")
 get_git_hash(GIT_HASH)
 get_git_branch(GIT_BRANCH)
 message(STATUS "GIT COMMIT: ${GIT_HASH}; BRANCH: ${GIT_BRANCH}")
-add_compile_options(-DGIT_HASH="${GIT_HASH}")
-add_compile_options(-DGIT_BRANCH="${GIT_BRANCH}")
 
 # Import the third party we depends.
 include(cmake/dependency.cmake)

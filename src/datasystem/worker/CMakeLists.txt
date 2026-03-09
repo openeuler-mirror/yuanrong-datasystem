@@ -56,6 +56,9 @@ if (ENABLE_PERF)
     list(APPEND WORKER_DEPEND_LIBS perf_posix_protos)
 endif ()
 
+set_source_files_properties(worker.cpp PROPERTIES
+        COMPILE_DEFINITIONS "GIT_HASH=\"${GIT_HASH}\";GIT_BRANCH=\"${GIT_BRANCH}\"")
+
 add_library(datasystem_worker_static STATIC ${WORKER_SRCS})
 target_link_libraries(datasystem_worker_static PRIVATE ${WORKER_DEPEND_LIBS})
 add_dependencies(datasystem_worker_static
