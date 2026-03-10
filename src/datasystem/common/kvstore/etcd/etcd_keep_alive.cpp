@@ -316,7 +316,8 @@ int64_t EtcdKeepAlive::GetLeaseRenewIntervalMs()
     INJECT_POINT("GetLeaseRenewIntervalMs", [](int64_t time) { return time; });
     const uint32_t maxIntervalS = 60;
     const uint32_t retryTimes = 4;
-    int64_t leaseRenewInterval = std::max(1u, std::min(maxIntervalS, FLAGS_node_timeout_s / retryTimes));
-    return leaseRenewInterval * kMillisecsPerSecond_;
+    int64_t leaseRenewInterval =
+        std::min(maxIntervalS * kMillisecsPerSecond_, FLAGS_node_timeout_s * kMillisecsPerSecond_ / retryTimes);
+    return leaseRenewInterval;
 }
 }  // namespace datasystem
