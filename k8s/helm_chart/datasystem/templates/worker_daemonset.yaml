@@ -248,20 +248,13 @@ spec:
         securityContext:
           {{- if $.Values.global.performance.enableRdma }}
           privileged: true
-          runAsUser: 0
           {{- else if $.Values.global.performance.enableHugeTlb }}
-          runAsUser: 0
           capabilities:
             add:
               - IPC_LOCK
             drop:
               - ALL
           allowPrivilegeEscalation: false
-          {{- else }}
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
           {{- end }}
         startupProbe:
           exec:
@@ -355,8 +348,6 @@ spec:
             value: "{{ $.Values.global.gracefulShutdown.scaleInTaint }}"
           - name: NAMESPACE
             value: "{{ $.Values.global.namespace }}"
-          - name: ENABLE_RDMA
-            value: "{{ $.Values.global.performance.enableRdma }}"
           {{- if $.Values.global.performance.enableRdma }}
           - name: UCX_TLS
             value: "{{ $.Values.global.performance.ucxTransportLayerSelection }}"
@@ -402,13 +393,13 @@ spec:
             cpu: {{ $spec.resources.limits.cpu }}
             memory: {{ $spec.resources.limits.memory }}
             {{- if $.Values.global.performance.enableHugeTlb }}
-            hugepages-2Mi: {{ $.Values.global.resources.hugepages2Mi}}
+            hugepages-2Mi: {{ $.Values.global.resources.datasystemWorker.limits.hugepages2Mi}}
             {{- end }}
           requests:
             cpu: {{ $spec.resources.requests.cpu }}
             memory: {{ $spec.resources.requests.memory }}
             {{- if $.Values.global.performance.enableHugeTlb }}
-            hugepages-2Mi: {{ $.Values.global.resources.hugepages2Mi}}
+            hugepages-2Mi: {{ $.Values.global.resources.datasystemWorker.requests.hugepages2Mi}}
             {{- end }}
         volumeMounts:
         {{- if $.Values.global.rpc.enableCurveZmq }}

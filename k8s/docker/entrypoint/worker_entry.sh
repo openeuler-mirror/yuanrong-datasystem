@@ -78,10 +78,6 @@ bash "${HOME}"/install.sh
 source /home/yuanrong/.bashrc
 umask 0027
 
-if [[ "${ENABLE_RDMA}" == "true" ]]; then
-    ulimit -l unlimited
-fi
-
 ilog "start worker"
 LD_LIBRARY_PATH="${HOME}/datasystem/lib:${LD_LIBRARY_PATH}" datasystem_worker "$@" &
 WORKER_PID=$!
