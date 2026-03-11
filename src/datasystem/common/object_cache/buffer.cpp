@@ -221,6 +221,16 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
 
+    if (bufferInfo_->ubUrmaDataInfo && !bufferInfo_->ubDataSentByMemoryCopy) {
+        uint64_t dataSize = GetSize();
+        const void *dataPtr = ImmutableData();
+        if (dataPtr != nullptr && dataSize > 0) {
+            Status ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize);
+            VLOG(DEBUG_LOG_LEVEL) << "Try to publish via UB, object key: " << bufferInfo_->objectKey
+                                  << ", ub send status: " << ubStatus.ToString();
+        }
+    }
+
     Status status = clientImplSharedPtr->Publish(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {
         SetVisibility(status.IsOk());
@@ -289,6 +299,15 @@ Status Buffer::UnWLatch()
 
 void *Buffer::MutableData()
 {
+    if (bufferInfo_->pointer == nullptr && bufferInfo_->ubUrmaDataInfo != nullptr) {
+        bufferInfo_->ubDataSentByMemoryCopy = false;
+        Status status = MallocBufferHelper();
+        if (status.IsError()) {
+            LOG(ERROR) << FormatString("Malloc buffer for object %s failed, err: %s", bufferInfo_->objectKey,
+                                       status.ToString());
+            return nullptr;
+        }
+    }
     return static_cast<void *>(bufferInfo_->pointer + bufferInfo_->metadataSize);
 }
 
