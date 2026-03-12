@@ -85,6 +85,7 @@ static int Write()
 
 static int Read()
 {
+    // use set traceid to set trace prefix
     (void)Context::SetTraceId("read");
     std::string objectKey = "key1";
     std::string correctVal = "test1";
@@ -104,7 +105,9 @@ static int Read()
 
     Optional<ReadOnlyBuffer> buffer;
     status = kvClient->Get(objectKey, buffer);
+    buffer->RLatch();
     auto str = std::string(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+    buffer->UnRLatch();
     if (status.IsError()) {
         std::cerr << "Get buffer value failed, detail: " << status.ToString() << std::endl;
         return FAILED;
