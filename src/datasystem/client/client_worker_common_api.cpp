@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <mutex>
 #include <sys/types.h>
+#include <arpa/inet.h>
 #include <nlohmann/json.hpp>
 #include <shared_mutex>
 #include <string>
@@ -269,53 +270,88 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
     auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
 
-    bool isConnectUdsSuccess = false;
+    bool isConnectSuccess = false;
     int32_t serverFd = INVALID_SOCKET_FD;
     int32_t socketFd = INVALID_SOCKET_FD;
     bool mustUds = heartbeatType_ == HeartbeatType::UDS_HEARTBEAT || (reconnection && shmEnabled_);
     INJECT_POINT_NO_RETURN("ClientWorkerCommonApi.Connect.MustUds", [&mustUds] { mustUds = true; });
-    RETURN_IF_NOT_OK(CreateUnixDomainSocket(timeoutMs, isConnectUdsSuccess, serverFd, socketFd));
-    if (isConnectUdsSuccess) {
-        VLOG(1) << "Create unix domain socket successfully, socketFd: " << socketFd << ", serverFd: " << serverFd;
+    std::string type;
+    RETURN_IF_NOT_OK(CreateConnectionForTransferShmFd(timeoutMs, isConnectSuccess, serverFd, socketFd, type));
+    if (mustUds && !isConnectSuccess) {
+        return { StatusCode::K_RPC_UNAVAILABLE, "Can not create connection to worker for shm fd transfer." };
     }
-    if (mustUds && !isConnectUdsSuccess) {
-        return { StatusCode::K_RPC_UNAVAILABLE, "Can not create a unix domain socket to connect worker." };
+
+    if (isConnectSuccess) {
+        LOG(INFO) << "Client and worker support transfer data through shared memory and the fd send over " << type
+                  << ", socketFd: " << socketFd << ", serverFd: " << serverFd;
     }
 
     CloseSocketFd();
 
-    shmEnabled_ = isUseStandbyWorker_ ? false : isConnectUdsSuccess;
+    shmEnabled_ = isUseStandbyWorker_ ? false : isConnectSuccess;
     socketFd_ = socketFd;
-    if (isConnectUdsSuccess) {
+    if (isConnectSuccess) {
         heartbeatType_ = heartbeatType_ == HeartbeatType::NO_HEARTBEAT ? HeartbeatType::RPC_HEARTBEAT : heartbeatType_;
     }
-    std::string type = isConnectUdsSuccess ? "Unix domain socket" : "TCP";
-    VLOG(1) << "Start to register client to worker through the " << type;
     req.set_server_fd(serverFd);
     RETURN_IF_NOT_OK(RegisterClient(req, timeoutMs));
     LOG(INFO) << FormatString("Register client to worker through the %s successfully, client id: %s", type, clientId_);
     return Status::OK();
 }
 
-Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, std::string &sockPath, int32_t &serverFd)
+bool ClientWorkerRemoteCommonApi::PrepareShmTransferEndpoint(const GetSocketPathRspPb &reply, std::string &endpointStr,
+                                                             std::string &type)
 {
-    LOG(INFO) << FormatString("Unix socket path %s", sockPath);
-    RETURN_IF_NOT_OK(fd.Connect(FormatString("ipc://%s", sockPath)));
+    uint32_t shmWorkerPort = reply.shm_worker_port();
+    if (shmWorkerPort > 0) {
+        endpointStr = FormatString("tcp://%s:%d", hostPort_.Host(), shmWorkerPort);
+        type = "SCMTCP";
+        return true;
+    }
+
+    if (!reply.path().empty()) {
+        endpointStr = FormatString("ipc://%s", reply.path());
+        type = "Unix domain socket";
+        return true;
+    }
+
+    type = "TCP";
+    LOG(INFO) << "Both the uds socket path and worker_port_for_ipc is empty, cannot transfer data through shm between "
+                 "client and worker.";
+    return false;
+}
+
+Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, const std::string &endpoint, int32_t &serverFd)
+{
+    LOG(INFO) << FormatString("Try connect worker for shm fd transfer, endpoint: %s", endpoint);
+    RETURN_IF_NOT_OK(fd.Connect(endpoint));
     uint32_t tmpServerFd;
     // Get the server side fd and add this to the RegisterClientReqPb
     RETURN_IF_NOT_OK(fd.SetTimeout(STUB_FRONTEND_TIMEOUT));
     RETURN_IF_NOT_OK(fd.Recv32(tmpServerFd, false));
     INJECT_POINT("ClientWorkerCommonApi.CreateHandShakeFunc");
     CHECK_FAIL_RETURN_STATUS(tmpServerFd <= INT32_MAX, K_RUNTIME_ERROR, "Server fd exceed range of int32_t");
+
+    if (shmWorkerPort_ > 0) {
+        // check the client and worker in the same node.
+        std::vector<int> clientFds;
+        uint64_t requestId;
+        RETURN_IF_NOT_OK_APPEND_MSG(SockRecvFd(fd.GetFd(), true, clientFds, requestId), "Recv fd failed");
+        // after check connection, direct close the received fds.
+        for (int fd : clientFds) {
+            RETRY_ON_EINTR(close(fd));
+        }
+    }
     serverFd = static_cast<int32_t>(tmpServerFd);  // The FD sent by the worker is of the int type.
-    LOG(INFO) << FormatString("Connects to local server %s successfully. Client fd %d. Server fd %d.", sockPath,
+    LOG(INFO) << FormatString("Connects to local server %s successfully. Client fd %d. Server fd %d.", endpoint,
                               fd.GetFd(), serverFd);
     // Change the timeout back to the default.
     return fd.SetTimeout(0);
 }
 
-Status ClientWorkerRemoteCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bool &isConnectUdsSuccess,
-                                                           int32_t &serverFd, int32_t &socketFd)
+Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t timeoutMs, bool &isConnectSuccess,
+                                                                     int32_t &serverFd, int32_t &socketFd,
+                                                                     std::string &type)
 {
     Timer timer(timeoutMs);
     GetSocketPathReqPb req;
@@ -336,30 +372,37 @@ Status ClientWorkerRemoteCommonApi::CreateUnixDomainSocket(int32_t timeoutMs, bo
           StatusCode::K_RPC_UNAVAILABLE },
         rpcTimeoutMs_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
-    std::string sockPath = reply.path();
-    isConnectUdsSuccess = false;
-    if (sockPath.empty()) {
-        LOG(INFO) << "The uds socket path is empty, current server can not support unix domain socket.";
+
+    isConnectSuccess = false;
+
+    std::string endpointStr;
+    // Determine how to reach the worker for shared memory transfer.
+    if (!PrepareShmTransferEndpoint(reply, endpointStr, type)) {
         return Status::OK();
     }
 
-    UnixSockFd sock;
-    auto func = [this, &sock, &sockPath, &serverFd](int32_t) {
-        Status status = CreateHandShakeFunc(sock, sockPath, serverFd);
+    shmWorkerPort_ = reply.shm_worker_port();
+    UnixSockFd sock(RPC_NO_FILE_FD, shmWorkerPort_ > 0);
+    auto func = [this, &sock, &endpointStr, &serverFd](int32_t) {
+        Status status = CreateHandShakeFunc(sock, endpointStr, serverFd);
         if (status.IsError()) {
             LOG(WARNING) << FormatString(
-                "Client can not connect to server by unix domain socket within allowed time (%dms). Socket path: "
+                "Client can not connect to server for shm fd transfer within allowed time (%dms). Socket path: "
                 "%s, Detail: %s",
-                STUB_FRONTEND_TIMEOUT, sockPath, status.GetMsg());
-            // Make sure we release the file descriptor.
+                STUB_FRONTEND_TIMEOUT, endpointStr, status.GetMsg());
             sock.Close();
         }
         return status;
     };
     rc = RetryOnError(timer.GetRemainingTimeMs(), func, [] { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
     if (rc.IsOk()) {
-        isConnectUdsSuccess = true;
+        isConnectSuccess = true;
         socketFd = sock.GetFd();
+    } else {
+        LOG(INFO) << "Failed connect to local worker via " << type
+                  << ", client and worker maybe not in the same node, falling back to TCP";
+        type = "TCP";
+        shmWorkerPort_ = 0;
     }
     return Status::OK();
 }
@@ -693,7 +736,7 @@ void ClientWorkerRemoteCommonApi::RecvPageFd()
         // Blocks and waits for worker to send fd unless the socket is disconnected.
         std::vector<int> serverFds;
         uint64_t requestId;
-        auto status = SockRecvFd(socketFd_, pageFds, requestId);
+        auto status = SockRecvFd(socketFd_, shmWorkerPort_ > 0, pageFds, requestId);
         PostRecvPageFd(status, requestId, pageFds);
         CloseExpiredFd();
         recvClientFdState_.recvPageNotify->Set();

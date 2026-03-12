@@ -139,6 +139,7 @@ message GetSocketPathReqPb {
 
 message GetSocketPathRspPb {
     string path = 1;
+    uint32 shm_worker_port = 2;
 }
 
 service WorkerService {
