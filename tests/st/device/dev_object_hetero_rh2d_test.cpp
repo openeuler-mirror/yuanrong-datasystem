@@ -51,7 +51,7 @@
 #include "datasystem/utils/status.h"
 #include "device/dev_test_helper.h"
 
-using datasystem::memory::DevMemFuncRegister;
+using datasystem::memory::AllocatorFuncRegister;
 
 namespace datasystem {
 using namespace acl;

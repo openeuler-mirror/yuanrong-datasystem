@@ -112,12 +112,25 @@ Status Allocator::InitSharedDisk(uint64_t size)
     return Status::OK();
 }
 
-Status Allocator::InitDevMemory(uint64_t devDevSize, uint64_t devHostSize)
+Status Allocator::InitDevHostMemory(uint64_t devHostSize)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(devHostSize > 0, K_INVALID, "Got invalid dev host memory init!");
+    devHostMemStats_ = std::make_unique<ResourcePool>(devHostSize);
+    return Status::OK();
+}
+
+Status Allocator::InitDevMemory(uint64_t devDevSize)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(devDevSize > 0, K_INVALID, "Got invalid dev device memory init!");
     INJECT_POINT_NO_RETURN("Allocator.InitDevMemory");
     devDeviceMemStats_ = std::make_unique<ResourcePool>(devDevSize);
-    devHostMemStats_ = std::make_unique<ResourcePool>(devHostSize);
+    return Status::OK();
+}
+
+Status Allocator::InitUBTransportMemory(uint64_t size)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(size > 0, K_INVALID, "Got invalid dev device memory init!");
+    ubTransportStats_ = std::make_unique<ResourcePool>(size);
     return Status::OK();
 }
 
@@ -136,20 +149,30 @@ Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool s
     RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold, streamThreshold));
     RETURN_IF_NOT_OK(InitSharedDisk(shdSize));
     arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
-    DevMemFuncRegister emptyRegister;
-    arenaManager_->Init(emptyRegister);
+    arenaManager_->Init();
     return Status::OK();
 }
 
-Status Allocator::InitWithoutShm(uint64_t devDevSize, uint64_t devHostSize, DevMemFuncRegister memFuncRegister,
-                                 bool populate, bool scaling, ssize_t decayMs)
+Status Allocator::InitWithFlexibleRegister(CacheType cacheType, uint64_t size, AllocatorFuncRegister memFuncRegister,
+                                           bool populate, bool scaling, ssize_t decayMs)
 {
-    if (arenaManager_) {
-        return Status::OK();
+    if (!arenaManager_) {
+        arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
     }
-    RETURN_IF_NOT_OK(InitDevMemory(devDevSize, devHostSize));
-    arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
-    arenaManager_->Init(memFuncRegister);
+    RETURN_IF_NOT_OK(arenaManager_->Init(cacheType, memFuncRegister));
+    switch (cacheType) {
+        case CacheType::DEV_DEVICE:
+            RETURN_IF_NOT_OK(InitDevMemory(size));
+            break;
+        case CacheType::DEV_HOST:
+            RETURN_IF_NOT_OK(InitDevHostMemory(size));
+            break;
+        case CacheType::UB_TRANSPORT:
+            RETURN_IF_NOT_OK(InitUBTransportMemory(size));
+            break;
+        default:
+            RETURN_STATUS_LOG_ERROR(K_INVALID, FormatString("Got unknow type: %d", (int)cacheType));
+    }
     return Status::OK();
 }
 
@@ -189,6 +212,8 @@ uint64_t Allocator::GetMaxMemoryLimit(CacheType cacheType) const
             return devDeviceMemStats_->FootprintLimit();
         case CacheType::DEV_HOST:
             return devHostMemStats_->FootprintLimit();
+        case CacheType::UB_TRANSPORT:
+            return ubTransportStats_->FootprintLimit();
         default:
             LOG(ERROR) << FormatString("Got unknow type: %d", (int)cacheType);
             return 0;
@@ -209,6 +234,8 @@ ResourcePool *Allocator::GetResourcePoolByType(ServiceType serviceType, CacheTyp
             return devDeviceMemStats_.get();
         case CacheType::MEMORY:
             return objectMemoryStats_.get();
+        case CacheType::UB_TRANSPORT:
+            return ubTransportStats_.get();
         default:
             return objectMemoryStats_.get();
     }
@@ -289,6 +316,8 @@ Status Allocator::IncrementMemoryUsage(uint64_t needSize, ServiceType serviceTyp
         return devDeviceMemStats_->AddUsageCAS(needSize);
     } else if (cacheType == CacheType::DEV_HOST) {
         return devHostMemStats_->AddUsageCAS(needSize);
+    } else if (cacheType == CacheType::UB_TRANSPORT) {
+        return ubTransportStats_->AddUsageCAS(needSize);
     }
     INJECT_POINT("worker.Allocator.MemoryAllocatedToStream", [this](int streamMemoryUsage) {
         streamMemoryStats_->SetUsage(streamMemoryUsage);
@@ -400,6 +429,9 @@ uint64_t Allocator::GetTotalPhysicalMemoryUsage(CacheType cacheType)
     if (cacheType == CacheType::DEV_HOST) {
         return devDeviceMemStats_->RealUsage();
     }
+    if (cacheType == CacheType::UB_TRANSPORT) {
+        return ubTransportStats_->RealUsage();
+    }
     INJECT_POINT("allocator.size", [this](int64_t usage) {
         physicalMemoryStats_->SetRealUsage(usage);
         return 0;
@@ -410,7 +442,7 @@ uint64_t Allocator::GetTotalPhysicalMemoryUsage(CacheType cacheType)
 
 bool Allocator::AddTotalPhysicalMemoryUsage(CacheType type, uint64_t size)
 {
-    if (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) {
+    if (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT) {
         return true;
     }
     return GetPhyResourcePoolByType(type)->AddRealUsage(size);
@@ -418,7 +450,7 @@ bool Allocator::AddTotalPhysicalMemoryUsage(CacheType type, uint64_t size)
 
 void Allocator::SubTotalPhysicalMemoryUsage(CacheType type, uint64_t size)
 {
-    if (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) {
+    if (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT) {
         return;
     }
     (void)GetPhyResourcePoolByType(type)->SubRealUsageCAS(size);

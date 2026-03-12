@@ -24,13 +24,14 @@ Status DeviceResourceManager::DoInit()
     INJECT_POINT_NO_RETURN("AclResourceManager.Init");
 
     auto devInterImpl = DeviceManagerFactory::GetDeviceManager();
-    struct DevMemFuncRegister regFunc;
+    struct AllocatorFuncRegister regFuncDevDev;
+    struct AllocatorFuncRegister regFuncDevHost;
 
-    regFunc.devDeviceCreateFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
+    regFuncDevDev.createFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
         return devInterImpl->Malloc(&(*ptr), maxSize, MemMallocPolicy::HUGE_FIRST);
     };
 
-    regFunc.devDeviceDestroyFunc = [](void *ptr, size_t destroySize) -> Status {
+    regFuncDevDev.destroyFunc = [](void *ptr, size_t destroySize) -> Status {
         (void)destroySize;
         if (ptr) {
             // do not free in instance yet (destroy func : devInterImpl->aclrtFreeHost(ptr))
@@ -40,11 +41,11 @@ Status DeviceResourceManager::DoInit()
         return Status::OK();
     };
 
-    regFunc.devHostCreateFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
+    regFuncDevHost.createFunc = [devInterImpl](void **ptr, size_t maxSize) -> Status {
         return devInterImpl->MallocHost(&(*ptr), maxSize);
     };
 
-    regFunc.devHostDestroyFunc = [](void *ptr, size_t destroySize) -> Status {
+    regFuncDevHost.destroyFunc = [](void *ptr, size_t destroySize) -> Status {
         (void)destroySize;
         if (ptr) {
             // do not free in instance yet (destroy func : devInterImpl->aclrtFree(ptr)
@@ -56,7 +57,8 @@ Status DeviceResourceManager::DoInit()
 
     auto *allocator = Allocator::Instance();
     LOG(INFO) << PrintMemConfig();
-    allocator->InitWithoutShm(deviceMemSize, hostMemSize, regFunc);
+    allocator->InitWithFlexibleRegister(AllocateType::DEV_DEVICE, deviceMemSize, regFuncDevDev);
+    allocator->InitWithFlexibleRegister(AllocateType::DEV_HOST, hostMemSize, regFuncDevHost);
 
     hostMemMgr_ = std::make_unique<HostMemMgr>(allocator);
     auto rc = hostMemMgr_->Init();

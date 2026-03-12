@@ -18,6 +18,9 @@
  * Description: Disk mmap instance.
  */
 
+#ifndef DATASYSTEM_COMMON_SHARED_MEMORY_MMAP_FLEXIBLE_MAP_H
+#define DATASYSTEM_COMMON_SHARED_MEMORY_MMAP_FLEXIBLE_MAP_H
+
 #include <atomic>
 #include <string>
 #include <functional>
@@ -27,11 +30,11 @@
 
 namespace datasystem {
 namespace memory {
-class DevMmap : public BaseMmap {
+class FlexibleMmap : public BaseMmap {
 public:
-    DevMmap(CacheType cacheType, DevMemFuncRegister devMemFuncRegister);
+    FlexibleMmap(AllocatorFuncRegister funcRegister);
 
-    ~DevMmap();
+    ~FlexibleMmap();
 
     void Destroy() override;
 
@@ -85,3 +88,5 @@ private:
 };
 }  // namespace memory
 }  // namespace datasystem
+
+#endif  // DATASYSTEM_COMMON_SHARED_MEMORY_MMAP_FLEXIBLE_MAP_H

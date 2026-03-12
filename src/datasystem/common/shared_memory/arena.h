@@ -181,9 +181,16 @@ public:
 
     /**
      * @brief Init ArenaManager.
-     * @param[in] devMemFuncRegister The register func for allocator.
      */
-    void Init(DevMemFuncRegister devMemFuncRegister);
+    void Init();
+
+    /**
+     * @brief Init ArenaManager.
+     * @param[in] The cache type.
+     * @param[in] funcRegister The register func for allocator.
+     * @return K_OK if success, the error otherwise.
+     */
+    Status Init(CacheType type, AllocatorFuncRegister funcRegister);
 
     /**
      * @brief Create an new arena group to allocate/deallocate shared memory.
@@ -424,7 +431,8 @@ private:
     WaitPost destroyWaitPost_;
     uint64_t maxTenantSize_ = 0;
 
-    DevMemFuncRegister devMemFuncRegister_;
+    std::shared_timed_mutex registerMutex_;
+    std::unordered_map<CacheType, AllocatorFuncRegister> funcRegisterList_;
 };
 
 class Arena {
@@ -436,10 +444,10 @@ public:
 
     /**
      * @brief Arena initialize.
-     * @param[in] devMemFuncRegister The register func for allocator.
+     * @param[in] funcRegister The register func for allocator.
      * @return K_OK if success, the error otherwise.
      */
-    Status Init(DevMemFuncRegister devMemFuncRegister);
+    Status Init(AllocatorFuncRegister funcRegister);
 
     /**
      * @brief Get mmap entry info via pointer, it will traverses 'mmapEntryTable_' to find the

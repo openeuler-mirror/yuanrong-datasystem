@@ -32,6 +32,7 @@ enum class CacheType : int {
     DISK = 1,
     DEV_DEVICE = 2,
     DEV_HOST = 3,
+    UB_TRANSPORT = 4,
 };
 
 static const std::unordered_map<CacheType, std::string> CACHE_TYPE_STR = { { CacheType::MEMORY, "Shared memory" },
@@ -48,12 +49,11 @@ struct ArenaGroupKey {
     }
 };
 
-struct DevMemFuncRegister {
-    std::function<Status(void **, size_t)> devDeviceCreateFunc;
-    std::function<Status(void *, size_t)> devDeviceDestroyFunc;
-    std::function<Status(void **, size_t)> devHostCreateFunc;
-    std::function<Status(void *, size_t)> devHostDestroyFunc;
+struct AllocatorFuncRegister {
+    std::function<Status(void **, size_t)> createFunc;
+    std::function<Status(void *, size_t)> destroyFunc;
 };
+
 }  // namespace memory
 }  // namespace datasystem
 

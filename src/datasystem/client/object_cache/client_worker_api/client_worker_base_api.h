@@ -93,7 +93,7 @@ protected:
 #ifdef USE_URMA
     Status PipelineDataTransferHelper(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                       uint64_t totalSize, std::shared_ptr<UrmaManager::BufferHandle> &bufHandle,
-                                      uint64_t slotSize);
+                                      uint64_t realSize);
 
     void PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
                            uint8_t *&ubBufferPtr, uint64_t &ubBufferSize);

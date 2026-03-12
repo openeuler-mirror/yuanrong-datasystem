@@ -36,7 +36,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/jemalloc.h"
-#include "datasystem/common/shared_memory/mmap/dev_mmap.h"
+#include "datasystem/common/shared_memory/mmap/flexible_mmap.h"
 #include "datasystem/common/shared_memory/mmap/disk_mmap.h"
 #include "datasystem/common/shared_memory/mmap/mem_mmap.h"
 #include "datasystem/common/util/format.h"
@@ -322,10 +322,24 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
     maxTenantSize_ = ARENAS_INIT_SIZE / arenaNum - 1;
 }
 
-void ArenaManager::Init(DevMemFuncRegister devMemFuncRegister)
+void ArenaManager::Init()
 {
-    devMemFuncRegister_ = std::move(devMemFuncRegister);
+    int runningNum = handleExpiredTenantThread_->GetRunningTasksNum();
+    if (runningNum >= handleExpiredTenantThreadNum_) {
+        return;
+    }
     StartCheckExpiredTenantResource();
+}
+
+Status ArenaManager::Init(CacheType type, AllocatorFuncRegister funcRegister)
+{
+    std::lock_guard<std::shared_timed_mutex> lck(registerMutex_);
+    auto rc = funcRegisterList_.try_emplace(type, funcRegister);
+    if (!rc.second) {
+        RETURN_STATUS(K_DUPLICATED, FormatString("Already register allocator func for type: %d", (int)type));
+    }
+    Init();
+    return Status::OK();
 }
 
 uint64_t ArenaManager::RoundUpToNextMultiple(uint64_t size)
@@ -363,7 +377,8 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         std::lock_guard<std::shared_timed_mutex> l(mutex_);
         std::vector<std::shared_ptr<Arena>> arenas;
         auto arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
-        arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) ? 1 : arenasNum;
+        arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT)
+                        ? 1 : arenasNum;
         arenas.reserve(arenasNum);
         for (uint32_t i = 0; i < arenasNum; i++) {
             uint32_t arenaInd = 0;
@@ -385,7 +400,15 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
                               FormatString("arena %d reuse, but exists in ArenaManager.", arenaInd));
             }
 
-            Status rc = arena->Init(devMemFuncRegister_);
+            AllocatorFuncRegister regFunc;
+            {
+                std::shared_lock<std::shared_timed_mutex> l(registerMutex_);
+                auto it = funcRegisterList_.find(type);
+                if (it != funcRegisterList_.end()) {
+                    regFunc = it->second;
+                }
+            }
+            Status rc = arena->Init(regFunc);
             if (rc.IsError()) {
                 LOG(ERROR) << "Init arena " << arenaInd << " failed: " << rc;
                 arenas_[arenaInd] = nullptr;
@@ -678,7 +701,7 @@ Arena::Arena(uint32_t arenaId, void *handler, bool populate, bool scaling, uint6
 {
 }
 
-Status Arena::Init(DevMemFuncRegister devMemFuncRegister)
+Status Arena::Init(AllocatorFuncRegister funcRegister)
 {
     switch (cacheType_) {
         case CacheType::MEMORY:
@@ -688,10 +711,9 @@ Status Arena::Init(DevMemFuncRegister devMemFuncRegister)
             mmap_ = std::make_unique<DiskMmap>();
             break;
         case CacheType::DEV_DEVICE:
-            mmap_ = std::make_unique<DevMmap>(cacheType_, devMemFuncRegister);
-            break;
         case CacheType::DEV_HOST:
-            mmap_ = std::make_unique<DevMmap>(cacheType_, devMemFuncRegister);
+        case CacheType::UB_TRANSPORT:
+            mmap_ = std::make_unique<FlexibleMmap>(funcRegister);
             break;
         default:
             return Status(StatusCode::K_INVALID,

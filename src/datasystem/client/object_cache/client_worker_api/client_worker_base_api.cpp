@@ -73,8 +73,7 @@ void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaM
         Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubBufferHandle);
         if (ubRc.IsOk() && ubBufferHandle != nullptr) {
             UrmaRemoteAddrPb urmaInfo;
-            ubRc = UrmaManager::Instance().GetMemoryBufferInfo(ubBufferHandle->GetOffset(), ubBufferPtr, ubBufferSize,
-                                                               urmaInfo);
+            ubRc = UrmaManager::Instance().GetMemoryBufferInfo(ubBufferHandle, ubBufferPtr, ubBufferSize, urmaInfo);
             if (ubRc.IsOk()) {
                 req.set_ub_buffer_size(ubBufferSize);
                 *req.mutable_urma_info() = urmaInfo;
@@ -122,10 +121,10 @@ Status ClientWorkerBaseApi::FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHa
 Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                                                        const void *data, uint64_t totalSize,
                                                        std::shared_ptr<UrmaManager::BufferHandle> &bufHandle,
-                                                       uint64_t slotSize)
+                                                       uint64_t realSize)
 {
     // Use credit-based pipeline for large data
-    uint32_t pipelineDepth = slotSize / CHUNK_SIZE;
+    uint32_t pipelineDepth = realSize / CHUNK_SIZE;
     VLOG(DEBUG_LOG_LEVEL) << FormatString("[UB Put Pipeline]: total_size=%llu, chunk_size=%llu, pipeline_depth=%u",
                                           totalSize, CHUNK_SIZE, pipelineDepth);
 
@@ -199,16 +198,20 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
 #ifdef USE_URMA
     const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
     std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
-    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle));
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle, totalSize));
     if (!bufHandle || !bufHandle->GetPointer()) {
         return Status(K_RUNTIME_ERROR, "Failed to get memory buffer handle");
     }
     // Check if data fits in a single buffer slot (fallback to old logic)
-    uint64_t slotSize = bufHandle->GetSlotSize();
-    if (totalSize <= slotSize) {
+    uint64_t realSize = bufHandle->GetSegmentSize();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        totalSize >= realSize, K_RUNTIME_ERROR,
+        FormatString("Got unexpected buffer size with total:%llu real:%llu", totalSize, realSize));
+
+    if (totalSize == realSize) {
         std::vector<uint64_t> keys;
         void *poolBuf = bufHandle->GetPointer();
-        memcpy_s(poolBuf, slotSize, data, totalSize);
+        memcpy_s(poolBuf, realSize, data, totalSize);
         Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
                                               bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
                                               bufferInfo->dataSize, bufferInfo->metadataSize, true, keys);
@@ -220,7 +223,7 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
     }
 
     // Use pipeline transfer for large data
-    RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, slotSize));
+    RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize));
     return Status::OK();
 #else
     return Status(K_INVALID, "Failed to send buffer via UB");

@@ -17,7 +17,7 @@
 /**
  * Description: Disk mmap instance.
  */
-#include "datasystem/common/shared_memory/mmap/dev_mmap.h"
+#include "datasystem/common/shared_memory/mmap/flexible_mmap.h"
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -33,18 +33,13 @@
 namespace datasystem {
 namespace memory {
 
-DevMmap::DevMmap(CacheType cacheType, DevMemFuncRegister devMemFuncRegister)
+FlexibleMmap::FlexibleMmap(AllocatorFuncRegister funcRegister)
 {
-    if (cacheType == CacheType::DEV_DEVICE) {
-        createFunc_ = std::move(devMemFuncRegister.devDeviceCreateFunc);
-        destroyFunc_ = std::move(devMemFuncRegister.devDeviceDestroyFunc);
-    } else {
-        createFunc_ = std::move(devMemFuncRegister.devHostCreateFunc);
-        destroyFunc_ = std::move(devMemFuncRegister.devHostDestroyFunc);
-    }
+    createFunc_ = std::move(funcRegister.createFunc);
+    destroyFunc_ = std::move(funcRegister.destroyFunc);
 }
 
-Status DevMmap::Initialize(uint64_t size, bool populate, bool hugepage)
+Status FlexibleMmap::Initialize(uint64_t size, bool populate, bool hugepage)
 {
     (void)populate;
     (void)hugepage;
@@ -57,12 +52,12 @@ Status DevMmap::Initialize(uint64_t size, bool populate, bool hugepage)
     return rc;
 }
 
-void DevMmap::Destroy()
+void FlexibleMmap::Destroy()
 {
     LOG_IF_ERROR(destroyFunc_(pointer_, mmapSize_), "Faied in destroy function");
 }
 
-DevMmap::~DevMmap()
+FlexibleMmap::~FlexibleMmap()
 {
     if (pointer_ == nullptr) {
         return;

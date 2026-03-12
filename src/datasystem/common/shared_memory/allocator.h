@@ -65,6 +65,7 @@ public:
 
     /**
      * @brief Pre allocate device memory size. The method will create a devHost mem and devDevice mem.
+     * @param[in] cacheType Device size in bytes.
      * @param[in] devSize Device size in bytes.
      * @param[in] memFuncRegister The allocate and destroy func for dev_allocator.
      * @param[in] populate Memory need pre-populate or not.
@@ -72,8 +73,9 @@ public:
      * @param[in] decayMs Decay clean dirty pages milliseconds.
      * @return Status of the call.
      */
-    Status InitWithoutShm(uint64_t devDevSize, uint64_t devHostSize, DevMemFuncRegister memFuncRegister,
-                          bool populate = false, bool scaling = true, ssize_t decayMs = 5'000);
+    Status InitWithFlexibleRegister(CacheType cacheType, uint64_t size, AllocatorFuncRegister memFuncRegister,
+                                bool populate = false, bool scaling = true, ssize_t decayMs = 5'000);
+
     /**
      * @brief Shutdown allocator.
      */
@@ -439,11 +441,25 @@ private:
     Status InitSharedDisk(uint64_t size);
 
     /**
-     * @brief Init device mem pool.
-     * @param[in] size The shared disk size.
+     * @brief Init device host mem pool.
+     * @param[in] size The host size.
      * @return Status K_OK if success, the error otherwise.
      */
-    Status InitDevMemory(uint64_t devDevSize, uint64_t devHostSize);
+    Status InitDevHostMemory(uint64_t devHostSize);
+
+    /**
+     * @brief Init device mem pool.
+     * @param[in] size The device size.
+     * @return Status K_OK if success, the error otherwise.
+     */
+    Status InitDevMemory(uint64_t devDevSize);
+
+    /**
+     * @brief Init ub transport mem pool.
+     * @param[in] size The ub mem size.
+     * @return Status K_OK if success, the error otherwise.
+     */
+    Status InitUBTransportMemory(uint64_t size);
 
     friend Arena;
 
@@ -472,6 +488,8 @@ private:
     // Record the device allocated in bytes.
     std::unique_ptr<ResourcePool> devDeviceMemStats_;
     std::unique_ptr<ResourcePool> devHostMemStats_;
+    // Record the ub transport allocated in bytes.
+    std::unique_ptr<ResourcePool> ubTransportStats_;
 
     // Number of the memory block allocated by allocator.
     std::atomic<uint64_t> totalNumOfAllocated_{ 0 };
