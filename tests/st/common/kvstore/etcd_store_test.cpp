@@ -141,6 +141,57 @@ protected:
     int eventCount_ = 0;
 };
 
+TEST(EtcdStoreKeepAliveValueTest, TestToStringAndFromStringRoundTrip)
+{
+    KeepAliveValue in{ "12345", "ready", "host-a" };
+    std::string str = in.ToString();
+    EXPECT_EQ(str, "12345;ready;host-a");
+
+    KeepAliveValue out;
+    Status rc = KeepAliveValue::FromString(str, out);
+    DS_EXPECT_OK(rc);
+    EXPECT_EQ(out.timestamp, "12345");
+    EXPECT_EQ(out.state, "ready");
+    EXPECT_EQ(out.hostId, "host-a");
+}
+
+TEST(EtcdStoreKeepAliveValueTest, TestWithoutSecondDelimiter)
+{
+    KeepAliveValue value;
+    value.timestamp = "123";
+    value.state = "ready";
+    value.hostId = "";
+    std::string str = value.ToString();
+    EXPECT_EQ(str, "123;ready");
+    KeepAliveValue parsed;
+    Status rc = KeepAliveValue::FromString(str, parsed);
+    DS_EXPECT_OK(rc);
+    EXPECT_EQ(parsed.timestamp, "123");
+    EXPECT_EQ(parsed.state, "ready");
+    EXPECT_EQ(parsed.hostId, "");
+}
+
+TEST(EtcdStoreKeepAliveValueTest, TestEmptyHostId)
+{
+    KeepAliveValue parsed;
+    Status rc = KeepAliveValue::FromString("123;ready;", parsed);
+    DS_EXPECT_OK(rc);
+    EXPECT_EQ(parsed.timestamp, "123");
+    EXPECT_EQ(parsed.state, "ready");
+    EXPECT_EQ(parsed.hostId, "");
+}
+
+TEST(EtcdStoreKeepAliveValueTest, TestFromStringWithoutFirstDelimiter)
+{
+    KeepAliveValue out{ "ts", "state", "host" };
+    Status rc = KeepAliveValue::FromString("invalid_value", out);
+    DS_EXPECT_NOT_OK(rc);
+    EXPECT_EQ(rc.GetCode(), K_INVALID);
+    EXPECT_EQ(out.timestamp, "");
+    EXPECT_EQ(out.state, "");
+    EXPECT_EQ(out.hostId, "");
+}
+
 TEST_F(EtcdStoreTest, TestPutGetKeyValue1)
 {
     LOG(INFO) << "Test EtcdStore put/get/delete key/value in a table.";

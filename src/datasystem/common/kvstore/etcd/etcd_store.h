@@ -57,6 +57,15 @@ struct WatchElement {
     int64_t startRevision;
 };
 
+struct KeepAliveValue {
+    std::string timestamp;
+    std::string state;
+    std::string hostId;
+
+    std::string ToString() const;
+    static Status FromString(const std::string &str, KeepAliveValue &value);
+};
+
 class EtcdStore : public KvStore {
 public:
     struct BatchInfoPutToEtcd {
@@ -453,7 +462,7 @@ public:
 
     bool IsCreateFirstLease()
     {
-        return keepAliveValue_.find("recover") != std::string::npos;
+        return keepAliveValue_.state == "recover";
     }
 
     /**
@@ -592,7 +601,7 @@ private:
     std::string address_;             // etcd address
     std::string keepAliveTableName_;  // The table on etcd for the leased kv's
     std::string keepAliveKey_;        // The key that is associated with the lease
-    std::string keepAliveValue_;      // The value that is associated with the lease
+    KeepAliveValue keepAliveValue_;   // The value that is associated with the lease
     std::atomic<int64_t> leaseId_;    // The lease id for the keep alive.
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession_;
     mutable std::shared_timed_mutex mutex_;
