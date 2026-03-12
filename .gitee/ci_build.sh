@@ -1,22 +1,13 @@
-upload_log_on_error() {
-    echo "======== Start uploading logs ========"
-    cd ${attach_workspace}
-    tar -cvf datasystem_$(uname -m)_${BUILD_NUMBER}.tar.gz ${test_workspace}
-    scp -o StrictHostKeyChecking=no -P ${af_node_port} -i ${af_node_key} datasystem_$(uname -m)_${BUILD_NUMBER}.tar.gz ${af_node_user}@${af_node_ip}:/data/logs/packages/yuanrong-datasystem/$(uname -m)/
-    echo "Upload successful, log address is：https://build-logs.openeuler.openatom.cn:38080/packages/yuanrong-datasystem/$(uname -m)/datasystem_$(uname -m)_${BUILD_NUMBER}.tar.gz"
-}
-
-trap upload_log_on_error EXIT
-
-test_workspace=${attach_workspace}/artifact
 datasystem_dir=${WORKSPACE}/yuanrong-datasystem
 attach_workspace=${WORKSPACE}/attach
+test_workspace=${attach_workspace}/artifact
 output_cover=${attach_workspace}/cover
-mkdir -p ${test_workspace}
 mkdir -p ${attach_workspace}
+mkdir -p ${test_workspace}
 mkdir -p ${output_cover}
 chmod -R 755 ${datasystem_dir}
 chmod -R 755 ${attach_workspace}
+chmod -R 755 ${test_workspace}
 chmod -R 755 ${output_cover}
 
 function run_compile() {
