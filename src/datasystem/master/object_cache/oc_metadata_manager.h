@@ -179,6 +179,24 @@ struct ObjectMeta {
     }
 
     /**
+     * @brief Check if the object is write back l2 cache type.
+     * @return True if the object is write back l2 cache type, false otherwise.
+     */
+    bool IsWriteBackL2CacheEvict() const
+    {
+        return meta.config().write_mode() == static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE_EVICT);
+    }
+
+    /**
+     * @brief Check if the object is write through l2 cache type.
+     * @return True if the object is write through l2 cache type, false otherwise.
+     */
+    bool IsWriteThroughL2Cache() const
+    {
+        return meta.config().write_mode() == static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE);
+    }
+
+    /**
      * @brief Check if the object IsPrimaryWithoutCopy.
      * @param[in] address primary address
      * @return True if the object is IsPrimaryWithoutCopy, false otherwise.

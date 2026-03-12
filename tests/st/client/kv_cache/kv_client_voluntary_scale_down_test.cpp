@@ -1035,6 +1035,38 @@ TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode1, LEVEL2_TestVoluntaryS
     sleep(10);  // sleep 10s to wait for scale down done.
 }
 
+TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryDownWorker1WriteThroughL2CacheNoCopy)
+{
+    int objectCnt = 5;
+    std::vector<std::string> objectKey(objectCnt);
+    std::vector<std::string> data(objectCnt);
+    SetUuidObject(client0_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
+    VoluntaryScaleDownInject(0);  // worker index is 0
+    sleep(10);  // Wait 10 seconds for voluntary scale down finished
+
+    for (int i = 0; i < objectCnt; ++i) {
+        std::string getValue;
+        DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
+        ASSERT_EQ(data[i], getValue);
+    }
+}
+
+TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryDownWorker1WriteBackL2CacheNoCopy)
+{
+    int objectCnt = 5;
+    std::vector<std::string> objectKey(objectCnt);
+    std::vector<std::string> data(objectCnt);
+    SetUuidObject(client0_, 0, objectKey, data, WriteMode::WRITE_BACK_L2_CACHE);
+    VoluntaryScaleDownInject(0);  // worker index is 0
+    sleep(10);  // Wait 10 seconds for voluntary scale down finished
+
+    for (int i = 0; i < objectCnt; ++i) {
+        std::string getValue;
+        DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
+        ASSERT_EQ(data[i], getValue);
+    }
+}
+
 TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode1, DISABLED_LEVEL1_TestCrossNodeConnectWorkerRestart)
 {
     InitTestKVClient(0, client0_, 2000, true);        // Init client0 to worker 0 with 2000ms timeout
