@@ -26,6 +26,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -38,6 +39,7 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -195,6 +197,9 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
         } else {
             nextAction = Action::SPILL;
         }
+    } else if (entry->IsWriteBackL2CacheEvictMode()) {
+        info = "object is WRITE_BACK_L2_CACHE_EVICT mode";
+        nextAction = Action::END_LIFE;
     } else if (hasL2Cache) {
         info = "object has L2 cache but no spill directory";
         nextAction = Action::DELETE;
@@ -237,6 +242,11 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
     } else if (nextAction == Action::SPILL) {
         VLOG(1) << FormatString("[ObjectKey %s] Object will be spill", objectKey);
     } else if (nextAction == Action::END_LIFE) {
+        if (entry->IsWriteBackL2CacheEvictMode()) {
+            if (auto sp = asyncSendManager_.lock()) {
+                sp->Remove(objectKey);
+            }
+        }
         VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life", objectKey);
         RETURN_IF_NOT_OK(DeleteNoneL2CacheEvictableObject(objectKV));
     } else {
@@ -321,8 +331,7 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         INJECT_POINT("worker.Evict", [&pendingSpillSize](size_t size) { pendingSpillSize = size; });
     }
     auto it = spillTasks.find(GetSpillTaskId());
-    if (it != spillTasks.end() && !it->second.future.valid() &&
-        !it->second.trace->objectKeySizeMap.empty()) {
+    if (it != spillTasks.end() && !it->second.future.valid() && !it->second.trace->objectKeySizeMap.empty()) {
         it->second.future = SubmitBatchSpillTask(GetSpillTaskId(), it->second.trace->objectKeySizeMap);
     }
     (void)ReleaseSpillFutures(spillTasks, evictFailedIds, true);
@@ -342,16 +351,15 @@ Status WorkerOcEvictionManager::MigrateData(const std::string &taskId,
     RETURN_OK_IF_TRUE(migrateObjects.empty());
     std::vector<std::string> objectKeys;
     objectKeys.reserve(migrateObjects.size());
-    std::transform(migrateObjects.begin(), migrateObjects.end(),
-                   std::back_inserter(objectKeys),
+    std::transform(migrateObjects.begin(), migrateObjects.end(), std::back_inserter(objectKeys),
                    [](const auto &pair) { return pair.first; });
     int maxRetryCount = 5;
     INJECT_POINT("worker.MigrateData.setMaxRetryCount", [&maxRetryCount](int cnt) {
         maxRetryCount = cnt;
         return Status::OK();
     });
-    DataMigrator migrator(MigrateType::SPILL, etcdCM_, localAddress_, akSkManager_, objectTable_,
-                          taskId, maxRetryCount);
+    DataMigrator migrator(MigrateType::SPILL, etcdCM_, localAddress_, akSkManager_, objectTable_, taskId,
+                          maxRetryCount);
     migrator.Init();
     Status rc = migrator.Migrate(objectKeys, migrateObjects);
     migrator.GetFailedKeys(failedMigrateObjectKeys);
@@ -519,7 +527,8 @@ std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::Submi
 }
 
 Status WorkerOcEvictionManager::BatchSpillImpl(const std::string &taskId,
-    const std::unordered_map<std::string, uint64_t> &objectKeySizeMap, std::vector<std::string> failedKeys)
+                                               const std::unordered_map<std::string, uint64_t> &objectKeySizeMap,
+                                               std::vector<std::string> failedKeys)
 {
     if (FLAGS_spill_to_remote_worker) {
         return MigrateData(taskId, objectKeySizeMap, failedKeys);

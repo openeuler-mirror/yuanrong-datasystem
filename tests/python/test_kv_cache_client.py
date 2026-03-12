@@ -659,3 +659,97 @@ class TestKVClientMethods(unittest.TestCase):
         self.assertFalse(client.health_check().is_ok())
         client.init()
         self.assertTrue(client.health_check().is_ok())
+
+    def test_set_write_back_l2_cache_evict(self):
+        """
+        Feature: Test set with WRITE_BACK_L2_CACHE_EVICT mode.
+        """
+        Context.set_trace_id("test_set_evict")
+        key = self.random_str()
+        val = self.random_str(20)
+        client = KVClient(self.host, self.port)
+        client.init()
+        param = WriteMode.WRITE_BACK_L2_CACHE_EVICT
+        client.set(key, val, param)
+        self.assertEqual(client.get([key], True), [val])
+        client.delete([key])
+
+    def test_mset_write_back_l2_cache_evict(self):
+        """
+        Feature: Test mset with WRITE_BACK_L2_CACHE_EVICT mode.
+        """
+        Context.set_trace_id("test_mset_evict")
+        key_num = 3
+        key_list = [self.random_str(15) for _ in range(key_num)]
+        val_list = [self.random_str(20) for _ in range(key_num)]
+        client = KVClient(self.host, self.port)
+        client.init()
+        write_mode = WriteMode.WRITE_BACK_L2_CACHE_EVICT
+        existence_opt = ExistenceOpt.NONE
+        self.assertEqual(client.mset(key_list, val_list, write_mode, 0, existence_opt), [])
+        get_vals = client.get(key_list, True)
+        self.assertListEqual(val_list, get_vals)
+        client.delete(key_list)
+
+    def test_mcreate_mset_write_back_l2_cache_evict(self):
+        """
+        Feature: Test mcreate and mset_buffer with WRITE_BACK_L2_CACHE_EVICT mode.
+        """
+        Context.set_trace_id("test_mcreate_evict")
+        client = KVClient(self.host, self.port)
+        client.init()
+
+        keys = ["key1", "key2"]
+        sizes = [100, 200]
+        ttl_second = 60
+
+        buffers = client.mcreate(keys, sizes, WriteMode.WRITE_BACK_L2_CACHE_EVICT, ttl_second)
+        self.assertEqual(len(buffers), len(keys))
+
+        self.assertEqual(buffers[0].GetSize(), 100)
+        self.assertEqual(buffers[1].GetSize(), 200)
+
+        client.mset_buffer(buffers)
+
+        retrieved_buffers = client.get_buffers(keys, timeout_ms=500)
+        self.assertEqual(len(retrieved_buffers), len(keys))
+
+        self.assertEqual(retrieved_buffers[0].GetSize(), 100)
+        self.assertEqual(retrieved_buffers[1].GetSize(), 200)
+
+        client.delete(keys)
+
+    def test_set_value_with_write_back_l2_cache_evict(self):
+        """
+        Features: Set value without key with WRITE_BACK_L2_CACHE_EVICT mode.
+        """
+        Context.set_trace_id("test_set_value_evict")
+        client = KVClient(self.host, self.port)
+        client.init()
+        
+        val = "test_value_evict"
+        # Test with WRITE_BACK_L2_CACHE_EVICT mode
+        key = client.set_value(val, WriteMode.WRITE_BACK_L2_CACHE_EVICT)
+        self.assertEqual(client.get([key], True), [val])
+        
+        # Clean up
+        client.delete([key])
+
+    def test_msettx_with_write_back_l2_cache_evict(self):
+        """
+        Feature: Test msettx with WRITE_BACK_L2_CACHE_EVICT mode.
+        """
+        Context.set_trace_id("test_msettx_evict")
+        client = KVClient(self.host, self.port)
+        client.init()
+
+        key_num = 3
+        key_list = [self.random_str(15) for _ in range(key_num)]
+        val_list = [self.random_str(20) for _ in range(key_num)]
+        write_mode = WriteMode.WRITE_BACK_L2_CACHE_EVICT
+        existence_opt = ExistenceOpt.NX
+        client.msettx(key_list, val_list, write_mode, 0, existence_opt)
+        get_vals = client.get(key_list, True)
+        self.assertListEqual(get_vals, val_list)
+
+        self.assertEqual(client.delete(key_list), [])

@@ -39,7 +39,12 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
-#include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
+// Forward declaration to avoid circular dependency
+namespace datasystem {
+namespace object_cache {
+class WorkerOcEvictionManager;
+}
+}
 
 namespace datasystem {
 namespace object_cache {

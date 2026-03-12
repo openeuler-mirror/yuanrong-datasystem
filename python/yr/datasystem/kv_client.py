@@ -231,11 +231,25 @@ class KVClient:
             val(memoryview, bytes, bytearray, str): The data to be set.
             write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
                 The options are as follows:
-                WriteMode.NONE_L2_CACHE: indicates that data reliability is not required,
-                WriteMode.WRITE_THROUGH_L2_CACHE: indicates that data is synchronously written to the L2 cache
-                WriteMode.WRITE_BACK_L2_CACHE: indicates that data is asynchronously written to the L2 cache
-                to improve data reliability.
-                WriteMode.NONE_L2_CACHE_EVICT: indicates that data reliability is not required and evictable.
+                    WriteMode.NONE_L2_CACHE:
+                        Indicates that objects are only written to the cache.
+                    WriteMode.WRITE_THROUGH_L2_CACHE:
+                        Indicates that objects are synchronously written to both the cache and the L2 storage.
+                        This mode ensures high data reliability but may affect performance due to 
+                        the synchronous write operation.
+                    WriteMode.WRITE_BACK_L2_CACHE:
+                        Indicates that objects are initially written to the cache, and an asynchronous task is 
+                        triggered to write the data to the L2 storage.
+                        This improves performance but may lead to data loss if the worker fails before the data is 
+                        persisted to the L2 storage.
+                    WriteMode.NONE_L2_CACHE_EVICT:
+                        Indicates that objects are only cached and are evictable when the cache capacity is 
+                        insufficient. Data reliability is not required, and the data will not be written to 
+                        the L2 storage upon eviction.
+                    WriteMode.WRITE_BACK_L2_CACHE_EVICT:
+                        Indicates that objects are cached and are evictable when the cache capacity is insufficient.
+                        The data is asynchronously written to the L2 storage to improve reliability, 
+                        but the object may be evicted from the cache before the write completes if the cache is full.
             ttl_second(uint32): controls the expire time of the data:
                 If the value is greater than 0, the data will be deleted automatically after expired.
                 If set to 0, the data need to be manually deleted.
@@ -249,6 +263,7 @@ class KVClient:
             [
                 "write_mode", write_mode, type(WriteMode.NONE_L2_CACHE), type(WriteMode.WRITE_BACK_L2_CACHE),
                 type(WriteMode.WRITE_THROUGH_L2_CACHE), type(WriteMode.NONE_L2_CACHE_EVICT),
+                type(WriteMode.WRITE_BACK_L2_CACHE_EVICT),
             ],
             ["ttl_second", ttl_second, int]
         ]
@@ -261,17 +276,11 @@ class KVClient:
             raise RuntimeError(status.to_string())
 
     def set_value(self, val, write_mode=WriteMode.NONE_L2_CACHE, ttl_second=0):
-        """ Invoke worker client to set the value of a key.
+        """Invoke worker client to set the value of a key.
 
         Args:
             val(memoryview, bytes, bytearray, str): The data to be set.
             write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
-                The options are as follows:
-                WriteMode.NONE_L2_CACHE: indicates that data reliability is not required,
-                WriteMode.WRITE_THROUGH_L2_CACHE: indicates that data is synchronously written to the L2 cache
-                WriteMode.WRITE_BACK_L2_CACHE: indicates that data is asynchronously written to the L2 cache
-                to improve data reliability.
-                WriteMode.NONE_L2_CACHE_EVICT: indicates that data reliability is not required and evictable.
             ttl_second(uint32): controls the expire time of the data:
                 If the value is greater than 0, the data will be deleted automatically after expired.
                 If set to 0, the data need to be manually deleted.
@@ -287,7 +296,8 @@ class KVClient:
             ["val", val, memoryview, bytes, bytearray, str],
             [
                 "write_mode", write_mode, type(WriteMode.NONE_L2_CACHE), type(WriteMode.WRITE_THROUGH_L2_CACHE),
-                type(WriteMode.WRITE_BACK_L2_CACHE)
+                type(WriteMode.WRITE_BACK_L2_CACHE), type(WriteMode.NONE_L2_CACHE_EVICT),
+                type(WriteMode.WRITE_BACK_L2_CACHE_EVICT)
             ],
             ["ttl_second", ttl_second, int]
         ]
@@ -302,18 +312,12 @@ class KVClient:
 
            The returned Buffers can be filled directly with data; subsequently call mset_buffer()
            to cache it. This interface avoids the need for temporary memory and reduces
-           one extra memory copy. The max keys size < 2000. 
+           one extra memory copy. The max keys size < 2000.
 
         Args:
             keys(str): The keys of objects.
             sizes(uint32): The sizes to create.
             write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
-                The options are as follows:
-                WriteMode.NONE_L2_CACHE: indicates that data reliability is not required,
-                WriteMode.WRITE_THROUGH_L2_CACHE: indicates that data is synchronously written to the L2 cache
-                WriteMode.WRITE_BACK_L2_CACHE: indicates that data is asynchronously written to the L2 cache
-                to improve data reliability.
-                WriteMode.NONE_L2_CACHE_EVICT: indicates that data reliability is not required and evictable.
             ttl_second(uint32): controls the expire time of the data:
                 If the value is greater than 0, the data will be deleted automatically after expired.
                 If set to 0, the data need to be manually deleted.
@@ -329,7 +333,8 @@ class KVClient:
             ["keys", keys, list],
             ["sizes", sizes, list],
             ["write_mode", write_mode, type(WriteMode.NONE_L2_CACHE), type(WriteMode.WRITE_THROUGH_L2_CACHE),
-             type(WriteMode.WRITE_BACK_L2_CACHE)],
+             type(WriteMode.WRITE_BACK_L2_CACHE), type(WriteMode.NONE_L2_CACHE_EVICT),
+             type(WriteMode.WRITE_BACK_L2_CACHE_EVICT)],
             ["ttl_second", ttl_second, int]
         ]
         validator.check_args_types(args)
@@ -338,7 +343,7 @@ class KVClient:
         if status.is_error():
             raise RuntimeError(status.to_string())
         return buffer_array
-    
+
     def mset_buffer(self, buffers):
         """Batch setter for multiple buffers.
 
@@ -357,7 +362,7 @@ class KVClient:
         validator.check_args_types(args)
 
         status = self._client.MSetBuffer(buffers)
-        
+
         if status.is_error():
             raise RuntimeError(status.to_string())
 
@@ -383,7 +388,7 @@ class KVClient:
         status, buffer_array = self._client.MGetBuffer(keys, timeout_ms)
         if status.is_error():
             raise RuntimeError(status.to_string())
-            
+
         return buffer_array
 
     def mset(self, keys, vals, write_mode=WriteMode.NONE_L2_CACHE, ttl_second=0, existence_opt=ExistenceOpt.NONE):
@@ -394,12 +399,6 @@ class KVClient:
             keys(str): The keys of objects.
             vals(memoryview, bytes, bytearray, str): The vals to set.
             write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
-                The options are as follows:
-                WriteMode.NONE_L2_CACHE: indicates that data reliability is not required,
-                WriteMode.WRITE_THROUGH_L2_CACHE: indicates that data is synchronously written to the L2 cache
-                WriteMode.WRITE_BACK_L2_CACHE: indicates that data is asynchronously written to the L2 cache
-                to improve data reliability.
-                WriteMode.NONE_L2_CACHE_EVICT: indicates that data reliability is not required and evictable.
             ttl_second(uint32): controls the expire time of the data:
                 If the value is greater than 0, the data will be deleted automatically after expired.
                 If set to 0, the data need to be manually deleted.
@@ -419,7 +418,8 @@ class KVClient:
             ["keys", keys, list],
             ["vals", vals, list],
             ["write_mode", write_mode, type(WriteMode.NONE_L2_CACHE), type(WriteMode.WRITE_THROUGH_L2_CACHE),
-             type(WriteMode.WRITE_BACK_L2_CACHE)],
+             type(WriteMode.WRITE_BACK_L2_CACHE), type(WriteMode.NONE_L2_CACHE_EVICT),
+             type(WriteMode.WRITE_BACK_L2_CACHE_EVICT)],
             ["ttl_second", ttl_second, int],
             ["existence_opt", existence_opt, type(ExistenceOpt.NONE), type(ExistenceOpt.NX)]
         ]
@@ -439,12 +439,6 @@ class KVClient:
             keys(str): The keys of objects.
             vals(memoryview, bytes, bytearray, str): The vals to set.
             write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
-                The options are as follows:
-                WriteMode.NONE_L2_CACHE: indicates that data reliability is not required,
-                WriteMode.WRITE_THROUGH_L2_CACHE: indicates that data is synchronously written to the L2 cache
-                WriteMode.WRITE_BACK_L2_CACHE: indicates that data is asynchronously written to the L2 cache
-                to improve data reliability.
-                WriteMode.NONE_L2_CACHE_EVICT: indicates that data reliability is not required and evictable.
             ttl_second(uint32): controls the expire time of the data:
                 If the value is greater than 0, the data will be deleted automatically after expired.
                 If set to 0, the data need to be manually deleted.
@@ -461,7 +455,8 @@ class KVClient:
             ["keys", keys, list],
             ["vals", vals, list],
             ["write_mode", write_mode, type(WriteMode.NONE_L2_CACHE), type(WriteMode.WRITE_THROUGH_L2_CACHE),
-             type(WriteMode.WRITE_BACK_L2_CACHE)],
+             type(WriteMode.WRITE_BACK_L2_CACHE), type(WriteMode.NONE_L2_CACHE_EVICT),
+             type(WriteMode.WRITE_BACK_L2_CACHE_EVICT)],
             ["ttl_second", ttl_second, int],
             ["existence_opt", existence_opt, type(ExistenceOpt.NONE), type(ExistenceOpt.NX)]
         ]

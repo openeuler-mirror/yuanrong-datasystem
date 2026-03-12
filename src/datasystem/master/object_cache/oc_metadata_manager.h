@@ -139,7 +139,8 @@ struct ObjectMeta {
     bool HasL2Cache() const
     {
         return meta.config().write_mode() == static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE)
-               || meta.config().write_mode() == static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE);
+               || meta.config().write_mode() == static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE)
+               || meta.config().write_mode() == static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE_EVICT);
     }
 
     /**

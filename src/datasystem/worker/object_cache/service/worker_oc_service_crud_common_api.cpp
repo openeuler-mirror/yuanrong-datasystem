@@ -168,10 +168,11 @@ Status WorkerOcServiceCrudCommonApi::CheckIfL2CacheNeededAndWritable(const L2Sto
 {
     if (supportType == L2StorageType::NONE) {
         bool isSetWriteL2Cache =
-            (writeMode == WriteMode::WRITE_THROUGH_L2_CACHE || writeMode == WriteMode::WRITE_BACK_L2_CACHE);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            !isSetWriteL2Cache, K_INVALID,
-            "The key is set to WRITE_THROUGH_L2_CACHE or WRITE_BACK_L2_CACHE, but L2_cache_type is set to none.");
+            (writeMode == WriteMode::WRITE_THROUGH_L2_CACHE || writeMode == WriteMode::WRITE_BACK_L2_CACHE
+             || writeMode == WriteMode::WRITE_BACK_L2_CACHE_EVICT);
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!isSetWriteL2Cache, K_INVALID,
+                                             "The key is set to WRITE_THROUGH_L2_CACHE, WRITE_BACK_L2_CACHE or "
+                                             "WRITE_BACK_L2_CACHE_EVICT, but L2_cache_type is set to none.");
     }
     return Status::OK();
 }

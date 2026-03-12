@@ -985,6 +985,7 @@ ObjectMetaStore::WriteType OCNotifyWorkerManager::GetWriteType(const std::string
             writeType = ObjectMetaStore::WriteType::ROCKS_SYNC_ETCD;
             break;
         case WriteMode::WRITE_BACK_L2_CACHE:
+        case WriteMode::WRITE_BACK_L2_CACHE_EVICT:
             writeType = ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD;
             break;
         case WriteMode::NONE_L2_CACHE:

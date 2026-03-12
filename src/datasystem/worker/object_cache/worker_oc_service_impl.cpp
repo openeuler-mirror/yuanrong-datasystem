@@ -158,6 +158,9 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
     asyncRollbackManager_ = std::make_shared<AsyncRollbackManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
+    
+    // Set async send manager and persistence api to eviction manager
+    evictionManager_->SetAsyncSendManager(asyncSendManager_);
 }
 
 WorkerOCServiceImpl::~WorkerOCServiceImpl()

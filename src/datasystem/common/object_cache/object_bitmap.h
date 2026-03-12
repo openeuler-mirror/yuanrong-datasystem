@@ -62,7 +62,7 @@ enum class ObjectFlag : uint16_t {
     IS_INCOMPLETE = 1u << 10,
 };
 
-enum class ModeFlag : uint8_t {
+enum class ModeFlag : uint16_t {
     NONE = 0,
     NONE_L2_CACHE = 1u,
     WRITE_THROUGH_L2_CACHE = 1u << 1,
@@ -72,6 +72,7 @@ enum class ModeFlag : uint8_t {
     CAUSAL = 1u << 5,
     MEMORY = 1u << 6,
     DISK = 1u << 7,
+    WRITE_BACK_L2_CACHE_EVICT = 1u << 8,
 };
 
 ENABLE_BITMASK_ENUM_OPS(ObjectFlag);
@@ -339,8 +340,12 @@ public:
             return WriteMode::WRITE_THROUGH_L2_CACHE;
         } else if (TESTFLAG(modeBitmap_, ModeFlag::WRITE_BACK_L2_CACHE)) {
             return WriteMode::WRITE_BACK_L2_CACHE;
-        } else {
+        } else if (TESTFLAG(modeBitmap_, ModeFlag::NONE_L2_CACHE_EVICT)) {
             return WriteMode::NONE_L2_CACHE_EVICT;
+        } else if (TESTFLAG(modeBitmap_, ModeFlag::WRITE_BACK_L2_CACHE_EVICT)) {
+            return WriteMode::WRITE_BACK_L2_CACHE_EVICT;
+        } else {
+            return WriteMode::NONE_L2_CACHE;
         }
     }
 
@@ -382,6 +387,9 @@ public:
                 break;
             case WriteMode::NONE_L2_CACHE_EVICT:
                 SETFLAG(modeBitmap_, ModeFlag::NONE_L2_CACHE_EVICT);
+                break;
+            case WriteMode::WRITE_BACK_L2_CACHE_EVICT:
+                SETFLAG(modeBitmap_, ModeFlag::WRITE_BACK_L2_CACHE_EVICT);
                 break;
             default:
                 break;
