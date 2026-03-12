@@ -140,6 +140,7 @@ Status UrmaManager::GetUrmaDeviceName(const HostPort &hostport, std::string &urm
 
 Status UrmaManager::Init(const HostPort &hostport)
 {
+    PerfPoint perfPoint(PerfKey::URMA_MANAGER_INIT);
     InitState expected = InitState::UNINITIALIZED;
     if (initState_.compare_exchange_strong(expected, INITIALIZED)) {
         LOG(INFO) << FormatString("UrmaManager::Init(hostport = %s)", hostport.ToString());

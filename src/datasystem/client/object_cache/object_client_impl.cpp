@@ -533,6 +533,7 @@ bool ObjectClientImpl::SwitchWorkerNode(WorkerNode node)
 
 bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode next)
 {
+    PerfPoint perfPoint(PerfKey::CLIENT_SWITCH_STANDBY_WORKER);
     auto standbyWorkers = currentApi->GetStandbyWorkers();
     INJECT_POINT("client.standby_worker", [&standbyWorkers](const std::string &addr) {
         HostPort hostPort;

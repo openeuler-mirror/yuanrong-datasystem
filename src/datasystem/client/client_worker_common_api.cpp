@@ -736,13 +736,19 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
 
 Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientRspPb &rsp)
 {
-    // Enable UB fast transport if client cannot use share memory while worker supports UB.
-    RETURN_OK_IF_TRUE(shmEnabled_);
+    // Initialize UrmaManager regardless of shmEnabled_ to avoid switch overhead standby worker.
     SetClientFastTransportMode(rsp.fast_transport_mode());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_), "Fast transport init failed");
+
+    // Enable UB fast transport if client cannot use share memory while worker supports UB.
+    if (shmEnabled_) {
+        FLAGS_enable_urma = false;
+        return Status::OK();
+    }
+
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        // Initialize fast transport manager before the handshake.
-        RETURN_IF_NOT_OK(InitializeFastTransportManager(hostPort_));
+        PerfPoint perfPoint(PerfKey::CLIENT_URMA_HANDSHAKE);
         // Perform handshake to set up jfr and segments.
         using TbbTransportStubTable =
             tbb::concurrent_hash_map<std::string,
