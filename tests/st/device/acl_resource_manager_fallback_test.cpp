@@ -99,5 +99,19 @@ TEST_F(AclResourceManagerFallbackTest, FallbackToDirectWhenDevicePinPoolTooSmall
     DS_ASSERT_OK(copyPool.MemcpyBatchH2D(0, helper, MemcopyPolicy::FFTS));
     ASSERT_EQ(std::string(destBuffers[0].begin(), destBuffers[0].end()), payloads[0]);
 }
+
+TEST_F(AclResourceManagerFallbackTest, FallbackToDirectWhenFftsH2DMeetsOOMAfterGuardCheck)
+{
+    TestAclResourceManager resourceMgr;
+    resourceMgr.Configure(1024, 120, MemcopyPolicy::FFTS, MemcopyPolicy::FFTS);
+    AclMemCopyPool copyPool(&resourceMgr);
+
+    std::vector<std::string> payloads = { std::string(60, 'd') };
+    std::vector<std::vector<char>> destBuffers;
+    auto helper = BuildHelper(payloads, destBuffers);
+
+    DS_ASSERT_OK(copyPool.MemcpyBatchH2D(0, helper, MemcopyPolicy::FFTS));
+    ASSERT_EQ(std::string(destBuffers[0].begin(), destBuffers[0].end()), payloads[0]);
+}
 }  // namespace st
 }  // namespace datasystem
