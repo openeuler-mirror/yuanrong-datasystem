@@ -16,6 +16,7 @@
 
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
 
+#include <algorithm>
 #include <securec.h>
 #include <cstring>
 #include <sstream>
@@ -207,6 +208,38 @@ AclMemCopyPool::AclMemCopyPool(AclResourceManager *resourceMgr) : resourceMgr_(r
     }
 }
 
+bool AclMemCopyPool::ShouldFallbackToDirectForH2D(const DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
+{
+    if (policy != MemcopyPolicy::FFTS && policy != MemcopyPolicy::HUGE_FFTS) {
+        return false;
+    }
+
+    const auto d2hPolicy = resourceMgr_->GetD2HPolicy();
+    const auto h2dPolicy = resourceMgr_->GetH2DPolicy();
+    const auto hostMemSize = resourceMgr_->GetHostMemSize();
+    const auto deviceMemSize = resourceMgr_->GetDeviceMemSize();
+    const bool skipHostPinMemcpy = d2hPolicy == h2dPolicy && d2hPolicy == MemcopyPolicy::HUGE_FFTS;
+
+    uint64_t totalObjectSize = 0;
+    for (const auto &meta : helper.bufferMetas) {
+        totalObjectSize += meta.size;
+        if (meta.size * FFTS_PIPELINE > deviceMemSize) {
+            LOG(WARNING) << FormatString("Fallback h2dPolicy to DIRECT, device pin memory pool size %zu, need size %zu",
+                                         static_cast<size_t>(deviceMemSize),
+                                         static_cast<size_t>(meta.size * FFTS_PIPELINE));
+            return true;
+        }
+        if (!skipHostPinMemcpy && totalObjectSize > hostMemSize) {
+            LOG(WARNING) << FormatString("Fallback h2dPolicy to DIRECT, host pin memory pool size %zu, need size %zu",
+                                         static_cast<size_t>(hostMemSize),
+                                         static_cast<size_t>(totalObjectSize));
+            return true;
+        }
+    }
+
+    return false;
+}
+
 Status AclMemCopyPool::MemcpyBatchD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
 {
     PerfPoint point(PerfKey::CLIENT_D2H_MEMCPY_INIT);
@@ -231,6 +264,9 @@ Status AclMemCopyPool::MemcpyBatchD2H(uint32_t deviceId, DeviceBatchCopyHelper &
 Status AclMemCopyPool::MemcpyBatchH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY_INIT);
+    if (ShouldFallbackToDirectForH2D(helper, policy)) {
+        policy = MemcopyPolicy::DIRECT;
+    }
     if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
         if (deviceNow_ != static_cast<int32_t>(deviceId)) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
@@ -240,9 +276,18 @@ Status AclMemCopyPool::MemcpyBatchH2D(uint32_t deviceId, DeviceBatchCopyHelper &
         CHECK_FAIL_RETURN_STATUS(
             deviceId < MAX_DEVICE_COUNT, K_INVALID,
             FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
-        FftsPipelineH2DCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(),
-                                     fftsCopyPool_.get());
-        return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+        Status fftsRc;
+        {
+            FftsPipelineH2DCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(),
+                                         fftsCopyPool_.get());
+            fftsRc = copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+        }
+        if (fftsRc.GetCode() == K_OUT_OF_MEMORY) {
+            LOG(WARNING) << FormatString("Fallback h2dPolicy to DIRECT after FFTS OOM, status: %s",
+                                         fftsRc.ToString());
+            return AclMemcpyBatch(deviceId, helper, MemcpyKind::HOST_TO_DEVICE);
+        }
+        return fftsRc;
     } else {
         PerfPoint point(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
         return AclMemcpyBatch(deviceId, helper, MemcpyKind::HOST_TO_DEVICE);

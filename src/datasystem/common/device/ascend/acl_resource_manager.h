@@ -192,6 +192,7 @@ public:
     ~AclMemCopyPool();
 
 private:
+    bool ShouldFallbackToDirectForH2D(const DeviceBatchCopyHelper &helper, MemcopyPolicy policy);
     Status AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind copyKind);
     std::unique_ptr<ThreadPool> copyPool_;
     std::unique_ptr<ThreadPool> h2hCopyPool_;

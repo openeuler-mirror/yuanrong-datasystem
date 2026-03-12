@@ -126,6 +126,16 @@ public:
         return policyH2D;
     }
 
+    uint64_t GetDeviceMemSize() const
+    {
+        return deviceMemSize;
+    }
+
+    uint64_t GetHostMemSize() const
+    {
+        return hostMemSize;
+    }
+
     void SetPolicyDirect()
     {
         policyD2H = MemcopyPolicy::DIRECT;
