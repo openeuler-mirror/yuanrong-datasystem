@@ -111,10 +111,10 @@ protected:
         eventCount_++;
         auto &key = event.kv().key();
         if (watchKeyMap_.find(key) != watchKeyMap_.end()) {
-            ASSERT_EQ(event.type(),  mvccpb::Event::EventType::Event_EventType_DELETE);
+            ASSERT_EQ(event.type(), mvccpb::Event::EventType::Event_EventType_DELETE);
             watchKeyMap_.erase(key);
         } else {
-            ASSERT_EQ(event.type(),  mvccpb::Event::EventType::Event_EventType_PUT);
+            ASSERT_EQ(event.type(), mvccpb::Event::EventType::Event_EventType_PUT);
             watchKeyMap_.emplace(key, event.type());
         }
     }
@@ -414,7 +414,7 @@ TEST_F(EtcdStoreTest, TestWatchEvents3)
 
 TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
 {
-    FLAGS_node_timeout_s = 3; // node timeout is 3 s
+    FLAGS_node_timeout_s = 3;  // node timeout is 3 s
     datasystem::inject::Set("EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)");
     InitTestEtcdInstance();
     ASSERT_TRUE(db_ != nullptr && tableCreated_);
@@ -947,7 +947,7 @@ TEST_F(EtcdSslTest, TestCreateSessionWithTls)
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession2_;
     rpcSession2_ = GrpcSession<etcdserverpb::KV>::CreateSessionWithoutTls(FLAGS_etcd_address);
     const int timeoutMs = 3'000;
-    res = rpcSession2_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, 0, timeoutMs);
+    res = rpcSession2_->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, "", 0, timeoutMs);
     ASSERT_EQ(res.GetCode(), K_RPC_UNAVAILABLE);
 }
 

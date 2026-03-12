@@ -63,10 +63,10 @@ TEST_F(GrpcSessionTest, DISABLED_TestCreateSessionAfterEtcdCrash)
     req.set_value(val);
     etcdserverpb::PutResponse rsp;
     DS_ASSERT_NOT_OK(
-        rpcSession->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, val.size(), timeoutMs));
+        rpcSession->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, "", val.size(), timeoutMs));
     DS_ASSERT_OK(externalCluster->StartEtcdCluster());
     DS_ASSERT_OK(
-        rpcSession->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, val.size(), timeoutMs));
+        rpcSession->SendRpc("Put::etcd_kv_Put", req, rsp, &etcdserverpb::KV::Stub::Put, "", val.size(), timeoutMs));
 }
 
 TEST_F(GrpcSessionTest, TestPutClusterTableWithoutLeaseId)
@@ -80,8 +80,8 @@ TEST_F(GrpcSessionTest, TestPutClusterTableWithoutLeaseId)
     putReq.set_key(ETCD_CLUSTER_TABLE);
     putReq.set_value(val);
     etcdserverpb::PutResponse putRsp;
-    DS_ASSERT_NOT_OK(
-        kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, val.size(), timeoutMs));
+    DS_ASSERT_NOT_OK(kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "",
+                                        val.size(), timeoutMs));
 
     std::unique_ptr<GrpcSession<etcdserverpb::Lease>> leaseSession;
     DS_ASSERT_OK(GrpcSession<etcdserverpb::Lease>::CreateSession(etcdAddr_, leaseSession));
@@ -91,17 +91,17 @@ TEST_F(GrpcSessionTest, TestPutClusterTableWithoutLeaseId)
     leaseReq.set_ttl(ttlInSec);
     leaseReq.set_id(0);
     DS_ASSERT_OK(leaseSession->AsyncSendRpc("LeaseGrant", leaseReq, leaseRsp,
-                                            &etcdserverpb::Lease::Stub::AsyncLeaseGrant, timeoutMs));
+                                            &etcdserverpb::Lease::Stub::AsyncLeaseGrant, "", timeoutMs));
     auto leaseId = leaseRsp.id();
 
     putReq.set_lease(leaseId);
-    DS_ASSERT_OK(
-        kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, val.size(), timeoutMs));
+    DS_ASSERT_OK(kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "", val.size(),
+                                    timeoutMs));
 
     auto invalidLeaseId = 1234;
     putReq.set_lease(invalidLeaseId);
-    DS_ASSERT_NOT_OK(
-        kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, val.size(), timeoutMs));
+    DS_ASSERT_NOT_OK(kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "",
+                                        val.size(), timeoutMs));
 }
 }  // namespace st
 }  // namespace datasystem

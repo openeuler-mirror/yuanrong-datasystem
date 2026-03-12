@@ -2448,5 +2448,75 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeScaleUp)
     DS_ASSERT_OK(client1->Get(key1, val));
     ASSERT_EQ(val, data);
 }
+
+class KVCacheClientServiceDiscoveryTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numOBS = 1;
+        opts.numWorkers = 2;
+        opts.enableDistributedMaster = "false";
+        opts.numEtcd = 1;
+        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000";
+    }
+
+    void SetUp() override
+    {
+        ExternalClusterTest::SetUp();
+        FLAGS_log_monitor = true;
+        InitClients();
+    }
+
+    void TearDown() override
+    {
+        client_.reset();
+        ExternalClusterTest::TearDown();
+    }
+
+    void InitTestKVClient(std::shared_ptr<KVClient> &client)
+    {
+        // initialize serviceDiscovery.
+        std::string etcdAddress;
+        for (size_t i = 0; i < cluster_->GetEtcdNum(); ++i) {
+            std::pair<HostPort, HostPort> addrs;
+            cluster_->GetEtcdAddrs(i, addrs);
+            if (!etcdAddress.empty()){
+                etcdAddress += ",";
+            }
+            etcdAddress += addrs.first.ToString();
+        }
+        ServiceDiscoveryOptions opts;
+        opts.etcdAddress = etcdAddress;
+        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
+        DS_ASSERT_OK(serviceDiscovery->Init());
+
+        ConnectOptions connectOptions{
+            .connectTimeoutMs = 60000,
+            .requestTimeoutMs = 0,
+            .accessKey = "QTWAOYTTINDUT2QVKYUC",
+            .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
+            .serviceDiscovery = serviceDiscovery
+        };
+        client = std::make_shared<KVClient>(connectOptions);
+        DS_ASSERT_OK(client->Init());
+    }
+
+    void InitClients()
+    {
+        InitTestKVClient(client_);
+    }
+
+    std::shared_ptr<KVClient> client_;
+};
+
+TEST_F(KVCacheClientServiceDiscoveryTest, TestSimpleSetGet)
+{
+    std::string key = "aaaa";
+    std::string value = "sssss";
+    ASSERT_EQ(client_->Set(key, value), Status::OK());
+    std::string valueGet;
+    ASSERT_EQ(client_->Get(key, valueGet), Status::OK());
+    ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
+}
 }  // namespace st
 }  // namespace datasystem
