@@ -47,10 +47,10 @@
 namespace datasystem {
 class UnixSockFd {
 public:
-    explicit UnixSockFd(int fd) : fd_(fd)
+    explicit UnixSockFd(int fd, bool isScmTcp = false) : fd_(fd), isScmTcp_(isScmTcp)
     {
     }
-    UnixSockFd() : fd_(RPC_NO_FILE_FD)
+    UnixSockFd() : fd_(RPC_NO_FILE_FD), isScmTcp_(false)
     {
     }
     ~UnixSockFd() = default;
@@ -328,7 +328,7 @@ public:
      * @return Status
      */
     static Status ErrnoToStatus(int err, int fd = RPC_NO_FILE_FD);
-    
+
     /**
      * @brief Return the address/port a socket bind/connect to
      * @param[in] servInfo The serv info to query
@@ -432,6 +432,7 @@ private:
     int fd_;
     bool timeoutEnabled_{ false };
     char workArea_[waSz_]{};
+    bool isScmTcp_{ false };
 };
 /**
  * @brief Parse a zmq ipc transport.

@@ -64,6 +64,7 @@ DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_uint32(page_size);
 DS_DEFINE_bool(authorization_enable, false, "Indicates whether to enable the tenant authentication, default is false.");
 DS_DECLARE_bool(ipc_through_shared_memory);
+DS_DEFINE_uint32(shared_memory_worker_port, 0, "The worker port for shared memory communication.");
 DS_DEFINE_uint32(max_client_num, 200,
                  "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]");
 DS_DEFINE_validator(max_client_num, &Validator::ValidateClientNum);
@@ -78,6 +79,7 @@ DS_DECLARE_uint32(client_reconnect_wait_s);
 
 namespace datasystem {
 namespace worker {
+const size_t UNBOUNDED_FD_MULTIPIER = 10;
 WorkerServiceImpl::WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, double timeoutMult, CommonServer *worker,
                                      std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid)
     : WorkerService(std::move(serverAddr)),
@@ -85,10 +87,10 @@ WorkerServiceImpl::WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, d
       worker_(worker),
       timeoutMultiplier_(timeoutMult),
       listenFd_(-1),
+      shmWorkerPort_(0),
       akSkManager_(akSkManager),
       workerUuid_(std::move(workerUuid)),
-      // The maximum number of caches is limited to 10 times of the maximum number of clients.
-      maxCacheUnboundedUnixSockFdsCount_(FLAGS_max_client_num * 10)
+      maxCacheUnboundedUnixSockFdsCount_(FLAGS_max_client_num * UNBOUNDED_FD_MULTIPIER)
 {
 }
 
@@ -109,19 +111,32 @@ Status WorkerServiceImpl::Init()
     RETURN_IF_NOT_OK(TenantAuthManager::Instance()->Init(FLAGS_authorization_enable, akSkManager_));
     workerStartId_ = GetStringUuid();
     if (FLAGS_ipc_through_shared_memory) {
-        std::string sockDir = FLAGS_unix_domain_socket_dir;
-        RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(sockDir, FLAGS_unix_domain_socket_dir, ""));
-        Status rc = CreateDir(sockDir, true, 0750);
-        if (!rc.IsOk() && !FileExist(sockDir)) {
-            RETURN_STATUS(rc.GetCode(), rc.GetMsg());
+        if (FLAGS_shared_memory_worker_port > 0) {
+            // Try to create TCP socket with IPPROTO_SCMTCP for FD passing over TCP
+            uint32_t tcpPort = FLAGS_shared_memory_worker_port;
+            UnixSockFd scmSockFd(RPC_NO_FILE_FD, true);
+            std::string tmp;
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                scmSockFd.Bind(FormatString("tcp://%s:%d", localAddress_.Host(), tcpPort), RPC_SOCK_MODE, tmp),
+                FormatString("Create SCMTCP socket failed, errno %d", errno));
+            listenFd_ = scmSockFd.GetFd();
+            shmWorkerPort_ = tcpPort;
+        } else {
+            std::string sockDir = FLAGS_unix_domain_socket_dir;
+            RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(sockDir, FLAGS_unix_domain_socket_dir, ""));
+            const int defaultUDSDirMode = 0750;
+            Status rc = CreateDir(sockDir, true, defaultUDSDirMode);
+            if (!rc.IsOk() && !FileExist(sockDir)) {
+                RETURN_STATUS(rc.GetCode(), rc.GetMsg());
+            }
+            std::string sockPath = FormatString("%s/%s", sockDir, GetStringUuid().substr(0, RPC_EIGHT));
+            (void)unlink(sockPath.data());
+            UnixSockFd udsSockFd;
+            std::string tmp;
+            RETURN_IF_NOT_OK(udsSockFd.Bind(FormatString("ipc://%s", sockPath), RPC_SOCK_MODE, tmp));
+            sockPath_ = std::move(sockPath);
+            listenFd_ = udsSockFd.GetFd();
         }
-        std::string sockPath = FormatString("%s/%s", sockDir, GetStringUuid().substr(0, RPC_EIGHT));
-        (void)unlink(sockPath.data());
-        UnixSockFd sockFd;
-        std::string tmp;
-        RETURN_IF_NOT_OK(sockFd.Bind(FormatString("ipc://%s", sockPath), RPC_SOCK_MODE, tmp));
-        sockPath_ = std::move(sockPath);
-        listenFd_ = sockFd.GetFd();
     }
 #ifndef MFD_HUGETLB
     if (FLAGS_enable_huge_tlb) {
@@ -156,7 +171,8 @@ Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRs
 
     LOG(INFO) << "Start to send client fd. worker fds: " << VectorToString(workerFds) << ", socket fd: " << socketFd
               << ", request id: " << req.request_id();
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SockSendFd(socketFd, workerFds, req.request_id()), "worker socketfd send failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SockSendFd(socketFd, shmWorkerPort_ > 0, workerFds, req.request_id()),
+                                     "worker socketfd send failed");
     ClientManager::Instance().SetClientId2WorkerFdMap(clientId, std::move(workerFds));
     LOG(INFO) << "Finish to send client fd. worker fds: " << VectorToString(workerFds) << ", socket fd: " << socketFd;
     return Status::OK();
@@ -367,6 +383,9 @@ Status WorkerServiceImpl::GetSocketPath(const GetSocketPathReqPb &req, GetSocket
                                      "Authenticate failed");
     if (FLAGS_ipc_through_shared_memory) {
         rsp.set_path(sockPath_);
+        if (shmWorkerPort_ > 0) {
+            rsp.set_shm_worker_port(shmWorkerPort_);
+        }
     }
     return Status::OK();
 }
@@ -431,6 +450,9 @@ Status WorkerServiceImpl::operator()()
             UnixSockFd sock(fd);
             Status rc = sock.Send32(fd);
             INJECT_POINT("WorkerServiceImpl.AcceptFdLoop.AfterSend");
+            if (rc.IsOk() && shmWorkerPort_ > 0) {
+                rc = SockSendFd(fd, true, { fd }, 1);
+            }
             if (rc.IsError()) {
                 RETRY_ON_EINTR(close(fd));
                 {

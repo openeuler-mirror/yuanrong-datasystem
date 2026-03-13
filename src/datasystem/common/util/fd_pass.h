@@ -28,21 +28,23 @@ namespace datasystem {
 /**
  * @brief Send file fd via unix domain socket.
  * @param[in] sock Unix domain socket fd.
+ * @param[in] isScmTcp Whether to use SCMTCP for passing file descriptors.
  * @param[in] serverFds File fds.
  * @param[in] requestId The unique id of this request.
  * @return Status of the call.
  */
-Status SockSendFd(int sock, const std::vector<int> &serverFds, uint64_t requestId);
+Status SockSendFd(int sock, bool isScmTcp, const std::vector<int> &serverFds, uint64_t requestId);
 
 /**
  * @brief Receive file fd via unix domain socket, this
  *        function would block if fd has not been send.
  * @param[in] sock Unix domain socket fd.
+ * @param[in] isScmTcp Whether to use SCMTCP for passing file descriptors.
  * @param[out] fds File fds.
  * @param[out] requestId The unique id of this request.
  * @return Status of the call.
  */
-Status SockRecvFd(int sock, std::vector<int> &clientFds, uint64_t &requestId);
+Status SockRecvFd(int sock, bool isScmTcp, std::vector<int> &clientFds, uint64_t &requestId);
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_UTIL_FD_PASS_H

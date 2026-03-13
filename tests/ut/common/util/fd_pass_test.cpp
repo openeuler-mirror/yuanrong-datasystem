@@ -45,11 +45,11 @@ TEST_F(FdPassTest, TestBasicFunction)
     int clientFd = server_->GetClientFd();
     ASSERT_GE(clientFd, 0);
 
-    DS_ASSERT_OK(SockSendFd(clientFd, { server_->GetFileFd() }, requestId_));
+    DS_ASSERT_OK(SockSendFd(clientFd, false, { server_->GetFileFd() }, requestId_));
 
     std::vector<int> revcFds;
     uint64_t recvRequestId = 0;
-    DS_ASSERT_OK(SockRecvFd(client.GetServerFd(), revcFds, recvRequestId));
+    DS_ASSERT_OK(SockRecvFd(client.GetServerFd(), false, revcFds, recvRequestId));
 
     ASSERT_EQ(recvRequestId, requestId_);
     ASSERT_EQ(revcFds.size(), 1);
@@ -69,7 +69,7 @@ TEST_F(FdPassTest, TestPassRandomInteger)
     LOG(INFO) << "Test fd pass with a random integer (not a fd).";
     int fd = 438;
     int sock1 = -1;
-    DS_ASSERT_NOT_OK(SockSendFd(sock1, { fd }, requestId_));
+    DS_ASSERT_NOT_OK(SockSendFd(sock1, false, { fd }, requestId_));
     LOG(INFO) << "Test fd pass with a random integer (not a fd) done.";
 }
 
@@ -87,7 +87,7 @@ TEST_F(FdPassTest, TestSendFdToDisconnectedClient)
     ASSERT_GE(clientFd, 0);
 
     // 2. Send fd to disconnect client.
-    DS_ASSERT_NOT_OK(SockSendFd(clientFd, { server_->GetFileFd() }, requestId_));
+    DS_ASSERT_NOT_OK(SockSendFd(clientFd, false, { server_->GetFileFd() }, requestId_));
     LOG(INFO) << "Test send fd to disconnected client done.";
 }
 
@@ -96,7 +96,7 @@ TEST_F(FdPassTest, TestSendFdToRandomInteger)
     LOG(INFO) << "Test send fd to a random integer (not a socket fd).";
 
     int clientFd = -1;
-    DS_ASSERT_NOT_OK(SockSendFd(clientFd, { server_->GetFileFd() }, requestId_));
+    DS_ASSERT_NOT_OK(SockSendFd(clientFd, false, { server_->GetFileFd() }, requestId_));
     LOG(INFO) << "Test send fd to a random integer (not a socket fd) done.";
 }
 
@@ -107,7 +107,7 @@ TEST_F(FdPassTest, TestReceiveFdFromRandomInteger)
     int serverFd = -1;
     std::vector<int> revcFds;
     uint64_t recvRequestId = 0;
-    DS_ASSERT_NOT_OK(SockRecvFd(serverFd, revcFds, recvRequestId));
+    DS_ASSERT_NOT_OK(SockRecvFd(serverFd, false, revcFds, recvRequestId));
     LOG(INFO) << "Test receive fd from a random integer (not a socket fd) done.";
 }
 
@@ -126,7 +126,7 @@ TEST_F(FdPassTest, TestReceiveFdFromDumpServer)
     // 3. Receive fd from a dump server.
     std::vector<int> revcFds;
     uint64_t recvRequestId = 0;
-    DS_ASSERT_NOT_OK(SockRecvFd(client.GetServerFd(), revcFds, recvRequestId));
+    DS_ASSERT_NOT_OK(SockRecvFd(client.GetServerFd(), false, revcFds, recvRequestId));
     LOG(INFO) << "Test receive fd from a dump server done.";
 }
 }  // namespace ut

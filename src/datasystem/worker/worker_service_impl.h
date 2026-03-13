@@ -170,6 +170,7 @@ private:
     double timeoutMultiplier_;
     std::string sockPath_;
     int listenFd_;
+    uint32_t shmWorkerPort_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::string workerUuid_;
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager

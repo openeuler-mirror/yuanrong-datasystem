@@ -452,6 +452,7 @@ protected:
     static std::atomic<int32_t> exclusiveIdGen_;
     std::optional<int32_t> exclusiveId_;
     std::string exclusiveConnSockPath_;
+    uint32_t shmWorkerPort_{ 0 };
 
 private:
     /**
@@ -476,17 +477,28 @@ private:
      * @param[in] serverFd The FD of the worker server.
      * @return Status of the call.
      */
-    Status CreateHandShakeFunc(UnixSockFd &fd, std::string &sockPath, int32_t &serverFd);
+    Status CreateHandShakeFunc(UnixSockFd &fd, const std::string &sockPath, int32_t &serverFd);
+
+    /**
+     * @brief Determine the endpoint and connection type for shared memory transfer.
+     * @param[in] reply The response containing socket path or port.
+     * @param[out] endpointStr The formatted endpoint string.
+     * @param[out] type The connection type description.
+     * @return True if a shared memory endpoint was found; false otherwise.
+     */
+    bool PrepareShmTransferEndpoint(const GetSocketPathRspPb &reply, std::string &endpointStr, std::string &type);
 
     /**
      * @brief Create a unix domain socket.
      * @param[in] timeoutMs Register request timeout interval.
-     * @param[out] isConnectUdsSuccess Check whether the UDS is successfully connected..
+     * @param[out] isConnectSuccess Check whether the UDS is successfully connected..
      * @param[out] serverFd Returns the FD of the worker server..
      * @param[out] socketFd FD of the UNIX socket.
+     * @param[out] type Type of connection (Unix domain socket SCMTCP or TCP).
      * @return Status of the call.
      */
-    Status CreateUnixDomainSocket(int32_t timeoutMs, bool &isConnectUdsSuccess, int32_t &serverFd, int32_t &socketFd);
+    Status CreateConnectionForTransferShmFd(int32_t timeoutMs, bool &isConnectSuccess, int32_t &serverFd,
+                                            int32_t &socketFd, std::string &type);
 
     /**
      * @brief Construct decShmUnit_ after register.

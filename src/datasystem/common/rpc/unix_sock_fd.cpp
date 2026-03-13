@@ -37,6 +37,11 @@
 
 constexpr int RECV_RETRY_COUNT = 10;
 
+// in case of compilation on systems without IPPROTO_SCMTCP
+#ifndef IPPROTO_SCMTCP
+#define IPPROTO_SCMTCP 518
+#endif
+
 namespace datasystem {
 #define RW_RETRY_ON_EINTR(nbytes, statement)                      \
     do {                                                          \
@@ -299,13 +304,13 @@ Status UnixSockFd::GetAddrInfo(const std::string &tcpIpAddr, struct addrinfo **s
     CHECK_FAIL_RETURN_STATUS(ret == EOK, StatusCode::K_RUNTIME_ERROR,
                              FormatString("Set sock hints failed, the memset_s return: %d", ret));
 
-    hints.ai_family = AF_UNSPEC;   // supports both ipv4 and ipv6
+    hints.ai_family = AF_UNSPEC;  // supports both ipv4 and ipv6
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
     int err = getaddrinfo(serverAddr.c_str(), serverPort.c_str(), &hints, servInfo);
-    CHECK_FAIL_RETURN_STATUS(err == 0, K_RUNTIME_ERROR, FormatString("getaddrinfo failed: %s:%s", serverAddr,
-                                                                     serverPort));
+    CHECK_FAIL_RETURN_STATUS(err == 0, K_RUNTIME_ERROR,
+                             FormatString("getaddrinfo failed: %s:%s", serverAddr, serverPort));
     return Status::OK();
 }
 
@@ -339,7 +344,10 @@ Status UnixSockFd::BindTcp(struct addrinfo *servInfo, HostPort &outHostPort)
     // If any of these fails, close the socket and reloop to the next address in the servInfo.
     // If the end of the loop is reached, then it is unsuccessful and report the error.
     for (currServInfo = servInfo; currServInfo != NULL; currServInfo = currServInfo->ai_next) {
-        fd_ = socket(currServInfo->ai_family, currServInfo->ai_socktype, currServInfo->ai_protocol);
+        auto protocol = isScmTcp_ ? IPPROTO_SCMTCP : currServInfo->ai_protocol;
+        VLOG(1) << "Attempting to create socket for bind family: " << currServInfo->ai_family
+                << ", socktype: " << currServInfo->ai_socktype << ", with protocol: " << protocol;
+        fd_ = socket(currServInfo->ai_family, currServInfo->ai_socktype, protocol);
         if (fd_ == RPC_NO_FILE_FD) {
             errMsg = FormatString("Socket create failed: errno = %d", errno);
             VLOG(RPC_LOG_LEVEL) << errMsg;
@@ -373,18 +381,17 @@ Status UnixSockFd::BindTcp(struct addrinfo *servInfo, HostPort &outHostPort)
     CHECK_FAIL_RETURN_STATUS(currServInfo != nullptr, K_RUNTIME_ERROR,
                              FormatString("Tcpip Bind failed. Last Error: %s", errMsg));
 
-    VLOG(RPC_KEY_LOG_LEVEL) << FormatString("BindTcp socket for %s success. fd = %d",
-                                            outHostPort.ToString(), fd_);
+    VLOG(RPC_KEY_LOG_LEVEL) << FormatString("BindTcp socket for %s success. fd = %d", outHostPort.ToString(), fd_);
 
     return Status::OK();
 }
 
-Status UnixSockFd::Bind(const std::string &ZmqEndPt, mode_t perm, std::string &bindStr)
+Status UnixSockFd::Bind(const std::string &zmqEndPt, mode_t perm, std::string &bindStr)
 {
     const std::string tcpTransport = "tcp://";
     const std::string udsTransport = "ipc://";
-    std::string tcpHostPort = ParseEndPt(ZmqEndPt, tcpTransport);
-    std::string udsPath = ParseEndPt(ZmqEndPt, udsTransport);
+    std::string tcpHostPort = ParseEndPt(zmqEndPt, tcpTransport);
+    std::string udsPath = ParseEndPt(zmqEndPt, udsTransport);
 
     CHECK_FAIL_RETURN_STATUS(fd_ == RPC_NO_FILE_FD, K_RUNTIME_ERROR,
                              FormatString("Bind attempted against a socket that is not closed."));
@@ -404,7 +411,7 @@ Status UnixSockFd::Bind(const std::string &ZmqEndPt, mode_t perm, std::string &b
         RETURN_IF_NOT_OK(BindUds(addr, perm));
         bindStr = udsPath;
     } else {
-        RETURN_STATUS(K_INVALID, FormatString("Invalid end point %s", ZmqEndPt));
+        RETURN_STATUS(K_INVALID, FormatString("Invalid end point %s", zmqEndPt));
     }
     return Status::OK();
 }
@@ -433,7 +440,10 @@ Status UnixSockFd::ConnectTcp(struct addrinfo *servInfo)
     // If any of these fails, close the socket and reloop to the next address in the servInfo.
     // If the end of the loop is reached, then it is unsuccessful and report the error.
     for (currServInfo = servInfo; currServInfo != NULL; currServInfo = currServInfo->ai_next) {
-        fd_ = socket(currServInfo->ai_family, currServInfo->ai_socktype, currServInfo->ai_protocol);
+        auto protocol = isScmTcp_ ? IPPROTO_SCMTCP : currServInfo->ai_protocol;
+        VLOG(1) << "Attempting to create socket for connect family: " << currServInfo->ai_family
+                << ", socktype: " << currServInfo->ai_socktype << ", with protocol: " << protocol;
+        fd_ = socket(currServInfo->ai_family, currServInfo->ai_socktype, protocol);
         if (fd_ == RPC_NO_FILE_FD) {
             errMsg = FormatString("Socket create failed: errno = %d", errno);
             VLOG(RPC_LOG_LEVEL) << errMsg;
@@ -521,8 +531,7 @@ Status UnixSockFd::GetSocketHostPort(struct addrinfo *servInfo, datasystem::Host
     CHECK_FAIL_RETURN_STATUS(err == 0, K_RUNTIME_ERROR, FormatString("getsockname failed with errno %d", errno));
 
     char s[INET6_ADDRSTRLEN];
-    bool success =
-        (inet_ntop(servInfo->ai_family, GetInAddr(addr), s, sizeof(s)) != nullptr);
+    bool success = (inet_ntop(servInfo->ai_family, GetInAddr(addr), s, sizeof(s)) != nullptr);
     CHECK_FAIL_RETURN_STATUS(success, K_RUNTIME_ERROR, FormatString("Invalid network address. Errno %d", errno));
 
     auto port = ntohs(GetInPort(addr));
@@ -534,9 +543,7 @@ Status UnixSockFd::SetTimeout(TimeoutType timeoutType, int64_t timeoutMs) const
 {
     auto s = timeoutMs / ONE_THOUSAND;
     auto us = (timeoutMs % ONE_THOUSAND) * ONE_THOUSAND;
-    struct timeval t {
-        .tv_sec = s, .tv_usec = us
-    };
+    struct timeval t{ .tv_sec = s, .tv_usec = us };
 
     // Note: std::to_underlying() is available in more recent C++ versions. static_cast for now.
     auto err = setsockopt(fd_, SOL_SOCKET, static_cast<int>(timeoutType), &t, sizeof(t));
@@ -655,16 +662,16 @@ Status UnixSockFd::SendWithTimeout(MemView &buf) const
 void *UnixSockFd::GetInAddr(struct sockaddr *sa)
 {
     if (sa->sa_family == AF_INET) {
-        return &((reinterpret_cast<struct sockaddr_in*>(sa))->sin_addr);
+        return &((reinterpret_cast<struct sockaddr_in *>(sa))->sin_addr);
     }
-    return &((reinterpret_cast<struct sockaddr_in6*>(sa))->sin6_addr);
+    return &((reinterpret_cast<struct sockaddr_in6 *>(sa))->sin6_addr);
 }
 
 in_port_t UnixSockFd::GetInPort(struct sockaddr *sa)
 {
     if (sa->sa_family == AF_INET) {
-        return ((reinterpret_cast<struct sockaddr_in*>(sa))->sin_port);
+        return ((reinterpret_cast<struct sockaddr_in *>(sa))->sin_port);
     }
-    return ((reinterpret_cast<struct sockaddr_in6*>(sa))->sin6_port);
+    return ((reinterpret_cast<struct sockaddr_in6 *>(sa))->sin6_port);
 }
 }  // namespace datasystem
