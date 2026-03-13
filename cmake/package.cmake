@@ -189,6 +189,9 @@ if (BUILD_GO_API)
     set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
     install_datasystem_target(common_flags)
 
+    set(etcdapi_proto_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
+    install_datasystem_target(etcdapi_proto)
+
     set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
     install_datasystem_target(rpc_option_protos)
 
@@ -296,25 +299,25 @@ install_file_pattern(
 )
 
 if (BUILD_WITH_RDMA)
-        list(APPEND UCX_BASE_LIB_PATH
+    list(APPEND UCX_BASE_LIB_PATH
                 "${UCX_LIB_PATH}/libucp.so*"
                 "${UCX_LIB_PATH}/libucs*.so*"
                 "${UCX_LIB_PATH}/libuct.so*"
                 "${UCX_LIB_PATH}/libucm.so*"
         )
 
-        list(APPEND UCX_IB_LIB_PATH
+    list(APPEND UCX_IB_LIB_PATH
                 "${UCX_LIB_PATH}/libuct_*.so*"
                 "${UCX_LIB_PATH}/libucx*.so*"
         )
 
-        install_file_pattern(
+    install_file_pattern(
                 PATH_PATTERN ${UCX_BASE_LIB_PATH}
                 DEST_DIR ${DATASYSTEM_SERVICE_LIBPATH}
                 PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
         )
 
-        install_file_pattern(
+    install_file_pattern(
                 PATH_PATTERN ${UCX_IB_LIB_PATH}
                 DEST_DIR "${DATASYSTEM_SERVICE_LIBPATH}/ucx"
                 PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
@@ -329,9 +332,9 @@ if (BUILD_PYTHON_API)
         datasystem
         ds_client_py)
 
-        if (BUILD_HETERO)
-            list(APPEND DEPEND_TARGETS acl_plugin)
-        endif()
+    if (BUILD_HETERO)
+        list(APPEND DEPEND_TARGETS acl_plugin)
+    endif()
 
     set(PYTHON_LIBPATH ${CMAKE_BINARY_DIR}/python_lib)
 
@@ -349,4 +352,3 @@ if (BUILD_PYTHON_API)
         DEPEND_TARGETS ${DEPEND_TARGETS}
         THIRDPATRY_LIBS_PATTERN ${PYTHON_LIB_PATTERNS})
 endif()
-
