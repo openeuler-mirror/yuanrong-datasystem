@@ -75,8 +75,8 @@ TEST_F(EvictMemTest, EvictThresHoldTest)
 {
     std::shared_ptr<DsClient> client0;
     InitTestDsClient(0, client0);
-    std::string key400 = "key_400", key10 = "key_10", key20 = "key_20";
-    auto mb400 = 400, mb20 = 20, mb10 = 10;
+    std::string key400 = "key_400", key10 = "key_10", key60 = "key_60";
+    auto mb400 = 400, mb60 = 60, mb10 = 10;
     auto put = [&client0](uint64_t mb) {
         uint64_t dataSize =  mb*MB_TO_BYTES;
         // Put, spill will be triggered
@@ -96,16 +96,16 @@ TEST_F(EvictMemTest, EvictThresHoldTest)
         return exists[0];
     };
     // The real size of 400_MB keys is 448MB
-    // mem reserve is min(560*0.2, 100) 100MB ;
-    // case 1  (560-468) <100 ,evict ;
+    // mem reserve is min(560*0.1, 100) 56MB ;
+    // case 1  (560-508) <56 ,evict ;
     put(mb400);
-    put(mb20);
-    DS_ASSERT_TRUE((exist(key20)), true);
+    put(mb60);
+    DS_ASSERT_TRUE((exist(key60)), true);
     std::vector<std::string> failKeys;
     DS_ASSERT_TRUE((exist(key400)), false);
-    DS_ASSERT_OK(client0->Hetero()->Delete({ key20 }, failKeys));
+    DS_ASSERT_OK(client0->Hetero()->Delete({ key60 }, failKeys));
     DS_ASSERT_TRUE((failKeys.empty()), true);
-    // case 2  (560-458) >100 , no evict
+    // case 2  (560-458) >56 , no evict
     put(mb400);
     put(mb10);
     DS_ASSERT_TRUE((exist(key400)), true);

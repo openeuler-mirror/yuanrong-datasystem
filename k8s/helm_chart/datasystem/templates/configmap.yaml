@@ -22,3 +22,4 @@ data:
     -cross_cluster_get_data_from_worker={{ .Values.global.reliability.crossAzGetDataFromWorker }}
     -enable_hash_ring_self_healing={{ .Values.global.reliability.enableHashRingSelfHealing }}
     -enable_lossless_data_exit_mode={{ .Values.global.gracefulShutdown.enableLosslessDataExitMode }}
+    -enable_l2_cache_fallback={{ .Values.global.l2Cache.enableL2CacheFallback }}

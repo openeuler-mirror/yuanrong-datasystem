@@ -70,7 +70,7 @@ DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(authorization_enable);
 DS_DECLARE_bool(enable_data_replication);
-
+DS_DEFINE_bool(enable_l2_cache_fallback, true, "Control whether enable fallback to L2 cache when worker failed.");
 using namespace datasystem::worker;
 using namespace datasystem::master;
 namespace datasystem {
@@ -766,7 +766,7 @@ Status WorkerOcServiceGetImpl::GetObjectsWithoutMeta(const std::map<std::string,
 
 Status WorkerOcServiceGetImpl::GetObjectsWithoutMetaFromL2Cache(ObjectKV &objectKV, uint64_t minVersion)
 {
-    if (IsSupportL2Storage(supportL2Storage_)) {
+    if (IsSupportL2Storage(supportL2Storage_) && FLAGS_enable_l2_cache_fallback) {
         return GetObjectFromPersistenceAndDumpWithoutCopyMeta(objectKV, true, true, minVersion);
     }
     RETURN_STATUS(K_INVALID, FormatString("The L2 Storage type is invalid for objectKey %s", objectKV.GetObjKey()));
@@ -1969,6 +1969,9 @@ void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectM
                                                                    bool ifWorkerConnected, ObjectKV &objectKV,
                                                                    Status &status)
 {
+    if (!FLAGS_enable_l2_cache_fallback) {
+        return;
+    }
     const ConfigPb &configPb = meta.config();
     bool writeToL2Storage = WriteMode(configPb.write_mode()) != WriteMode::NONE_L2_CACHE
                             && WriteMode(configPb.write_mode()) != WriteMode::NONE_L2_CACHE_EVICT;
@@ -2637,7 +2640,7 @@ Status WorkerOcServiceGetImpl::KeepObjectDataInMemory(ReadObjectKV &objectKV)
     } else if (entry->IsSpilled()) {
         RETURN_IF_NOT_OK(LoadSpilledObjectToMemory(objectKV, evictionManager_));
         CacheHitInfo::Instance().IncDiskHit(1);
-    } else if (entry->HasL2Cache()) {
+    } else if (entry->HasL2Cache() && FLAGS_enable_l2_cache_fallback) {
         RETURN_IF_NOT_OK(GetObjectFromPersistenceAndDumpWithoutCopyMeta(objectKV, false, false));
         CacheHitInfo::Instance().IncL2Hit(1);
     } else {

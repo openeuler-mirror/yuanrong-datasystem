@@ -161,6 +161,8 @@ global:
     objectDelRetryDelaySec: 3600
     # Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd.
     ocIoFromL2CacheNeedMetadata: true
+    # Control whether enable fallback to L2 cache when worker failed.
+    enableL2CacheFallback: true
 
     obs:
       # The access key for obs AK/SK authentication.
