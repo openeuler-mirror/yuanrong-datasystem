@@ -35,6 +35,7 @@ class WriteMode(Enum):
     `WriteMode.WRITE_THROUGH_L2_CACHE`   Object store in cache and synchronized to L2.
     `WriteMode.WRITE_BACK_L2_CACHE`      Object store in cache and asynchronized to L2.
     `WriteMode.NONE_L2_CACHE_EVICT`      Object is volatile, if cache resource is lack it would be delete.
+    `WriteMode.WRITE_BACK_L2_CACHE_EVICT` Object store in cache and asynchronized to L2, evictable when cache is full.
     ===================================  ==================================================================
     """
 
@@ -42,6 +43,7 @@ class WriteMode(Enum):
     WRITE_THROUGH_L2_CACHE = ds.WriteMode.WRITE_THROUGH_L2_CACHE
     WRITE_BACK_L2_CACHE = ds.WriteMode.WRITE_BACK_L2_CACHE
     NONE_L2_CACHE_EVICT = ds.WriteMode.NONE_L2_CACHE_EVICT
+    WRITE_BACK_L2_CACHE_EVICT = ds.WriteMode.WRITE_BACK_L2_CACHE_EVICT
 
 
 class ConsistencyType(Enum):

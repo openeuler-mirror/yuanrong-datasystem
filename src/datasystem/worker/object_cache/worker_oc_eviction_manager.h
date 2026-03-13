@@ -41,6 +41,12 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
+namespace datasystem {
+namespace object_cache {
+class AsyncSendManager;
+}
+}  // namespace datasystem
+
 static constexpr double HIGH_WATER_FACTOR = 0.9;
 static constexpr double LOW_WATER_FACTOR = 0.8;
 
@@ -124,6 +130,15 @@ public:
     }
 
     /**
+     * @brief Setter function to assign the async send manager.
+     * @param[in] asyncSendManager The async send manager pointer to assign
+     */
+    void SetAsyncSendManager(std::shared_ptr<AsyncSendManager> asyncSendManager)
+    {
+        asyncSendManager_ = asyncSendManager;
+    }
+
+    /**
      * @brief Evict clear object.
      * @param[in] objectKV The object that need to evict.
      * @return Status of the call.
@@ -166,7 +181,8 @@ private:
             if (!info.empty()) {
                 ss << info << ", ";
             }
-            ss << "evict action " << actionName << ", total cost " << elapsed << " ms, " << "obj size: " << objectSize;
+            ss << "evict action " << actionName << ", total cost " << elapsed << " ms, "
+               << "obj size: " << objectSize;
             if (action == Action::SPILL) {
                 ss << "spill cost " << spillCost << " ms, ";
             }
@@ -306,8 +322,8 @@ private:
      * @param[in] objectKeySizeMap The object key and size map.
      * @return The future of the async thread.
      */
-    std::future<WorkerOcEvictionManager::SpillResult> SubmitBatchSpillTask(const std::string &taskId,
-        const std::unordered_map<std::string, uint64_t> &objectKeySizeMap);
+    std::future<WorkerOcEvictionManager::SpillResult> SubmitBatchSpillTask(
+        const std::string &taskId, const std::unordered_map<std::string, uint64_t> &objectKeySizeMap);
 
     /**
      * @brief Batch spill object.
@@ -316,8 +332,7 @@ private:
      * @param[out] failedKeys The failed keys.
      * @return Status
      */
-    Status BatchSpillImpl(const std::string &taskId,
-                          const std::unordered_map<std::string, uint64_t> &objectKeySizeMap,
+    Status BatchSpillImpl(const std::string &taskId, const std::unordered_map<std::string, uint64_t> &objectKeySizeMap,
                           std::vector<std::string> failedKeys);
 
     /**
@@ -425,7 +440,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
-
+    std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     friend class ::datasystem::ut::SpillEvictionTest;
 };
 

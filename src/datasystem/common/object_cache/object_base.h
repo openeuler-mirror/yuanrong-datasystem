@@ -250,7 +250,8 @@ struct ObjectInterface {
     bool HasL2Cache() const
     {
         return modeInfo.GetWriteMode() == WriteMode::WRITE_THROUGH_L2_CACHE
-               || modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE;
+               || modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE
+               || modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE_EVICT;
     }
 
     /**
@@ -268,7 +269,8 @@ struct ObjectInterface {
      */
     bool IsWriteBackMode() const
     {
-        return modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE;
+        return modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE
+               || modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE_EVICT;
     }
 
     /**
@@ -287,6 +289,15 @@ struct ObjectInterface {
     bool IsNoneL2CacheEvictMode() const
     {
         return modeInfo.GetWriteMode() == WriteMode::NONE_L2_CACHE_EVICT;
+    }
+
+    /**
+     * @brief Check if the object is write back l2 cache evict mode.
+     * @return True if the object is write back l2 cache evict mode, false otherwise.
+     */
+    bool IsWriteBackL2CacheEvictMode() const
+    {
+        return modeInfo.GetWriteMode() == WriteMode::WRITE_BACK_L2_CACHE_EVICT;
     }
 
     /**

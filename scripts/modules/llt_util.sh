@@ -145,10 +145,15 @@ function start_all()
   WORKER_ADDRESS="127.0.0.1:${worker_port}"
   WORKER_ETCD_ADDRESS="127.0.0.1:${etcd_client_port}"
   # make this parameter available to python unit tests.
+  # Create SFS directory
+  mkdir -p "${root_dir}/datasystem/sfs"
+  
   sed -i \
     -e '/"worker_address": {/,/}/ s|"value": "[^"]*"|"value": "'"${WORKER_ADDRESS}"'"|' \
     -e '/"etcd_address": {/,/}/ s|"value": "[^"]*"|"value": "'"${WORKER_ETCD_ADDRESS}"'"|' \
     -e '/"add_node_wait_time_s": {/,/}/ s|"value": "[^"]*"|"value": "0"|' \
+    -e '/"l2_cache_type": {/,/}/ s|"value": "[^"]*"|"value": "sfs"|' \
+    -e '/"sfs_path": {/,/}/ s|"value": "[^"]*"|"value": "'"${root_dir}/datasystem/sfs"'"|' \
     "${deploy_dir}/datasystem/service/worker_config.json"
 
   ${DSCLI} start -d "${root_dir}" -f "${deploy_dir}/datasystem/service/worker_config.json"

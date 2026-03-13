@@ -73,6 +73,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
         .value("WRITE_THROUGH_L2_CACHE", WriteMode::WRITE_THROUGH_L2_CACHE)
         .value("WRITE_BACK_L2_CACHE", WriteMode::WRITE_BACK_L2_CACHE)
         .value("NONE_L2_CACHE_EVICT", WriteMode::NONE_L2_CACHE_EVICT)
+        .value("WRITE_BACK_L2_CACHE_EVICT", WriteMode::WRITE_BACK_L2_CACHE_EVICT)
         .export_values();
 
     py::enum_<ConsistencyType>(*m, "ConsistencyType")
