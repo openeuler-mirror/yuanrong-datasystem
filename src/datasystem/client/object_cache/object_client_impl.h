@@ -522,15 +522,35 @@ public:
     Status DeleteDevObjects(const std::vector<std::string> &objKeys, std::vector<std::string> &failList);
 
     /**
+     * @brief For device object, to sync get multiple objects
+     * @param[in] objectKeys multiple keys support
+     * @param[in] devBlobList vector of compose blobInfo
+     * @param[out] failedKeys failed keys if retrieval fails
+     * @param[in] timeoutMs max waiting time of getting data
+     * @return Status of the result.
+     */
+    Status MGetH2D(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
+                   std::vector<std::string> &failedKeys, uint64_t timeoutMs);
+
+    /**
      * @brief For device object, to async get multiple objects
      * @param[in] objectKeys multiple keys support
-     * @param[out] devBlobList vector of compose blobInfo
+     * @param[in] devBlobList vector of compose blobInfo
      * @param[in] timeoutMs max waiting time of getting data
      * @return future of AsyncResult, describe get status and failed list.
      */
-    std::shared_future<AsyncResult> MGetH2D(const std::vector<std::string> &objectKeys,
-                                            const std::vector<DeviceBlobList> &devBlobList, uint64_t timeout,
-                                            AccessRecorderKey accessRecorderKey);
+    std::shared_future<AsyncResult> AsyncMGetH2D(const std::vector<std::string> &objectKeys,
+                                                 const std::vector<DeviceBlobList> &devBlobList, uint64_t timeout);
+
+    /**
+     * @brief For device object, to sync set multiple objects
+     * @param[in] objectKeys multiple keys support
+     * @param[in] devBlobList vector of compose data
+     * @param[in] param set parameter
+     * @return Status of the result.
+     */
+    Status MSetD2H(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
+                   const SetParam &param);
 
     /**
      * @brief For device object, to invoke worker client to create and async publish multiple objects
@@ -538,9 +558,8 @@ public:
      * @param[in] devBlobList vector of compose data
      * @return future of AsyncResult, describe set status and failed list.
      */
-    std::shared_future<AsyncResult> MSet(const std::vector<std::string> &objectKeys,
-                                         const std::vector<DeviceBlobList> &devBlobList, const SetParam &param,
-                                         AccessRecorderKey accessRecorderKey);
+    std::shared_future<AsyncResult> AsyncMSetD2H(const std::vector<std::string> &objectKeys,
+                                                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &param);
 
     /**
     @brief Publish device data to device.
@@ -649,28 +668,34 @@ private:
     friend ClientDeviceObjectManager;
     enum WorkerNode : uint32_t { LOCAL_WORKER = 0, STANDBY1_WORKER, STANDBY2_WORKER };
 
-    struct MGetAsyncRPCSource {
-        std::future<Status> rpcFuture;
-        std::promise<AsyncResult> promise;
-        std::vector<DeviceBlobList> devBlobList;
-        // hold the buffer to avoid it destroy before batch release.
-        std::vector<Optional<Buffer>> bufferList;
-        std::vector<Buffer *> existBufferList;
-        std::vector<std::string> failList;
-    };
-
     /**
      * @brief Init ParallelFor thread pool.
      */
     void InitParallelFor();
 
     /**
-     * @brief process too handler MGetH2D rpc response.
-     * @param[in] asyncResource A struct type containing a future with rpc, a buffer that cannot be destructured for the
-     * time being, and a promise to be used for return. Passed to the thread to use to avoid destructuring the current
-     * ptr.
+     * @brief The core synchronous implementation shared by MGetH2D and AsyncMGetH2D.
      */
-    void MGetAsyncRpcThread(const std::shared_ptr<MGetAsyncRPCSource> &asyncResource);
+    Status MGetH2DImpl(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
+                       uint64_t timeoutMs, std::vector<std::string> &failedKeys);
+
+    /**
+     * @brief Validate MGetH2D input arguments.
+     */
+    Status CheckMGetH2DInput(const std::vector<std::string> &objectKeys,
+                             const std::vector<DeviceBlobList> &devBlobList);
+
+    /**
+     * @brief The core synchronous implementation shared by MSetD2H and AsyncMSetD2H.
+     */
+    Status MSetD2HImpl(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
+                       const SetParam &setParam);
+
+    /**
+     * @brief Validate MSetD2H input arguments.
+     */
+    Status CheckMSetD2HInput(const std::vector<std::string> &objectKeys, const std::vector<DeviceBlobList> &devBlobList,
+                             const SetParam &setParam);
 
     /**
      * @brief Check and construct the multi createParam.
