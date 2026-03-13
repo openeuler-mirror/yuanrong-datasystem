@@ -37,6 +37,8 @@
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/worker/object_cache/limiter/data_limiter.h"
+#include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 // Forward declaration to avoid circular dependency
@@ -341,7 +343,7 @@ private:
      * @return Status of the call.
      */
     Status SendToRemoteOnLock(const std::string &objectKey, std::shared_ptr<std::stringstream> buf, uint64_t createTime,
-                              std::chrono::time_point<std::chrono::steady_clock> &beginTime);
+                              uint64_t &dataSize, std::chrono::time_point<std::chrono::steady_clock> &beginTime);
 
     /**
      * @brief Try to evict when memory size reach high water maker.
@@ -392,6 +394,7 @@ private:
     // Protect 'failedObjects_'
     mutable std::shared_timed_mutex failedObjectsMutex_;
     std::unordered_set<std::string> failedObjects_;
+    DataLimiter limiter_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

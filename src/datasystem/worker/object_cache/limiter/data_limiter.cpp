@@ -17,9 +17,10 @@
 /**
  * Description: Migrate data limiter implementation.
  */
-#include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
+#include "datasystem/worker/object_cache/limiter/data_limiter.h"
 
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/inject/inject_point.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -31,14 +32,22 @@ static inline std::time_t Now()
     return GetSteadyClockTimeStampUs() / ms2us;
 }
 
-MigrateDataLimiter::MigrateDataLimiter(uint64_t rate) : rate_(rate), tokens_(rate)
+DataLimiter::DataLimiter(uint64_t rate, uint64_t maxTokenSize)
+    : rate_(rate), tokens_(rate), maxTokenSize_(maxTokenSize)
 {
     timestamp_ = Now();
 }
 
-void MigrateDataLimiter::WaitAllow(uint64_t requiredSize)
+void DataLimiter::WaitAllow(uint64_t requiredSize)
 {
     std::unique_lock<std::mutex> l(mtx_);
+    uint64_t originalMax = maxTokenSize_;
+    bool needRestore = false;
+
+    if (requiredSize > maxTokenSize_) {
+        maxTokenSize_ = requiredSize;
+        needRestore = true;
+    }
     while (tokens_ < requiredSize) {
         Refill();
         if (tokens_ < requiredSize) {
@@ -48,12 +57,19 @@ void MigrateDataLimiter::WaitAllow(uint64_t requiredSize)
         }
     }
     tokens_ -= requiredSize;
+    if (needRestore) {
+        maxTokenSize_ = originalMax;
+    }
 }
 
-void MigrateDataLimiter::Refill()
+void DataLimiter::Refill()
 {
     auto now = Now();
     uint64_t elapsed = now - timestamp_;
+    INJECT_POINT("migrate.limiter.elapsed.longtime", [&elapsed] {
+        uint64_t delayTimeS = 100;
+        elapsed += delayTimeS * s2ms;
+    });
     uint64_t newTokens;
     if (rate_ <= UINT64_MAX / (elapsed == 0 ? 1 : elapsed)) {
         newTokens = rate_ * elapsed;
@@ -62,16 +78,19 @@ void MigrateDataLimiter::Refill()
     }
     newTokens = newTokens / s2ms + 1;
     tokens_ = newTokens + tokens_ > tokens_ ? newTokens + tokens_ : UINT64_MAX;
+    if (tokens_ > maxTokenSize_) {
+        tokens_ = maxTokenSize_;
+    }
     timestamp_ = now;
 }
 
-void MigrateDataLimiter::UpdateRate(uint64_t rate)
+void DataLimiter::UpdateRate(uint64_t rate)
 {
     std::unique_lock<std::mutex> l(mtx_);
     rate_ = rate;
 }
 
-std::time_t MigrateDataLimiter::WaitMilliseconds(uint64_t requiredSize)
+std::time_t DataLimiter::WaitMilliseconds(uint64_t requiredSize)
 {
     if (requiredSize <= tokens_) {
         return 0;
@@ -79,7 +98,7 @@ std::time_t MigrateDataLimiter::WaitMilliseconds(uint64_t requiredSize)
     return (requiredSize - tokens_) * s2ms / rate_ + 1;
 }
 
-bool MigrateDataLimiter::IsRemoteBusyNode() const
+bool DataLimiter::IsRemoteBusyNode() const
 {
     std::unique_lock<std::mutex> l(mtx_);
     return rate_ == 0;

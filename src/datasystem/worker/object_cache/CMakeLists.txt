@@ -19,7 +19,6 @@ set(WORKER_OC_SRCS
         device/device_obj_cache.cpp
         device/worker_device_oc_manager.cpp
         device/worker_dev_req_manager.cpp
-        data_migrator/basic/migrate_data_limiter.cpp
         data_migrator/basic/migrate_progress.cpp
         data_migrator/handler/async_resource_releaser.cpp
         data_migrator/handler/migrate_data_handler.cpp
@@ -29,6 +28,7 @@ set(WORKER_OC_SRCS
         data_migrator/transport/fast_migrate_transport.cpp
         data_migrator/transport/tcp_migrate_transport.cpp
         data_migrator/data_migrator.cpp
+        limiter/data_limiter.cpp
         service/worker_oc_service_crud_common_api.cpp
         service/worker_oc_service_create_impl.cpp
         service/worker_oc_service_publish_impl.cpp

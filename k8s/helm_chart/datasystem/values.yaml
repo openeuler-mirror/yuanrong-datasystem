@@ -167,8 +167,12 @@ global:
     objectDelRetryDelaySec: 3600
     # Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd.
     ocIoFromL2CacheNeedMetadata: true
+    # "The size of the per-thread asynchronous queue for writing to the secondary cache. With 8 threads, the system supports a maximum total capacity of 8 * l2_cache_async_write_queue_size key-value pairs pending write.
+    l2CacheAsyncWriteQueueSize: 10000
     # Control whether enable fallback to L2 cache when worker failed.
     enableL2CacheFallback: true
+    # Data write to l2cache rate limit for every node
+    l2CacheAsyncWriteRateLimitMb: 200
 
     obs:
       # The access key for obs AK/SK authentication.
