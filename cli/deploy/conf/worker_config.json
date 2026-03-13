@@ -547,6 +547,10 @@
         "value": "true",
         "description": "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd"
     },
+    "enable_l2_cache_fallback": {
+        "value": "true",
+        "description": "Control whether enable fallback to L2 cache when worker failed."
+    },
     "oc_worker_aggregate_merge_size": {
         "value": "2097152",
         "description": "Target batch size for worker worker responses, default is 2MB"

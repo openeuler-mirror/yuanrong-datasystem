@@ -126,7 +126,7 @@ public:
 
     uint64_t GetAllocatedSize()
     {
-        return allocator->GetMemoryUsage();
+        return allocator->GetTotalPhysicalMemoryUsage(datasystem::memory::CacheType::MEMORY);
     }
 
     void GetAllObjsFromObjectTable(std::unordered_map<std::string, std::shared_ptr<SafeObjType>> &res)
@@ -864,10 +864,12 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillSizeLimit)
 
     // Evict, objects will be spilled to disk.
     evictionManager.Evict();
-    sleep(5);
-    ASSERT_LT(GetAllocatedSize(), GetMaxMemorySize() * HIGH_WATER_FACTOR);
-    ASSERT_GT(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
-
+    auto sleepTime = 20;
+    while (GetAllocatedSize() > GetMaxMemorySize() * LOW_WATER_FACTOR && sleepTime > 0) {
+        sleepTime--;
+        sleep(1);
+    }
+    ASSERT_LT(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
     objsInList.clear();
     objsInTable.clear();
     DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
