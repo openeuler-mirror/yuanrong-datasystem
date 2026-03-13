@@ -709,6 +709,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | ipc_through_shared_memory | bool | `true` | datasystem-worker共享内存启用开关 |
+| shared_memory_worker_port | int | `0` | 指定用于共享内存 FD 传输的 SCMTCP 监听端口；当值为非 0 时，datasystem-worker 会在该端口监听连接 ，要求内核支持 SCMTCP 且端口未被占用，否则 worker 启动失败。客户端与 worker 在同一节点时，客户端会使用该通道传递共享内存描述符。 |
 | unix_domain_socket_dir | string | `"./datasystem/uds"` | 配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限 |
 | worker_address | string | `"127.0.0.1:31501"` | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | enable_curve_zmq | bool | `false` | 是否开启服务端组件间认证鉴权功能 |
@@ -734,9 +735,12 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | etcd_ca | string | `""` | CA明文证书，使用Base64编码 |
 | etcd_cert | string | `""` | 客户端明文证书，使用Base64转码 |
 | etcd_key | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语 |
+| etcd_username | string | `""` | ETCD鉴权用户名。仅在ETCD开启用户名/密码鉴权时需要配置 |
+| etcd_password | string | `""` | ETCD鉴权密码。仅在ETCD开启用户名/密码鉴权时需要配置 |
 | etcd_passphrase_path | string | `""` | 密码短语的值，需加密并进行Base64转码 |
 | etcd_meta_pool_size | int | `8` | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
 | etcd_target_name_override | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
+| host_id_env_name | string | `""` | 用于读取当前节点 `host_id` 的环境变量名。配置后，worker 在注册到 ETCD 时会同时上报 `host_id`，供客户端按同节点策略优先选择 worker |
 
 #### Spill相关配置
 
