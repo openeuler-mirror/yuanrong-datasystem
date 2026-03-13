@@ -46,12 +46,8 @@ DS_DECLARE_bool(urma_event_mode);
 
 namespace datasystem {
 constexpr uint32_t DEFAULT_TOKEN = 0xACFE;
-static const std::string ENV_URMA_CLIENT_MEMORY_BUFFER_NUM = "URMA_CLIENT_MEMORY_BUFFER_NUM";
-constexpr uint64_t CLIENT_MEMORY_BUFFER_SIZE = 9 * 1024 * 1024;  // 9MB
-constexpr uint64_t CLIENT_MEMORY_BUFFER_NUM = 100;
 constexpr uint64_t MAX_STUB_CACHE_NUM = 2048;
 bool UrmaManager::clientMode_ = false;
-uint64_t UrmaManager::clientMemoryBufferNum_ = CLIENT_MEMORY_BUFFER_NUM;
 UrmaManager &UrmaManager::Instance()
 {
     static UrmaManager manager;
@@ -99,7 +95,7 @@ UrmaManager::~UrmaManager()
     UrmaDeleteContext();
     UrmaUninit();
     if (memoryBuffer_ != nullptr) {
-        munmap(memoryBuffer_, CLIENT_MEMORY_BUFFER_SIZE * UrmaManager::clientMemoryBufferNum_);
+        munmap(memoryBuffer_, ubTransportMemSize_);
         memoryBuffer_ = nullptr;
     }
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager() done";
@@ -193,51 +189,73 @@ Status UrmaManager::Init(const HostPort &hostport)
 
 Status UrmaManager::InitMemoryBufferPool()
 {
-    UrmaManager::clientMemoryBufferNum_ =
-        GetUint64FromEnv(ENV_URMA_CLIENT_MEMORY_BUFFER_NUM.c_str(), UrmaManager::clientMemoryBufferNum_);
-    // todo: Check overflow for total buffer size calculation.
-    uint64_t totalBufferSize = CLIENT_MEMORY_BUFFER_SIZE * UrmaManager::clientMemoryBufferNum_;
-    memoryBuffer_ = mmap(nullptr, totalBufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (memoryBuffer_ == nullptr) {
-        RETURN_STATUS(K_OUT_OF_MEMORY, "Failed to allocate memory buffer pool for client");
+    auto strValue = std::getenv(UB_TRANSPORT_MEM_SIZE.c_str());
+    if (strValue != nullptr) {
+        try {
+            uint64_t ret = StrToUnsignedLong(strValue);
+            if (ret == 0) {
+                throw std::out_of_range("Memory should not be set to zero.");
+            }
+            ubTransportMemSize_ = ret;
+        } catch (std::invalid_argument &invalidArgument) {
+            RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                          FormatString("Env %s value %s parse to number failed, invalid argument",
+                                       UB_TRANSPORT_MEM_SIZE, strValue));
+        } catch (std::out_of_range &outOfRange) {
+            RETURN_STATUS(
+                StatusCode::K_RUNTIME_ERROR,
+                FormatString("Env %s value %s parse to number failed, out of range", UB_TRANSPORT_MEM_SIZE, strValue));
+        }
     }
-    // Register the memory buffer as segment, so that it can be used for client side UB operations.
-    RETURN_IF_NOT_OK(RegisterSegment(reinterpret_cast<uint64_t>(memoryBuffer_), totalBufferSize));
-    memoryBufferPool_ = std::make_unique<Queue<uint32_t>>(UrmaManager::clientMemoryBufferNum_);
-    uint32_t curOffset = 0;
-    for (uint32_t i = 0; i < UrmaManager::clientMemoryBufferNum_; ++i) {
-        memoryBufferPool_->Add(curOffset);
-        curOffset += CLIENT_MEMORY_BUFFER_SIZE;
+
+    AllocatorFuncRegister regFunc;
+
+    auto hostAllocFunc = [this](void **ptr, size_t maxSize) -> Status {
+        memoryBuffer_ = mmap(nullptr, maxSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        *ptr = memoryBuffer_;
+        if (memoryBuffer_ == MAP_FAILED) {
+            RETURN_STATUS(K_OUT_OF_MEMORY, "Failed to allocate memory buffer pool for client");
+        }
+        RETURN_IF_NOT_OK(RegisterSegment(reinterpret_cast<uint64_t>(*ptr), maxSize));
+        return Status::OK();
+    };
+    auto hostdestroyFunc = [](void *ptr, size_t destroySize) -> Status {
+        // unmmap in urma manager
+        (void)ptr;
+        (void)destroySize;
+        return Status::OK();
+    };
+
+    regFunc.createFunc = hostAllocFunc;
+    regFunc.destroyFunc = hostdestroyFunc;
+
+    auto *allocator = Allocator::Instance();
+    auto rc = allocator->InitWithFlexibleRegister(AllocateType::UB_TRANSPORT, ubTransportMemSize_, regFunc);
+    if (rc.IsError()) {
+        rc = rc.GetCode() == K_DUPLICATED ? Status::OK() : rc;
+        LOG(WARNING) << "Failed to register memory buffer pool for client, error: " << rc.ToString();
     }
-    return Status::OK();
+
+    return rc;
 }
 
-Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle)
+Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size)
 {
-    if (!memoryBufferPool_) {
-        RETURN_STATUS(K_INVALID, "Memory buffer pool is not initialized");
-    }
-    uint32_t bufferOffset = 0;
-    RETURN_IF_NOT_OK(memoryBufferPool_->Poll(&bufferOffset, RPC_POLL_TIME));
-    uint64_t segmentSize = CLIENT_MEMORY_BUFFER_SIZE * UrmaManager::clientMemoryBufferNum_;
-    handle = std::make_shared<BufferHandle>(memoryBufferPool_.get(), bufferOffset, memoryBuffer_, segmentSize,
-                                            CLIENT_MEMORY_BUFFER_SIZE);
+    size = size > CLIENT_MEMORY_BUFFER_SIZE ? CLIENT_MEMORY_BUFFER_SIZE : size;
+    std::shared_ptr<ShmUnit> unit = std::make_shared<ShmUnit>();
+    RETURN_IF_NOT_OK(
+        unit->AllocateMemory(DEFAULT_TENANTID, size, false, ServiceType::OBJECT, AllocateType::UB_TRANSPORT));
+
+    handle = std::make_shared<BufferHandle>(unit, memoryBuffer_, size);
     return Status::OK();
 }
 
-Status UrmaManager::GetMemoryBufferInfo(uint32_t bufferOffset, uint8_t *&bufferPtr, uint64_t &bufferSize,
-                                        UrmaRemoteAddrPb &urmaInfo)
+Status UrmaManager::GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandle> &handler, uint8_t *&bufferPtr,
+                                        uint64_t &bufferSize, UrmaRemoteAddrPb &urmaInfo)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(memoryBuffer_);
-    uint64_t totalBufferSize = CLIENT_MEMORY_BUFFER_SIZE * UrmaManager::clientMemoryBufferNum_;
-    CHECK_FAIL_RETURN_STATUS(
-        bufferOffset < totalBufferSize, K_INVALID,
-        FormatString("Invalid client memory buffer offset %u, total size %llu", bufferOffset, totalBufferSize));
-    CHECK_FAIL_RETURN_STATUS(bufferOffset % CLIENT_MEMORY_BUFFER_SIZE == 0, K_INVALID,
-                             FormatString("Invalid client memory buffer offset %u, must align to %llu", bufferOffset,
-                                          CLIENT_MEMORY_BUFFER_SIZE));
-    auto *memoryBuffer = reinterpret_cast<uint8_t *>(memoryBuffer_);
-    bufferPtr = memoryBuffer + bufferOffset;
+    uint32_t bufferOffset = handler->GetOffset();
+    bufferPtr = reinterpret_cast<uint8_t *>(handler->GetPointer());
     bufferSize = CLIENT_MEMORY_BUFFER_SIZE;
     urmaInfo.set_seg_va(reinterpret_cast<uint64_t>(memoryBuffer_));
     urmaInfo.set_seg_data_offset(bufferOffset);

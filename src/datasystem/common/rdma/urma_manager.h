@@ -37,6 +37,9 @@
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/shared_memory/arena_group_key.h"
+#include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
@@ -46,6 +49,14 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+
+using datasystem::memory::Allocator;
+using datasystem::memory::AllocatorFuncRegister;
+using AllocateType = datasystem::memory::CacheType;
+
+constexpr uint64_t CLIENT_MEMORY_BUFFER_SIZE = 9 * 1024 * 1024;  // 9MB
+const std::string DEFAULT_TENANTID = "";
+const std::string UB_TRANSPORT_MEM_SIZE = "UB_TRANSPORT_MEM_SIZE";
 
 #define MAX_POLL_JFC_TRY_CNT 10
 class Segment {
@@ -161,8 +172,8 @@ public:
     public:
         BufferHandle() = default;
 
-        BufferHandle(Queue<uint32_t> *pool, uint32_t offset, void *basePtr, uint64_t segmentSize, uint64_t slotSize)
-            : pool_(pool), offset_(offset), basePtr_(basePtr), segmentSize_(segmentSize), slotSize_(slotSize)
+        BufferHandle(std::shared_ptr<ShmUnit> shmUnit, void *basePtr, uint64_t segmentSize)
+            : shmUnit_(shmUnit), basePtr_(basePtr), segmentSize_(segmentSize)
         {
         }
 
@@ -176,12 +187,12 @@ public:
 
         uint32_t GetOffset() const
         {
-            return offset_;
+            return shmUnit_->GetOffset();
         }
 
         void *GetPointer() const
         {
-            return basePtr_ ? static_cast<uint8_t *>(basePtr_) + offset_ : nullptr;
+            return shmUnit_->GetPointer();
         }
 
         uint64_t GetSegmentAddress() const
@@ -194,33 +205,27 @@ public:
             return segmentSize_;
         }
 
-        uint64_t GetSlotSize() const
-        {
-            return slotSize_;
-        }
-
     private:
         void Release()
         {
-            if (pool_) {
-                pool_->Add(offset_);
-                pool_ = nullptr;
+            if (shmUnit_) {
+                shmUnit_.reset();
+                shmUnit_ = nullptr;
             }
         }
 
-        Queue<uint32_t> *pool_ = nullptr;
-        uint32_t offset_ = 0;
+        std::shared_ptr<ShmUnit> shmUnit_;
         void *basePtr_ = nullptr;
         uint64_t segmentSize_ = 0;
-        uint64_t slotSize_ = 0;
     };
 
     /**
      * @brief Get a self-release memory buffer handle for client side RDMA operation.
      * @param[out] handle The memory buffer handle with offset info.
+     * @param[in] size The size of the memory buffer.
      * @return Status of the call.
      */
-    Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle);
+    Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size = CLIENT_MEMORY_BUFFER_SIZE);
 
     /**
      * @brief Get client comm-buffer details for UB Get by buffer offset.
@@ -230,8 +235,8 @@ public:
      * @param[out] urmaInfo Remote address info used by worker-side UrmaWritePayload.
      * @return Status of the call.
      */
-    Status GetMemoryBufferInfo(uint32_t bufferOffset, uint8_t *&bufferPtr, uint64_t &bufferSize,
-                               UrmaRemoteAddrPb &urmaInfo);
+    Status GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandle> &handler, uint8_t *&bufferPtr,
+                               uint64_t &bufferSize, UrmaRemoteAddrPb &urmaInfo);
 
     /**
      * @brief Check if Urma worker flag is set
@@ -722,11 +727,11 @@ private:
     WaitPost waitInit_;
     std::string clientId_;
     static bool clientMode_;
-    static uint64_t clientMemoryBufferNum_;
     void *memoryBuffer_ = nullptr;
     std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
+    uint64_t ubTransportMemSize_ = 100 * 1024 * 1024;
 };
 
 }  // namespace datasystem

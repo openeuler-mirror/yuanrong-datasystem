@@ -51,7 +51,8 @@
 #include "datasystem/utils/status.h"
 #include "device/dev_test_helper.h"
 
-using datasystem::memory::DevMemFuncRegister;
+using datasystem::memory::AllocatorFuncRegister;
+using AllocateType = datasystem::memory::CacheType;
 
 namespace datasystem {
 using namespace acl;
@@ -795,11 +796,9 @@ TEST_F(DevObjectHeteroTest, DISABLED_AllocateDeviceMemTest)
     };
 
     auto *allocator = datasystem::memory::Allocator::Instance();
-    struct DevMemFuncRegister regFunc;
-    regFunc.devDeviceCreateFunc = allocateFunc;
-    regFunc.devDeviceDestroyFunc = destroyFunc;
-    regFunc.devHostCreateFunc = allocateFunc;
-    regFunc.devHostDestroyFunc = destroyFunc;
+    struct AllocatorFuncRegister regFunc;
+    regFunc.createFunc = allocateFunc;
+    regFunc.destroyFunc = destroyFunc;
 
     uint64_t maxSize1 = 65 * 1024ul * 1024ul;
     uint64_t maxSize2 = 64 * 1024ul * 1024ul;
@@ -807,7 +806,8 @@ TEST_F(DevObjectHeteroTest, DISABLED_AllocateDeviceMemTest)
     DS_ASSERT_OK(AclDeviceManager::Instance()->aclInit(nullptr));
     DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtSetDevice(deviceId_));
 
-    allocator->InitWithoutShm(maxSize1, maxSize2, regFunc);
+    allocator->InitWithFlexibleRegister(AllocateType::DEV_DEVICE, maxSize1, regFunc);
+    allocator->InitWithFlexibleRegister(AllocateType::DEV_HOST, maxSize2, regFunc);
 
     ShmUnit shmUnit;
     auto clearFunc = [&shmUnit]() {

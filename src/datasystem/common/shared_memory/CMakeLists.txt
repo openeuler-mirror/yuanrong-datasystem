@@ -14,7 +14,7 @@ set(SHARED_MEM_SRCS
         shared_disk_detecter.cpp
         mmap/base_mmap.cpp
         mmap/disk_mmap.cpp
-        mmap/dev_mmap.cpp
+        mmap/flexible_mmap.cpp
         mmap/mem_mmap.cpp)
 
 set(SHARED_MEM_DEPEND_LIBS

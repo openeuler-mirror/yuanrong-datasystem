@@ -35,7 +35,7 @@ struct BufferMetaInfo {
     size_t size;
 };
 using datasystem::memory::Allocator;
-using datasystem::memory::DevMemFuncRegister;
+using datasystem::memory::AllocatorFuncRegister;
 using AllocateType = datasystem::memory::CacheType;
 
 class MemMgrBase {
