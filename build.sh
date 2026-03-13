@@ -551,6 +551,7 @@ function build_datasystem()
       echo -e "WARNING: Build in debug mode and use strip tool to erase symbol table, it could be a problem when you use gdb."
     fi
     strip_symbols "${INSTALL_DIR}/datasystem/sdk/cpp/lib" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
+    strip_symbols "${INSTALL_DIR}/cpp/lib" "${INSTALL_DIR}/cpp/DATASYSTEM_SYM"
     if is_on "${BUILD_HETERO}"; then
       cp ${BUILD_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so.sym "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
     fi
