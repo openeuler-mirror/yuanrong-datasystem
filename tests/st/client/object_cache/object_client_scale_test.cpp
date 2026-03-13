@@ -988,8 +988,12 @@ TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2EvictNoCopy)
     VoluntaryScaleDownInject(0);  // worker index is 0
     std::vector<std::string> buffers;
     WaitForVoluntaryDownFinished(20, 2, worker0Address_.ToString());  // timeout is 20, left num is 2
-    DS_ASSERT_NOT_OK(client2->Get(objs, buffers));
+    DS_ASSERT_OK(client2->Get(objs, buffers));
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_EQ(buffers[i], value);
+    }
 }
+
 
 TEST_F(OCVoluntaryScaleDownTest, VoluntaryDownWorker1NoneL2EvictWithCopy)
 {

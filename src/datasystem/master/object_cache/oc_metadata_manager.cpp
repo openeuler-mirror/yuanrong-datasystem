@@ -1489,16 +1489,11 @@ void OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, co
         bool IsPrimaryWithoutCopy = IsPrimaryCopyWithCopy(meta, address);
         VLOG(1) << FormatString("[Objects %s] Write mode: %d, is primary without other: %d", objectKey,
                                 meta.meta.config().write_mode(), IsPrimaryWithoutCopy);
-        if (meta.IsNoneL2CacheEvict() && IsPrimaryWithoutCopy) {
-            (void)metaTable_.erase(accessor);
-            needRemoveIds.emplace(objectKey);
-            response.add_success_ids(objectKey);
-            continue;
-        } else if (meta.IsNoneL2Cache() && IsPrimaryWithoutCopy) {
+        if (IsPrimaryWithoutCopy) {
             response.add_need_data_ids(objectKey);
-            continue;
-        } else if (meta.IsWriteBackL2Cache() && IsPrimaryWithoutCopy) {
-            response.add_need_wait_ids(objectKey);
+            if (meta.IsWriteBackL2Cache() || meta.IsWriteBackL2CacheEvict()) {
+                response.add_need_wait_ids(objectKey);
+            }
             continue;
         }
         bool foundCopy = false;

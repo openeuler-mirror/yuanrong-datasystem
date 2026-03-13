@@ -29,9 +29,10 @@ namespace datasystem {
 
 enum class WriteMode : int {
     NONE_L2_CACHE = 0,
-    WRITE_THROUGH_L2_CACHE = 1,  // sync write
-    WRITE_BACK_L2_CACHE = 2,     // async write
-    NONE_L2_CACHE_EVICT = 3,     // evictable write
+    WRITE_THROUGH_L2_CACHE = 1,     // sync write
+    WRITE_BACK_L2_CACHE = 2,        // async write
+    NONE_L2_CACHE_EVICT = 3,        // evictable write
+    WRITE_BACK_L2_CACHE_EVICT = 4,  // evictable async write
 };
 
 enum class ConsistencyType : int {
