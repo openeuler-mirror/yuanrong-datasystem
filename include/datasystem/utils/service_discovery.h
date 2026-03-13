@@ -26,7 +26,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <set>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -43,6 +42,13 @@ class RandomData;
 
 namespace datasystem {
 const uint32_t DEFAULT_ETCD_TOKEN_REFRESH_INTERVAL = 30;  // seconds
+
+enum class ServiceAffinityPolicy : uint8_t {
+    PREFERRED_SAME_NODE = 0,
+    REQUIRED_SAME_NODE = 1,
+    RANDOM = 2,
+};
+
 struct ServiceDiscoveryOptions {
     std::string etcdAddress;
     std::string clusterName = "";
@@ -57,6 +63,8 @@ struct ServiceDiscoveryOptions {
     std::string username = "";
     SensitiveValue password = "";
     uint32_t tokenRefreshIntervalSec = DEFAULT_ETCD_TOKEN_REFRESH_INTERVAL;
+    std::string hostIdEnvName = "";
+    ServiceAffinityPolicy affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
 };
 
 class __attribute((visibility("default"))) ServiceDiscovery {
@@ -99,11 +107,15 @@ private:
     std::string username_;
     SensitiveValue password_;
     uint32_t tokenRefreshInterval_;
-    std::set<std::string> activeWorkerAddrs_;
+    std::string hostIdEnvName_;
+    std::string hostId_;
+    ServiceAffinityPolicy affinityPolicy_;
+    // key is worker_address, value is worker_id.
+    std::unordered_map<std::string, std::string> activeWorkerInfo_;
     std::shared_ptr<RandomData> randomData_;
-    // workerHostPortMutext_ is used to protect the read and write of activeWorkerAddrs_.
+    // workerHostPortMutext_ is used to protect the read and write of activeWorkerInfo_.
     mutable std::shared_timed_mutex workerHostPortMutext_;
-    // etcdStore_ uses workerHostPortMutext_ and activeWorkerAddrs_, so needs to be destructed first.
+    // etcdStore_ uses workerHostPortMutext_ and activeWorkerInfo_, so needs to be destructed first.
     std::shared_ptr<EtcdStore> etcdStore_;
 };
 }  // namespace datasystem

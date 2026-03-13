@@ -282,7 +282,7 @@ TEST_F(KVCacheClientTest, SubscribeTimeoutTest)
     InitTestKVClient(0, client1);
     InitTestKVClient(1, client2);
     auto key = client1->GenerateKey();
-    std::thread t1([&] () {
+    std::thread t1([&]() {
         std::string val;
         DS_ASSERT_OK(client1->Get(key, val, 20000));  // timeout is 20000 ms
     });
@@ -870,7 +870,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numOBS = 1;
-        opts.numWorkers = 2; // worker num is 2
+        opts.numWorkers = 2;  // worker num is 2
         opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
@@ -894,7 +894,7 @@ TEST_F(KVCacheClientNoRedirectTest, ConcurrentDeleteAndRemoteGet)
 
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    for (int i = 0; i < 100; i++) { // obj num is 100
+    for (int i = 0; i < 100; i++) {  // obj num is 100
         DS_ASSERT_OK(client1->Set(objectKey, data));
         std::string val;
         DS_ASSERT_OK(client2->Get(objectKey, val));
@@ -1388,8 +1388,8 @@ TEST_F(KVCacheClientTest, TestMCreateKeysSizesMismatchError)
 {
     std::shared_ptr<KVClient> client;
     InitTestKVClient(1, client);
-    std::vector<std::string> keys{"key1", "key2", "key3"};
-    std::vector<uint64_t> sizes{NON_SHM_SIZE, SHM_SIZE};
+    std::vector<std::string> keys{ "key1", "key2", "key3" };
+    std::vector<uint64_t> sizes{ NON_SHM_SIZE, SHM_SIZE };
     std::vector<std::shared_ptr<Buffer>> buffers;
 
     SetParam param;
@@ -1420,7 +1420,7 @@ TEST_F(KVCacheClientTest, TestShmAndNonShmBufferMixedSetSuccess)
     ASSERT_NE(shmBufffer, nullptr);
     ASSERT_EQ(SHM_SIZE, shmBufffer->GetSize());
 
-    std::vector<std::shared_ptr<Buffer>> buffers{nonShmBufffer, shmBufffer};
+    std::vector<std::shared_ptr<Buffer>> buffers{ nonShmBufffer, shmBufffer };
     DS_ASSERT_OK(client->MSet(buffers));
     std::vector<Optional<Buffer>> getBuffers;
     ASSERT_EQ(client->Get(keys, getBuffers), Status::OK());
@@ -2458,65 +2458,181 @@ public:
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000";
+
+        std::string hostIp = "127.0.0.1";
+        for (size_t i = 0; i < opts.numWorkers; i++) {
+            HostPort hostPort(hostIp, GetFreePort());
+            opts.workerConfigs.emplace_back(hostPort);
+            workerAddress_.emplace_back(hostPort);
+
+            std::string envName = "host_id_env" + std::to_string(i);
+            std::string envVal = "host_id" + std::to_string(i);
+            ASSERT_EQ(setenv(envName.c_str(), envVal.c_str(), 1), 0);
+            opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
+        }
+        ASSERT_EQ(setenv("host_id_env_n", "host_id_n", 1), 0);
     }
 
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
         FLAGS_log_monitor = true;
-        InitClients();
+        FLAGS_v = 1;
     }
 
     void TearDown() override
     {
-        client_.reset();
         ExternalClusterTest::TearDown();
     }
 
-    void InitTestKVClient(std::shared_ptr<KVClient> &client)
+    void InitTestKVClient(std::shared_ptr<KVClient> &client, ServiceAffinityPolicy policy,
+                          const std::string &hostIdEnvName = "")
     {
         // initialize serviceDiscovery.
         std::string etcdAddress;
         for (size_t i = 0; i < cluster_->GetEtcdNum(); ++i) {
             std::pair<HostPort, HostPort> addrs;
             cluster_->GetEtcdAddrs(i, addrs);
-            if (!etcdAddress.empty()){
+            if (!etcdAddress.empty()) {
                 etcdAddress += ",";
             }
             etcdAddress += addrs.first.ToString();
         }
         ServiceDiscoveryOptions opts;
         opts.etcdAddress = etcdAddress;
+        opts.hostIdEnvName = hostIdEnvName;
+        opts.affinityPolicy = policy;
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
         DS_ASSERT_OK(serviceDiscovery->Init());
 
-        ConnectOptions connectOptions{
-            .connectTimeoutMs = 60000,
-            .requestTimeoutMs = 0,
-            .accessKey = "QTWAOYTTINDUT2QVKYUC",
-            .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
-            .serviceDiscovery = serviceDiscovery
-        };
+        ConnectOptions connectOptions{ .connectTimeoutMs = 60000,
+                                       .requestTimeoutMs = 0,
+                                       .accessKey = "QTWAOYTTINDUT2QVKYUC",
+                                       .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
+                                       .serviceDiscovery = serviceDiscovery };
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
 
-    void InitClients()
+    void GetServiceDiscovery(const std::string &hostIdEnvName, ServiceAffinityPolicy policy,
+                             std::shared_ptr<ServiceDiscovery> &serviceDiscovery)
     {
-        InitTestKVClient(client_);
+        std::string etcdAddress;
+        for (size_t i = 0; i < cluster_->GetEtcdNum(); ++i) {
+            std::pair<HostPort, HostPort> addrs;
+            cluster_->GetEtcdAddrs(i, addrs);
+            if (!etcdAddress.empty()) {
+                etcdAddress += ",";
+            }
+            etcdAddress += addrs.first.ToString();
+        }
+
+        ServiceDiscoveryOptions opts;
+        opts.etcdAddress = etcdAddress;
+        opts.hostIdEnvName = hostIdEnvName;
+        opts.affinityPolicy = policy;
+        serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
+        DS_ASSERT_OK(serviceDiscovery->Init());
     }
 
-    std::shared_ptr<KVClient> client_;
+protected:
+    std::vector<HostPort> workerAddress_;
 };
 
-TEST_F(KVCacheClientServiceDiscoveryTest, TestSimpleSetGet)
+TEST_F(KVCacheClientServiceDiscoveryTest, TestSimpleSetGetForRandom)
 {
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(client, ServiceAffinityPolicy::RANDOM);
     std::string key = "aaaa";
     std::string value = "sssss";
-    ASSERT_EQ(client_->Set(key, value), Status::OK());
+    ASSERT_EQ(client->Set(key, value), Status::OK());
     std::string valueGet;
-    ASSERT_EQ(client_->Get(key, valueGet), Status::OK());
+    ASSERT_EQ(client->Get(key, valueGet), Status::OK());
     ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
 }
+
+TEST_F(KVCacheClientServiceDiscoveryTest, TestRandom)
+{
+    auto func = [this](const std::string &hostIdEnvName) {
+        std::shared_ptr<ServiceDiscovery> serviceDiscovery;
+        GetServiceDiscovery(hostIdEnvName, ServiceAffinityPolicy::RANDOM, serviceDiscovery);
+        ASSERT_TRUE(serviceDiscovery != nullptr);
+        std::string workerIp;
+        int workerPort;
+        DS_ASSERT_OK(serviceDiscovery->SelectWorker(workerIp, workerPort));
+
+        bool found = false;
+        for (const auto &addr : workerAddress_) {
+            if (addr.Host() == workerIp && addr.Port() == workerPort) {
+                found = true;
+                break;
+            }
+        }
+        ASSERT_TRUE(found);
+    };
+    func("host_id_env0");
+    func("host_id_env1");
+    func("host_id_env_n");
+}
+
+TEST_F(KVCacheClientServiceDiscoveryTest, TestSameNode)
+{
+    auto func = [this](const std::string &hostIdEnvName, int workerIndex) {
+        std::shared_ptr<ServiceDiscovery> serviceDiscovery;
+        GetServiceDiscovery(hostIdEnvName, ServiceAffinityPolicy::REQUIRED_SAME_NODE, serviceDiscovery);
+        ASSERT_TRUE(serviceDiscovery != nullptr);
+        std::string workerIp;
+        int workerPort;
+        auto rc = serviceDiscovery->SelectWorker(workerIp, workerPort);
+        if (workerIndex == -1) {
+            ASSERT_TRUE(rc.IsError());
+            return;
+        }
+
+        ASSERT_LT(workerIndex, workerAddress_.size());
+        ASSERT_EQ(workerIp, workerAddress_[workerIndex].Host()) << ", env:" << hostIdEnvName;
+        ASSERT_EQ(workerPort, workerAddress_[workerIndex].Port());
+    };
+    const int loopCount = 5;
+    for (int i = 0; i < loopCount; i++) {
+        func("host_id_env0", 0);
+        func("host_id_env1", 1);
+        func("host_id_env_n", -1);
+    }
+}
+
+TEST_F(KVCacheClientServiceDiscoveryTest, TestPreferSameNode)
+{
+    auto func = [this](const std::string &hostIdEnvName, int workerIndex) {
+        std::shared_ptr<ServiceDiscovery> serviceDiscovery;
+        GetServiceDiscovery(hostIdEnvName, ServiceAffinityPolicy::PREFERRED_SAME_NODE, serviceDiscovery);
+        ASSERT_TRUE(serviceDiscovery != nullptr);
+        std::string workerIp;
+        int workerPort;
+        DS_ASSERT_OK(serviceDiscovery->SelectWorker(workerIp, workerPort));
+
+        if (workerIndex >= 0) {
+            ASSERT_LT(workerIndex, workerAddress_.size());
+            ASSERT_EQ(workerIp, workerAddress_[workerIndex].Host());
+            ASSERT_EQ(workerPort, workerAddress_[workerIndex].Port());
+        } else {
+            bool found = false;
+            for (const auto &addr : workerAddress_) {
+                if (addr.Host() == workerIp && addr.Port() == workerPort) {
+                    found = true;
+                    break;
+                }
+            }
+            ASSERT_TRUE(found);
+        }
+    };
+    const int loopCount = 5;
+    for (int i = 0; i < loopCount; i++) {
+        func("host_id_env0", 0);
+        func("host_id_env1", 1);
+        func("host_id_env_n", -1);
+    }
+}
+
 }  // namespace st
 }  // namespace datasystem

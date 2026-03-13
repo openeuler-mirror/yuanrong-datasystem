@@ -739,10 +739,11 @@ Status EtcdClusterManager::HandleClusterEvent(const mvccpb::Event &event)
     // Parse the type of event of addition appended to timestamp.
     std::string additionEventType;  // "start", "restart", "recover"
     if (event.type() == mvccpb::Event_EventType::Event_EventType_PUT || nodeTimestamp == FAKE_NODE_EVENT_VALUE) {
-        auto pos = nodeTimestamp.find(";");
-        if (pos != std::string::npos) {
-            additionEventType = nodeTimestamp.substr(pos + 1);
-            nodeTimestamp = nodeTimestamp.substr(0, pos);
+        KeepAliveValue keepAliveValue;
+        auto parseRc = KeepAliveValue::FromString(nodeTimestamp, keepAliveValue);
+        if (parseRc.IsOk()) {
+            additionEventType = keepAliveValue.state;
+            nodeTimestamp = keepAliveValue.timestamp;
         } else {
             std::stringstream ss;
             ss << "Event of node, key: " << nodeHostPortStr << " value: " << nodeTimestamp
