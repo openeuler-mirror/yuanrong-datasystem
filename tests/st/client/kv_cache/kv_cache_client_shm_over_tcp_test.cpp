@@ -72,7 +72,7 @@ public:
 
     void SetUp() override
     {
-        if (!SupportSmcTcp()) {
+        if (!SupportScmTcp()) {
             skip_ = true;
             GTEST_SKIP() << "SMC over TCP not supported";
         }
@@ -87,7 +87,7 @@ public:
         }
     }
 
-    bool SupportSmcTcp()
+    bool SupportScmTcp()
     {
         const int proto = 518;  // IPPROTO_SCMTCP
         auto fd = socket(AF_INET, SOCK_STREAM, proto);

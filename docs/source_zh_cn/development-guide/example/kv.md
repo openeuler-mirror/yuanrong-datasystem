@@ -80,6 +80,39 @@ ASSERT_TRUE(status.IsError());
 KV 接口支持 Causal 级别数据读写一致性。
 一致性模型定义参见 [Consistency Models](https://jepsen.io/consistency/models)。
 
+### 服务发现
+
+当客户端使用 `ServiceDiscovery` 连接集群时，可通过 `ServiceAffinityPolicy` 指定 worker 选择策略：
+
+- `PREFERRED_SAME_NODE`（默认）：优先选择同节点 worker；若无同节点 worker，则随机选择。
+- `REQUIRED_SAME_NODE`：必须选择同节点 worker；若未匹配到同节点 worker，则返回错误。
+- `RANDOM`：随机选择 worker。
+
+使用该能力时，需要让 worker 和客户端都能读取到同一套 `host_id` 信息：
+
+1. 在 worker 侧配置 `host_id_env_name`（例如 `HOST_ID`），并在启动前注入环境变量。
+2. 在客户端 `ServiceDiscoveryOptions` 中配置相同的 `hostIdEnvName`，并按需设置 `affinityPolicy`。
+3. 如果 ETCD 启用了用户名/密码鉴权，还需要在客户端配置 `username` 和 `password`。
+
+```cpp
+#include "datasystem/datasystem.h"
+
+ServiceDiscoveryOptions sdOpts;
+sdOpts.etcdAddress = "127.0.0.1:2379";
+sdOpts.hostIdEnvName = "HOST_ID";
+sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+sdOpts.username = "etcd_user";
+sdOpts.password = "etcd_password";
+
+auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+ASSERT_TRUE(serviceDiscovery->Init().IsOk());
+
+ConnectOptions connectOptions;
+connectOptions.serviceDiscovery = serviceDiscovery;
+auto client = std::make_shared<DsClient>(connectOptions);
+ASSERT_TRUE(client->Init().IsOk());
+```
+
 ### 数据溢出到磁盘
 
 KV 数据存储在数据系统的共享内存中，当内存不足时，支持自动将数据溢出到磁盘并从内存中删除数据。当数据需要读取时，自动从磁盘中加载到共享内存。

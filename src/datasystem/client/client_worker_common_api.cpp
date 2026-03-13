@@ -316,7 +316,7 @@ bool ClientWorkerRemoteCommonApi::PrepareShmTransferEndpoint(const GetSocketPath
     }
 
     type = "TCP";
-    LOG(INFO) << "Both the uds socket path and worker_port_for_ipc is empty, cannot transfer data through shm between "
+    LOG(INFO) << "Both the uds socket path and shm_worker_port is empty, cannot transfer data through shm between "
                  "client and worker.";
     return false;
 }

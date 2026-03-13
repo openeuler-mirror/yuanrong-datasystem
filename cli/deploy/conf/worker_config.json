@@ -7,6 +7,14 @@
         "value": "",
         "description": "Address of ETCD server, (such as \"192.168.0.1:10001,192.168.0.2:10001,192.168.0.3:10001\")."
     },
+    "etcd_username": {
+        "value": "",
+        "description": "Username for ETCD authentication. Leave empty to disable ETCD auth."
+    },
+    "etcd_password": {
+        "value": "",
+        "description": "Password for ETCD authentication. Leave empty to disable ETCD auth."
+    },
     "shared_memory_size_mb": {
         "value": "1024",
         "description": "Upper limit of the shared memory, the unit is mb, must be greater than 0."
@@ -35,6 +43,10 @@
         "value": "true",
         "description": "Using shared memory to exchange data between client and worker. If this parameter is set to true, client and worker will pass control messages through Unix Domain Sockets (UDS); otherwise, they will pass control messages through TCP/IP and exchange data through TCP/IP."
     },
+    "shared_memory_worker_port": {
+        "value": "0",
+        "description": "Port for SCMTCP connections when transferring shared memory file descriptors. A non-zero value enables IPPROTO_SCMTCP (protocol number 518) on worker nodes and clients to attempt SCMTCP when connecting."
+    },
     "unix_domain_socket_dir": {
         "value": "./datasystem/uds",
         "description": "The directory to store unix domain socket file. The UDS generates temporary files in this path. Max length: 80"
@@ -42,6 +54,10 @@
     "cluster_name": {
         "value": "",
         "description": "cluster_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, allowing different clusters to be distinguished by the cluster_name."
+    },
+    "host_id_env_name": {
+        "value": "",
+        "description": "Environment variable name used to obtain the current host_id. Worker reports this host_id to ETCD for same-node worker affinity."
     },
     "other_cluster_names": {
         "value": "",
