@@ -40,10 +40,10 @@ ClientWorkerLocalApi::ClientWorkerLocalApi(HostPort hostPort,
 {
 }
 
-Status ClientWorkerLocalApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+Status ClientWorkerLocalApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
 {
     connectTimeoutMs_ = connectTimeoutMs;
-    RETURN_IF_NOT_OK(ClientWorkerLocalCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
+    RETURN_IF_NOT_OK(ClientWorkerLocalCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize));
     workerOCService_ = api_->GetWorkerOCService(worker_);
     return Status::OK();
 }

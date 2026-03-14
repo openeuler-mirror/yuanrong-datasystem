@@ -108,9 +108,10 @@ ClientWorkerLocalCommonApi::ClientWorkerLocalCommonApi(
     (void)enableCrossNodeConnection;
 }
 
-Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
 {
     (void)requestTimeoutMs;
+    (void)fastTransportSize;
     connectTimeoutMs_ = connectTimeoutMs;
     workerService_ = api_->GetWorkerService(worker_);
     RegisterClientReqPb req;
@@ -259,7 +260,7 @@ void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
     LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
 }
 
-Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
 {
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
@@ -270,6 +271,7 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
         FormatString("The requestTimeoutMs(%d) should be greater than or equal to 0 milliseconds.", requestTimeoutMs));
     requestTimeoutMs_ = requestTimeoutMs;
     connectTimeoutMs_ = connectTimeoutMs;
+    fastTransportMemSize_ = fastTransportSize;
     recvClientFdState_.getClientFdTimeoutMs = connectTimeoutMs;
     SetRpcTimeout(requestTimeoutMs);
     VLOG(1) << "Client start to connect worker";
@@ -797,8 +799,8 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
 
 Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientRspPb &rsp)
 {
-    // Initialize UrmaManager regardless of shm state to avoid switch overhead standby worker.
-    SetClientFastTransportMode(rsp.fast_transport_mode());
+    // Initialize UrmaManager regardless of shmEnabled_ to avoid switch overhead standby worker.
+    SetClientFastTransportMode(rsp.fast_transport_mode(), fastTransportMemSize_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_), "Fast transport init failed");
 
     // Enable UB fast transport if client cannot use share memory while worker supports UB.

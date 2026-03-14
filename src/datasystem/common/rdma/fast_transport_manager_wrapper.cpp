@@ -70,11 +70,12 @@ bool IsUrmaEnabled()
 #endif
 }
 
-void SetClientFastTransportMode(FastTransportMode fastTransportMode)
+void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize)
 {
     (void)fastTransportMode;
+    (void)transportSize;
 #ifdef USE_URMA
-    UrmaManager::SetClientUrmaConfig(fastTransportMode);
+    UrmaManager::SetClientUrmaConfig(fastTransportMode, transportSize);
 #endif
 }
 

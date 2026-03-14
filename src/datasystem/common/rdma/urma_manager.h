@@ -249,9 +249,9 @@ public:
     /**
      * @brief Set the fast transport mode and client id for client process (e.g. UB Put).
      * @param[in] urmaMode The transport mode, e.g. UB.
-     * @param[in] clientId The client identifier; shall be consistent in the same client process.
+     * @param[in] transportSize The client transport mem pool size.
      */
-    static void SetClientUrmaConfig(FastTransportMode urmaMode);
+    static void SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t transportSize);
 
     /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
@@ -709,6 +709,12 @@ private:
      */
     void DeleteEvent(uint64_t requestId);
 
+    /**
+     * @brief Get ub transport size from environment
+     * @return Status of the call.
+     */
+    void GetTransportSizeFromEnv();
+
     Status InitLocalUrmaInfo(const HostPort &hostport);
 
     // Polling thread
@@ -752,9 +758,9 @@ private:
     std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
-    uint64_t ubTransportMemSize_ = 128 * 1024 * 1024;  // 128 MB
-    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;     // 32 MB
-    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;    // 8 MB
+    static std::atomic<uint64_t> ubTransportMemSize_;   // 128 MB
+    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;      // 32 MB
+    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;     // 8 MB
 };
 
 }  // namespace datasystem

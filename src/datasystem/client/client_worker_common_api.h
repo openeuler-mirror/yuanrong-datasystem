@@ -185,11 +185,12 @@ public:
     /**
      * @brief Initialize the ClientWorkerApi Object.
      * @param[in] requestTimeoutMs The request timeout.
-     * @param[in] connectTimeoutMs The connec  timeout.
+     * @param[in] connectTimeoutMs The connec timeout.
+     * @param[in] fastTransportSize The transport pool mem size.
      * @return K_OK on success; the error code otherwise.
      *         K_INVALID: the input ip or port is invalid.
      */
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) = 0;
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) = 0;
 
     /**
      * @brief Send heartbeat messages periodically.
@@ -292,7 +293,7 @@ public:
 
     virtual ~ClientWorkerLocalCommonApi() = default;
 
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) override;
     Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
                          const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
     Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
@@ -343,7 +344,7 @@ public:
 
     virtual ~ClientWorkerRemoteCommonApi();
 
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) override;
     Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
                          const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
     Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
@@ -443,6 +444,7 @@ protected:
     std::unique_ptr<ClientAccessToken> clientAccessToken_;
     int32_t requestTimeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };
+    uint64_t fastTransportMemSize_ { 0 };
     bool enableExclusiveConnection_{ false };
     struct RecvClientFdState {
         std::unique_ptr<WaitPost> recvPageWaitPost{ nullptr };

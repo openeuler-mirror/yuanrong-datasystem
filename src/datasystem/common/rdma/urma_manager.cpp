@@ -46,7 +46,11 @@ DS_DECLARE_bool(urma_event_mode);
 namespace datasystem {
 constexpr uint32_t DEFAULT_TOKEN = 0xACFE;
 constexpr uint64_t MAX_STUB_CACHE_NUM = 2048;
+constexpr uint64_t DEFAULT_TRANSPORT_MEM_SIZE = 128UL * 1024UL * 1024UL;
+constexpr uint64_t MAX_TRANSPORT_MEM_SIZE = 2UL * 1024UL * 1024UL * 1024UL;
+;
 bool UrmaManager::clientMode_ = false;
+std::atomic<uint64_t> UrmaManager::ubTransportMemSize_(DEFAULT_TRANSPORT_MEM_SIZE);
 UrmaManager &UrmaManager::Instance()
 {
     static UrmaManager manager;
@@ -95,7 +99,7 @@ UrmaManager::~UrmaManager()
     UrmaUninit();
     urma_dlopen::Cleanup();
     if (memoryBuffer_ != nullptr) {
-        munmap(memoryBuffer_, ubTransportMemSize_);
+        munmap(memoryBuffer_, ubTransportMemSize_.load());
         memoryBuffer_ = nullptr;
     }
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager() done";
@@ -213,12 +217,24 @@ static Status ParseEnvUint64(const std::string &envName, uint64_t &outVal)
 
 Status UrmaManager::InitMemoryBufferPool()
 {
-    RETURN_IF_NOT_OK(ParseEnvUint64(UB_TRANSPORT_MEM_SIZE, ubTransportMemSize_));
+    // Parse max get data size and max set buffer size from environment
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_GET_DATA_SIZE, ubMaxGetDataSize_));
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_SET_BUFFER_SIZE, ubMaxSetBufferSize_));
 
-    AllocatorFuncRegister regFunc;
+    // If transport size is not set by connection, try to get from environment
+    if (ubTransportMemSize_.load() == 0) {
+        uint64_t envSize = 0;
+        RETURN_IF_NOT_OK(ParseEnvUint64(UB_TRANSPORT_MEM_SIZE, envSize));
+        ubTransportMemSize_.store(envSize);
+    }
 
+    if (ubTransportMemSize_.load() > MAX_TRANSPORT_MEM_SIZE || ubTransportMemSize_.load() <= 0) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID,
+                                FormatString("ubTransportMemSize %lu is invalid, must be between %lu and %lu",
+                                             ubTransportMemSize_.load(), 0, MAX_TRANSPORT_MEM_SIZE));
+    }
+
+    AllocatorFuncRegister regFunc;
     auto hostAllocFunc = [this](void **ptr, size_t maxSize) -> Status {
         memoryBuffer_ = mmap(nullptr, maxSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         *ptr = memoryBuffer_;
@@ -1373,13 +1389,21 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
     return Status::OK();
 }
 
-void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode)
+void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t transportSize)
 {
     // Note: The parameter needs to be consistent in the same client process.
     if (urmaMode == FastTransportMode::UB) {
         FLAGS_enable_urma = true;
         FLAGS_urma_mode = "UB";
         UrmaManager::clientMode_ = true;
+        uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;
+        if (UrmaManager::ubTransportMemSize_.compare_exchange_strong(expected, transportSize)) {
+            LOG(INFO) << "Set client UB transport memory size to " << transportSize;
+        } else {
+            LOG(WARNING) << FormatString(
+                "Try to set client UB transport memory size to %lu, but it is already set to %lu", transportSize,
+                UrmaManager::ubTransportMemSize_);
+        }
         FLAGS_urma_connection_size = 1;
     }
 }

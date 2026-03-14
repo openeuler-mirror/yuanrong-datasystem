@@ -1291,6 +1291,7 @@ private:
     RpcCredential cred_;
     int32_t requestTimeoutMs_;
     int32_t connectTimeoutMs_;
+    uint64_t fastTransportMemSize_;
     SensitiveValue token_;
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
