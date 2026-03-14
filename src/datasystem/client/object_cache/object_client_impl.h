@@ -1159,6 +1159,11 @@ private:
                               std::vector<bool> &exists, std::vector<MultiCreateParam> &multiCreateParamList,
                               std::vector<std::shared_ptr<Buffer>> &bufferList);
 
+    Status CreateBufferForMultiCreateParamAtIndex(size_t index, bool skipCheckExistence, const FullParam &param,
+                                                   uint32_t version, const std::vector<bool> &exists,
+                                                   std::vector<MultiCreateParam> &multiCreateParamList,
+                                                   std::vector<std::shared_ptr<Buffer>> &bufferList);
+
     /**
      * @brief Get clientId.
      * @return The ID of the current client.

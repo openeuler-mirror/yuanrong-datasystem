@@ -72,6 +72,9 @@ struct MultiCreateParam {
     size_t dataSize;
     size_t metadataSize;
     std::shared_ptr<ShmUnitInfo> shmBuf;
+#ifdef USE_URMA
+    std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;  // For SendBufferViaUb in MSet MultiCreate path
+#endif
 };
 
 struct PublishParam {
@@ -450,6 +453,10 @@ protected:
     void FillDevObjMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, const std::vector<Blob> &blobs,
                         DeviceObjectMetaPb *metaPb);
 
+    bool CheckUseTransferForMultiCreateRsp(const MultiCreateRspPb &rsp, bool skipCheckExistence) const;
+    void FillCreateParamsFromMultiCreateRsp(const MultiCreateRspPb &rsp, bool skipCheckExistence,
+                                            std::vector<MultiCreateParam> &createParams,
+                                            const std::vector<bool> &exists);
     void PostMultiCreate(bool skipCheckExistence, const MultiCreateRspPb &rsp,
                          std::vector<MultiCreateParam> &createParams, bool &useShmTransfer, PerfPoint &point,
                          uint32_t &version, std::vector<bool> &exists);
