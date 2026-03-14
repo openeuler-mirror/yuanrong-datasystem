@@ -11,6 +11,8 @@ global:
 
   # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
   clusterName: "AZ1"
+  # Environment variable name used to obtain host id for same-node worker affinity.
+  hostIdEnvName: "NODE_ID"
 
   etcd:
     # ETCD configuration
@@ -35,6 +37,10 @@ global:
     # ETCD metadata async operation pool size.
     # If key size is large under WRITE_BACK_L2_CACHE mode, you may need to increase this value.
     etcdMetaPoolSize: 8
+    # Username for etcd authentication.
+    etcdUsername: ""
+    # Password for etcd authentication.
+    etcdPassword: ""
 
   # Port value (suggested range: 30000-32767).
   port:
@@ -303,6 +309,8 @@ global:
   ipc:
     # Determines whether the shared memory feature is enabled.
     ipcThroughSharedMemory: true
+    # Worker port for shared-memory fd transfer over TCP. 0 means disabled.
+    sharedMemoryWorkerPort: 0
     # Unix domain socket (UDS) file directory with 80-character path limit
     udsDir: /home/uds
 

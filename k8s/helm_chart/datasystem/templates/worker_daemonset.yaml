@@ -176,6 +176,7 @@ spec:
         - -rocksdb_write_mode={{ $.Values.global.metadata.rocksdbWriteMode }}
         - -node_timeout_s={{ $.Values.global.reliability.nodeTimeoutS }}
         - -node_dead_timeout_s={{ $.Values.global.reliability.nodeDeadTimeoutS }}
+        - -host_id_env_name={{ $.Values.global.hostIdEnvName }}
         - -enable_etcd_auth={{ $.Values.global.etcd.enableEtcdAuth }}
         - -etcd_target_name_override={{ $.Values.global.etcd.etcdTargetNameOverride }}
         {{- if $.Values.global.etcd.enableEtcdAuth }}
@@ -196,11 +197,14 @@ spec:
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
         - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
+        - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
         - -curve_key_dir=$(CURVE_KEY_DIR)
         - -zmq_server_io_context={{ $.Values.global.rpc.zmqServerIoContext }}
         - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}
+        - -etcd_username={{ $.Values.global.etcd.etcdUsername }}
+        - -etcd_password={{ $.Values.global.etcd.etcdPassword }}
         - -cluster_name={{ $.Values.global.clusterName }}
         - -other_cluster_names={{ $.Values.global.crossAz.otherClusterNames }}
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
