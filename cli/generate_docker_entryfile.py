@@ -45,6 +45,15 @@ class Command(BaseCommand):
             help='path to save the generated docker entrypoint files, default path is the current directory. \
                 Example: dscli generate_docker_entryfile --output_path /home/user/docker_entryfiles'
         )
+        parser.add_argument(
+            '-m', '--mode',
+            type=str,
+            metavar='MODE',
+            default="daemonset",
+            help='mode to save the generated docker entrypoint files, default mode is daemonset. \
+                Optional parameter: daemonset, deployment. \
+                Example: dscli generate_docker_entryfile --output_path /home/user/docker_entryfiles'
+        )
 
     def run(self, args):
         """
@@ -53,7 +62,10 @@ class Command(BaseCommand):
         Args:
             args (Namespace): Parsed command-line arguments.
         """
-
+        
+        # Validate mode
+        mode = util.validate_mode(args.mode)
+        
         # Process output path
         output_path = Path(args.output_path)
         output_path = output_path.resolve()
@@ -63,7 +75,7 @@ class Command(BaseCommand):
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Get entrypoint and exitpoint paths
-        entryfile_path = os.path.join(self._base_dir, 'docker_entryfile')
+        entryfile_path = os.path.join(self._base_dir, 'docker_entryfile', mode)
 
         try:
             for item in os.listdir(entryfile_path):

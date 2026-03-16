@@ -41,7 +41,7 @@ COPY ./${CONFIG_NAME} ${KVCACHE_DIR}
 
 RUN python3 -m pip install ${KVCACHE_DIR}/openyuanrong_datasystem-*.whl --force-reinstall && \
     rm ${KVCACHE_DIR}/openyuanrong_datasystem-*.whl && \
-    dscli generate_docker_entryfile -o ${KVCACHE_DIR}/docker
+    dscli generate_docker_entryfile -m deployment -o ${KVCACHE_DIR}/docker
 
 WORKDIR ${KVCACHE_DIR}
 

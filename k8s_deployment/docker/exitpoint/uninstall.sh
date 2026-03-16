@@ -56,7 +56,7 @@ function main() {
   ilog "container prestop start"
   PROBE_PATH=`utils_get_worker_arg_value liveness_check_path`
   PROBE_TIMEOUT=`utils_get_worker_arg_value liveness_probe_timeout_s`
-
+  STATUS_FILE_PATH=`utils_get_worker_arg_value log_dir`/worker/worker-status
   liveness_check ${LIVENESS_CHECK_PATH} ${PROBE_TIMEOUT} || force_kill_worker
 
   ilog "send TERM to process 1 to gracefully notify worker to exit"
