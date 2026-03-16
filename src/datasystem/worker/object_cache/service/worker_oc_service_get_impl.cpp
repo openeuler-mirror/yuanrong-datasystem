@@ -688,6 +688,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     Status result =
         QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult, !request->NoQueryL2Cache());
     if (result.IsError()) {
+        lastRc = result;
         // If we query meta from master meets RPC error, do not add these objects to failedIds,
         // otherwise other concurrent get operations would failed, so we just notify ourselves.
         if (IsRpcTimeoutOrTryAgain(result)) {
@@ -714,8 +715,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
     VLOG(1) << FormatString("Query meta success: target num %d, success num %d", objectsNeedGetRemote.size(),
                             queryMetas.size());
-    lastRc = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
-
+    auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
+    lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
     // a fair change to complete within the given timeout.
     if (!FLAGS_oc_io_from_l2cache_need_metadata) {
@@ -1361,6 +1362,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
                                                        QueryMetadataFromMasterResult &result, bool queryEtcdMeta)
 {
     PerfPoint point(PerfKey::WORKER_QUERY_META_PRE);
+    Status lastRc;
     std::vector<master::QueryMetaInfoPb> &queryMetas = result.queryMetas;
     std::vector<RpcMessage> &payloads = result.payloads;
     std::map<std::string, uint64_t> &absentObjectKeysWithVersion = result.absentObjectKeysWithVersion;
@@ -1371,7 +1373,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_ROUTER);
     etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
     // 2. Send requests for each master
-    std::vector<std::future<void>> futures;
+    std::vector<std::future<Status>> futures;
     std::string traceID = Trace::Instance().GetTraceID();
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
@@ -1393,21 +1395,24 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             if (rc.IsError()) {
                 LOG(ERROR) << FormatString("Query metadata from master[%s]: %s", masterAddr.ToString(), rc.ToString());
                 res.failedKeys.insert(currentIds.begin(), currentIds.end());
-                return;
+                return rc;
             }
             for (auto &meta : *rsp.mutable_query_metas()) {
                 meta.set_is_from_other_az(isFromOtherAz);
             }
+            return Status::OK();
         };
         if (idx == objKeysGrpByMaster.size()) {
             // using current thread handle the last task.
-            func();
+            auto rc = func();
+            lastRc = rc.IsError() ? rc : lastRc;
         } else {
             futures.emplace_back(workerBatchQueryMetaThreadPool_->Submit(std::move(func)));
         }
     }
     for (auto &f : futures) {
-        f.wait();
+        auto rc = f.get();
+        lastRc = rc.IsError() ? rc : lastRc;
     }
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_RESULT);
     // 3. Statistics the metadata results just queried.
@@ -1474,7 +1479,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
         absentObjectKeysWithVersion.emplace(id, deletingVersion);
     }
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_OTHER);
-    return Status::OK();
+    return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
