@@ -606,6 +606,13 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
             CreateMultiMetaRspPb rsp;
             PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
             rc = RetryCreateMultiMetaWhenMoving(api, req, rsp);
+            if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+                rsp.mutable_last_rc()->set_error_code(rc.GetCode());
+                rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+                for (auto &meta : *(req.mutable_metas())) {
+                    rsp.add_failed_object_keys(meta.object_key());
+                }
+            }
             return CreateMeta2PCRes{ rc, rsp, masterAddrInfo };
         };
         if (i == masterAddrs.size() - 1) {

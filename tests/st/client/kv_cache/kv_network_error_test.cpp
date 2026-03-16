@@ -74,8 +74,11 @@ public:
                          [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId_); });
         InitTestKVClient(0, client1_,
                          [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId1_); });
-        InitTestKVClient(1, client2_,
-                         [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId2_); });
+        InitTestKVClient(1, client2_, [&](ConnectOptions &opts) {
+            auto rpcTiemoutMs = 10000;
+            opts.requestTimeoutMs = rpcTiemoutMs;
+            opts.SetAkSkAuth(accessKey_, secretKey_, tenantId2_);
+        });
     }
 
     std::shared_ptr<KVClient> client_;
@@ -106,6 +109,34 @@ TEST_F(KvNetworkErrorTest, DISABLED_BlockMasterAndWorker)
     Raii raii([]() { ExecuteCmd("nft flush ruleset"); });
     std::string val;
     DS_ASSERT_TRUE(client2_->Get(key, val).GetCode(), K_RPC_UNAVAILABLE);
+}
+
+TEST_F(KvNetworkErrorTest, DISABLED_BlockMasterAndWorker2)
+{
+    HostPort hostPort;
+    cluster_->GetWorkerAddr(0, hostPort);
+    auto blockCmd =
+        "nft add table ip filter"
+        "&& nft add chain ip filter input { type filter hook input priority 0 \\;} "
+        "&& nft add chain ip filter output { type filter hook output priority 0 \\;} "
+        + FormatString(" && nft add rule ip filter input ip protocol tcp tcp dport %d drop ", hostPort.Port())
+        + FormatString("&& nft add rule ip filter output ip protocol tcp tcp dport %d drop ", hostPort.Port());
+    ;
+    std::vector<std::string> keys;
+    std::vector<StringView> vals;
+    auto num = 100;
+    for (auto i = 0; i < num; i++) {
+        keys.emplace_back(client_->GenerateKey(FormatString("key_%d", i)));
+        vals.emplace_back(FormatString("val_%d", i));
+    }
+    ExecuteCmd(blockCmd);
+    Raii raii([]() { ExecuteCmd("nft flush ruleset"); });
+    std::vector<std::string> failedKeys;
+    ASSERT_EQ(client2_->MSet(keys, vals, failedKeys).GetCode(), K_RPC_UNAVAILABLE);
+    ASSERT_EQ(failedKeys.size(), num);
+    ExecuteCmd("nft flush ruleset");
+    std::string val;
+    DS_ASSERT_TRUE(client_->Get(keys[0], val).GetCode(), K_NOT_FOUND);
 }
 }  // namespace st
 }  // namespace datasystem
