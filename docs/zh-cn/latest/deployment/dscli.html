@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,11 +48,17 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'deployment/dscli';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'latest';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -155,6 +161,29 @@
   
 </a></div>
         <div class="sidebar-primary-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        <div class="sidebar-primary-item">
 
  <script>
  document.write(`
@@ -175,6 +204,7 @@
 <li class="toctree-l2"><a class="reference internal" href="deploy.html">部署 openYuanrong datasystem</a></li>
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">dscli命令行工具</a></li>
 <li class="toctree-l2"><a class="reference internal" href="k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dsbench.html">dsbench性能测试工具</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -261,6 +291,9 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
@@ -269,6 +302,7 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -1493,77 +1527,82 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>datasystem-worker共享内存启用开关</p></td>
 </tr>
-<tr class="row-odd"><td><p>unix_domain_socket_dir</p></td>
+<tr class="row-odd"><td><p>shared_memory_worker_port</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>指定用于共享内存 FD 传输的 SCMTCP 监听端口；当值为非 0 时，datasystem-worker 会在该端口监听连接 ，要求内核支持 SCMTCP 且端口未被占用，否则 worker 启动失败。客户端与 worker 在同一节点时，客户端会使用该通道传递共享内存描述符。</p></td>
+</tr>
+<tr class="row-even"><td><p>unix_domain_socket_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/uds&quot;</span></code></p></td>
 <td><p>配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限</p></td>
 </tr>
-<tr class="row-even"><td><p>worker_address</p></td>
+<tr class="row-odd"><td><p>worker_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;127.0.0.1:31501&quot;</span></code></p></td>
 <td><p>datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501</p></td>
 </tr>
-<tr class="row-odd"><td><p>enable_curve_zmq</p></td>
+<tr class="row-even"><td><p>enable_curve_zmq</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启服务端组件间认证鉴权功能</p></td>
 </tr>
-<tr class="row-even"><td><p>curve_key_dir</p></td>
+<tr class="row-odd"><td><p>curve_key_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径</p></td>
 </tr>
-<tr class="row-odd"><td><p>oc_worker_worker_direct_port</p></td>
+<tr class="row-even"><td><p>oc_worker_worker_direct_port</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延</p></td>
 </tr>
-<tr class="row-even"><td><p>oc_worker_worker_pool_size</p></td>
+<tr class="row-odd"><td><p>oc_worker_worker_pool_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">3</span></code></p></td>
 <td><p>datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 <code class="docutils literal notranslate"><span class="pre">ocWorkerWorkerDirectPort</span></code> 指定为非0值时该配置才生效</p></td>
 </tr>
-<tr class="row-odd"><td><p>payload_nocopy_threshold</p></td>
+<tr class="row-even"><td><p>payload_nocopy_threshold</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;104857600&quot;</span></code></p></td>
 <td><p>datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位）</p></td>
 </tr>
-<tr class="row-even"><td><p>rpc_thread_num</p></td>
+<tr class="row-odd"><td><p>rpc_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
 <td><p>配置服务端的RPC线程数，必须为大于0的数</p></td>
 </tr>
-<tr class="row-odd"><td><p>oc_thread_num</p></td>
+<tr class="row-even"><td><p>oc_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">32</span></code></p></td>
 <td><p>配置服务端用于处理对象/KV缓存的业务线程数</p></td>
 </tr>
-<tr class="row-even"><td><p>zmq_server_io_context</p></td>
+<tr class="row-odd"><td><p>zmq_server_io_context</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
 <td><p>ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
 </tr>
-<tr class="row-odd"><td><p>zmq_client_io_context</p></td>
+<tr class="row-even"><td><p>zmq_client_io_context</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
 <td><p>ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
 </tr>
-<tr class="row-even"><td><p>zmq_chunk_sz</p></td>
+<tr class="row-odd"><td><p>zmq_chunk_sz</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
 <td><p>并行负载分块大小配置（以字节为单位）</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_rpc_session_num</p></td>
+<tr class="row-even"><td><p>max_rpc_session_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
 <td><p>单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000]</p></td>
 </tr>
-<tr class="row-even"><td><p>remote_send_thread_num</p></td>
+<tr class="row-odd"><td><p>remote_send_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>配置服务端用于将元素发送到远程工作线程的线程数量</p></td>
 </tr>
-<tr class="row-odd"><td><p>stream_idle_time_s</p></td>
+<tr class="row-even"><td><p>stream_idle_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>配置流的空闲时间。默认值为300秒（5分钟）</p></td>
@@ -1608,6 +1647,16 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语</p></td>
 </tr>
+<tr class="row-odd"><td><p>etcd_username</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>ETCD鉴权用户名。仅在ETCD开启用户名/密码鉴权时需要配置</p></td>
+</tr>
+<tr class="row-even"><td><p>etcd_password</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>ETCD鉴权密码。仅在ETCD开启用户名/密码鉴权时需要配置</p></td>
+</tr>
 <tr class="row-odd"><td><p>etcd_passphrase_path</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
@@ -1622,6 +1671,11 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致</p></td>
+</tr>
+<tr class="row-even"><td><p>host_id_env_name</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>用于读取当前节点 <code class="docutils literal notranslate"><span class="pre">host_id</span></code> 的环境变量名。配置后，worker 在注册到 ETCD 时会同时上报 <code class="docutils literal notranslate"><span class="pre">host_id</span></code>，供客户端按同节点策略优先选择 worker</p></td>
 </tr>
 </tbody>
 </table>

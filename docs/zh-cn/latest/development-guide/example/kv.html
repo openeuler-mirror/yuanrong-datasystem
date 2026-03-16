@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=a3619945" />
   
@@ -48,11 +48,17 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/example/kv';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'latest';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
     <script src="../../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -155,6 +161,29 @@
   
 </a></div>
         <div class="sidebar-primary-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        <div class="sidebar-primary-item">
 
  <script>
  document.write(`
@@ -175,6 +204,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../deployment/dscli.html">dscli命令行工具</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../deployment/dsbench.html">dsbench性能测试工具</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -261,6 +291,9 @@
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
@@ -269,6 +302,7 @@
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -499,8 +533,9 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">使用限制</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">关于 KV 更多信息</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">数据一致性</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">数据溢出到磁盘</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">数据可靠性</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">服务发现</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">数据溢出到磁盘</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">数据可靠性</a></li>
 </ul>
 </li>
 </ul>
@@ -596,7 +631,40 @@ C++</label><div class="sd-tab-content docutils">
 一致性模型定义参见 <a class="reference external" href="https://jepsen.io/consistency/models">Consistency Models</a>。</p>
 </section>
 <section id="id6">
-<h3>数据溢出到磁盘<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<h3>服务发现<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<p>当客户端使用 <code class="docutils literal notranslate"><span class="pre">ServiceDiscovery</span></code> 连接集群时，可通过 <code class="docutils literal notranslate"><span class="pre">ServiceAffinityPolicy</span></code> 指定 worker 选择策略：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">PREFERRED_SAME_NODE</span></code>（默认）：优先选择同节点 worker；若无同节点 worker，则随机选择。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">REQUIRED_SAME_NODE</span></code>：必须选择同节点 worker；若未匹配到同节点 worker，则返回错误。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">RANDOM</span></code>：随机选择 worker。</p></li>
+</ul>
+<p>使用该能力时，需要让 worker 和客户端都能读取到同一套 <code class="docutils literal notranslate"><span class="pre">host_id</span></code> 信息：</p>
+<ol class="arabic simple">
+<li><p>在 worker 侧配置 <code class="docutils literal notranslate"><span class="pre">host_id_env_name</span></code>（例如 <code class="docutils literal notranslate"><span class="pre">HOST_ID</span></code>），并在启动前注入环境变量。</p></li>
+<li><p>在客户端 <code class="docutils literal notranslate"><span class="pre">ServiceDiscoveryOptions</span></code> 中配置相同的 <code class="docutils literal notranslate"><span class="pre">hostIdEnvName</span></code>，并按需设置 <code class="docutils literal notranslate"><span class="pre">affinityPolicy</span></code>。</p></li>
+<li><p>如果 ETCD 启用了用户名/密码鉴权，还需要在客户端配置 <code class="docutils literal notranslate"><span class="pre">username</span></code> 和 <code class="docutils literal notranslate"><span class="pre">password</span></code>。</p></li>
+</ol>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;datasystem/datasystem.h&quot;</span>
+
+<span class="n">ServiceDiscoveryOptions</span><span class="w"> </span><span class="n">sdOpts</span><span class="p">;</span>
+<span class="n">sdOpts</span><span class="p">.</span><span class="n">etcdAddress</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span><span class="p">;</span>
+<span class="n">sdOpts</span><span class="p">.</span><span class="n">hostIdEnvName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;HOST_ID&quot;</span><span class="p">;</span>
+<span class="n">sdOpts</span><span class="p">.</span><span class="n">affinityPolicy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ServiceAffinityPolicy</span><span class="o">::</span><span class="n">PREFERRED_SAME_NODE</span><span class="p">;</span>
+<span class="n">sdOpts</span><span class="p">.</span><span class="n">username</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;etcd_user&quot;</span><span class="p">;</span>
+<span class="n">sdOpts</span><span class="p">.</span><span class="n">password</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;etcd_password&quot;</span><span class="p">;</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">serviceDiscovery</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">ServiceDiscovery</span><span class="o">&gt;</span><span class="p">(</span><span class="n">sdOpts</span><span class="p">);</span>
+<span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">serviceDiscovery</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+
+<span class="n">ConnectOptions</span><span class="w"> </span><span class="n">connectOptions</span><span class="p">;</span>
+<span class="n">connectOptions</span><span class="p">.</span><span class="n">serviceDiscovery</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serviceDiscovery</span><span class="p">;</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">DsClient</span><span class="o">&gt;</span><span class="p">(</span><span class="n">connectOptions</span><span class="p">);</span>
+<span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">().</span><span class="n">IsOk</span><span class="p">());</span>
+</pre></div>
+</div>
+</section>
+<section id="id7">
+<h3>数据溢出到磁盘<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
 <p>KV 数据存储在数据系统的共享内存中，当内存不足时，支持自动将数据溢出到磁盘并从内存中删除数据。当数据需要读取时，自动从磁盘中加载到共享内存。
 若磁盘空间也不足时，如果数据已写入到二级缓存，则自动将数据从本地磁盘和内存中删除。当数据需要读取时，自动从二级缓存加载到共享内存。
 使用 KV 溢出功能，需要在部署时指定相关参数，默认为关闭。</p>
@@ -630,8 +698,8 @@ C++</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 </section>
-<section id="id7">
-<h3>数据可靠性<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
+<section id="id8">
+<h3>数据可靠性<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
 <p>数据系统 KV 接口提供可靠性语义，在数据写入时，通过 <strong>writeMode</strong> 参数配置数据可靠性级别。仅当 <strong>writeMode</strong> 配置为 <em><strong>WRITE_THROUGH_L2_CACHE</strong></em> 或 <em><strong>WRITE_BACK_L2_CACHE</strong></em> 时才保证数据可靠性，否则当出现故障或空间不足时，数据可能丢失。<br />
 数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：OBS/SFS。<br />
 在集群部署时，需要在数据系统的部署参数中配置二级缓存相关参数，若未配置，则在 KV 写入时 <strong>writeMode</strong> 参数指定为 <em><strong>WRITE_THROUGH_L2_CACHE</strong></em> 或 <em><strong>WRITE_BACK_L2_CACHE</strong></em> 时会写入失败。</p>
@@ -754,8 +822,9 @@ sfs</label><div class="sd-tab-content docutils">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">使用限制</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">关于 KV 更多信息</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">数据一致性</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">数据溢出到磁盘</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">数据可靠性</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">服务发现</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">数据溢出到磁盘</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">数据可靠性</a></li>
 </ul>
 </li>
 </ul>
