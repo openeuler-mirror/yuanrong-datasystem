@@ -191,9 +191,12 @@ void HeteroDevSubscribe()
 **DevMSet / DevMGet**：数据缓存语义，数据生成端执行 DevMSet 将 HBM 数据发布到数据系统，数据接收端申请 HBM 内存后，执行 DevMGet 接口读取数据。当数据被读取后，数据系统不会删除对象，该数据可被反复读取。数据使用完成后需要调用 DevLocalDelete/DevDelete 删除对象。  
 
 > **注意**：  
-> DevMSet / DevMGet 传入的 Device 内存地址不能归属于同一张 NPU 卡。  
-> 在执行 DevMGet 过程中，执行了 DevMSet 的进程不能退出，否则 DevMGet 会失败。  
-> 在key，devBlobList内存地址映射关系均一致的情况下，DevMGet在同进程支持重试。
+> · `DevMSet / DevMGet` 传入的 Device 内存地址不能归属于同一张 NPU 卡。  
+> · 在执行`DevMGet`过程中，执行了 DevMSet 的进程不能退出，否则 DevMGet 会失败。  
+> · 在key，devBlobList内存地址映射关系均一致的情况下，DevMGet在同进程支持重试。  
+> · `DevMSet / DevMGet`接口注册的是 Device 内存地址，不会隐式等待上游框架异步算子完成。若调用前同一地址上仍有异步写操作（如 `torch` 的 `to/clone/zeros` 等），可能出现数据不一致，可在调用前增加`torch.npu.synchronize()`显示同步。
+
+
 
 ::::{tab-set}
 
