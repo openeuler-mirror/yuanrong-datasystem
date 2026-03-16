@@ -25,6 +25,7 @@ logging.basicConfig(
 sys.path.append(str(Path("..", "api", "python").resolve()))
 
 ENV_YR_GIT_COMMIT_ID = os.environ.get("YR_DOC_GIT_COMMIT_ID", "")
+ENV_BUILD_VERSION = os.environ.get("BUILD_VERSION", "")
 
 build_time = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(
     hours=8
@@ -38,6 +39,7 @@ author = "openYuanrong datasystem with CC BY 4.0 LICENSE"
 logging.info(
     f"""Doc build configs:
 ENV_YR_GIT_COMMIT_ID: {ENV_YR_GIT_COMMIT_ID}
+ENV_BUILD_VERSION: {ENV_BUILD_VERSION}
 
 current_date: {current_time_str}
 project: {project}
@@ -116,7 +118,20 @@ html_theme_options = {
         <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
         provided by
         <a href="https://github.com/executablebooks">Executable Books Project</a>.
-    """
+    """,
+    "switcher": {
+        "json_url": "https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json", 
+        "version_match": os.getenv("BUILD_VERSION", "latest"), 
+    }
+}
+
+html_sidebars = {
+    "**": [
+        "navbar-logo.html",
+        "version-switcher.html",
+        "search-button-field.html", 
+        "sbt-sidebar-nav.html",
+    ]
 }
 
 # -----------------------------------------------------------------------------
