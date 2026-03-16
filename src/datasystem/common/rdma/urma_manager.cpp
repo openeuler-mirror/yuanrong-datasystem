@@ -231,6 +231,12 @@ Status UrmaManager::InitMemoryBufferPool()
 
     auto *allocator = Allocator::Instance();
     auto rc = allocator->InitWithFlexibleRegister(AllocateType::UB_TRANSPORT, ubTransportMemSize_, regFunc);
+    if (rc.IsOK()) {
+        // Allocate phyica memory buffer pool for client
+        std::shared_ptr<ArenaGroup> arenaGroup;
+        rc = allocator->GetArenaGroup(DEFAULT_TENANT_ID, ubTransportMemSize_, arenaGroup, AllocateType::UB_TRANSPORT);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to get arena group for client");
+    }
     if (rc.IsError()) {
         rc = rc.GetCode() == K_DUPLICATED ? Status::OK() : rc;
         LOG(WARNING) << "Failed to register memory buffer pool for client, error: " << rc.ToString();
@@ -1249,6 +1255,7 @@ Status UrmaManager::RemoveRemoteDevice(const std::string &deviceId)
 {
     TbbRemoteDeviceMap::accessor accessor;
     if (tbbRemoteDeviceMap_.find(accessor, deviceId)) {
+        LOG(INFO) << "Remove RemoteDevice for " << deviceId;
         tbbRemoteDeviceMap_.erase(accessor);
         return Status::OK();
     }

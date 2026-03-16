@@ -53,6 +53,7 @@ namespace datasystem {
 using datasystem::memory::Allocator;
 using datasystem::memory::AllocatorFuncRegister;
 using AllocateType = datasystem::memory::CacheType;
+using ArenaGroup = datasystem::memory::ArenaGroup
 
 constexpr uint64_t CLIENT_MEMORY_BUFFER_SIZE = 9 * 1024 * 1024;  // 9MB
 const std::string DEFAULT_TENANTID = "";
