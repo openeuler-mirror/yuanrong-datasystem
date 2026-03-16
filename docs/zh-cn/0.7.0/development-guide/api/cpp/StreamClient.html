@@ -1,0 +1,813 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>StreamClient &#8212; openYuanrong datasystem  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../../../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../../../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../../../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../../../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=a3619945" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../../../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../../../_static/documentation_options.js?v=9eb32ce0"></script>
+    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../../../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'development-guide/api/cpp/StreamClient';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.7.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
+    <script src="../../../_static/custom.js?v=f6e2bf52"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="HeteroClient" href="HeteroClient.html" />
+    <link rel="prev" title="KVClient" href="KVClient.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../../_static/logo-small.png" class="logo__image only-light" alt="openYuanrong datasystem  documentation - Home"/>
+    <script>document.write(`<img src="../../../_static/logo-small.png" class="logo__image only-dark" alt="openYuanrong datasystem  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../getting-started/getting_started.html">入门</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../installation/installation_linux.html">安装</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../deployment/index.html">部署</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../deployment/dsbench.html">dsbench性能测试工具</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../../index.html">编程接口</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 has-children"><a class="reference internal" href="../../example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3"><a class="reference internal" href="../../example/hetero.html">异构对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../example/kv.html">KV</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../example/object.html">Object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../index.html">API</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 has-children"><a class="reference internal" href="../python/index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsClient.kv.html">yr.datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.async_mset_d2h.html">yr.datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.async_mget_h2d.html">yr.datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.dev_publish.html">yr.datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.dev_mset.html">yr.datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.dev_mget.html">yr.datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.dev_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.hetero_client.Blob.html">yr.datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.Blob.set_dev_ptr.html">yr.datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.Blob.set_size.html">yr.datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.hetero_client.DeviceBlobList.html">yr.datasystem.hetero_client.DeviceBlobList</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.DeviceBlobList.append_blob.html">yr.datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.DeviceBlobList.get_blob_list.html">yr.datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.hetero_client.Future.html">yr.datasystem.hetero_client.Future</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.hetero_client.Future.get.html">yr.datasystem.hetero_client.Future.get</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.hetero_client.MetaInfo.html">yr.datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.html">yr.datasystem.kv_client.KVClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.init.html">yr.datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.read.html">yr.datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.delete.html">yr.datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.ReadOnlyBuffer.rlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.wlatch.html">yr.datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.unwlatch.html">yr.datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.rlatch.html">yr.datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.unrlatch.html">yr.datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.mutable_data.html">yr.datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.immutable_data.html">yr.datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.memory_copy.html">yr.datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.publish.html">yr.datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.seal.html">yr.datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.invalidate_buffer.html">yr.datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.object_client.Buffer.get_size.html">yr.datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.object_client.ConsistencyType.html">yr.datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.object_client.WriteMode.html">yr.datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.object_client.CacheType.html">yr.datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.html">yr.datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.init.html">yr.datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.create_producer.html">yr.datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.subscribe.html">yr.datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.delete_stream.html">yr.datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.query_global_producer_num.html">yr.datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.StreamClient.query_global_consumer_num.html">yr.datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.stream_client.Producer.html">yr.datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.Producer.send.html">yr.datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.Producer.close.html">yr.datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../python/yr.datasystem.stream_client.Consumer.html">yr.datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.Consumer.receive.html">yr.datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.Consumer.receive_any.html">yr.datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.Consumer.ack.html">yr.datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../python/yr.datasystem.stream_client.Consumer.close.html">yr.datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../python/yr.datasystem.stream_client.SubconfigType.html">yr.datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 current active has-children"><a class="reference internal" href="index.html">C++</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="KVClient.html">KVClient</a></li>
+<li class="toctree-l4 current active"><a class="current reference internal" href="#">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-MSetParam.html">MSetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../java/index.html">Java</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../FAQ/FAQ.html">FAQ</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>StreamClient</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv412StreamClient"><code class="docutils literal notranslate"><span class="pre">StreamClient</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient12StreamClientEK14ConnectOptions"><code class="docutils literal notranslate"><span class="pre">StreamClient::StreamClient()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClientD0Ev"><code class="docutils literal notranslate"><span class="pre">StreamClient::~StreamClient()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient4InitEb"><code class="docutils literal notranslate"><span class="pre">StreamClient::Init()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient8ShutDownEv"><code class="docutils literal notranslate"><span class="pre">StreamClient::ShutDown()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf"><code class="docutils literal notranslate"><span class="pre">StreamClient::CreateProducer()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb"><code class="docutils literal notranslate"><span class="pre">StreamClient::Subscribe()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient12DeleteStreamERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">StreamClient::DeleteStream()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t"><code class="docutils literal notranslate"><span class="pre">StreamClient::QueryGlobalProducersNum()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t"><code class="docutils literal notranslate"><span class="pre">StreamClient::QueryGlobalConsumersNum()</span></code></a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="streamclient">
+<h1>StreamClient<a class="headerlink" href="#streamclient" title="Link to this heading">#</a></h1>
+<dl class="cpp class">
+<dt class="sig sig-object cpp" id="_CPPv412StreamClient">
+<span id="_CPPv312StreamClient"></span><span id="_CPPv212StreamClient"></span><span id="StreamClient"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">StreamClient</span></span></span><a class="headerlink" href="#_CPPv412StreamClient" title="Link to this definition">#</a><br /></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Header-file<span class="colon">:</span></dt>
+<dd class="field-odd"><p>#include &lt;datasystem/stream_client.h&gt;</p>
+</dd>
+<dt class="field-even">Namespace<span class="colon">:</span></dt>
+<dd class="field-even"><p>datasystem</p>
+</dd>
+</dl>
+<p>Stream缓存客户端。</p>
+<p><strong>公共函数</strong></p>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient12StreamClientEK14ConnectOptions">
+<span id="_CPPv3N12StreamClient12StreamClientEK14ConnectOptions"></span><span id="_CPPv2N12StreamClient12StreamClientEK14ConnectOptions"></span><span id="StreamClient::StreamClient__ConnectOptionsC"></span><span class="sig-name descname"><span class="n"><span class="pre">StreamClient</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="struct-ConnectOptions.html#_CPPv414ConnectOptions" title="ConnectOptions"><span class="n"><span class="pre">ConnectOptions</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">connectOptions</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient12StreamClientEK14ConnectOptions" title="Link to this definition">#</a><br /></dt>
+<dd><p>构造Stream缓存客户端实例。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>connectOptions</strong> - 配置连接选项，包括IP地址和端口，详见 <a class="reference internal" href="struct-ConnectOptions.html#_CPPv414ConnectOptions" title="ConnectOptions"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ConnectOptions</span></code></a> 章节</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>Stream缓存客户端实例。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClientD0Ev">
+<span id="_CPPv3N12StreamClientD0Ev"></span><span id="_CPPv2N12StreamClientD0Ev"></span><span id="StreamClient::~StreamClient"></span><span class="sig-name descname"><span class="n"><span class="pre">~StreamClient</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClientD0Ev" title="Link to this definition">#</a><br /></dt>
+<dd><p>析构Stream缓存客户端实例，析构过程中会自动断开与 Worker 的连接，释放客户端持有的资源。</p>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient4InitEb">
+<span id="_CPPv3N12StreamClient4InitEb"></span><span id="_CPPv2N12StreamClient4InitEb"></span><span id="StreamClient::Init__b"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Init</span></span></span><span class="sig-paren">(</span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">reportWorkerLost</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient4InitEb" title="Link to this definition">#</a><br /></dt>
+<dd><p>建立与数据系统 Worker 之间的连接并完成初始化。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>reportWorkerLost</strong> - 当client与worker断连时是否向用户返回 <code class="docutils literal notranslate"><span class="pre">K_SC_WORKER_WAS_LOST</span></code> 错误码。默认为false。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示初始化成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient8ShutDownEv">
+<span id="_CPPv3N12StreamClient8ShutDownEv"></span><span id="_CPPv2N12StreamClient8ShutDownEv"></span><span id="StreamClient::ShutDown"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">ShutDown</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient8ShutDownEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>断开与数据系统 Worker 之间的连接。</p>
+<dl class="simple">
+<dt>返回:</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示断链成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf">
+<span id="_CPPv3N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf"></span><span id="_CPPv2N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf"></span><span id="StreamClient::CreateProducer__ssCR.std::shared_ptr:Producer:R.ProducerConf"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">CreateProducer</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">streamName</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="Producer.html#_CPPv48Producer" title="Producer"><span class="n"><span class="pre">Producer</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">outProducer</span></span>, <a class="reference internal" href="struct-ProducerConf.html#_CPPv412ProducerConf" title="ProducerConf"><span class="n"><span class="pre">ProducerConf</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">producerConf</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">{</span></span><span class="p"><span class="pre">}</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf" title="Link to this definition">#</a><br /></dt>
+<dd><p>创建生产者, 创建生产者时会创建流。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>streamName</strong> - 指定流的名称， 用于创建生产者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>outProducer</strong> - 传出参数，返回 std::shared_ptr&lt; <a class="reference internal" href="Producer.html#_CPPv48Producer" title="Producer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Producer</span></code></a> &gt; 用于生产数据。</p></li>
+<li><p><strong>producerConf</strong> - 设置参数，详见 <a class="reference internal" href="struct-ProducerConf.html#_CPPv412ProducerConf" title="ProducerConf"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ProducerConf</span></code></a> 章节。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示创建成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb">
+<span id="_CPPv3N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb"></span><span id="_CPPv2N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb"></span><span id="StreamClient::Subscribe__ssCR.SubscriptionConfigCR.std::shared_ptr:Consumer:R.b"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Subscribe</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">streamName</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">struct</span></span><span class="w"> </span><a class="reference internal" href="struct-SubscriptionConfig.html#_CPPv418SubscriptionConfig" title="SubscriptionConfig"><span class="n"><span class="pre">SubscriptionConfig</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">config</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="Consumer.html#_CPPv48Consumer" title="Consumer"><span class="n"><span class="pre">Consumer</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">outConsumer</span></span>, <span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">autoAck</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb" title="Link to this definition">#</a><br /></dt>
+<dd><p>创建消费者，创建消费者时会创建流。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>streamName</strong> - 指定流的名称， 用于创建消费者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>config</strong> - 设置参数，详见 <a class="reference internal" href="struct-SubscriptionConfig.html#_CPPv418SubscriptionConfig" title="SubscriptionConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">SubscriptionConfig</span></code></a> 。</p></li>
+<li><p><strong>outConsumer</strong> - 传出参数，返回 std::shared_ptr&lt; <a class="reference internal" href="Consumer.html#_CPPv48Consumer" title="Consumer"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">Consumer</span></code></a> &gt; 用于消费数据。</p></li>
+<li><p><strong>autoAck</strong> - 设置参数，是否支持自动 <a class="reference internal" href="Consumer.html#_CPPv4N8Consumer3AckE8uint64_t" title="Consumer::Ack"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">Consumer::Ack()</span></code></a> 功能。</p></li>
+</ul>
+</dd>
+<dt>返回值</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示创建成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient12DeleteStreamERKNSt6stringE">
+<span id="_CPPv3N12StreamClient12DeleteStreamERKNSt6stringE"></span><span id="_CPPv2N12StreamClient12DeleteStreamERKNSt6stringE"></span><span id="StreamClient::DeleteStream__ssCR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">DeleteStream</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">streamName</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient12DeleteStreamERKNSt6stringE" title="Link to this definition">#</a><br /></dt>
+<dd><p>删除数据流，用于删除数据流。。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>streamName</strong> - 键，key的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节.</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示删除成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t">
+<span id="_CPPv3N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t"></span><span id="_CPPv2N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t"></span><span id="StreamClient::QueryGlobalProducersNum__ssCR.uint64_tR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">QueryGlobalProducersNum</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">streamName</span></span>, <span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">gProducerNum</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t" title="Link to this definition">#</a><br /></dt>
+<dd><p>指定流的名称，查询流的生产者数量。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>streamName</strong> - 指定流的名称，查询该条流有多少个生产者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>gProducerNum</strong> - 传出参数， 指定 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 对应的生产者的数量。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示查询成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t">
+<span id="_CPPv3N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t"></span><span id="_CPPv2N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t"></span><span id="StreamClient::QueryGlobalConsumersNum__ssCR.uint64_tR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">QueryGlobalConsumersNum</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">streamName</span></span>, <span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">gConsumerNum</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t" title="Link to this definition">#</a><br /></dt>
+<dd><p>指定流的名称，查询流的消费者数量。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>streamName</strong> - 指定流的名称，查询该条流有多少消费者。 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 的合法字符为：英文字母（a-zA-Z）、数字以及 <code class="docutils literal notranslate"><span class="pre">-_!&#64;#%^*()+=:;</span></code>，最大长度为255字节。</p></li>
+<li><p><strong>gConsumerNum</strong> - 传出参数， 指定 <code class="docutils literal notranslate"><span class="pre">streamName</span></code> 对应的消费者的数量。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示查询成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="KVClient.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">KVClient</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="HeteroClient.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">HeteroClient</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv412StreamClient"><code class="docutils literal notranslate"><span class="pre">StreamClient</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient12StreamClientEK14ConnectOptions"><code class="docutils literal notranslate"><span class="pre">StreamClient::StreamClient()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClientD0Ev"><code class="docutils literal notranslate"><span class="pre">StreamClient::~StreamClient()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient4InitEb"><code class="docutils literal notranslate"><span class="pre">StreamClient::Init()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient8ShutDownEv"><code class="docutils literal notranslate"><span class="pre">StreamClient::ShutDown()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient14CreateProducerERKNSt6stringERNSt10shared_ptrI8ProducerEE12ProducerConf"><code class="docutils literal notranslate"><span class="pre">StreamClient::CreateProducer()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient9SubscribeERKNSt6stringERK18SubscriptionConfigRNSt10shared_ptrI8ConsumerEEb"><code class="docutils literal notranslate"><span class="pre">StreamClient::Subscribe()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient12DeleteStreamERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">StreamClient::DeleteStream()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient23QueryGlobalProducersNumERKNSt6stringER8uint64_t"><code class="docutils literal notranslate"><span class="pre">StreamClient::QueryGlobalProducersNum()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N12StreamClient23QueryGlobalConsumersNumERKNSt6stringER8uint64_t"><code class="docutils literal notranslate"><span class="pre">StreamClient::QueryGlobalConsumersNum()</span></code></a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By openYuanrong datasystem with CC BY 4.0 LICENSE
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2026, openEuler openYuanrong datasystem.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+<div class="extra_footer">
+  
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    
+</div>
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../../../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

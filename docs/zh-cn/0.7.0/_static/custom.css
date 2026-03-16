@@ -1,0 +1,77 @@
+html {
+    --pst-font-family-base: 'Microsoft Yahei', 'Inter', sans-serif;
+}
+
+.bd-page-width {
+    max-width: 100%;
+    min-width: 100%;
+}
+
+.bd-content .sd-tab-set>input:checked+label {
+    border-color: #d3d3d3 #d3d3d3 transparent;
+}
+
+.bd-content .sd-tab-set .sd-tab-content {
+    border-color: #d3d3d3;
+}
+
+/* 1. 灯箱模态框背景 */
+#custom-image-modal {
+    display: none; /* 默认隐藏 */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.92);
+    z-index: 9999;
+    cursor: zoom-out;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+}
+
+/* 2. 关闭按钮 */
+#custom-modal-close {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    color: white;
+    font-size: 40px;
+    font-weight: bold;
+    cursor: pointer;
+    z-index: 10000;
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.1);
+    transition: background-color 0.2s;
+}
+
+#custom-modal-close:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* 3. 放大后的图片 */
+#custom-modal-image {
+    max-width: 90%;
+    max-height: 80%;
+    object-fit: contain;
+    box-shadow: 0 5px 30px rgba(0, 0, 0, 0.5);
+    cursor: default;
+}
+
+/* 4. 为文档中的所有图片添加鼠标手势提示 */
+div.body img,
+figure img {
+    cursor: zoom-in !important;
+    transition: opacity 0.2s;
+}
+
+div.body img:hover,
+figure img:hover {
+    opacity: 0.95;
+}

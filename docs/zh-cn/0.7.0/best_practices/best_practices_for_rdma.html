@@ -1,0 +1,991 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>RDMA最佳实践 &#8212; openYuanrong datasystem  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=9eb32ce0"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'best_practices/best_practices_for_rdma';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.7.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="编程接口" href="../development-guide/index.html" />
+    <link rel="prev" title="UB最佳实践" href="best_pracitces_for_ub.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo-small.png" class="logo__image only-light" alt="openYuanrong datasystem  documentation - Home"/>
+    <script>document.write(`<img src="../_static/logo-small.png" class="logo__image only-dark" alt="openYuanrong datasystem  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/getting_started.html">入门</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation/installation_linux.html">安装</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dsbench.html">dsbench性能测试工具</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">最佳实践</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">RDMA最佳实践</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/hetero.html">异构对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/kv.html">KV</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/object.html">Object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/api/index.html">API</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/python/index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsClient.kv.html">yr.datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.async_mset_d2h.html">yr.datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.async_mget_h2d.html">yr.datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.dev_publish.html">yr.datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mset.html">yr.datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mget.html">yr.datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.dev_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.Blob.html">yr.datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.Blob.set_dev_ptr.html">yr.datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.Blob.set_size.html">yr.datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.DeviceBlobList.html">yr.datasystem.hetero_client.DeviceBlobList</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.DeviceBlobList.append_blob.html">yr.datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.DeviceBlobList.get_blob_list.html">yr.datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.Future.html">yr.datasystem.hetero_client.Future</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.Future.get.html">yr.datasystem.hetero_client.Future.get</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.hetero_client.MetaInfo.html">yr.datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.html">yr.datasystem.kv_client.KVClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.init.html">yr.datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.read.html">yr.datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.delete.html">yr.datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.rlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.wlatch.html">yr.datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.unwlatch.html">yr.datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.rlatch.html">yr.datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.unrlatch.html">yr.datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.mutable_data.html">yr.datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.immutable_data.html">yr.datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.memory_copy.html">yr.datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.publish.html">yr.datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.seal.html">yr.datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.invalidate_buffer.html">yr.datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.Buffer.get_size.html">yr.datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.ConsistencyType.html">yr.datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.WriteMode.html">yr.datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.object_client.CacheType.html">yr.datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.html">yr.datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.init.html">yr.datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.create_producer.html">yr.datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.subscribe.html">yr.datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.delete_stream.html">yr.datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.query_global_producer_num.html">yr.datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.StreamClient.query_global_consumer_num.html">yr.datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Producer.html">yr.datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Producer.send.html">yr.datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Producer.close.html">yr.datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Consumer.html">yr.datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Consumer.receive.html">yr.datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Consumer.receive_any.html">yr.datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Consumer.ack.html">yr.datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.Consumer.close.html">yr.datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.stream_client.SubconfigType.html">yr.datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-MSetParam.html">MSetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/java/index.html">Java</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>RDMA最佳实践</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">安装</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">部署指南</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">快速验证</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">推荐配置</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">开启大页内存</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numa">绑定NUMA节点</a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="rdma">
+<h1>RDMA最佳实践<a class="headerlink" href="#rdma" title="Link to this heading">#</a></h1>
+<p>远程直接内存访问（Remote Direct Memory Access，RDMA）是一种面向大规模数据中心与并行计算的互联技术，将网络传输与内存访问深度融合，通过旁路内核与硬件卸载，实现跨节点间高带宽、极低时延的数据直接搬移。RDMA 统一了分布式系统中的通信与存储访问路径，大幅降低了处理器的协议栈开销，支持异构计算单元间的高效协同，是构建高性能计算、AI 训练及分布式数据库的关键底层基础设施。</p>
+<p>openYuanrong datasystem 现已集成对 RDMA 的支持，实现了分布式缓存在物理节点之间的硬件级加速。基于 RDMA 构建的全局缓存抽象，透明化了下层拓扑，使得应用能够以极简的编程方式，在跨节点通信场景中实现数据直通，充分释放底层硬件性能。</p>
+<section id="id1">
+<h2>源码编译安装<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<p>源码编译安装前请确保编译环境中具备如下软件依赖：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>软件名称</p></th>
+<th class="head"><p>版本</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>openEuler</p></td>
+<td><p>22.03</p></td>
+<td><p>运行openYuanrong datasystem的操作系统</p></td>
+</tr>
+<tr class="row-odd"><td><p>rdma-core</p></td>
+<td><p>41.0+</p></td>
+<td><p>RDMA软件依赖</p></td>
+</tr>
+<tr class="row-even"><td><p>Python</p></td>
+<td><p>3.9-3.11</p></td>
+<td><p>openYuanrong datasystem的编译依赖Python环境</p></td>
+</tr>
+<tr class="row-odd"><td><p>GCC</p></td>
+<td><p>7.5.0+</p></td>
+<td><p>用于编译openYuanrong datasystem的C编译器</p></td>
+</tr>
+<tr class="row-even"><td><p>G++</p></td>
+<td><p>7.5.0+</p></td>
+<td><p>用于编译openYuanrong datasystem的C++编译器</p></td>
+</tr>
+<tr class="row-odd"><td><p>libtool</p></td>
+<td><p>-</p></td>
+<td><p>编译构建openYuanrong datasystem的工具</p></td>
+</tr>
+<tr class="row-even"><td><p>git</p></td>
+<td><p>-</p></td>
+<td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
+</tr>
+<tr class="row-odd"><td><p>Make</p></td>
+<td><p>-</p></td>
+<td><p>openYuanrong datasystem使用的源代码管理工具</p></td>
+</tr>
+<tr class="row-even"><td><p>CMake</p></td>
+<td><p>3.18.3+</p></td>
+<td><p>编译构建openYuanrong datasystem的工具</p></td>
+</tr>
+<tr class="row-odd"><td><p>patch</p></td>
+<td><p>2.5+</p></td>
+<td><p>openYuanrong datasystem使用的源代码补丁工具</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<section id="id2">
+<h3>下载源码<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h3>编译<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p>默认配置下数据系统会启用异构能力的编译，需要编译环境中具备 CANN 依赖，如无需异构能力支持，可禁用异构能力。</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-0">
+启用 RDMA 支持</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>build.sh<span class="w"> </span>-A<span class="w"> </span>on
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-1">
+启用 RDMA，禁用异构能力</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>build.sh<span class="w"> </span>-A<span class="w"> </span>on<span class="w"> </span>-X<span class="w"> </span>off
+</pre></div>
+</div>
+</div>
+</div>
+<p>编译成功后，会在output目录下产生如下编译产物：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
+├── openyuanrong_datasystem-x.x.x-cp311-cp311-manylinux_2_34_x86_64.whl
+└── yr-datasystem-vx.x.x.tar.gz
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h3>安装<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>output/openyuanrong_datasystem-*.whl
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id5">
+<h2>部署指南<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<p>部署前，请确保满足以下必要条件：</p>
+<ol class="arabic simple">
+<li><p>节点准备：须至少在 2 个 已配备 RDMA 硬件并安装相应软件的节点上部署服务端组件。</p></li>
+<li><p>集群依赖：openYuanrong datasystem 的集群管理功能依赖于 ETCD，因此需预先搭建并确保一个稳定可用的 ETCD 集群。</p></li>
+</ol>
+<p>ETCD部署命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>etcd<span class="w"> </span>--listen-client-urls<span class="w"> </span>http://0.0.0.0:2379<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span>--advertise-client-urls<span class="w"> </span>http://0.0.0.0:2379<span class="w"> </span><span class="p">&amp;</span>
+</pre></div>
+</div>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-2">
+进程部署</label><div class="sd-tab-content docutils">
+<p>openYuanrong datasystem 进程部署主要通过 dscli 工具，在使用前请确保在两个节点中已安装 openYuanrong datasystem wheel 包。</p>
+<p>分别在两个节点执行如下命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 指定UCX使用的RDMA传输模式</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">UCX_TLS</span><span class="o">=</span>rc_x
+<span class="c1"># （可选）配置UCX日志</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">UCX_LOG_FILE</span><span class="o">=</span>/tmp/ucx.log
+<span class="nb">export</span><span class="w"> </span><span class="nv">UCX_LOG_LEVEL</span><span class="o">=</span>ERROR
+<span class="c1"># 启动datasystem worker</span>
+dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--etcd_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">etcd_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_rdma<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--arena_per_tenant<span class="w"> </span><span class="m">1</span>
+</pre></div>
+</div>
+<p>参数说明：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">UCX_TLS</span></code>：用于选择UCX的RDMA传输模式，默认选用<code class="docutils literal notranslate"><span class="pre">&quot;rc_x&quot;</span></code> 加速型可靠连接传输模式，以获得最佳性能，若网卡不支持该模式，可选择<code class="docutils literal notranslate"><span class="pre">&quot;rc&quot;</span></code>、<code class="docutils literal notranslate"><span class="pre">&quot;ud&quot;</span></code>与<code class="docutils literal notranslate"><span class="pre">&quot;dc&quot;</span></code>等，详情参考<a class="reference external" href="https://github.com/openucx/ucx/wiki/UCX-environment-parameters">UCX环境配置</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UCX_LOG_FILE</span></code>：指定UCX日志的输出文件路径（例如 <code class="docutils literal notranslate"><span class="pre">/tmp/ucx.log</span></code>）。仅当设置了<code class="docutils literal notranslate"><span class="pre">UCX_LOG_LEVEL</span></code>时生效。日志文件需确保运行用户有写入权限。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UCX_LOG_LEVEL</span></code>：设置UCX日志级别，可选值包括<code class="docutils literal notranslate"><span class="pre">FATAL</span></code>、<code class="docutils literal notranslate"><span class="pre">ERROR</span></code>、<code class="docutils literal notranslate"><span class="pre">WARN</span></code>、<code class="docutils literal notranslate"><span class="pre">INFO</span></code>、<code class="docutils literal notranslate"><span class="pre">DEBUG</span></code>、<code class="docutils literal notranslate"><span class="pre">TRACE</span></code>。建议生产环境使用 <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> 或 <code class="docutils literal notranslate"><span class="pre">WARN</span></code>，调试时使用 <code class="docutils literal notranslate"><span class="pre">DEBUG</span></code>或<code class="docutils literal notranslate"><span class="pre">TRACE</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">node_address</span></code>：当前节点的通信地址与端口。格式为 <code class="docutils literal notranslate"><span class="pre">IP:Port</span></code>，例如：<code class="docutils literal notranslate"><span class="pre">192.168.0.1:31501</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>：ETCD集群的访问地址列表。格式为多个 <code class="docutils literal notranslate"><span class="pre">IP:Port</span></code> 的逗号分隔字符串，例如：<code class="docutils literal notranslate"><span class="pre">192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">arena_per_tenant</span></code>：不应超过系统内存资源限制，避免初始化失败，默认值为<code class="docutils literal notranslate"><span class="pre">1</span></code>，在保证功能的前提下提供最快的启动速度</p></li>
+</ul>
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-3">
+K8S部署</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 通过dscli获取helm chart包</span>
+dscli<span class="w"> </span>generate_helm_chart<span class="w"> </span>-o<span class="w"> </span>/tmp
+
+<span class="c1"># 通过源码获取helm chart包</span>
+git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
+cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/chart/datasystem<span class="w"> </span>/tmp
+</pre></div>
+</div>
+<p>命令运行成功后会在”/tmp”目录下生成helm chart目录。</p>
+<p>编辑 <code class="docutils literal notranslate"><span class="pre">/tmp/datasystem/values.yaml</span></code> 对集群启动项进行配置：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 其他配置项...</span>
+<span class="w">  </span><span class="c1"># 请注意分配的arenaPerTenant及sharedMemory大小与允许的资源匹配</span>
+
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.6.0&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="c1"># （可选）UCX RDMA日志配置</span>
+<span class="w">  </span><span class="c1"># 日志将保存至${logDir}/worker/ucx.log</span>
+<span class="w">  </span><span class="nt">log</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># 是否开启UCX RDMA日志</span>
+<span class="w">    </span><span class="nt">enableUcxLog</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="c1"># 日志级别，建议生产环境使用ERROR/WARN，调试时可设为DEBUG/TRACE</span>
+<span class="w">    </span><span class="nt">ucxLogLevel</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ERROR&quot;</span>
+
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># ETCD集群地址</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">performance</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># arena数量不应超过系统内存资源限制，避免初始化失败</span>
+<span class="w">    </span><span class="c1"># 默认值为1，在保证功能的前提下提供最快的启动速度</span>
+<span class="w">    </span><span class="nt">arenaPerTenant</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">    </span><span class="c1"># 开启RDMA能力</span>
+<span class="w">    </span><span class="nt">enableRdma</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="c1"># 指定UCX使用的RDMA传输模式</span>
+<span class="w">    </span><span class="c1"># 默认选用&quot;rc_x&quot;加速型可靠连接传输模式，以获得最佳性能。</span>
+<span class="w">    </span><span class="c1"># 若当前网卡或驱动不支持 &quot;rc_x&quot;，可尝试以下替代选项：</span>
+<span class="w">    </span><span class="c1">#   - &quot;rc&quot;   : 可靠连接模式，兼容性更好；</span>
+<span class="w">    </span><span class="c1">#   - &quot;ud&quot;   : 不可靠数据报模式，适用于低延迟、小消息场景；</span>
+<span class="w">    </span><span class="c1">#   - &quot;dc&quot;   : 动态连接模式，适用于大规模节点通信（需Mellanox网卡支持）。</span>
+<span class="w">    </span><span class="c1"># 更多传输模式及其详细说明，请参阅：</span>
+<span class="w">    </span><span class="c1"># https://github.com/openucx/ucx/wiki/UCX-environment-parameters</span>
+<span class="w">    </span><span class="nt">ucxTransportLayerSelection</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rc_x&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="c1"># 挂载IB设备相关目录，默认已挂载/dev/infiniband与/sys/class/infiniband，无需重复挂载</span>
+<span class="w">  </span><span class="c1"># 例外情况请参考以下格式自行挂载</span>
+<span class="w">  </span><span class="nt">mount</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hostPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+</pre></div>
+</div>
+<p>部署集群：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>helm<span class="w"> </span>install<span class="w"> </span>datasystem<span class="w"> </span>/tmp/datasystem
+</pre></div>
+</div>
+<p>部署后可以通过 kubectl 命令查看集群状态：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="c1"># NAME                   READY   STATUS       RESTARTS      AGE    IP           NODE </span>
+<span class="c1"># ...</span>
+<span class="c1"># ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   Running</span>
+<span class="c1"># ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   Running</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="id6">
+<h2>快速验证<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<p>通过跨节点拉取数据的样例可快速验证RDMA的能力。</p>
+<p>在节点1执行以下Python脚本：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">KVClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">KVClient</span><span class="p">(</span><span class="s2">&quot;192.168.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+<span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+<span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;key&quot;</span>
+<span class="n">expected_val</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;value&quot;</span>
+<span class="n">client</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">expected_val</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;[OK] Set value&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>在节点2执行以下Python脚本：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">KVClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">KVClient</span><span class="p">(</span><span class="s2">&quot;192.168.0.2&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+<span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+<span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;key&quot;</span>
+<span class="n">expected_val</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&quot;value&quot;</span>
+<span class="n">val</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">([</span><span class="n">key</span><span class="p">])</span>
+<span class="k">assert</span> <span class="n">val</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">expected_val</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;[OK] Get value&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>注意：</p>
+<p>脚本中初始化KVClient的入参需要替换为节点1/节点2服务端组件的IP和端口号。</p>
+</div></blockquote>
+<p>当脚本执行完均打印OK时说明验证成功。</p>
+</section>
+<section id="id7">
+<h2>推荐配置<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<p>为确保RDMA组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。</p>
+<section id="id8">
+<h3>开启大页内存<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<p>开启大页内存可有效提升内存的分配与拷贝性能，开启大页内存可参考附录文档：<a class="reference internal" href="../appendix/hugepage_guide.html"><span class="std std-doc">大页内存配置指南</span></a>。</p>
+<p>运行环境开启大页内存之后，启动数据系统服务端组件时需要启用大页内存配置项：</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-4">
+进程部署</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">UCX_TLS</span><span class="o">=</span>rc_x
+dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--etcd_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">etcd_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_rdma<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--arena_per_tenant<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_huge_tlb<span class="w"> </span><span class="nb">true</span>
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-5">
+K8s部署</label><div class="sd-tab-content docutils">
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 其他配置项...</span>
+
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.6.0&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># ETCD集群地址</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379&quot;</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="nt">performance</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># arena数量不应超过系统内存资源限制，避免初始化失败</span>
+<span class="w">    </span><span class="c1"># 默认值为1，在保证功能的前提下提供最快的启动速度</span>
+<span class="w">    </span><span class="nt">arenaPerTenant</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">    </span><span class="c1"># 开启RDMA能力</span>
+<span class="w">    </span><span class="nt">enableRdma</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="c1"># 选择RDMA高性能传输模式</span>
+<span class="w">    </span><span class="nt">ucxTransportLayerSelection</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rc_x&quot;</span>
+<span class="w">    </span><span class="c1"># 开启大页内存</span>
+<span class="w">    </span><span class="nt">enableHugeTlb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="numa">
+<h3>绑定NUMA节点<a class="headerlink" href="#numa" title="Link to this heading">#</a></h3>
+<p>绑定NUMA节点可减少远程内存访问，提升缓存访问性能，进程部署时绑定NUMA节点命令如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 指定UCX使用的RDMA传输模式</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">UCX_TLS</span><span class="o">=</span>rc_x
+<span class="c1"># 启动datasystem worker</span>
+dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cpunodebind<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--localalloc<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--worker_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">node_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--etcd_address<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">etcd_address</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_rdma<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--arena_per_tenant<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enable_huge_tlb<span class="w"> </span><span class="nb">true</span>
+<span class="w">    </span>
+</pre></div>
+</div>
+<p>表示绑定到 NUMA 节点 0 的 CPU，并在节点 NUMA 0 分配内存。
+更多 dscli绑定numa节点 部署详细信息请参考：<a class="reference internal" href="../deployment/dscli.html#id13"><span class="std std-ref">dscli命令参数说明</span></a>。</p>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="best_pracitces_for_ub.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">UB最佳实践</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../development-guide/index.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">编程接口</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">源码编译安装</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载源码</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">编译</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">安装</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">部署指南</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">快速验证</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">推荐配置</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">开启大页内存</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numa">绑定NUMA节点</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By openYuanrong datasystem with CC BY 4.0 LICENSE
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2026, openEuler openYuanrong datasystem.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+<div class="extra_footer">
+  
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    
+</div>
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

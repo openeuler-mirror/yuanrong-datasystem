@@ -1,0 +1,998 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>openYuanrong datasystem日志 &#8212; openYuanrong datasystem  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=9eb32ce0"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'appendix/log_guide';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.6.0';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="大页内存配置指南" href="hugepage_guide.html" />
+    <link rel="prev" title="附录" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo-small.png" class="logo__image only-light" alt="openYuanrong datasystem  documentation - Home"/>
+    <script>document.write(`<img src="../_static/logo-small.png" class="logo__image only-dark" alt="openYuanrong datasystem  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/getting_started.html">入门</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installation/installation_linux.html">安装</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../development-guide/index.html">编程接口</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/example/index.html">编程指南</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/hetero.html">异构对象</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/kv.html">KV</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../development-guide/example/object.html">Object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../development-guide/api/index.html">API</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/python/index.html">Python</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.html">datasystem.DsClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.init.html">datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.hetero.html">datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.kv.html">datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsClient.object.html">datasystem.DsClient.object</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.html">datasystem.DsTensorClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.init.html">datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mset_d2h.html">datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mget_h2d.html">datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_mset_d2h.html">datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_mget_h2d.html">datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.delete.html">datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_send.html">datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_recv.html">datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_mset.html">datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_mget.html">datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_local_delete.html">datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.dev_delete.html">datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.async_dev_delete.html">datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.html">datasystem.hetero_client.HeteroClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.init.html">datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.mget_h2d.html">datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.mset_d2h.html">datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mget_h2d.html">datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_mset_d2h.html">datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.delete.html">datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_publish.html">datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_subscribe.html">datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_mset.html">datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_mget.html">datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_local_delete.html">datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.dev_delete.html">datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.async_dev_delete.html">datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.generate_key.html">datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.get_meta_info.html">datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.HeteroClient.exist.html">datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.html">datasystem.hetero_client.Blob</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.set_dev_ptr.html">datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Blob.set_size.html">datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.html">datasystem.hetero_client.DeviceBlobList</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.append_blob.html">datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.DeviceBlobList.get_blob_list.html">datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Future.html">datasystem.hetero_client.Future</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.Future.get.html">datasystem.hetero_client.Future.get</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.hetero_client.MetaInfo.html">datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.html">datasystem.kv_client.KVClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.init.html">datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.set.html">datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.set_value.html">datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.mset.html">datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.msettx.html">datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.get_read_only_buffers.html">datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.get.html">datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.read.html">datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.delete.html">datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.generate_key.html">datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.exist.html">datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.KVClient.expire.html">datasystem.kv_client.KVClient.expire</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.html">datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.rlatch.html">datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.SetParam.html">datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.kv_client.ReadParam.html">datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.html">datasystem.object_client.ObjectClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.init.html">datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.create.html">datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.put.html">datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.get.html">datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.g_increase_ref.html">datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.g_decrease_ref.html">datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.query_global_ref_num.html">datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ObjectClient.generate_object_key.html">datasystem.object_client.ObjectClient.generate_object_key</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.html">datasystem.object_client.Buffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.wlatch.html">datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.unwlatch.html">datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.rlatch.html">datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.unrlatch.html">datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.mutable_data.html">datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.immutable_data.html">datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.memory_copy.html">datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.publish.html">datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.seal.html">datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.invalidate_buffer.html">datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.Buffer.get_size.html">datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.ConsistencyType.html">datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.WriteMode.html">datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.object_client.CacheType.html">datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.html">datasystem.stream_client.StreamClient</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.init.html">datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.create_producer.html">datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.subscribe.html">datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.delete_stream.html">datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.query_global_producer_num.html">datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.StreamClient.query_global_consumer_num.html">datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Producer.html">datasystem.stream_client.Producer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Producer.send.html">datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Producer.close.html">datasystem.stream_client.Producer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.html">datasystem.stream_client.Consumer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.receive.html">datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.receive_any.html">datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.ack.html">datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.Consumer.close.html">datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</details></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/python/datasystem.stream_client.SubconfigType.html">datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</details></li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../development-guide/api/cpp/index.html">C++</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../development-guide/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">附录</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="build_for_bazel.html">openYuanrong datasystem + Bazel 集成指南</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/clusterFAQ.html">多集群模式FAQ</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/appendix/log_guide.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>openYuanrong datasystem日志</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">日志类别</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">日志格式</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">格式介绍</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">日志字段</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sdkworker">SDK与worker访问日志关键请求参数</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">访问第三方日志关键请求参数</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="openyuanrong-datasystem">
+<h1>openYuanrong datasystem日志<a class="headerlink" href="#openyuanrong-datasystem" title="Link to this heading">#</a></h1>
+<section id="id1">
+<h2>日志类别<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<p>openYuanrong datasystem的日志分为四类：</p>
+<ol class="arabic simple">
+<li><p>运行日志: 记录客户端、服务端运行时的日志信息，包括DEBUG、INFO、WARNING、ERROR级别；</p></li>
+<li><p>访问日志：记录每一个访问客户端/服务端请求，而且每个请求仅打印一条日志，可用于定界定位上游应用是否访问客户端/服务端；</p></li>
+<li><p>请求第三方日志：记录datasystem_worker每一个访问第三方组件日志的请求，而且每个请求仅打印一条日志，可用于定界定位openYuanrong datasystem是否有成功访问该外部组件；</p></li>
+<li><p>资源日志：定时输出datasystem_worker运行时关键资源信息，包括共享内存使用量、Spill磁盘使用量、 threadpool及队列使用量等等信息。</p></li>
+</ol>
+<p>openYuanrong datasystem 不同模块日志分类如下表所示：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>序号</p></th>
+<th class="head"><p>模块</p></th>
+<th class="head"><p>日志路径及文件名</p></th>
+<th class="head"><p>含义、用途</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p>/path/yr_datasystem/logs/datasystem_worker.INFO.log</p></td>
+<td><p>worker运行日志</p></td>
+</tr>
+<tr class="row-odd"><td><p>2</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p>/path/yr_datasystem/logs/access.log</p></td>
+<td><p>访问worker POSIX接口的日志</p></td>
+</tr>
+<tr class="row-even"><td><p>3</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p>/path/yr_datasystem/logs/resource.log</p></td>
+<td><p>Worker资源使用日志，默认关闭，通过log_monitor开关控制是否开启</p></td>
+</tr>
+<tr class="row-odd"><td><p>4</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p>/path/yr_datasystem/logs/requestout.log</p></td>
+<td><p>访问ETCD接口日志</p></td>
+</tr>
+<tr class="row-even"><td><p>5</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p>/path/yr_datasystem/logs/container.log</p></td>
+<td><p>容器运行日志，管理和监控worker进程的生命周期</p></td>
+</tr>
+<tr class="row-odd"><td><p>6</p></td>
+<td><p>Client</p></td>
+<td><p>/path/client/ds_client_&lt;pid&gt;.log</p></td>
+<td><p>SDK运行日志</p></td>
+</tr>
+<tr class="row-even"><td><p>7</p></td>
+<td><p>Client</p></td>
+<td><p>/path/client/ds_client_access_&lt;pid&gt;.log</p></td>
+<td><p>SDK接口访问日志</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id2">
+<h2>日志格式<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<section id="id3">
+<h3>格式介绍<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>序号</p></th>
+<th class="head"><p>日志</p></th>
+<th class="head"><p>日志格式</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>运行日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | message</p></td>
+</tr>
+<tr class="row-odd"><td><p>2</p></td>
+<td><p>访问日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | status_code | action | cost | data size | request param| response param</p></td>
+</tr>
+<tr class="row-even"><td><p>3</p></td>
+<td><p>访问第三方日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | status_code | action | cost | data size | request param| response param</p></td>
+</tr>
+<tr class="row-odd"><td><p>4</p></td>
+<td><p>资源日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | shm_info | spill_disk_info | client nums | object nums | object total datasize | WorkerOcService threadpool | WorkerWorkerOcService threadpool | MasterWokrerOcService threadpool | MasterOcService threadpool | write ETCD queue | ETCDrequest success rate | OBSrequest success rate | Master AsyncTask threadpool |Cache Hit Info |</p></td>
+</tr>
+<tr class="row-even"><td><p>5</p></td>
+<td><p>容器运行日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | message</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id4">
+<h3>日志字段<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>字段</p></th>
+<th class="head"><p>长度 Byte</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>time</p></td>
+<td><p>26</p></td>
+<td><p>ISO8601格式的时间戳，示例: 2023-06-02T14:58:32.081156</p></td>
+</tr>
+<tr class="row-odd"><td><p>level</p></td>
+<td><p>1</p></td>
+<td><p>日志级别 (debug, info, warn等)</p></td>
+</tr>
+<tr class="row-even"><td><p>filename</p></td>
+<td><p>128</p></td>
+<td><p>输出该条日志的函数所在文件及行号，最大长度128Byte，超出则截断。示例：oc_metadata_manager.cpp:733</p></td>
+</tr>
+<tr class="row-odd"><td><p>pod_name</p></td>
+<td><p>128</p></td>
+<td><p>输出当前worker所属的POD名称，超出长度则截断。示例：ds-worker-hs5qm</p></td>
+</tr>
+<tr class="row-even"><td><p>pid:tid</p></td>
+<td><p>11</p></td>
+<td><p>该日志所属的进程ID和线程ID。进程号最大值为32757，该字段最大长度11.示例：9:177</p></td>
+</tr>
+<tr class="row-odd"><td><p>traceid</p></td>
+<td><p>36</p></td>
+<td><p>请求的traceid。</p></td>
+</tr>
+<tr class="row-even"><td><p>cluster_name</p></td>
+<td><p>128</p></td>
+<td><p>输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。</p></td>
+</tr>
+<tr class="row-odd"><td><p>Message</p></td>
+<td><p>1024</p></td>
+<td><p>自定义消息内容</p></td>
+</tr>
+<tr class="row-even"><td><p>status_code</p></td>
+<td><p>5</p></td>
+<td><p>该请求的状态，不同消息类型状态值不一样。SDK/datasystem_worker 访问日志，0表示成功，其他表示失败。</p></td>
+</tr>
+<tr class="row-odd"><td><p>action</p></td>
+<td><p>64</p></td>
+<td><p>表示该请求所访问的接口名称。约定前缀：SDK接口：DS_STATE_CLINET、DS_OBJECT_CLIENT，Worker接口：DS_OBJECT_POSIX，ETCD：DS_ETCD，HTTP请求：POST {url path}</p></td>
+</tr>
+<tr class="row-even"><td><p>cost</p></td>
+<td><p>16</p></td>
+<td><p>记录该请求所花费的时间。单位：us</p></td>
+</tr>
+<tr class="row-odd"><td><p>datasize</p></td>
+<td><p>16</p></td>
+<td><p>记录Publish请求接收到的Payload大小。</p></td>
+</tr>
+<tr class="row-even"><td><p>request param</p></td>
+<td><p>2560</p></td>
+<td><p>记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。</p></td>
+</tr>
+<tr class="row-odd"><td><p>response param</p></td>
+<td><p>1024</p></td>
+<td><p>记录该请求的响应信息。最大长度为1024 Byte，超出则截断。</p></td>
+</tr>
+<tr class="row-even"><td><p>shm_info</p></td>
+<td><p>47</p></td>
+<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_disk_info</p></td>
+<td><p>47</p></td>
+<td><p>记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>1) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>2) physicalSpaceUsage	已使用的物理磁盘大小。<br>3) totalLimit	Spill磁盘总大小。<br>4) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %.</p></td>
+</tr>
+<tr class="row-even"><td><p>client nums</p></td>
+<td><p>5</p></td>
+<td><p>记录已和worker成功建立连接的Client数。最大值为10000.</p></td>
+</tr>
+<tr class="row-odd"><td><p>object nums</p></td>
+<td><p>9</p></td>
+<td><p>记录worker已缓存对象数。按照1亿对象限制数量。</p></td>
+</tr>
+<tr class="row-even"><td><p>object total datasize</p></td>
+<td><p>13</p></td>
+<td><p>记录worker已缓存对象的大小。按照1T限制大小，长度 13 Byte</p></td>
+</tr>
+<tr class="row-odd"><td><p>WorkerOcService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idelNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字。</p></td>
+</tr>
+<tr class="row-even"><td><p>WorkerWorkerOcService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>threadpool使用信息</p></td>
+</tr>
+<tr class="row-odd"><td><p>MasterWokrerOcService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>threadpool使用信息</p></td>
+</tr>
+<tr class="row-even"><td><p>MasterOcService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>threadpool使用信息</p></td>
+</tr>
+<tr class="row-odd"><td><p>write ETCD queue</p></td>
+<td><p>15</p></td>
+<td><p>队列使用信息</p></td>
+</tr>
+<tr class="row-even"><td><p>ETCDrequest success rate</p></td>
+<td><p>6</p></td>
+<td><p>请求使用率，单位 %,保留3位有效数字</p></td>
+</tr>
+<tr class="row-odd"><td><p>OBSrequest success rate</p></td>
+<td><p>6</p></td>
+<td><p>请求使用率，单位 %,保留3位有效数字</p></td>
+</tr>
+<tr class="row-even"><td><p>Master AsyncTask threadpool</p></td>
+<td><p>21</p></td>
+<td><p>threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
+</tr>
+<tr class="row-odd"><td><p>Cache Hit Info</p></td>
+<td><p>9</p></td>
+<td><p>缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。<br>2) diskHitNum	本地磁盘命中次数. <br>3) l2HitNum	二级缓存命中次数。<br>4) remoteHitNum 远端worker命中次数。<br>5) missNum 未命中次数。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<section id="sdkworker">
+<h4>SDK与worker访问日志关键请求参数<a class="headerlink" href="#sdkworker" title="Link to this heading">#</a></h4>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>关键请求参数</p></th>
+<th class="head"><p>长度 Byte</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Object_key</p></td>
+<td><p>255</p></td>
+<td><p>对象的ID。长度：255Byte；</p></td>
+</tr>
+<tr class="row-odd"><td><p>object_keys</p></td>
+<td><p>1024</p></td>
+<td><p>多个对象KEY。单个Item长度：255Byte，全部长度：1KB；超出的对象KEY，只显示出总数。示例： {“object_keys”:[”id1xx”,”id2xx”,”id3xx”,”id4xx”, total: 100]}</p></td>
+</tr>
+<tr class="row-even"><td><p>Nested_keys</p></td>
+<td><p>1024</p></td>
+<td><p>嵌套引用的对象KEY。单个Item长度：255Byte，全部长度：1KB；</p></td>
+</tr>
+<tr class="row-odd"><td><p>keep</p></td>
+<td><p>1</p></td>
+<td><p>是否手动管理对象生命周期。取值：true/false, 长度：5Byte</p></td>
+</tr>
+<tr class="row-even"><td><p>Write_mode</p></td>
+<td><p>1</p></td>
+<td><p>写数据的模式，影响数据可靠性。取值：int32</p></td>
+</tr>
+<tr class="row-odd"><td><p>consistency_type</p></td>
+<td><p>1</p></td>
+<td><p>数据一致性模式。取值：uint32</p></td>
+</tr>
+<tr class="row-even"><td><p>is_seal</p></td>
+<td><p>1</p></td>
+<td><p>数据是否不可修改。取值：0/1, 0表示false</p></td>
+</tr>
+<tr class="row-odd"><td><p>is_retry</p></td>
+<td><p>1</p></td>
+<td><p>是否为重试场景。取值：0/1</p></td>
+</tr>
+<tr class="row-even"><td><p>ttl_second</p></td>
+<td><p>32</p></td>
+<td><p>TTL时间配置。取值：uint32</p></td>
+</tr>
+<tr class="row-odd"><td><p>existence</p></td>
+<td><p>1</p></td>
+<td><p>配置Key存在时是否允许继续操作，默认允许。取值：int</p></td>
+</tr>
+<tr class="row-even"><td><p>sub_timeout</p></td>
+<td><p>32</p></td>
+<td><p>Get请求订阅时间。取值：int64</p></td>
+</tr>
+<tr class="row-odd"><td><p>timeout</p></td>
+<td><p>32</p></td>
+<td><p>接口超时时间。取值：int32</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id5">
+<h4>访问第三方日志关键请求参数<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>外部组件</p></th>
+<th class="head"><p>请求类型</p></th>
+<th class="head"><p>关键请求参数</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ETCD</p></td>
+<td><p>GRPC</p></td>
+<td><p>key</p></td>
+<td><p>将Key字段获取并打印。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">附录</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="hugepage_guide.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">大页内存配置指南</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">日志类别</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">日志格式</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">格式介绍</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">日志字段</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sdkworker">SDK与worker访问日志关键请求参数</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">访问第三方日志关键请求参数</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By openYuanrong datasystem with CC BY 4.0 LICENSE
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2026, openEuler openYuanrong datasystem.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+<div class="extra_footer">
+  
+        Built with
+        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
+        using a
+        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
+        provided by
+        <a href="https://github.com/executablebooks">Executable Books Project</a>.
+    
+</div>
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

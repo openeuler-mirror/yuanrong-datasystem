@@ -31,7 +31,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=a3619945" />
   
@@ -48,11 +48,17 @@
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=1ae7504c"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'best_practices/best_practices_for_rdma';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'latest';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -155,6 +161,29 @@
   
 </a></div>
         <div class="sidebar-primary-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        <div class="sidebar-primary-item">
 
  <script>
  document.write(`
@@ -175,6 +204,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署 openYuanrong datasystem</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">openYuanrong datasystem Kubernetes配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dsbench.html">dsbench性能测试工具</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">最佳实践</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
@@ -261,6 +291,9 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
@@ -269,6 +302,7 @@
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
 </ul>
 </details></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../development-guide/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -665,7 +699,7 @@ dscli<span class="w"> </span>generate_helm_chart<span class="w"> </span>-o<span 
 
 <span class="c1"># 通过源码获取helm chart包</span>
 git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
-cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/chart/datasystem<span class="w"> </span>/tmp
+cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/k8s/helm_chart/datasystem<span class="w"> </span>/tmp
 </pre></div>
 </div>
 <p>命令运行成功后会在”/tmp”目录下生成helm chart目录。</p>
@@ -676,6 +710,7 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/c
 
 <span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 <span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># 镜像名称</span>
 <span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.6.0&quot;</span>
 <span class="w">  </span>
 <span class="w">  </span><span class="c1"># （可选）UCX RDMA日志配置</span>
@@ -765,7 +800,14 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/c
 <p>为确保RDMA组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。</p>
 <section id="id8">
 <h3>开启大页内存<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
-<p>开启大页内存可有效提升内存的分配与拷贝性能，开启大页内存可参考附录文档：<a class="reference internal" href="../appendix/hugepage_guide.html"><span class="std std-doc">大页内存配置指南</span></a>。</p>
+<p>开启大页内存可有效提升内存的分配与拷贝性能，首先需要在运行服务的物理节点上手动预留大页内存，否则应用将无法使用大页功能。 开启大页内存可参考附录文档：<a class="reference internal" href="../appendix/hugepage_guide.html"><span class="std std-doc">大页内存配置指南</span></a>。</p>
+<p>若使用Kubernetes，还需重启kubelet以使节点上报大页资源：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>kubelet
+
+<span class="c1"># 验证节点是否识别大页：</span>
+kubectl<span class="w"> </span>describe<span class="w"> </span>node<span class="w"> </span>&lt;node-name&gt;<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>huge
+</pre></div>
+</div>
 <p>运行环境开启大页内存之后，启动数据系统服务端组件时需要启用大页内存配置项：</p>
 <div class="sd-tab-set docutils">
 <input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
@@ -784,11 +826,13 @@ dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </s
 <input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-5">
 K8s部署</label><div class="sd-tab-content docutils">
+<p>编辑 <code class="docutils literal notranslate"><span class="pre">/tmp/datasystem/values.yaml</span></code> 开启大页内存：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
 <span class="w">  </span><span class="c1"># 其他配置项...</span>
 
 <span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
 <span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># 镜像名称</span>
 <span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.6.0&quot;</span>
 <span class="w">  </span>
 <span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
@@ -805,6 +849,8 @@ K8s部署</label><div class="sd-tab-content docutils">
 <span class="w">    </span><span class="nt">ucxTransportLayerSelection</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;rc_x&quot;</span>
 <span class="w">    </span><span class="c1"># 开启大页内存</span>
 <span class="w">    </span><span class="nt">enableHugeTlb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="c1"># 指定分配的 2MiB 大页内存总量（例如 &quot;16Gi&quot; 表示 16 GiB，即 8192 个 2MiB 页面）</span>
+<span class="w">    </span><span class="nt">hugepages2Mi</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;16Gi&quot;</span>
 </pre></div>
 </div>
 </div>
