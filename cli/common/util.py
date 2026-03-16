@@ -168,6 +168,22 @@ def validate_no_injection(user_input: str) -> str:
     if DANGER.search(user_input):
         raise ValueError("Input contains potential command-injection characters")
     return user_input
+    
+    
+def validate_mode(mode: str) -> str:
+    """
+    Validate the mode of k8s.
+
+    Args:
+        mode: The mode of k8s.
+
+    Raises:
+        ValueError: If the mode is not supported.
+    """
+    supported_modes = ["daemonset", "deployment"]
+    if mode not in supported_modes:
+        raise ValueError(f"Unsupported mode: {mode}")
+    return mode
 
 
 def get_required_config(config, key):
