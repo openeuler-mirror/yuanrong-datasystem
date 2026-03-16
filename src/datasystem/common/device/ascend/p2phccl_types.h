@@ -76,6 +76,17 @@ typedef struct P2pScatterEntry {
     uint32_t numEl;
 } P2pScatterEntry;
 
+/**
+ * @brief P2P Comm Init Options
+ */
+typedef struct P2PCommInitOptions {
+    bool enableTwoSidedBuffer;  // Whether to enable two-sided buffer allocation
+    std::function<int()> *heartbeatCallback;  // Function callback for sending/receiving heartbeats in TCP Client/Server
+
+    P2PCommInitOptions(bool enableTwoSidedBuffer = true, std::function<int()> *heartbeatCallback = nullptr)
+        : enableTwoSidedBuffer(enableTwoSidedBuffer), heartbeatCallback(heartbeatCallback) {}
+} P2PCommInitOptions;
+
 #ifdef __cplusplus
 };
 #endif

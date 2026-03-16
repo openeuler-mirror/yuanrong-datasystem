@@ -22,13 +22,14 @@
 #include "npu/P2PStream.h"
 
 RoceSender::RoceSender(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes,
-                       uint32_t nSendBuffs, uint32_t qpNum)
+                       uint32_t nSendBuffs, uint32_t qpNum, bool enableTwoSidedBuffer)
     : sendDeviceId(deviceId),
       isRoot(isRoot),
       blockSizeBytes(blockSizeBytes),
       chunkSizeBytes(chunkSizeBytes),
       nSendBuffs(nSendBuffs),
-      qpNum(qpNum)
+      qpNum(qpNum),
+      enableTwoSidedBuffer(enableTwoSidedBuffer)
 {
     nChunksPerBuff = blockSizeBytes / chunkSizeBytes;  // Should be divisible
 }
@@ -64,8 +65,7 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
         CHECK_STATUS(client->ReceiveObject(receiverData));
     }
 
-    union hccp_ip_addr remoteIp {
-    };
+    union hccp_ip_addr remoteIp{};
     uint32_to_in_addr(receiverData.recvnpuipv4(), remoteIp.addr);
     CHECK_STATUS(rdmaSocket->connect(remoteIp, receiverData.recvlistenport(), receiverData.tag()));
     CHECK_STATUS(rdmaSocket->waitReady(0));
@@ -79,10 +79,12 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
     CHECK_STATUS(valueMem->alloc());
     CHECK_STATUS(valueMem->get(&notifySrcValAddr, &notifySize));
 
-    for (int i = 0; i < nSendBuffs; i++) {
-        std::unique_ptr<P2PMem> mem = std::make_unique<P2PMem>();
-        CHECK_STATUS(mem->alloc(blockSizeBytes, ACL_MEM_MALLOC_HUGE_FIRST_P2P));
-        sendBuffs.push_back(std::move(mem));
+    if (enableTwoSidedBuffer) {
+        for (int i = 0; i < nSendBuffs; i++) {
+            std::unique_ptr<P2PMem> mem = std::make_unique<P2PMem>();
+            CHECK_STATUS(mem->alloc(blockSizeBytes, ACL_MEM_MALLOC_HUGE_FIRST_P2P));
+            sendBuffs.push_back(std::move(mem));
+        }
     }
 
     for (int q = 0; q < qpNum; q++) {
@@ -91,8 +93,10 @@ Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
 
         CHECK_STATUS(qp->registerMemoryRegion(notifySrcValAddr, notifySize));
 
-        for (int i = 0; i < nSendBuffs; i++) {
-            CHECK_STATUS(qp->registerMemoryRegion(sendBuffs[i]->get(), blockSizeBytes));
+        if (enableTwoSidedBuffer) {
+            for (int i = 0; i < nSendBuffs; i++) {
+                CHECK_STATUS(qp->registerMemoryRegion(sendBuffs[i]->get(), blockSizeBytes));
+            }
         }
 
         CHECK_STATUS(qp->connect(fdHandle));
@@ -313,6 +317,8 @@ Status RoceSender::Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtSt
 {
     if (state != RoceSenderStatus::ROCE_SENDER_INITIALIZED) {
         return Status::Error(ErrorCode::NOT_INITIALIZED, "Sender has not been initialized yet");
+    } else if (!enableTwoSidedBuffer || sendBuffs.size() == 0) {
+        return Status::Error(ErrorCode::NOT_INITIALIZED, "Two-sided buffer is not enabled, so send operation is not supported");
     }
 
     uint32_t numTasks = 1;

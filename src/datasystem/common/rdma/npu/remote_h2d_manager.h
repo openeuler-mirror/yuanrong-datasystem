@@ -129,7 +129,6 @@ public:
      * @brief Get the root info for communicator connection.
      * @param[in] key The client uuid for the connection.
      * @param[out] p2pRootInfo The p2p root info for communicator connection.
-     * @param[in] p2pCallback Function callback to check if client was disconnected
      * @return Status of the call.
      */
     Status P2PGetRootInfo(const std::string &key, RemoteH2DRootInfoPb *p2pRootInfo);

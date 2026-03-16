@@ -12,6 +12,12 @@
 #include "p2p.h"
 #include "communicator/CommChannel.h"
 
+// Later make all configurable
+constexpr uint32_t P2P_NUM_PINGPONG_BUFF = 2;
+constexpr uint32_t P2P_BLOCK_SIZE_BYTES = 16 * 1024 * 1024;
+constexpr uint32_t P2P_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
+constexpr uint32_t P2P_QP_NUM = 3;
+
 enum P2PCommChannelType { P2P_COMM_HCCS, P2P_COMM_RDMA };
 
 enum P2PCommRole { P2P_COMM_RECEIVER, P2P_COMM_SENDER };
@@ -28,6 +34,7 @@ struct P2PCommArgs {
     // Buffer transmission granularity (transmitted and pipelined in chunkSizeBytes chunks)
     uint32_t chunkSizeBytes;
     uint32_t qpNum;
+    bool enableTwoSidedBuffer;  // Whether to enable two-sided buffer allocation
 };
 
 #define ROOTHANDLE_IP_ADDRESS_BUFFER_LEN 64
@@ -41,6 +48,8 @@ struct P2PRootHandle {
     char identifier[ROOTHANDLE_INDENTIFIER_MAX_LENGTH];
 };
 
+class PingpongBufferPool;
+
 class P2PCommunicator {
 public:
     P2PCommunicator(bool isRoot);
@@ -52,7 +61,8 @@ public:
     Status StartClient(P2PRootHandle &rootHandle);
     Status GetRootHandle(P2PRootHandle &rootHandle);
     Status GetChannelType(P2PCommChannelType &channelType);
-    Status EstablishConnection(P2PCommArgs &args, std::function<int()> *p2pCallback = nullptr);
+    Status EstablishConnection(P2PCommArgs &args, PingpongBufferPool *pingpongPool, 
+                               std::function<int()> *p2pCallback = nullptr);
     Status Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
     Status Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
     Status Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream);

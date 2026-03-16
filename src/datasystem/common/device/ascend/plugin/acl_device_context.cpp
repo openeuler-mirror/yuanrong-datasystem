@@ -226,9 +226,9 @@ int DSP2PGetRootInfo(HcclRootInfo *rootInfo)
 }
 
 int DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
-                          std::function<int()> *p2pCallback)
+                          P2PCommInitOptions *p2pCommInitOptions)
 {
-    return P2PCommInitRootInfo(rootInfo, kind, link, comm, p2pCallback);
+    return P2PCommInitRootInfo(rootInfo, kind, link, comm, p2pCommInitOptions);
 }
 
 int DSP2PCommDestroy(P2PComm comm)

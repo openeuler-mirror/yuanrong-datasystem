@@ -33,7 +33,7 @@ enum RoceSenderStatus {
 class RoceSender : public SendChannel {
 public:
     RoceSender(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes, uint32_t nSendBuffs,
-               uint32_t qpNum);
+               uint32_t qpNum, bool enableTwoSidedBuffer);
 
     Status Initialize(TCPObjectClient *client, TCPObjectServer *server) override;
     Status Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream) override;
@@ -49,6 +49,7 @@ private:
     uint32_t nSendBuffs;
     uint32_t nChunksPerBuff;
     uint32_t qpNum;
+    bool enableTwoSidedBuffer;
 
     std::string tag;
     int32_t sendDeviceId;
