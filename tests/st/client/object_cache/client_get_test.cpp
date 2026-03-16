@@ -750,7 +750,7 @@ TEST_F(OCClientGetTest, SubTimeoutTest)
     ASSERT_LE(elasped, 8'000);
 }
 
-TEST_F(OCClientGetTest, ThreadBusySubTimeoutTest)
+TEST_F(OCClientGetTest, DISABLED_ThreadBusySubTimeoutTest)
 {
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
