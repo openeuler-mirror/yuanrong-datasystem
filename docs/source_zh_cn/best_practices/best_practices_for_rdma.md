@@ -112,6 +112,41 @@ dscli start \
 
 :::{tab-item} K8S部署
 
+#### 容器内 memlock 资源限制配置
+
+如在容器环境下运行，需确保 memlock（内存锁定）资源限制为 unlimited，否则 RDMA 初始化可能失败。注意：Kubernetes 集群中每个节点都需要完成以下配置。具体配置如下：
+
+ - **容器内非 Root 权限用户**：
+   - 修改 Docker Daemon 全局配置 `/etc/docker/daemon.json`，添加：
+     ```json
+     {
+       "default-ulimits": {
+         "memlock": {
+           "Name": "memlock",
+           "Hard": -1,
+           "Soft": -1
+         }
+       }
+     }
+     ```
+   - 重启 Docker 服务：
+     ```bash
+     sudo systemctl daemon-reload
+     sudo systemctl restart docker
+     ```
+   - 验证：
+     ```bash
+     kubectl exec -it <Pod-name> -- sh -c "ulimit -l"
+     ```
+     若输出为 `unlimited`，说明 memlock 资源限制已正确放开。
+
+ - **容器内 Root 权限用户**：
+   - 在 entrypoint 脚本（ `yuanrong-datasystem/k8s/docker/entrypoint/worker_entry.sh`）中添加如下内容，务必放在 `ilog "start worker" `之前：
+     ```bash
+     ulimit -l unlimited
+     ```
+   - 修改 entrypoint 脚本后，必须重新构建 Docker 镜像，这样可在容器启动并启用 RDMA 时自动解除内存锁定限制。
+
 ```bash
 # 通过dscli获取helm chart包
 dscli generate_helm_chart -o /tmp
@@ -236,7 +271,14 @@ print("[OK] Get value")
 
 ### 开启大页内存
 
-开启大页内存可有效提升内存的分配与拷贝性能，首先需要在运行服务的物理节点上手动预留大页内存，否则应用将无法使用大页功能。 开启大页内存可参考附录文档：[大页内存配置指南](../appendix/hugepage_guide.md)。
+开启大页内存可有效提升内存的分配与拷贝性能。部署前，请务必在运行服务的物理节点上手动预留大页内存，否则应用将无法启用该功能。详细操作步骤请参考附录：[大页内存配置指南](../appendix/hugepage_guide.md)。
+
+关键配置约束（请在`values.yaml`中检查）：
+
+1. 如需开启的大页内存大于默认值，请同时修改 `global.resources.datasystemWorker.limits.hugepages2Mi` 以及 `global.resources.datasystemWorker.requests.hugepages2Mi`，以确保资源申请和限制一致。
+2. 物理节点预留的大页总量必须大于等于`global.resources.datasystemWorker.limits.hugepages2Mi`的配置值
+3. `global.resources.sharedMemory`的设置值必须小于等于`hugepages2Mi`。
+4. 严禁将`global.resources.datasystemWorker.limits.memory`设为`0`或极小值。请务必预留至少`512Mi`，以满足线程栈、动态库加载及运行时元数据的刚性需求，防止应用瞬间OOM Kill。
 
 若使用Kubernetes，还需重启kubelet以使节点上报大页资源：
 

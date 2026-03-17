@@ -55,10 +55,12 @@ global:
       limits:
         cpu: "3"
         memory: "4Gi"
+        hugepages2Mi: "16Gi"
       # Minimum required resources.
       requests:
         cpu: "3"
         memory: "3Gi"
+        hugepages2Mi: "16Gi"
 
       # Upper limit of the shared memory, the default unit for shared memory is MB.
       # To prevent being rendered as scientific notation by helm, numbers with more than 5 digits should be configured as strings.
@@ -361,10 +363,6 @@ global:
     # Huge pages require system-level configuration. use command "echo [pageNums] > /proc/sys/vm/nr_hugepages" to config the number of huge page.
     # If the system does not have enough physical memory to allocate huge pages, memory allocation will fail.
     enableHugeTlb: false
-    # Specifies the total amount of memory to reserve for 2MiB huge pages (e.g., "16Gi" means reserving 16 GiB of memory for 2MiB huge pages).
-    # For this to take effect, ensure the system has already allocated a sufficient number of 2MiB huge pages.
-    # If enableHugeTlb is set to true, hugepages2Mi should not be empty.
-    hugepages2Mi: ""
     #Due to Kubernetes' (k8s) resource calculation policies, shared memory is sometimes counted twice, which can lead to client crashes.
     #To address this issue, fallocate is employed to link the client and worker nodes for shared memory,
     #thus correcting the memory calculation errors. By default, fallocate is enabled.
