@@ -378,7 +378,7 @@ public:
                               const RpcOptions &opts = RpcOptions())
     {
         // Get a cache or create a new one.
-        auto msgQ = GetOrCreateMsgQ();
+        auto msgQ = GetOrCreateMsgQ(opts);
         RETURN_IF_NOT_OK(msgQ->Reset(opts));
         msgQ->id_ = altName;
         // Insert into the repository. It is done by holding the mux_ lock
@@ -681,9 +681,10 @@ private:
 
     /**
      * @brief Create a MsgQue
+     * @param[in] opts The options for the message queue.
      * @return MsgQue
      */
-    std::shared_ptr<MsgQue<W, R>> GetOrCreateMsgQ()
+    std::shared_ptr<MsgQue<W, R>> GetOrCreateMsgQ(const RpcOptions &opts = RpcOptions())
     {
         // If we have cached a MsgQue, reuse it.
         // First check (without getting the lock) if the cache is empty or not.
@@ -698,7 +699,7 @@ private:
                 return msgQ;
             }
         }
-        return std::make_shared<MsgQue<W, R>>(this->shared_from_this(), RpcOptions());
+        return std::make_shared<MsgQue<W, R>>(this->shared_from_this(), opts);
     }
 
     /**
