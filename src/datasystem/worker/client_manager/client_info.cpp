@@ -36,7 +36,7 @@ static bool ValidClientDeadTimeoutSecs(const char *flagName, uint64_t value)
     (void)value;
     return true;
 #else
-    const uint32_t minTimeoutSecs = 15;
+    const uint32_t minTimeoutSecs = 3;
     const uint64_t s2ms = 1000;
     if (value < minTimeoutSecs || value > UINT64_MAX / s2ms) {
         // LCOV_EXCL_START

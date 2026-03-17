@@ -319,11 +319,11 @@ global:
   reliability:
     # Client reconnect wait seconds, default value is 5 seconds. (Must be greater than 0)
     clientReconnectWaitS: 5
-    # Maximum time interval for the worker to determine client death, value range: [15, UINT64_MAX).
+    # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX).
     clientDeadTimeoutS: 120
     # Time interval between worker and etcd heartbeats.
     heartbeatIntervalMs: 1000
-    # Maximum time interval before a node is considered lost, the unit is second. (Must be greater than 5s)
+    # Maximum time interval before a node is considered lost, the unit is second. (Must be greater than or equal to 1)
     nodeTimeoutS: 60
     # Maximum time interval for the etcd to determine node death, the unit is second. (Must be greater than nodeTimeoutS)
     nodeDeadTimeoutS: 300

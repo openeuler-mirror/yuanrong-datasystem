@@ -41,7 +41,7 @@
 
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;
 constexpr int32_t OBJECT_KEYS_MAX_SIZE_LIMIT = 10000;
-constexpr int32_t NODE_TIMEOUT_LIMIT = 5;
+constexpr int32_t NODE_TIMEOUT_LIMIT = 1;
 constexpr int32_t MS_PER_SECOND = 1000;
 constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
 static std::string ENCRYPT_KIT_PLAINTEXT = "plaintext";
@@ -402,7 +402,7 @@ public:
         return true;
 #endif
         if (nodeTimeoutS < NODE_TIMEOUT_LIMIT || nodeTimeoutS > UINT32_MAX / MS_PER_SECOND) {
-            LOG(ERROR) << FormatString("The value of %s flag is %u, which must be greater than or equal to 5.",
+            LOG(ERROR) << FormatString("The value of %s flag is %u, which must be greater than or equal to 1.",
                                        flagName, nodeTimeoutS);
             return false;
         }
