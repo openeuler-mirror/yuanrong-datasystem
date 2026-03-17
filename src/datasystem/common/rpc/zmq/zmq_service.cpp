@@ -172,6 +172,7 @@ Status ZmqService::BindTcpIpPort(const std::vector<std::string> &frontendEndPtLi
 
 Status ZmqService::BindUnixPath()
 {
+    INJECT_POINT("worker.bind_unix_path");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!cfg_.udsDirectory_.empty(), K_RUNTIME_ERROR,
                                          "unix_domain_socket_dir is empty");
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(cfg_.udsDirectory_, FLAGS_unix_domain_socket_dir,

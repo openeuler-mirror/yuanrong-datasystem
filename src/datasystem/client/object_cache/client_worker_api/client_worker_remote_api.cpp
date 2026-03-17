@@ -61,7 +61,7 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     // We will enable uds after handshaking with the worker.
-    if (shmEnabled_) {
+    if (IsShmEnableByUDS()) {
         channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
                                       GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
     }
@@ -69,7 +69,7 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
         connectTimeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs));
     }
     stub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && shmEnabled_) {
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
         // Note: exclusiveConnSockPath_ will be initialized during client register call driven from base class Init()
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
     }
@@ -100,7 +100,7 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     req.add_extend()->PackFrom(extendPb);
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && shmEnabled_) {
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
         // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
     }

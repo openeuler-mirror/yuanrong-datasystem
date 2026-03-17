@@ -58,7 +58,7 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFd)
     auto clientApi = std::make_shared<ClientWorkerRemoteApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT,    "", signature_.get());
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
-    ASSERT_TRUE(clientApi->shmEnabled_);
+    ASSERT_TRUE(clientApi->IsShmEnable());
 
     int64_t dataSize = 10;
     uint32_t version;
@@ -83,7 +83,7 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
     auto clientApi = std::make_shared<ClientWorkerRemoteApi>(
         workerHostPort_, RpcCredential(), HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "tenant1");
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
-    ASSERT_TRUE(clientApi->shmEnabled_);
+    ASSERT_TRUE(clientApi->IsShmEnable());
 
     int64_t dataSize = 10;
     uint32_t version;
@@ -107,7 +107,7 @@ TEST_F(ClientCommonWorkerApiTest, TestGetMultiClientFd)
     auto clientApi = std::make_shared<ClientWorkerRemoteApi>(workerHostPort_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
-    ASSERT_TRUE(clientApi->shmEnabled_);
+    ASSERT_TRUE(clientApi->IsShmEnable());
 
     int64_t dataSize = 10;
     uint32_t version;

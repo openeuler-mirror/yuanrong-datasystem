@@ -424,7 +424,7 @@ inline Status StreamClientImpl::IsClientReady()
 
 Status StreamClientImpl::CheckConnectByUds()
 {
-    RETURN_OK_IF_TRUE(clientWorkerApi_->shmEnabled_);
+    RETURN_OK_IF_TRUE(clientWorkerApi_->IsShmEnable());
     RETURN_STATUS(
         StatusCode::K_RUNTIME_ERROR,
         "Connection to worker not using unix domain socket, please check if the connection is to a local worker.");
