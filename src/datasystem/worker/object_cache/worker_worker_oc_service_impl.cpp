@@ -604,13 +604,7 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
         port = req.ucp_info().remote_ip_addr().port();
     }
     const HostPort requestAddress(host, port);
-    auto rc = CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
-    if (rc.GetCode() == K_RDMA_NEED_CONNECT) {
-        // Clear remote ucp connection and reconnect in write payload.
-        LOG(INFO) << "Rdma receive get request form restart worker " << requestAddress.ToString();
-        return RemoveRemoteFastTransportNode(requestAddress);
-    }
-    return rc;
+    return CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
 }
 
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(

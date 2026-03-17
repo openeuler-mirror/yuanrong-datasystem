@@ -199,13 +199,13 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
                                  bool blocking, std::vector<uint64_t> &keys)
 {
     // Note that the returned keys only contain the new key(s).
-    LOG(INFO) << "UcpManager::UcpPutPayload()";
     keys.clear();
     const std::string &remoteWorkerAddr = ucpInfo.remote_worker_addr();
     const uint64_t &remoteBuf = ucpInfo.remote_buf();
     const std::string &rkey = ucpInfo.rkey();
     const std::string &remoteIpAddr =
         ucpInfo.remote_ip_addr().host() + ":" + std::to_string(ucpInfo.remote_ip_addr().port());
+    LOG(INFO) << "UcpPutPayload to " << remoteIpAddr;
     PerfPoint point(PerfKey::RDMA_TOTAL_WRITE);
     uint64_t writtenSize = 0;
     uint64_t remainSize = readSize;
@@ -292,21 +292,31 @@ Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDat
 
 Status UcpManager::CheckUcpConnectionStable(const std::string &hostAddress, const std::string &instanceId)
 {
-    TbbInstanceMap::const_accessor constAccessor;
-    auto res = instanceTable_.find(constAccessor, hostAddress);
-    if (!res) {
-        TbbInstanceMap::accessor accessor;
-        if (instanceTable_.insert(accessor, hostAddress)) {
-            accessor->second = instanceId;
+    std::string oldInstanceId = "";
+    {
+        std::unique_lock<std::mutex> lock(instanceTableMutex_);
+        if (instanceTable_.find(hostAddress) == instanceTable_.end()) {
+            LOG(INFO) << "It's the first time to see receiver address " << hostAddress
+                      << ", instance id: " << instanceId;
+            instanceTable_[hostAddress] = instanceId;
+            return Status::OK();
         }
-        return Status::OK();
+        oldInstanceId = instanceTable_[hostAddress];
     }
-    if (!instanceId.empty()) {
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor->second == instanceId, K_RDMA_NEED_CONNECT,
-                                             "Ucp connect has disconnected and needs to be reconnected!");
+    if (!instanceId.empty() && !oldInstanceId.empty() && oldInstanceId != instanceId) {
+        LOG(WARNING) << "Ucp connection is stale; remove endpoints for " << hostAddress << "; reset instance id from "
+                     << oldInstanceId << " to " << instanceId;
+        HostPort remoteAddress;
+        (void)remoteAddress.ParseString(hostAddress);
+        (void)RemoveEndpoint(remoteAddress);
+        std::unique_lock<std::mutex> lock(instanceTableMutex_);
+        instanceTable_[hostAddress] = instanceId;
+    } else {
+        LOG(INFO) << "Successfully checked that ucp connection is stable";
     }
     return Status::OK();
 }
+
 void UcpManager::InsertSuccessfulEvent(uint64_t requestId)
 {
     std::shared_ptr<Event> event;
@@ -332,18 +342,15 @@ void UcpManager::InsertFailedEvent(uint64_t requestId)
 
 Status UcpManager::RemoveEndpoint(const HostPort &remoteAddress)
 {
-    TbbInstanceMap::accessor acc;
     std::string addrStr = remoteAddress.ToString();
-    if (instanceTable_.find(acc, addrStr)) {
-        instanceTable_.erase(acc);
+    {
+        std::unique_lock<std::mutex> lock(instanceTableMutex_);
+        if (instanceTable_.find(addrStr) != instanceTable_.end()) {
+            LOG(INFO) << "removed instance id " << instanceTable_[addrStr] << " from instance table";
+            instanceTable_.erase(addrStr);
+        }
     }
-    Status status = workerPool_->RemoveByIp(remoteAddress.ToString());
-    if (!status.IsOk()) {
-        std::string detailed_msg =
-            FormatString("Cannot remove RemoteEndpoint, RemoteEndpoint for %s does not exist. Underlying error: %s",
-                         remoteAddress.ToString(), status.ToString().c_str());
-        RETURN_STATUS(K_NOT_FOUND, detailed_msg);
-    }
+    (void)workerPool_->RemoveByIp(remoteAddress.ToString());
     return Status::OK();
 }
 
