@@ -27,7 +27,9 @@
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/kv_client.h"
 #include "oc_client_common.h"
+#include "securec.h"
 #include "zmq_curve_test_common.h"
 
 namespace datasystem {
@@ -530,6 +532,64 @@ TEST_F(UrmaObjectClientTest, TestDeadLock)
     DS_ASSERT_OK(client->Get(key, value2));
 
     ASSERT_EQ(value, value2);
+}
+
+TEST_F(UrmaObjectClientTest, TestMutableData)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    auto func = [&client](size_t dataSize) {
+        std::string key = "key";
+        std::string value(dataSize, 'a');
+        DS_ASSERT_OK(client->Set(key, value));
+        SetParam param;
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(key, dataSize, param, buffer));
+        auto ptr = buffer->MutableData();
+        ASSERT_NE(ptr, nullptr);
+        ASSERT_EQ(memset_s(ptr, dataSize, 'a', dataSize), EOK);
+        DS_ASSERT_OK(buffer->Publish());
+
+        std::string value2;
+        DS_ASSERT_OK(client->Get(key, value2));
+
+        ASSERT_EQ(value, value2);
+    };
+    const size_t smallSize = 1024UL;
+    const size_t bigSize = 1024UL * 1024UL;
+    func(smallSize);
+    func(bigSize);
+}
+
+TEST_F(UrmaObjectClientTest, TestMemcopyThenMutableData)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    auto func = [&client](size_t dataSize) {
+        std::string key = "key";
+        std::string value(dataSize, 'a');
+        DS_ASSERT_OK(client->Set(key, value));
+        SetParam param;
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(key, dataSize, param, buffer));
+        std::string temp(dataSize, 'b');
+        DS_ASSERT_OK(buffer->MemoryCopy(temp.data(), temp.size()));
+        auto ptr = buffer->MutableData();
+        ASSERT_NE(ptr, nullptr);
+        ASSERT_EQ(memset_s(ptr, dataSize, 'a', dataSize), EOK);
+        DS_ASSERT_OK(buffer->Publish());
+
+        std::string value2;
+        DS_ASSERT_OK(client->Get(key, value2));
+
+        ASSERT_EQ(value, value2);
+    };
+    const size_t smallSize = 1024UL;
+    const size_t bigSize = 1024UL * 1024UL;
+    func(smallSize);
+    func(bigSize);
 }
 
 class UrmaObjectClientDisableDataReplicationTest : public UrmaObjectClientTest {
