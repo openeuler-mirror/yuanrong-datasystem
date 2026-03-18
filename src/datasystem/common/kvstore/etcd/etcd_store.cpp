@@ -131,7 +131,13 @@ Status EtcdStore::Authenticate(std::string username, const SensitiveValue &passw
     tokenRefreshInterval_ = tokenRefreshInterval;
 
     if (authSession_ == nullptr) {
-        RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Auth>::CreateSession(address_, authSession_));
+        if (!isRouterClientCurveConnect_) {
+            RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Auth>::CreateSession(address_, authSession_));
+        } else {
+            RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::Auth>::CreateSession(
+                address_, authSession_, clientCurveKit_.etcdCa, clientCurveKit_.etcdCert, clientCurveKit_.etcdKey,
+                clientCurveKit_.etcdNameOverride));
+        }
     }
 
     // Initial synchronous authentication to secure the first token

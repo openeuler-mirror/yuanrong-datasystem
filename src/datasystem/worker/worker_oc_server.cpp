@@ -1152,6 +1152,7 @@ void WorkerOCServer::WaitClientsExit()
 
 Status WorkerOCServer::PreShutDown()
 {
+    RETURN_OK_IF_TRUE(etcdCM_ == nullptr);
     INJECT_POINT("worker.PreShutDown.skip");
     bool scaleIn = IsScaleIn();
     bool waitFlag = false;
