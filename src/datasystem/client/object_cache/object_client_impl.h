@@ -808,6 +808,36 @@ private:
     Status GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                 std::vector<std::shared_ptr<Buffer>> &buffers);
 
+#ifdef USE_URMA
+    /**
+     * @brief Get buffers from worker in sub-batches when total UB data exceeds the max buffer size.
+     * @param[in] workerApi The worker that handles get request.
+     * @param[in] getParam The parameters of get request.
+     * @param[out] buffers The address of the objects.
+     * @param[in] objMetas Pre-fetched object metadata (sizes).
+     * @param[in] ubMaxGetSize Maximum UB buffer size per Get RPC.
+     * @return Status of the result.
+     */
+    Status GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                       std::vector<std::shared_ptr<Buffer>> &buffers,
+                                       const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize);
+#endif
+
+    /**
+     * @brief Validate Get response counts and extract object buffers.
+     * @param[in] objectKeys The object keys that were requested.
+     * @param[in] readParams The read parameters.
+     * @param[in,out] rsp The Get response.
+     * @param[in] version The Worker version.
+     * @param[in,out] payloads The payloads from worker.
+     * @param[out] buffers The buffer of the objects.
+     * @param[out] failedObjectKey The vector of failed object keys.
+     * @return Status of the result.
+     */
+    Status ProcessGetResponse(const std::vector<std::string> &objectKeys, const std::vector<ReadParam> &readParams,
+                              GetRspPb &rsp, uint32_t version, std::vector<RpcMessage> &payloads,
+                              std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey);
+
     /**
      * @brief Get shared memory data buffers from worker.
      * @param[in] objectsNeedToGet The vector of the object key that needs to get from worker.
@@ -1248,7 +1278,7 @@ private:
      */
     Status HandleShmRefCountAfterMultiPublish(const std::vector<std::shared_ptr<Buffer>> &bufferList,
                                               const MultiPublishRspPb &rsp);
-    
+
     /**
      * @brief Parse embedded config.
      * @param[in] config Embedded config.

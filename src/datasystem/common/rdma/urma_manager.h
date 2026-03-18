@@ -55,9 +55,10 @@ using datasystem::memory::AllocatorFuncRegister;
 using AllocateType = datasystem::memory::CacheType;
 using ArenaGroup = datasystem::memory::ArenaGroup;
 
-constexpr uint64_t CLIENT_MEMORY_BUFFER_SIZE = 9 * 1024 * 1024;  // 9MB
 const std::string DEFAULT_TENANTID = "";
 const std::string UB_TRANSPORT_MEM_SIZE = "UB_TRANSPORT_MEM_SIZE";
+const std::string UB_MAX_GET_DATA_SIZE = "UB_MAX_GET_DATA_SIZE";
+const std::string UB_MAX_SET_BUFFER_SIZE = "UB_MAX_SET_BUFFER_SIZE";
 
 #define MAX_POLL_JFC_TRY_CNT 10
 class Segment {
@@ -226,7 +227,7 @@ public:
      * @param[in] size The size of the memory buffer.
      * @return Status of the call.
      */
-    Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size = CLIENT_MEMORY_BUFFER_SIZE);
+    Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size);
 
     /**
      * @brief Get client comm-buffer details for UB Get by buffer offset.
@@ -260,6 +261,18 @@ public:
      * @return Client id string.
      */
     const std::string &GetClientId();
+
+    /**
+     * @brief Get the ub max get data size. Default is 32MB when no value set in environment
+     * @return The max get data size
+     */
+    uint64_t GetUBMaxGetDataSize();
+
+    /**
+     * @brief Get the ub max set buffer size. Default is 8MB when no value set in environment
+     * @return The max set buffer size per request
+     */
+    uint64_t GetUBMaxSetBufferSize();
 
     /**
      * @brief Check we should register whole arena upfront
@@ -732,7 +745,9 @@ private:
     std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
-    uint64_t ubTransportMemSize_ = 100 * 1024 * 1024;
+    uint64_t ubTransportMemSize_ = 128 * 1024 * 1024;   // 128 MB
+    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;      // 32 MB
+    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;     // 8 MB
 };
 
 }  // namespace datasystem

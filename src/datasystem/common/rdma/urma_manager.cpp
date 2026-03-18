@@ -187,26 +187,29 @@ Status UrmaManager::Init(const HostPort &hostport)
     return Status::OK();
 }
 
+static Status ParseEnvUint64(const std::string &envName, uint64_t &outVal)
+{
+    auto strValue = std::getenv(envName.c_str());
+    RETURN_OK_IF_TRUE(strValue == nullptr);
+
+    try {
+        uint64_t ret = StrToUnsignedLong(strValue);
+        if (ret == 0) {
+            throw std::out_of_range("Value should not be zero.");
+        }
+        outVal = ret;
+    } catch (std::logic_error &e) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("Env %s value %s parse to number failed: %s", envName, strValue, e.what()));
+    }
+    return Status::OK();
+}
+
 Status UrmaManager::InitMemoryBufferPool()
 {
-    auto strValue = std::getenv(UB_TRANSPORT_MEM_SIZE.c_str());
-    if (strValue != nullptr) {
-        try {
-            uint64_t ret = StrToUnsignedLong(strValue);
-            if (ret == 0) {
-                throw std::out_of_range("Memory should not be set to zero.");
-            }
-            ubTransportMemSize_ = ret;
-        } catch (std::invalid_argument &invalidArgument) {
-            RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-                          FormatString("Env %s value %s parse to number failed, invalid argument",
-                                       UB_TRANSPORT_MEM_SIZE, strValue));
-        } catch (std::out_of_range &outOfRange) {
-            RETURN_STATUS(
-                StatusCode::K_RUNTIME_ERROR,
-                FormatString("Env %s value %s parse to number failed, out of range", UB_TRANSPORT_MEM_SIZE, strValue));
-        }
-    }
+    RETURN_IF_NOT_OK(ParseEnvUint64(UB_TRANSPORT_MEM_SIZE, ubTransportMemSize_));
+    RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_GET_DATA_SIZE, ubMaxGetDataSize_));
+    RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_SET_BUFFER_SIZE, ubMaxSetBufferSize_));
 
     AllocatorFuncRegister regFunc;
 
@@ -248,7 +251,9 @@ Status UrmaManager::InitMemoryBufferPool()
 
 Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size)
 {
-    size = size > CLIENT_MEMORY_BUFFER_SIZE ? CLIENT_MEMORY_BUFFER_SIZE : size;
+    if (size == 0) {
+        return Status(K_INVALID, "UB Get buffer size is 0");
+    }
     std::shared_ptr<ShmUnit> unit = std::make_shared<ShmUnit>();
     RETURN_IF_NOT_OK(
         unit->AllocateMemory(DEFAULT_TENANTID, size, false, ServiceType::OBJECT, AllocateType::UB_TRANSPORT));
@@ -263,7 +268,7 @@ Status UrmaManager::GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandl
     RETURN_RUNTIME_ERROR_IF_NULL(memoryBuffer_);
     uint32_t bufferOffset = handler->GetOffset();
     bufferPtr = reinterpret_cast<uint8_t *>(handler->GetPointer());
-    bufferSize = CLIENT_MEMORY_BUFFER_SIZE;
+    bufferSize = handler->GetSegmentSize();
     urmaInfo.set_seg_va(reinterpret_cast<uint64_t>(memoryBuffer_));
     urmaInfo.set_seg_data_offset(bufferOffset);
     auto *requestAddr = urmaInfo.mutable_request_address();
@@ -1358,6 +1363,16 @@ std::string UrmaManager::GetRemoteDevicesByClientId(ClientKey clientEntityId)
 const std::string &UrmaManager::GetClientId()
 {
     return clientId_;
+}
+
+uint64_t UrmaManager::GetUBMaxGetDataSize()
+{
+    return ubMaxGetDataSize_;
+}
+
+uint64_t UrmaManager::GetUBMaxSetBufferSize()
+{
+    return ubMaxSetBufferSize_;
 }
 
 Segment::~Segment()

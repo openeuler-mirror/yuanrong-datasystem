@@ -230,6 +230,31 @@ bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
     return true;
 }
 
+#ifdef USE_URMA
+uint64_t ClientWorkerRemoteApi::ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId)
+{
+    uint64_t totalRequiredSize = getParam.ubTotalSize;
+    if (totalRequiredSize > 0) {
+        return totalRequiredSize;
+    }
+    std::vector<ObjMetaInfo> objMetas;
+    Status metaRc = GetObjMetaInfo(tenantId, getParam.objectKeys, objMetas);
+    if (metaRc.IsError()) {
+        LOG(WARNING) << "GetObjMetaInfo failed: " << metaRc.ToString();
+        return 0;
+    }
+    if (objMetas.size() != getParam.objectKeys.size()) {
+        LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << getParam.objectKeys.size()
+                     << " but got " << objMetas.size();
+        return 0;
+    }
+    for (const auto &meta : objMetas) {
+        totalRequiredSize += meta.objSize;
+    }
+    return totalRequiredSize;
+}
+#endif
+
 Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
                                   std::vector<RpcMessage> &payloads)
 {
@@ -246,7 +271,12 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     std::shared_ptr<UrmaManager::BufferHandle> ubBufferHandle;
     uint8_t *ubBufferPtr = nullptr;
     uint64_t ubBufferSize = 0;
-    PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize);
+    if (IsUrmaEnabled() && !IsShmEnable()) {
+        uint64_t totalRequiredSize = ResolveUBGetSize(getParam, req.tenant_id());
+        if (totalRequiredSize > 0) {
+            PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize, totalRequiredSize);
+        }
+    }
 #endif
     Status getStatus;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
