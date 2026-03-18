@@ -231,10 +231,11 @@ Status UrmaManager::InitMemoryBufferPool()
 
     auto *allocator = Allocator::Instance();
     auto rc = allocator->InitWithFlexibleRegister(AllocateType::UB_TRANSPORT, ubTransportMemSize_, regFunc);
-    if (rc.IsOK()) {
+    if (rc.IsOk()) {
         // Allocate phyica memory buffer pool for client
         std::shared_ptr<ArenaGroup> arenaGroup;
-        rc = allocator->GetArenaGroup(DEFAULT_TENANT_ID, ubTransportMemSize_, arenaGroup, AllocateType::UB_TRANSPORT);
+        rc =
+            allocator->CreateArenaGroup(DEFAULT_TENANT_ID, ubTransportMemSize_, arenaGroup, AllocateType::UB_TRANSPORT);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to get arena group for client");
     }
     if (rc.IsError()) {

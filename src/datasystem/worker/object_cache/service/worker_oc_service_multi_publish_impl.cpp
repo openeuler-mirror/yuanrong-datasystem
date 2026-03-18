@@ -115,12 +115,14 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     std::vector<std::string> namespaceUri;
     size_t objectSize = static_cast<size_t>(req.object_info_size());
     namespaceUri.reserve(objectSize);
+    Status checkStatus = Status::OK();
     for (size_t i = 0; i < objectSize; ++i) {
         namespaceUri.emplace_back(
             TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_info(i).object_key()));
     }
 
     LOG(INFO) << FormatString("Process multi pub from client: %s, cacheType: %d", clientId, req.cache_type());
+    RETURN_IF_NOT_OK(VerifyDuplicateKeys(namespaceUri));
     VLOG(1) << "Multi publish with key : " << VectorToString(namespaceUri);
 
     // Insert entry to object table and get lock.
@@ -226,6 +228,16 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     // roll back failed ids;
     BatchRollBackEntries(namespaceUri, ifInserts, entries, failedKeys, resp);
+    return Status::OK();
+}
+
+Status WorkerOcServiceMultiPublishImpl::VerifyDuplicateKeys(const std::vector<std::string> &objectKeys)
+{
+    std::unordered_set<std::string> keys(objectKeys.begin(), objectKeys.end());
+    if (keys.size() != objectKeys.size()) {
+        RETURN_STATUS_LOG_ERROR(
+            K_DUPLICATED, FormatString("Multi publish with duplicate object key: %s", VectorToString(objectKeys)));
+    }
     return Status::OK();
 }
 
@@ -1153,31 +1165,29 @@ Status WorkerOcServiceMultiPublishImpl::BatchLockForSetNtx(const std::vector<std
                                                            std::vector<bool> &isInserts,
                                                            std::vector<std::shared_ptr<SafeObjType>> &entries)
 {
+    std::map<std::string, size_t> objectToIdx;
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        objectToIdx[objectKeys[i]] = i;
+    }
     std::atomic<size_t> failCnt{ 0 };
-    auto getEntryLock = [&](size_t start, size_t end) {
-        for (size_t i = start; i < end; i++) {
+    std::function<Status()> GetEntryLock = [&]() {
+        for (auto itr = objectToIdx.begin(); itr != objectToIdx.end(); ++itr) {
             std::shared_ptr<SafeObjType> entry;
             bool isInsert;
-            Status rc =
-                objectTable_->ReserveGetAndLock(objectKeys[i], entry, isInsert, existence == ExistenceOptPb::NX);
+            auto rc = objectTable_->ReserveGetAndLock(itr->first, entry, isInsert, existence == ExistenceOptPb::NX);
             if (rc.IsError()) {
-                LOG(ERROR) << "Lock for object " << objectKeys[i] << " failed, status: " << rc.ToString();
+                LOG(ERROR) << FormatString("Lock for object %s failed, rc=%s", itr->first.c_str(), rc.ToString());
                 failCnt.fetch_add(1);
                 continue;
             }
-            isInserts[i] = isInsert;
-            entries[i] = entry;
+            isInserts[itr->second] = isInsert;
+            entries[itr->second] = entry;
         }
+        return Status::OK();
     };
-    size_t objectSize = objectKeys.size();
-    static const int parallelThreshold = 128;
-    static const int parallism = 4;
-    if (objectSize > parallelThreshold) {
-        LOG_IF_ERROR(Parallel::ParallelFor<size_t>(0, objectSize, getEntryLock, 0, parallism), "ParallelFor failed");
-    } else {
-        getEntryLock(0, objectSize);
-    }
-    return failCnt == objectKeys.size() ? Status(K_TRY_AGAIN, "Lock objects failed") : Status::OK();
+
+    GetEntryLock();
+    return failCnt == objectKeys.size() ? Status(K_TRY_AGAIN, "Lock objects failed.") : Status::OK();
 }
 }  // namespace object_cache
 }  // namespace datasystem
