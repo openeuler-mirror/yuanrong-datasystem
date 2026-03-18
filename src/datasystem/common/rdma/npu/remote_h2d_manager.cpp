@@ -98,8 +98,8 @@ Status RemoteH2DManager::SetDeviceIdx(std::optional<int32_t> specifiedDevId)
     uint32_t npuCount;
     RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->aclrtGetDeviceCount(&npuCount));
     if (devId < 0 || devId > static_cast<int32_t>(npuCount)) {
-        RETURN_STATUS(StatusCode::K_INVALID, "Invalid device id: " + std::to_string(devId) +
-                                             ". Total NPU Count: " + std::to_string(npuCount));
+        RETURN_STATUS(StatusCode::K_INVALID,
+                      "Invalid device id: " + std::to_string(devId) + ". Total NPU Count: " + std::to_string(npuCount));
     }
 
     RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->SetDeviceIdx(devId));
@@ -134,8 +134,8 @@ Status RemoteH2DManager::GetWorkerDeviceIds(std::vector<int32_t> *devIds)
         std::string devIdStr = FLAGS_remote_h2d_device_ids;
         RE2 pattern("^\\d+(,\\s*\\d+)*$");
         if (!RE2::FullMatch(devIdStr, pattern)) {
-            RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid form: " + devIdStr +
-                                     ". Must use form \"1, 2, 3\"");
+            RETURN_STATUS(K_INVALID,
+                          "remote_h2d_device_ids flag has invalid form: " + devIdStr + ". Must use form \"1, 2, 3\"");
         }
 
         size_t start = 0;
@@ -146,19 +146,19 @@ Status RemoteH2DManager::GetWorkerDeviceIds(std::vector<int32_t> *devIds)
             size_t end = devIdStr.find(',', start);
             try {
                 workerDeviceIds_.push_back(std::stoi(devIdStr.substr(start, end - start)));
-            } catch (const std::invalid_argument& e) {
-                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid form: " + devIdStr +
-                                         ". Must use form \"1, 2, 3\"");
-            } catch (const std::out_of_range& e) {
+            } catch (const std::invalid_argument &e) {
+                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid form: " + devIdStr
+                                             + ". Must use form \"1, 2, 3\"");
+            } catch (const std::out_of_range &e) {
                 RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag contains out of range number: " + devIdStr);
             }
             if (end == std::string::npos) {
                 break;
             }
             if (workerDeviceIds_[workerDeviceIds_.size() - 1] >= int32_t(npuCount)) {
-                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid id: " +
-                                         std::to_string(workerDeviceIds_[workerDeviceIds_.size() - 1]) +
-                                         ". Total NPU count: " + std::to_string(npuCount));
+                RETURN_STATUS(K_INVALID, "remote_h2d_device_ids flag has invalid id: "
+                                             + std::to_string(workerDeviceIds_[workerDeviceIds_.size() - 1])
+                                             + ". Total NPU count: " + std::to_string(npuCount));
             }
             start = end + 1;
         }
@@ -236,8 +236,9 @@ Status RemoteH2DManager::HandleConnection(const std::string &key, const RemoteH2
     accessor.Release();
     P2pLink link = P2P_LINK_ROCE;
     std::shared_ptr<std::function<int()>> p2pCallback = std::make_shared<std::function<int()>>();
+    P2PCommInitOptions p2pCommInitOptions(false, p2pCallback.get());
     Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&rootInfo, kind, link, &p2pComm->p2pComm,
-                                                                         p2pCallback.get());
+                                                                         &p2pCommInitOptions);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
     if (kind == P2P_RECEIVER) {
         clientPingFunctions_.insert({key, p2pCallback});

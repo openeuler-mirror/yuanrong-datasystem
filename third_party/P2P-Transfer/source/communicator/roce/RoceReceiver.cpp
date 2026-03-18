@@ -21,13 +21,16 @@
 #include "tools/env.h"
 
 RoceReceiver::RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes,
-                           uint32_t nRecvBuffs, uint32_t qpNum)
+                           uint32_t nRecvBuffs, uint32_t qpNum, bool enableTwoSidedBuffer,
+                           PingpongBufferPool *pingpongPool)
     : recvDeviceId(deviceId),
       isRoot(isRoot),
       blockSizeBytes(blockSizeBytes),
       chunkSizeBytes(chunkSizeBytes),
       nRecvBuffs(nRecvBuffs),
-      qpNum(qpNum)
+      qpNum(qpNum),
+      enableTwoSidedBuffer(enableTwoSidedBuffer),
+      pingpongPool(pingpongPool)
 {
     nChunksPerBuff = blockSizeBytes / chunkSizeBytes;  // Should be divisible
     oneSidedBuffLkeys.resize(qpNum);
@@ -91,10 +94,12 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     CHECK_STATUS(valueMem->alloc());
     CHECK_STATUS(valueMem->get(&notifySrcValAddr, &notifySize));
 
-    for (int i = 0; i < nRecvBuffs; i++) {
-        std::unique_ptr<P2PMem> mem = std::make_unique<P2PMem>();
-        CHECK_STATUS(mem->alloc(blockSizeBytes, ACL_MEM_MALLOC_HUGE_FIRST_P2P));
-        recvBuffs.push_back(std::move(mem));
+    if (enableTwoSidedBuffer) {
+        for (int i = 0; i < nRecvBuffs; i++) {
+            std::unique_ptr<P2PMem> mem = std::make_unique<P2PMem>();
+            CHECK_STATUS(mem->alloc(blockSizeBytes, ACL_MEM_MALLOC_HUGE_FIRST_P2P));
+            recvBuffs.push_back(std::move(mem));
+        }
     }
 
     for (int i = 0; i < nRecvBuffs * nChunksPerBuff; i++) {
@@ -109,8 +114,10 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
 
         CHECK_STATUS(qp->registerMemoryRegion(notifySrcValAddr, notifySize));
 
-        for (int i = 0; i < nRecvBuffs; i++) {
-            CHECK_STATUS(qp->registerMemoryRegion(recvBuffs[i]->get(), blockSizeBytes));
+        if (enableTwoSidedBuffer) {
+            for (int i = 0; i < nRecvBuffs; i++) {
+                CHECK_STATUS(qp->registerMemoryRegion(recvBuffs[i]->get(), blockSizeBytes));
+            }
         }
 
         CHECK_STATUS(qp->connect(fdHandle));
@@ -166,19 +173,6 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
 
     // One sided comm
     remotenotifySrcValAddr = senderResources.notifysrcvaladdr();
-    for (int i = 0; i < nRecvBuffs; i++) {
-        std::unique_ptr<P2PMem> mem = std::make_unique<P2PMem>();
-        CHECK_STATUS(mem->alloc(blockSizeBytes, ACL_MEM_MALLOC_HUGE_FIRST_P2P));
-        for (int q = 0; q < qpNum; q++) {
-            CHECK_STATUS(qps[q]->registerMemoryRegion(mem->get(), blockSizeBytes));
-
-            struct mr_info mrInfo {};
-            CHECK_STATUS(qps[q]->getMemoryRegionInfo(mem->get(), &mrInfo));
-            oneSidedBuffLkeys[q].push_back(mrInfo.lkey);
-        }
-
-        oneSidedBuffs.push_back(std::move(mem));
-    }
 
     for (int i = 0; i < nRecvBuffs * nChunksPerBuff; i++) {
         std::unique_ptr<RdmaNotify> notify = std::make_unique<RdmaNotify>();
@@ -337,6 +331,9 @@ Status RoceReceiver::Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, ac
 {
     if (state != RoceReceiverStatus::ROCE_RECEIVER_INITIALIZED) {
         return Status::Error(ErrorCode::NOT_INITIALIZED, "Receiver has not been initialized yet");
+    } else if (!enableTwoSidedBuffer || recvBuffs.size() == 0) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED,
+                             "Two-sided buffer is not enabled, so receive operation is not supported");
     }
 
     if (!started) {
@@ -407,11 +404,16 @@ Status RoceReceiver::Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, ac
 // Note2: currently assumes srcptr always same rkey
 Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, uint64_t *dstSizes, uint32_t count,
                                aclrtStream stream, uint32_t &lastRdmaTaskId, uint32_t &lastRdmaTaskCount,
-                               uint32_t *lastSdmaTaskIds, uint32_t &lastSdmaTaskCount, uint32_t srcRkey, bool isLast)
+                               uint32_t *lastSdmaTaskIds, uint32_t &lastSdmaTaskCount, uint32_t srcRkey, bool isLast,
+                               bool isFirst)
 {
+    // Get current one-sided buffer and chunk ids
+    uint32_t curOneSidedBuffer = pingpongPool->GetCurBuffer();
+    uint32_t curOneSidedChunk = pingpongPool->GetCurChunk();
+
     // Wait for block to become available
     uint32_t blockAvailableTaskId = 0;
-    if (curOneSidedChunk == 0) {
+    if (curOneSidedChunk == 0 || isFirst) {
         uint32_t notifyId;
         CHECK_STATUS(blockAvailableNotifies[curOneSidedBuffer]->getId(&notifyId));
         fftsDispatcher->SignalWaitCrossChip(blockAvailableNotifies[curOneSidedBuffer]->get(), &blockAvailableTaskId,
@@ -429,7 +431,7 @@ Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, u
     CHECK_STATUS(qps[curQp]->dispatchTypicalRdmaOpFfts(
         fftsDispatcher.get(), reinterpret_cast<uint64_t>(chunkMid), reinterpret_cast<uint64_t>(srcPtr), srcSize,
         RA_OP_READ, RA_SEND_SIGNALED, oneSidedBuffLkeys[curQp][curOneSidedBuffer], srcRkey, &rdmaReadTaskId));
-    if (curOneSidedChunk == 0) {
+    if (curOneSidedChunk == 0 || isFirst) {
         fftsDispatcher->AddTaskDependency(blockAvailableTaskId, rdmaReadTaskId);
     } else if (lastRdmaTaskCount > 0) {
         fftsDispatcher->AddTaskDependency(lastRdmaTaskId, rdmaReadTaskId);
@@ -476,7 +478,7 @@ Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, u
         lastMemcpyTaskIds[i % RECEIVER_MAX_PARALLEL_TASKS] = memcpyTaskId;
     }
 
-    if (curOneSidedChunk == nChunksPerBuff - 1) {
+    if (curOneSidedChunk == nChunksPerBuff - 1 || isLast) {
         uint32_t blockAvailableNotifyTaskId = 0;
         ACL_CHECK_STATUS(fftsDispatcher->SignalRecordCrossChip(blockAvailableNotifies[curOneSidedBuffer]->get(),
                                                                &blockAvailableNotifyTaskId,
@@ -486,7 +488,7 @@ Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, u
         }
         lastSdmaTaskIds[0] = blockAvailableNotifyTaskId;
         lastSdmaTaskCount = 1;
-        curOneSidedBuffer = (curOneSidedBuffer + 1) % nRecvBuffs;
+        pingpongPool->SetCurBuffer((curOneSidedBuffer + 1) % nRecvBuffs);
     } else {
         for (int i = 0; i < numLastMemcpyTaskIds; i++) {
             lastSdmaTaskIds[i] = lastMemcpyTaskIds[i];
@@ -494,7 +496,7 @@ Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, u
         lastSdmaTaskCount = numLastMemcpyTaskIds;
     }
 
-    curOneSidedChunk = (curOneSidedChunk + 1) % nChunksPerBuff;
+    pingpongPool->SetCurChunk((curOneSidedChunk + 1) % nChunksPerBuff);
     curQp = (curQp + 1) % qpNum;
 
     lastRdmaTaskId = readChunkDoneNotifyTaskId;
@@ -516,6 +518,28 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
         }
     }
 
+    // Prepare pingpong buffer from pool
+    if (!pingpongPool) {
+        return Status::Error(ErrorCode::NOT_INITIALIZED, "Pingpong buffer pool is not initialized");
+    }
+    auto pingpongBuff = pingpongPool->Acquire();
+    if (!pingpongBuff) {
+        return Status::Error(ErrorCode::TIMEOUT, "No available pingpong buffer in pool");
+    }
+    // Clean up and reinitialize buffer state for new transfer
+    oneSidedBuffs = *(pingpongBuff.value());
+    oneSidedBuffLkeys.clear();
+    oneSidedBuffLkeys.resize(qpNum);
+    for (int i = 0; i < oneSidedBuffs.size(); i++) {
+        for (int q = 0; q < qpNum; q++) {
+            CHECK_STATUS(qps[q]->registerMemoryRegion((*pingpongBuff.value())[i]->get(), blockSizeBytes));
+
+            struct mr_info mrInfo{};
+            CHECK_STATUS(qps[q]->getMemoryRegionInfo((*pingpongBuff.value())[i]->get(), &mrInfo));
+            oneSidedBuffLkeys[q].push_back(mrInfo.lkey);
+        }
+    }
+
     uint32_t lastRdmaTaskId = 0;
     uint32_t lastRdmaTaskCount = 0;
     uint32_t lastSdmaTaskIds[RECEIVER_MAX_PARALLEL_TASKS];
@@ -523,6 +547,7 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
 
     void *chunkDstPtrs[chunkSizeBytes / PAGE_SIZE_BYTES];
     size_t chunkCopySizes[chunkSizeBytes / PAGE_SIZE_BYTES];
+    bool isFirst = true;
 
     for (int b = 0; b < batchSize; b++) {
         void *srcPtr = entries[b].ddrBuf;
@@ -531,7 +556,7 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
         uint32_t count = entries[b].numEl;
 
         // Note: currently assumes srcPtr one rkey, which seems reasonable
-        struct P2PSegmentHandle segmentHandle {};
+        struct P2PSegmentHandle segmentHandle{};
         std::shared_ptr<RdmaDev> rdmaDev;
         CHECK_STATUS(RdmaDev::GetInstance(recvDeviceId, rdmaDev));
         CHECK_STATUS(rdmaDev->getRemoteSegment(srcPtr, remoteIp, segmentHandle));
@@ -556,10 +581,10 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
                     uint64_t chunkCopySize = (i < numChunks - 1) ? chunkSizeBytes : (currentSize - i * chunkSizeBytes);
                     ;
                     chunkCopySizes[0] = chunkCopySize;
-                    bool isLast = (dstIdx == count - 1) && i == (numChunks - 1);
+                    bool isLast = (dstIdx == count - 1) && i == (numChunks - 1) && (b == batchSize - 1);
                     CHECK_STATUS(ReadChunk(chunkSrcPtr, chunkCopySize, chunkDstPtrs, chunkCopySizes, 1, stream,
                                            lastRdmaTaskId, lastRdmaTaskCount, lastSdmaTaskIds, lastSdmaTaskCount,
-                                           segmentHandle.rKey, isLast));
+                                           segmentHandle.rKey, isLast, isFirst));
                     curSrcOffset += chunkCopySize;
                 }
                 dstIdx++;
@@ -584,14 +609,15 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
                         break;
                     }
                 }
-                bool isLast = (dstIdx + numMerged == count);
+                bool isLast = (dstIdx + numMerged == count) && (b == batchSize - 1);
                 void *chunkSrcPtr = static_cast<void *>(static_cast<unsigned char *>(srcDevPtr) + curSrcOffset);
                 CHECK_STATUS(ReadChunk(chunkSrcPtr, chunkSize, chunkDstPtrs, chunkCopySizes, numMerged, stream,
                                        lastRdmaTaskId, lastRdmaTaskCount, lastSdmaTaskIds, lastSdmaTaskCount,
-                                       segmentHandle.rKey, isLast));
+                                       segmentHandle.rKey, isLast, isFirst));
                 curSrcOffset += chunkSize;  // NOTE: only correct if all copies are larger than PAGE_SIZE_BYTES
                 dstIdx += numMerged;
             }
+            isFirst = false;
         }
     }
 
@@ -600,6 +626,5 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
     ACL_CHECK_STATUS(fftsDispatcher->LaunchFftsTask(stream, 1, 0));
     ACL_CHECK_STATUS(fftsDispatcher->ReuseCtx(0));
 #endif
-
     return Status::Success();
 }

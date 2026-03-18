@@ -109,7 +109,8 @@ P2PCommChannelType P2PCommunicator::DetermineChannelType(const P2PCommArgs &args
     }
 }
 
-Status P2PCommunicator::EstablishConnection(P2PCommArgs &args, std::function<int()> *p2pCallback)
+Status P2PCommunicator::EstablishConnection(P2PCommArgs &args, PingpongBufferPool *pingpongPool,
+                                            std::function<int()> *p2pCallback)
 {
     if (isRoot) {
         CHECK_STATUS(AcceptClient(p2pCallback));
@@ -131,10 +132,10 @@ Status P2PCommunicator::EstablishConnection(P2PCommArgs &args, std::function<int
     } else if (channelType == P2PCommChannelType::P2P_COMM_RDMA) {
         if (role == P2P_COMM_RECEIVER) {
             receiver = std::make_unique<RoceReceiver>(args.deviceId, isRoot, args.blockSizeBytes, args.chunkSizeBytes,
-                                                      args.nRecvBuffs, args.qpNum);
+                                                      args.nRecvBuffs, args.qpNum, args.enableTwoSidedBuffer, pingpongPool);
         } else {
             sender = std::make_unique<RoceSender>(args.deviceId, isRoot, args.blockSizeBytes, args.chunkSizeBytes,
-                                                  args.nRecvBuffs, args.qpNum);
+                                                  args.nRecvBuffs, args.qpNum, args.enableTwoSidedBuffer);
         }
     } else {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "Unsupported channeltype");

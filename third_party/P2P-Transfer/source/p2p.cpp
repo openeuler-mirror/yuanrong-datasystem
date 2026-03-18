@@ -30,12 +30,6 @@
 #include "npu/RdmaDev.h"
 #include "external/adapter_rts_common.h"
 
-// Later make all configurable
-constexpr uint32_t P2P_NUM_PINGPONG_BUFF = 2;
-constexpr uint32_t P2P_BLOCK_SIZE_BYTES = 16 * 1024 * 1024;
-constexpr uint32_t P2P_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
-constexpr uint32_t P2P_QP_NUM = 3;
-
 // Manages P2PCommunicators of the current process
 P2PCommunicatorManager commManager;
 
@@ -59,13 +53,13 @@ HcclResult P2PGetRootInfo(HcclRootInfo *rootInfo)
 
     // Store communicator as unassociated
     std::string identifier(rootHandle.identifier, ROOTHANDLE_INDENTIFIER_MAX_LENGTH);
-    commManager.addUnboundRootComm(identifier, p2pComm);
+    commManager.AddUnboundRootComm(identifier, p2pComm);
 
     return HCCL_SUCCESS;
 }
 
 HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
-                               std::function<int()> *p2pCallback)
+                               P2PCommInitOptions *p2pCommInitOptions)
 {
     if (rootInfo == nullptr) {
         std::cerr << "[P2P] P2PCommInitRootInfo: rootInfo is empty" << std::endl;
@@ -82,6 +76,9 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
         return HCCL_E_PARA;
     }
 
+    P2PCommInitOptions defaultOptions;
+    P2PCommInitOptions *options = (p2pCommInitOptions != nullptr) ? p2pCommInitOptions : &defaultOptions;
+
     int32_t deviceId;
     ACL_CHECK_HCCL(hrtGetDeviceRefresh(&deviceId));
 
@@ -95,7 +92,7 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
 
     // Get root communicator associated with identifier. If no root communicator is found, P2PCommInitRootInfo
     // was called on the client side and we need to create a new communicator to connect to the root communicator.
-    std::shared_ptr<P2PCommunicator> p2pComm = commManager.getAndRemoveUnboundCommunicator(identifier);
+    std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetAndRemoveUnboundCommunicator(identifier);
     if (!p2pComm) {
         p2pComm = std::make_shared<P2PCommunicator>(false);
         CHECK_STATUS_HCCL(p2pComm->StartClient(rootHandle));
@@ -104,14 +101,21 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
     P2PCommRole role;
     CHECK_STATUS_HCCL(p2pKindToCommRole(kind, role));
 
-    P2PCommArgs args = { deviceId,  link, role, P2P_NUM_PINGPONG_BUFF, P2P_BLOCK_SIZE_BYTES, P2P_CHUNK_SIZE_BYTES,
-                         P2P_QP_NUM };
+    P2PCommArgs args = { deviceId,
+                         link,
+                         role,
+                         P2P_NUM_PINGPONG_BUFF,
+                         P2P_BLOCK_SIZE_BYTES,
+                         P2P_CHUNK_SIZE_BYTES,
+                         P2P_QP_NUM,
+                         options->enableTwoSidedBuffer};
 
     // Establish connection between root and client communicators
-    CHECK_STATUS_HCCL(p2pComm->EstablishConnection(args, p2pCallback));
+    CHECK_STATUS_HCCL(p2pComm->EstablishConnection(args, commManager.GetBufferPool(),
+                                                   options->heartbeatCallback));
 
     P2PComm resComm = p2pComm.get();
-    commManager.addCommunicator(resComm, p2pComm);
+    commManager.AddCommunicator(resComm, p2pComm);
 
     *comm = resComm;
 
@@ -125,7 +129,7 @@ HcclResult P2PCommDestroy(P2PComm comm)
         return HCCL_E_PARA;
     }
 
-    if (!commManager.removeCommunicator(comm)) {
+    if (!commManager.RemoveCommunicator(comm)) {
         std::cerr << "[P2P] P2PCommDestroy: comm does not exist" << std::endl;
         return HCCL_E_NOT_FOUND;
     }
@@ -162,7 +166,7 @@ HcclResult P2PSendBatch(void **sendBufs, uint64_t *counts, HcclDataType dataType
         return HCCL_E_PARA;
     }
 
-    std::shared_ptr<P2PCommunicator> p2pComm = commManager.getCommunicator(comm);
+    std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetCommunicator(comm);
     if (!p2pComm) {
         std::cerr << "[P2P] P2PSend: comm does not exist" << std::endl;
         return HCCL_E_NOT_FOUND;
@@ -202,7 +206,7 @@ HcclResult P2PRecvBatch(void **recvBuffs, uint64_t *counts, HcclDataType dataTyp
         return HCCL_E_PARA;
     }
 
-    std::shared_ptr<P2PCommunicator> p2pComm = commManager.getCommunicator(comm);
+    std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetCommunicator(comm);
     if (!p2pComm) {
         std::cerr << "[P2P] P2PRecv: comm does not exist" << std::endl;
         return HCCL_E_NOT_FOUND;
@@ -231,7 +235,7 @@ HcclResult P2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t b
         return HCCL_E_PARA;
     }
 
-    std::shared_ptr<P2PCommunicator> p2pComm = commManager.getCommunicator(comm);
+    std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetCommunicator(comm);
     if (!p2pComm) {
         std::cerr << "[P2P] P2PGet: comm does not exist" << std::endl;
         return HCCL_E_NOT_FOUND;
@@ -314,7 +318,7 @@ HcclResult P2PGetCommAsyncError(P2PComm comm, HcclResult *asyncError)
         return HCCL_E_PARA;
     }
 
-    std::shared_ptr<P2PCommunicator> p2pComm = commManager.getCommunicator(comm);
+    std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetCommunicator(comm);
     if (!p2pComm) {
         std::cerr << "[P2P] P2PGetCommAsyncError: comm does not exist" << std::endl;
         return HCCL_E_NOT_FOUND;

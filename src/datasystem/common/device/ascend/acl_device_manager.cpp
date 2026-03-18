@@ -352,7 +352,8 @@ Status AclDeviceManager::DSHcclGetRootInfo(HcclRootInfo *rootInfo)
     RETURN_RUNTIME_ERROR_IF_NULL(DSHcclGetRootInfoFunc_);
     int hcclRet = DSHcclGetRootInfoFunc_(rootInfo);
     if (hcclRet == 1) {  // HCCL_E_PARA = 1
-        RETURN_STATUS(K_HCCL_ERROR,
+        RETURN_STATUS(
+            K_HCCL_ERROR,
             "HcclGetRootInfoapi failed with error code 1 (parameter error). Possible cause: HCCL failed to obtain IP "
             "address (null). Please check Ascend logs for detailed error information. "
             "Solution: If IP address acquisition failed, configure environment variable "
@@ -573,11 +574,11 @@ Status AclDeviceManager::DSP2PGetRootInfo(HcclRootInfo *rootInfo)
 }
 
 Status AclDeviceManager::DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
-                                               std::function<int()> *p2pCallback)
+                                               P2PCommInitOptions *p2pCommInitOptions)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSP2PCommInitRootInfoFunc_);
-    RETURN_HCCL_RESULT(DSP2PCommInitRootInfoFunc_(rootInfo, kind, link, comm, p2pCallback));
+    RETURN_HCCL_RESULT(DSP2PCommInitRootInfoFunc_(rootInfo, kind, link, comm, p2pCommInitOptions));
 }
 
 Status AclDeviceManager::DSP2PCommDestroy(P2PComm comm)
@@ -789,13 +790,12 @@ Status AclDeviceManager::FreeHost(void *hostPtr)
     return aclrtFreeHost(hostPtr);
 }
 
-Status AclDeviceManager::MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count,
-                                     MemcpyKind kind, void *stream)
+Status AclDeviceManager::MemcpyAsync(void *dst, size_t dstMaxSize, const void *src, size_t count, MemcpyKind kind,
+                                     void *stream)
 {
     aclrtMemcpyKind aclKind = {};
     RETURN_IF_NOT_OK(ToAclMemcpyKind(kind, aclKind));
-    return aclrtMemcpyAsync(dst, dstMaxSize, src, count, aclKind,
-                           static_cast<aclrtStream>(stream));
+    return aclrtMemcpyAsync(dst, dstMaxSize, src, count, aclKind, static_cast<aclrtStream>(stream));
 }
 
 Status AclDeviceManager::CreateStream(void **stream)
@@ -867,22 +867,22 @@ Status AclDeviceManager::CommInitRootInfo(uint32_t nRanks, const CommRootInfo *r
     return DSHcclCommInitRootInfo(nRanks, hcclRootInfo, rank, reinterpret_cast<HcclComm *>(comm));
 }
 
-Status AclDeviceManager::CommSend(void *sendBuf, uint64_t count, CommDataType dataType, uint32_t destRank,
-                                  void *comm, void *stream)
+Status AclDeviceManager::CommSend(void *sendBuf, uint64_t count, CommDataType dataType, uint32_t destRank, void *comm,
+                                  void *stream)
 {
     HcclDataType hcclDataType = {};
     RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
-    return DSHcclSend(sendBuf, count, hcclDataType, destRank,
-                      static_cast<HcclComm>(comm), static_cast<aclrtStream>(stream));
+    return DSHcclSend(sendBuf, count, hcclDataType, destRank, static_cast<HcclComm>(comm),
+                      static_cast<aclrtStream>(stream));
 }
 
-Status AclDeviceManager::CommRecv(void *recvBuf, uint64_t count, CommDataType dataType, uint32_t srcRank,
-                                  void *comm, void *stream)
+Status AclDeviceManager::CommRecv(void *recvBuf, uint64_t count, CommDataType dataType, uint32_t srcRank, void *comm,
+                                  void *stream)
 {
     HcclDataType hcclDataType = {};
     RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
-    return DSHcclRecv(recvBuf, count, hcclDataType, srcRank,
-                      static_cast<HcclComm>(comm), static_cast<aclrtStream>(stream));
+    return DSHcclRecv(recvBuf, count, hcclDataType, srcRank, static_cast<HcclComm>(comm),
+                      static_cast<aclrtStream>(stream));
 }
 
 Status AclDeviceManager::CommDestroy(void *comm)
@@ -905,13 +905,11 @@ Status AclDeviceManager::P2PCommInitRootInfo(const CommRootInfo *rootInfo, P2pKi
 {
     P2pKind p2pKind = {};
     RETURN_IF_NOT_OK(ToP2pKind(kind, p2pKind));
-    
+
     P2pLink p2pLink = {};
     RETURN_IF_NOT_OK(ToP2pLink(link, p2pLink));
-    
-    return DSP2PCommInitRootInfo(reinterpret_cast<const HcclRootInfo *>(rootInfo),
-                                 p2pKind,
-                                 p2pLink,
+
+    return DSP2PCommInitRootInfo(reinterpret_cast<const HcclRootInfo *>(rootInfo), p2pKind, p2pLink,
                                  reinterpret_cast<P2PComm *>(comm));
 }
 
@@ -924,16 +922,14 @@ Status AclDeviceManager::P2PSend(void *sendBuf, uint64_t count, CommDataType dat
 {
     HcclDataType hcclDataType = {};
     RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
-    return DSP2PSend(sendBuf, count, hcclDataType,
-                     static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+    return DSP2PSend(sendBuf, count, hcclDataType, static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
 }
 
 Status AclDeviceManager::P2PRecv(void *recvBuf, uint64_t count, CommDataType dataType, void *comm, void *stream)
 {
     HcclDataType hcclDataType = {};
     RETURN_IF_NOT_OK(ToHcclDataType(dataType, hcclDataType));
-    return DSP2PRecv(recvBuf, count, hcclDataType,
-                     static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+    return DSP2PRecv(recvBuf, count, hcclDataType, static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
 }
 
 Status AclDeviceManager::P2PGetCommAsyncError(void *comm)
@@ -965,8 +961,8 @@ Status AclDeviceManager::LaunchCallback(StreamCallback fn, void *userData, Callb
 {
     aclrtCallbackBlockType aclBlockType = {};
     RETURN_IF_NOT_OK(ToAclCallbackBlockType(blockType, aclBlockType));
-    return AclrtLaunchCallback(reinterpret_cast<aclrtCallback>(fn), userData,
-                               aclBlockType, static_cast<aclrtStream>(stream));
+    return AclrtLaunchCallback(reinterpret_cast<aclrtCallback>(fn), userData, aclBlockType,
+                               static_cast<aclrtStream>(stream));
 }
 
 Status AclDeviceManager::ProcessReport(int32_t timeout)
@@ -999,10 +995,10 @@ Status AclDeviceManager::P2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSeg
 {
     P2pSegmentInfo *p2pSegmentInfo = nullptr;
     RETURN_IF_NOT_OK(ToP2pSegmentInfo(segmentInfo, p2pSegmentInfo));
-    
+
     P2pSegmentPermissions p2pPermissions = {};
     RETURN_IF_NOT_OK(ToP2pSegmentPermissions(permissions, p2pPermissions));
-    
+
     return DSP2PRegisterHostMem(hostBuf, size, p2pSegmentInfo, p2pPermissions);
 }
 
@@ -1013,16 +1009,16 @@ Status AclDeviceManager::P2PImportHostSegment(P2pSegmentBase segmentInfo)
     return DSP2PImportHostSegment(p2pSegmentInfo);
 }
 
-Status AclDeviceManager::P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entries, uint32_t batchSize,
-                                                          void *comm, void *stream)
+Status AclDeviceManager::P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entries, uint32_t batchSize, void *comm,
+                                                          void *stream)
 {
     // Convert P2pScatterBase array to P2pScatterEntry array
     std::vector<P2pScatterEntry> nativeEntries(batchSize);
     for (uint32_t i = 0; i < batchSize; ++i) {
         RETURN_IF_NOT_OK(ToP2pScatterEntry(entries[i], nativeEntries[i]));
     }
-    return DSP2PScatterBatchFromRemoteHostMem(nativeEntries.data(), batchSize,
-                                              static_cast<P2PComm>(comm), static_cast<aclrtStream>(stream));
+    return DSP2PScatterBatchFromRemoteHostMem(nativeEntries.data(), batchSize, static_cast<P2PComm>(comm),
+                                              static_cast<aclrtStream>(stream));
 }
 
 Status AclDeviceManager::MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,

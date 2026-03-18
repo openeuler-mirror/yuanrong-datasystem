@@ -397,12 +397,12 @@ int DSP2PGetRootInfo(HcclRootInfo *rootInfo);
  * @param kind Identifies whether the current device is a sender and receiver.
  * @param link Identifies the communication channel type.
  * @param comm A pointer identifying the initialized communication resource.
- * @param p2pCallback Function callback to check if client was disconnected
+ * @param p2pCommInitOptions Additional options for p2pcomm
  * @return HcclResult
  * @see HcclCommDestroy()
  */
 int DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
-                          std::function<int()> *p2pCallback = nullptr);
+                          P2PCommInitOptions *p2pCommInitOptions = nullptr);
 
 /**
  * @brief Destroy P2P comm
@@ -466,7 +466,7 @@ int DSAclrtUnSubscribeReport(uint64_t threadId, aclrtStream stream);
 
 int DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segmentInfo, P2pSegmentPermissions permissions);
 int DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
-int DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchSize, P2PComm comm, aclrtStream stream);
+int DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t batchSize, P2PComm comm, aclrtStream stream);
 
 #ifdef __cplusplus
 };

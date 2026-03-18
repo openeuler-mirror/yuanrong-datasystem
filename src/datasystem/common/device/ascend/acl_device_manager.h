@@ -61,7 +61,6 @@
 namespace datasystem {
 
 namespace acl {
-
 class AclDeviceManager : public DeviceManagerBase {
 public:
     AclDeviceManager();
@@ -339,12 +338,12 @@ public:
      * @param kind Identifies whether the current device is a sender and receiver.
      * @param link Identifies the communication channel type.
      * @param comm A pointer identifying the initialized communication resource.
-     * @param p2pCallback Function callback to check if client was disconnected
+     * @param p2pCommInitOptions Additional options for p2pcomm
      * @return HcclResult
      * @see HcclCommDestroy()
      */
     virtual Status DSP2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
-                                         std::function<int()> *p2pCallback = nullptr);
+                                         P2PCommInitOptions *p2pCommInitOptions = nullptr);
 
     /**
      * @brief Destroy P2P comm
@@ -410,7 +409,7 @@ public:
     virtual Status DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segmentInfo,
                                         P2pSegmentPermissions permissions);
     virtual Status DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
-    virtual Status DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchSize, P2PComm comm,
+    virtual Status DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t batchSize, P2PComm comm,
                                                       aclrtStream stream);
     virtual Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
                                MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex) override;
@@ -454,17 +453,16 @@ public:
     // Communication
     Status CommGetRootInfo(CommRootInfo *rootInfo) override;
     Status CommInitRootInfo(uint32_t nRanks, const CommRootInfo *rootInfo, uint32_t rank, void **comm) override;
-    Status CommSend(void *sendBuf, uint64_t count, CommDataType dataType, uint32_t destRank,
-                    void *comm, void *stream) override;
-    Status CommRecv(void *recvBuf, uint64_t count, CommDataType dataType, uint32_t srcRank,
-                    void *comm, void *stream) override;
+    Status CommSend(void *sendBuf, uint64_t count, CommDataType dataType, uint32_t destRank, void *comm,
+                    void *stream) override;
+    Status CommRecv(void *recvBuf, uint64_t count, CommDataType dataType, uint32_t srcRank, void *comm,
+                    void *stream) override;
     Status CommDestroy(void *comm) override;
     Status CommGetAsyncError(void *comm) override;
 
     // P2P
     Status P2PGetRootInfo(CommRootInfo *rootInfo) override;
-    Status P2PCommInitRootInfo(const CommRootInfo *rootInfo, P2pKindBase kind, P2pLinkBase link,
-                               void **comm) override;
+    Status P2PCommInitRootInfo(const CommRootInfo *rootInfo, P2pKindBase kind, P2pLinkBase link, void **comm) override;
     Status P2PCommDestroy(void *comm) override;
     Status P2PSend(void *sendBuf, uint64_t count, CommDataType dataType, void *comm, void *stream) override;
     Status P2PRecv(void *recvBuf, uint64_t count, CommDataType dataType, void *comm, void *stream) override;
@@ -482,8 +480,8 @@ public:
     Status P2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentBase *segmentInfo,
                               P2pSegmentPermBase permissions) override;
     Status P2PImportHostSegment(P2pSegmentBase segmentInfo) override;
-    Status P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entries, uint32_t batchSize,
-                                            void *comm, void *stream) override;
+    Status P2PScatterBatchFromRemoteHostMem(P2pScatterBase *entries, uint32_t batchSize, void *comm,
+                                            void *stream) override;
 
 private:
     /**
@@ -557,7 +555,7 @@ private:
     REG_METHOD(DSAclrtFreeHost, int, void *);
 
     REG_METHOD(DSP2PGetRootInfo, int, HcclRootInfo *);
-    REG_METHOD(DSP2PCommInitRootInfo, int, const HcclRootInfo *, P2pKind, P2pLink, P2PComm *, std::function<int()> *);
+    REG_METHOD(DSP2PCommInitRootInfo, int, const HcclRootInfo *, P2pKind, P2pLink, P2PComm *, P2PCommInitOptions *);
     REG_METHOD(DSP2PCommDestroy, int, P2PComm);
     REG_METHOD(DSP2PSend, int, void *, uint64_t, HcclDataType, P2PComm, aclrtStream);
     REG_METHOD(DSP2PRecv, int, void *, uint64_t, HcclDataType, P2PComm, aclrtStream);
@@ -578,7 +576,7 @@ private:
 
     REG_METHOD(DSP2PRegisterHostMem, int, void *, uint64_t, P2pSegmentInfo *, P2pSegmentPermissions);
     REG_METHOD(DSP2PImportHostSegment, int, P2pSegmentInfo);
-    REG_METHOD(DSP2PScatterBatchFromRemoteHostMem, int, P2pScatterEntry*, uint32_t, P2PComm, aclrtStream);
+    REG_METHOD(DSP2PScatterBatchFromRemoteHostMem, int, P2pScatterEntry *, uint32_t, P2PComm, aclrtStream);
 
     static std::once_flag init_;
     static std::once_flag hasLoadPlugin_;

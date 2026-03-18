@@ -102,6 +102,9 @@ public:
                         const std::vector<size_t> &numObjChoices, const std::vector<size_t> &blkSzChoices,
                         size_t deviceId, const size_t blksPerObj = 31, int loopsNum = 5);
 
+    void RunDistributedMGetH2DTest(const int numSetWorkers, const std::vector<size_t> &numObjChoices,
+                                   const std::vector<size_t> &blkSzChoices, const size_t blksPerObj);
+
 public:
     std::mt19937 gen_;
     int32_t deviceId_ = 0;
@@ -148,6 +151,42 @@ class DevObjectHeteroRH2DNoNpuTest : public DevObjectHeteroRH2DTest {
         opts.injectActions =
             "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
             "RH2D.ManageHeartbeats.heartbeat_timeout_s:call(10)";
+        FLAGS_v = 0;
+    }
+};
+
+class DevObjectHeteroRH2DTwoSetWorkersTest : public DevObjectHeteroRH2DTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 3;
+        opts.workerGflagParams =
+            " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
+            "-client_dead_timeout_s=15";
+        opts.workerSpecifyGflagParams[0] += " -remote_h2d_device_ids=7 ";
+        opts.workerSpecifyGflagParams[1] += " -remote_h2d_device_ids=5 ";
+        opts.workerSpecifyGflagParams[2] += " -remote_h2d_device_ids=3 ";
+        opts.enableDistributedMaster = "false";
+        opts.numEtcd = 1;
+        FLAGS_v = 0;
+    }
+};
+
+class DevObjectHeteroRH2DSixSetWorkersTest : public DevObjectHeteroRH2DTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 7;
+        opts.workerGflagParams =
+            " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
+            "-client_dead_timeout_s=15";
+        opts.workerSpecifyGflagParams[0] += " -remote_h2d_device_ids=7 ";
+        opts.workerSpecifyGflagParams[1] += " -remote_h2d_device_ids=5 ";
+        opts.workerSpecifyGflagParams[2] += " -remote_h2d_device_ids=3 ";
+        opts.workerSpecifyGflagParams[3] += " -remote_h2d_device_ids=2 ";
+        opts.workerSpecifyGflagParams[4] += " -remote_h2d_device_ids=1 ";
+        opts.workerSpecifyGflagParams[5] += " -remote_h2d_device_ids=0 ";
+        opts.workerSpecifyGflagParams[6] += " -remote_h2d_device_ids=4 ";
+        opts.enableDistributedMaster = "false";
+        opts.numEtcd = 1;
         FLAGS_v = 0;
     }
 };
@@ -201,6 +240,66 @@ void DevObjectHeteroRH2DTest::RunMGetH2DTest(const std::shared_ptr<DsClient> &cl
             ASSERT_TRUE(failedList.empty());
             verifyFunc(verifyList);
             DS_ASSERT_OK(client1->Hetero()->Delete(inObjectIds, failedList));
+            ASSERT_TRUE(failedList.empty());
+        }
+    }
+}
+
+void DevObjectHeteroRH2DTest::RunDistributedMGetH2DTest(const int numSetWorkers,
+                                                        const std::vector<size_t> &numObjChoices,
+                                                        const std::vector<size_t> &blkSzChoices,
+                                                        const size_t blksPerObj)
+{
+    InitAcl(deviceId_);
+
+    std::vector<std::shared_ptr<DsClient>> setClients(numSetWorkers);
+    std::shared_ptr<DsClient> getClient;
+    for (int i = 0; i < numSetWorkers; i++) {
+        InitTestDsClientForRemoteH2D(i, setClients[i]);
+    }
+    InitTestDsClientForRemoteH2D(numSetWorkers, getClient);
+
+    for (size_t vecIdx = 0; vecIdx < numObjChoices.size(); vecIdx++) {
+        auto blkSz = blkSzChoices[vecIdx];
+        auto numOfObjs = numObjChoices[vecIdx];
+
+        std::vector<DeviceBlobList> setBlobListUseless;
+        std::vector<DeviceBlobList> getBlobList;
+        PrePareDevData(numOfObjs, blksPerObj, blkSz, setBlobListUseless, getBlobList, deviceId_);
+
+        auto verifyFunc = [&](std::vector<std::vector<std::string>> &verifyList) {
+            for (size_t j = 0; j < numOfObjs; j++) {
+                for (size_t k = 0; k < blksPerObj; k++) {
+                    LOG(INFO) << "Check object " << j << ", blob " << k;
+                    CheckDevPtrContent(getBlobList[j].blobs[k].pointer, getBlobList[j].blobs[k].size, verifyList[j][k]);
+                }
+            }
+        };
+
+        std::vector<std::string> inObjectIds;
+        std::vector<std::vector<std::string>> splitInObjectIds(numSetWorkers);
+        for (auto i = 0ul; i < numOfObjs; i++) {
+            std::string uuid = GetStringUuid();
+            inObjectIds.emplace_back(uuid);
+            splitInObjectIds[i % numSetWorkers].emplace_back(uuid);
+        }
+        std::vector<DeviceBlobList> setBlobList;
+        std::vector<std::vector<DeviceBlobList>> splitSetBlobList(numSetWorkers);
+        std::vector<std::vector<std::string>> verifyList;
+        PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
+        for (size_t i = 0; i < setBlobList.size(); i++) {
+            splitSetBlobList[i % numSetWorkers].emplace_back(setBlobList[i]);
+        }
+
+        for (int i = 0; i < numSetWorkers; i++) {
+            DS_ASSERT_OK(setClients[i]->Hetero()->MSetD2H(splitInObjectIds[i], splitSetBlobList[i]));
+        }
+        std::vector<std::string> failedList;
+        DS_ASSERT_OK(getClient->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+        ASSERT_TRUE(failedList.empty());
+        verifyFunc(verifyList);
+        for (int i = 0; i < numSetWorkers; i++) {
+            DS_ASSERT_OK(setClients[i]->Hetero()->Delete(splitInObjectIds[i], failedList));
             ASSERT_TRUE(failedList.empty());
         }
     }
@@ -670,6 +769,28 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestReliability1)
     InitTestDsClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
+}
+
+TEST_F(DevObjectHeteroRH2DTwoSetWorkersTest, DISABLED_RemoteH2DTestMultiSetWorkers1)
+{
+    // Test that MGetH2D works when getting from 2 seperate workers
+    const int numSetWorkers = 2;
+    const std::vector<size_t> numObjChoices = { 5, 20u, 50u };
+    const std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024 };
+    const size_t blksPerObj = 31;
+
+    RunDistributedMGetH2DTest(numSetWorkers, numObjChoices, blkSzChoices, blksPerObj);
+}
+
+TEST_F(DevObjectHeteroRH2DSixSetWorkersTest, DISABLED_RemoteH2DTestMultiSetWorkers2)
+{
+    // Test that MGetH2D works when getting from 6 seperate workers
+    const int numSetWorkers = 6;
+    const std::vector<size_t> numObjChoices = { 15, 50, 100 };
+    const std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024 };
+    const size_t blksPerObj = 31;
+
+    RunDistributedMGetH2DTest(numSetWorkers, numObjChoices, blkSzChoices, blksPerObj);
 }
 
 }  // namespace st
