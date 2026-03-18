@@ -33,7 +33,7 @@
 
 dsbench工具需要配合已部署好的datasystem worker使用，而datasystem worker的运行又依赖etcd服务，所以需要先完成以下环境准备工作：
 
-#### 安装Python
+### 安装Python
 
 安装Python的详细步骤可以参考[dscli.md中的安装Python部分](dscli.md#安装python)。
 

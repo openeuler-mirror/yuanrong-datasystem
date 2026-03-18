@@ -14,4 +14,4 @@
 - [部署 openYuanrong datasystem](deploy.md)
 - [dscli命令行工具详细介绍](dscli.md)
 - [Kubernetes详细配置项](k8s_configuration.md)
-- [dsbench基准测试工具](dsbench.md)
+- [dsbench性能测试工具](dsbench.md)
