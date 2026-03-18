@@ -69,7 +69,7 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
 void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
                                             uint8_t *&ubBufferPtr, uint64_t &ubBufferSize)
 {
-    if (IsUrmaEnabled() && !shmEnabled_) {
+    if (IsUrmaEnabled() && !IsShmEnable()) {
         Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubBufferHandle);
         if (ubRc.IsOk() && ubBufferHandle != nullptr) {
             UrmaRemoteAddrPb urmaInfo;
@@ -322,7 +322,7 @@ void ClientWorkerBaseApi::PostMultiCreate(bool skipCheckExistence, const MultiCr
 bool ClientWorkerBaseApi::CheckUseTransferForMultiCreateRsp(const MultiCreateRspPb &rsp,
                                                             bool skipCheckExistence) const
 {
-    if (shmEnabled_) {
+    if (IsShmEnable()) {
         if (skipCheckExistence) {
             return true;
         }

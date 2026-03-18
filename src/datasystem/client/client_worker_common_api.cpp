@@ -57,6 +57,21 @@
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
 namespace datasystem {
+namespace {
+const char *ShmEnableTypeName(ShmEnableType type)
+{
+    switch (type) {
+        case ShmEnableType::UDS:
+            return "Unix domain socket";
+        case ShmEnableType::SCMTCP:
+            return "SCMTCP";
+        case ShmEnableType::NONE:
+        default:
+            return "TCP";
+    }
+}
+}  // namespace
+
 namespace client {
 void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
@@ -175,13 +190,13 @@ Status ClientWorkerLocalCommonApi::Reconnect()
 Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection)
 {
     (void)reconnection;
-    shmEnabled_ = true;
+    shmEnableType_ = ShmEnableType::UDS;
     heartbeatType_ = HeartbeatType::RPC_HEARTBEAT;
     req.set_server_fd(INVALID_SOCKET_FD);
     req.set_version(DATASYSTEM_VERSION);
     req.set_git_hash(GetGitHash());
     req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
-    req.set_shm_enabled(shmEnabled_);
+    req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id("");
     req.set_enable_cross_node(enableCrossNodeConnection_);
     req.set_enable_exclusive_connection(false);
@@ -273,49 +288,51 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
     bool isConnectSuccess = false;
     int32_t serverFd = INVALID_SOCKET_FD;
     int32_t socketFd = INVALID_SOCKET_FD;
-    bool mustUds = heartbeatType_ == HeartbeatType::UDS_HEARTBEAT || (reconnection && shmEnabled_);
+    ShmEnableType shmEnableType = ShmEnableType::NONE;
+    bool mustUds = heartbeatType_ == HeartbeatType::UDS_HEARTBEAT || (reconnection && IsShmEnable());
     INJECT_POINT_NO_RETURN("ClientWorkerCommonApi.Connect.MustUds", [&mustUds] { mustUds = true; });
-    std::string type;
-    RETURN_IF_NOT_OK(CreateConnectionForTransferShmFd(timeoutMs, isConnectSuccess, serverFd, socketFd, type));
+    RETURN_IF_NOT_OK(CreateConnectionForTransferShmFd(timeoutMs, isConnectSuccess, serverFd, socketFd, shmEnableType));
     if (mustUds && !isConnectSuccess) {
         return { StatusCode::K_RPC_UNAVAILABLE, "Can not create connection to worker for shm fd transfer." };
     }
 
     if (isConnectSuccess) {
-        LOG(INFO) << "Client and worker support transfer data through shared memory and the fd send over " << type
+        LOG(INFO) << "Client and worker support transfer data through shared memory and the fd send over "
+                  << ShmEnableTypeName(shmEnableType)
                   << ", socketFd: " << socketFd << ", serverFd: " << serverFd;
     }
 
     CloseSocketFd();
 
-    shmEnabled_ = isUseStandbyWorker_ ? false : isConnectSuccess;
+    shmEnableType_ = isUseStandbyWorker_ ? ShmEnableType::NONE : shmEnableType;
     socketFd_ = socketFd;
     if (isConnectSuccess) {
         heartbeatType_ = heartbeatType_ == HeartbeatType::NO_HEARTBEAT ? HeartbeatType::RPC_HEARTBEAT : heartbeatType_;
     }
     req.set_server_fd(serverFd);
     RETURN_IF_NOT_OK(RegisterClient(req, timeoutMs));
-    LOG(INFO) << FormatString("Register client to worker through the %s successfully, client id: %s", type, clientId_);
+    LOG(INFO) << FormatString("Register client to worker through the %s successfully, client id: %s",
+                              ShmEnableTypeName(shmEnableType_), clientId_);
     return Status::OK();
 }
 
 bool ClientWorkerRemoteCommonApi::PrepareShmTransferEndpoint(const GetSocketPathRspPb &reply, std::string &endpointStr,
-                                                             std::string &type)
+                                                             ShmEnableType &shmEnableType)
 {
     uint32_t shmWorkerPort = reply.shm_worker_port();
     if (shmWorkerPort > 0) {
         endpointStr = FormatString("tcp://%s:%d", hostPort_.Host(), shmWorkerPort);
-        type = "SCMTCP";
+        shmEnableType = ShmEnableType::SCMTCP;
         return true;
     }
 
     if (!reply.path().empty()) {
         endpointStr = FormatString("ipc://%s", reply.path());
-        type = "Unix domain socket";
+        shmEnableType = ShmEnableType::UDS;
         return true;
     }
 
-    type = "TCP";
+    shmEnableType = ShmEnableType::NONE;
     LOG(INFO) << "Both the uds socket path and shm_worker_port is empty, cannot transfer data through shm between "
                  "client and worker.";
     return false;
@@ -351,7 +368,7 @@ Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, const st
 
 Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t timeoutMs, bool &isConnectSuccess,
                                                                      int32_t &serverFd, int32_t &socketFd,
-                                                                     std::string &type)
+                                                                     ShmEnableType &shmEnableType)
 {
     Timer timer(timeoutMs);
     GetSocketPathReqPb req;
@@ -374,10 +391,11 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
 
     isConnectSuccess = false;
+    shmEnableType = ShmEnableType::NONE;
 
     std::string endpointStr;
     // Determine how to reach the worker for shared memory transfer.
-    if (!PrepareShmTransferEndpoint(reply, endpointStr, type)) {
+    if (!PrepareShmTransferEndpoint(reply, endpointStr, shmEnableType)) {
         return Status::OK();
     }
 
@@ -399,9 +417,9 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
         isConnectSuccess = true;
         socketFd = sock.GetFd();
     } else {
-        LOG(INFO) << "Failed connect to local worker via " << type
+        LOG(INFO) << "Failed connect to local worker via " << ShmEnableTypeName(shmEnableType)
                   << ", client and worker maybe not in the same node, falling back to TCP";
-        type = "TCP";
+        shmEnableType = ShmEnableType::NONE;
         shmWorkerPort_ = 0;
     }
     return Status::OK();
@@ -491,7 +509,7 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
 
 void ClientWorkerRemoteCommonApi::ConstructDecShmUnit(const RegisterClientRspPb &rsp)
 {
-    if (shmEnabled_) {
+    if (IsShmEnable()) {
         decShmUnit_ = std::make_shared<ShmUnitInfo>();
         decShmUnit_->fd = rsp.store_fd();
         decShmUnit_->mmapSize = rsp.mmap_size();
@@ -523,7 +541,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_version(DATASYSTEM_VERSION);
     req.set_git_hash(GetGitHash());
     req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
-    req.set_shm_enabled(shmEnabled_);
+    req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id(tenantId_);
     req.set_enable_cross_node(enableCrossNodeConnection_);
     req.set_enable_exclusive_connection(enableExclusiveConnection_);
@@ -536,7 +554,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
 
     RegisterClientRspPb rsp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << shmEnabled_
+    LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << IsShmEnable()
               << ", enable cross node: " << enableCrossNodeConnection_ << ", tenant id: " << tenantId_
               << ", auth: " << signature_->ToString()
               << ", client support multi shm ref count:" << req.support_multi_shm_ref_count();
@@ -637,7 +655,7 @@ void ClientWorkerRemoteCommonApi::RecvFdAfterNotify(const std::vector<int> &work
 Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
                                                 const std::string &tenantId)
 {
-    if (!shmEnabled_ || socketFd_ == INVALID_SOCKET_FD) {
+    if (!IsShmEnable() || socketFd_ == INVALID_SOCKET_FD) {
         return { K_RUNTIME_ERROR, "Current client can not support uds, so query client fd failed." };
     }
     PerfPoint point(PerfKey::RPC_WORKER_GET_CLIENT_FDS);
@@ -779,12 +797,12 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
 
 Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientRspPb &rsp)
 {
-    // Initialize UrmaManager regardless of shmEnabled_ to avoid switch overhead standby worker.
+    // Initialize UrmaManager regardless of shm state to avoid switch overhead standby worker.
     SetClientFastTransportMode(rsp.fast_transport_mode());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_), "Fast transport init failed");
 
     // Enable UB fast transport if client cannot use share memory while worker supports UB.
-    if (shmEnabled_) {
+    if (IsShmEnable()) {
         FLAGS_enable_urma = false;
         return Status::OK();
     }

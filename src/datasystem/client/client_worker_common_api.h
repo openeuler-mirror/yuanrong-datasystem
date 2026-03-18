@@ -54,6 +54,7 @@ static constexpr int MIN_HEARTBEAT_INTERVAL_MS = 3 * 1000;
 static constexpr int MAX_HEARTBEAT_INTERVAL_MS = 30 * 1000;  // 30s, Maintain compatibility of EDA scenarios.
 constexpr int INVALID_SOCKET_FD = -1;
 enum class HeartbeatType { NO_HEARTBEAT = 0, RPC_HEARTBEAT = 1, UDS_HEARTBEAT = 2 };
+enum class ShmEnableType { NONE, UDS, SCMTCP };
 namespace client {
 
 struct ClientWorkerCommonApiAttribute {
@@ -72,7 +73,17 @@ struct ClientWorkerCommonApiAttribute {
 
     bool ShmCreateable(uint64_t size) const
     {
-        return shmEnabled_ && size >= shmThreshold_;
+        return IsShmEnable() && size >= shmThreshold_;
+    }
+
+    bool IsShmEnable() const
+    {
+        return shmEnableType_ != ShmEnableType::NONE;
+    }
+
+    bool IsShmEnableByUDS() const
+    {
+        return shmEnableType_ == ShmEnableType::UDS;
     }
 
     int GetWorkHostPortINETFamily() const
@@ -131,7 +142,7 @@ struct ClientWorkerCommonApiAttribute {
 
     std::atomic<int32_t> socketFd_{ -1 };
     std::string clientId_;
-    bool shmEnabled_{ false };
+    ShmEnableType shmEnableType_{ ShmEnableType::NONE };
     uint64_t shmThreshold_{ 0 };
     HeartbeatType heartbeatType_;
     // Worker version, increases 1 each time the worker recovers from a disconnection.
@@ -483,10 +494,11 @@ private:
      * @brief Determine the endpoint and connection type for shared memory transfer.
      * @param[in] reply The response containing socket path or port.
      * @param[out] endpointStr The formatted endpoint string.
-     * @param[out] type The connection type description.
+     * @param[out] shmEnableType The shared-memory connection type.
      * @return True if a shared memory endpoint was found; false otherwise.
      */
-    bool PrepareShmTransferEndpoint(const GetSocketPathRspPb &reply, std::string &endpointStr, std::string &type);
+    bool PrepareShmTransferEndpoint(const GetSocketPathRspPb &reply, std::string &endpointStr,
+                                    ShmEnableType &shmEnableType);
 
     /**
      * @brief Create a unix domain socket.
@@ -494,11 +506,11 @@ private:
      * @param[out] isConnectSuccess Check whether the UDS is successfully connected..
      * @param[out] serverFd Returns the FD of the worker server..
      * @param[out] socketFd FD of the UNIX socket.
-     * @param[out] type Type of connection (Unix domain socket SCMTCP or TCP).
+     * @param[out] shmEnableType Shared-memory connection type.
      * @return Status of the call.
      */
     Status CreateConnectionForTransferShmFd(int32_t timeoutMs, bool &isConnectSuccess, int32_t &serverFd,
-                                            int32_t &socketFd, std::string &type);
+                                            int32_t &socketFd, ShmEnableType &shmEnableType);
 
     /**
      * @brief Construct decShmUnit_ after register.

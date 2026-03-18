@@ -50,9 +50,9 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Setting client-worker communication via Unix socket : %s",
-                                              (shmEnabled_ ? "true" : "false"));
+                                              (IsShmEnable() ? "true" : "false"));
     // We will enable uds after handshaking with the worker.
-    if (shmEnabled_) {
+    if (IsShmEnableByUDS()) {
         channel->SetServiceUdsEnabled(ClientWorkerSCService_Stub::FullServiceName(),
                                       GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
     }
@@ -63,8 +63,8 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
 Status ClientWorkerApi::CreateProducer(const std::string &streamName, const std::string &producerId,
                                        const ProducerConf &producerConf, ShmView &outPageView,
                                        DataVerificationHeader::SenderProducerNo &senderProducerNo,
-                                       bool &enableStreamDataVerification, uint64_t &streamNo,
-                                       bool &enableSharedPage, uint64_t &sharedPageSize, ShmView &outStreamMetaView)
+                                       bool &enableStreamDataVerification, uint64_t &streamNo, bool &enableSharedPage,
+                                       uint64_t &sharedPageSize, ShmView &outStreamMetaView)
 {
     CreateProducerReqPb req;
     req.set_stream_name(streamName);

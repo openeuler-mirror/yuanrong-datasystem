@@ -50,7 +50,7 @@ public:
 
     bool EnableDecreaseShmRefByShmQueue()
     {
-        return shmEnabled_ && decShmUnit_->fd > 0;
+        return IsShmEnable() && decShmUnit_->fd > 0;
     }
 
 protected:

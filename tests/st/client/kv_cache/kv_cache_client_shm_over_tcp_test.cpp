@@ -115,5 +115,45 @@ TEST_F(KVCacheClientShmOverTcpTest, TestSingleKey)
     ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
     ASSERT_EQ(client->Del(key), Status::OK());
 }
+
+class KVCacheClientShmOverTcpDisableUDSTest : public KVCacheClientShmOverTcpTest {
+public:
+    std::vector<std::string> workerAddress_;
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 2;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
+        std::string hostIp = "127.0.0.1";
+        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+        for (const auto &addr : opts.workerConfigs) {
+            workerAddress_.emplace_back(addr.ToString());
+        }
+
+        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -inject_actions=worker.bind_unix_path:return(K_OK) ";
+
+        for (size_t i = 0; i < opts.numWorkers; i++) {
+            auto shmWorkerPort = GetFreePort();
+            opts.workerSpecifyGflagParams[i] = FormatString("-shared_memory_worker_port=%d", shmWorkerPort);
+        }
+    }
+};
+
+TEST_F(KVCacheClientShmOverTcpDisableUDSTest, TestSingleKey)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    std::string key = "key1";
+    std::string value(SHM_SIZE, 'a');
+    ASSERT_EQ(client->Set(key, value), Status::OK());
+    std::string valueGet;
+    ASSERT_EQ(client->Get(key, valueGet), Status::OK());
+    ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
+    ASSERT_EQ(client->Del(key), Status::OK());
+}
+
 }  // namespace st
 }  // namespace datasystem
