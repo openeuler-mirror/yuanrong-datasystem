@@ -124,7 +124,7 @@ DsLogger LoggerContext::CreateLogger(const LogParam &logParam)
         }
 
         ds_spdlog::initialize_logger(logger);
-        logger->set_pattern(logParam.pattern, ds_spdlog::pattern_time_type::utc);
+        logger->set_pattern(logParam.pattern, ds_spdlog::pattern_time_type::local);
 
         const auto logLevel = GetLogLevel(logParam.logLevel);
         logger->set_level(logLevel);
