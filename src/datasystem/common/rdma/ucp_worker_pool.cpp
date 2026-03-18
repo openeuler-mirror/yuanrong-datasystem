@@ -92,6 +92,7 @@ std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
         return it->second;
     }
 
+    LOG(INFO) << "Select new ucp worker " << roundRobin_ << " for " << ipAddr << " to recv";
     auto &worker = localWorkerPool_[roundRobin_];
     roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
 
@@ -111,7 +112,7 @@ Status UcpWorkerPool::RemoveByIp(const std::string &ipAddr)
         // first check if there is a worker attached to this IP
         std::unique_lock writeLock(recvMapMutex_);
         if (localWorkerRecvMap_.erase(ipAddr) <= 0) {
-            errMsg << "never received from this IP, ";
+            LOG(INFO) << FormatString("Try to remove by IP but never received from %s", ipAddr);
         }
     }
 
@@ -124,20 +125,13 @@ Status UcpWorkerPool::RemoveByIp(const std::string &ipAddr)
             Status status = it->second->RemoveEndpointByIp(ipAddr);
             localWorkerSendMap_.erase(it);
             if (status.IsError()) {
-                errMsg << status.ToString();
+                LOG(WARNING) << FormatString("Try to remove by IP %s but failed: %s", ipAddr, status.ToString());
             }
         } else {
-            errMsg << "never sent to this IP, ";
+            LOG(INFO) << FormatString("Try to remove by IP but never sent to %s", ipAddr);
         }
     }
     point.Record();
-
-    if (errMsg.str().empty()) {
-        return Status::OK();
-    }
-
-    LOG(WARNING) << FormatString("[UcpWorkerPool] RemoveByIp failed, ip: %s, errMsg: %s", ipAddr, errMsg.str());
-
     return Status::OK();
 }
 
@@ -162,11 +156,10 @@ UcpWorker *UcpWorkerPool::GetOrSelSendWorker(const std::string &ipAddr)
     if (it != localWorkerSendMap_.end()) {
         return it->second;
     }
+    LOG(INFO) << "Select new ucp worker " << roundRobin_ << " for " << ipAddr << " to send";
     auto worker = localWorkerPool_[roundRobin_].get();
     roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
     localWorkerSendMap_.emplace(ipAddr, worker);
-    LOG(INFO) << "Emplace new remote ucp worker : " << ipAddr;
-
     return worker;
 }
 

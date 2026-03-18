@@ -43,7 +43,6 @@ DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
 class UcpWorkerPool;
-using TbbInstanceMap = tbb::concurrent_hash_map<std::string, std::string>;
 using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
 
 class UcpManager {
@@ -238,8 +237,9 @@ private:
     std::unique_ptr<UcpSegmentMap> localSegmentMap_;
     mutable std::shared_timed_mutex localMapMutex_;
     mutable std::shared_timed_mutex eventMapMutex_;
+    mutable std::mutex instanceTableMutex_;
     std::unique_ptr<EventMap> eventMap_;
-    TbbInstanceMap instanceTable_;
+    std::unordered_map<std::string, std::string> instanceTable_;
     std::string uniqueInstanceId_;
 };
 
