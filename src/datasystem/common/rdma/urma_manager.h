@@ -27,10 +27,7 @@
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
 
-#include <ub/umdk/urma/urma_api.h>
-#ifdef URMA_OVER_UB
-#include <ub/umdk/urma/urma_ubagg.h>
-#endif
+#include "datasystem/common/rdma/urma_dlopen_util.h"
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -65,7 +62,7 @@ public:
     /**
      * @brief Create a new Segment object.
      */
-    Segment() : segment_(nullptr), local_(true) {};
+    Segment() : segment_(nullptr), local_(true){};
     ~Segment();
 
     /**
