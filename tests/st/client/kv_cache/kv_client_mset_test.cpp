@@ -1176,8 +1176,8 @@ public:
         opts.numEtcd = 1;
     }
 
-    void InitTestKVClient(std::shared_ptr<KVClient> &client, std::string tenant, std::string token,
-                             std::string &ak, std::string &sk)
+    void InitTestKVClient(std::shared_ptr<KVClient> &client, std::string tenant, std::string token, std::string &ak,
+                          std::string &sk)
     {
         std::string returnVal = "return(" + token + ", " + tenant + ")";
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", returnVal));
@@ -1663,8 +1663,7 @@ TEST_F(KVClientMSetDMTest, PreCommitConflict)
     for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "master.CreateMultiMetaTx.pendingTtl", "call(2'000'000)"));
     }
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "worker.CreateMultiMetaParallel.begin", "3*return(K_TRY_AGAIN)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.CreateMultiMetaParallel.begin", "3*return(K_TRY_AGAIN)"));
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMetaPhaseTwo.begin", "1*return(K_RUNTIME_ERROR)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMeta.begin", "5*return(K_TRY_AGAIN)"));
@@ -1678,9 +1677,8 @@ TEST_F(KVClientMSetDMTest, PreCommitConflict)
 
     const int threadNum = 2;
     ThreadPool threadPool(threadNum);
-    auto fut = threadPool.Submit([this, &keyW1, &keyW2]() {
-        DS_ASSERT_OK(client0_->MSetTx({ keyW1, keyW2 }, { "any", "any" }, mParam_));
-    });
+    auto fut = threadPool.Submit(
+        [this, &keyW1, &keyW2]() { DS_ASSERT_OK(client0_->MSetTx({ keyW1, keyW2 }, { "any", "any" }, mParam_)); });
     auto fut1 = threadPool.Submit([this, &keyW0, &keyW2]() {
         sleep(1);
         ASSERT_EQ(client1_->MSetTx({ keyW0, keyW2 }, { "any", "any" }, mParam_).GetCode(), K_RUNTIME_ERROR);

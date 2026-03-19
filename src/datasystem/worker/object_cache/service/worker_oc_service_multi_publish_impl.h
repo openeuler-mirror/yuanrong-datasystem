@@ -438,6 +438,13 @@ private:
                           std::vector<std::shared_ptr<SafeObjType>> &entries,
                           std::unordered_set<std::string> &failedKeys);
 
+    /**
+     * @brief Verify objects is valid.
+     * @param[in] objectKeys Object key list.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status VerifyDuplicateKeys(const std::vector<std::string> &objectKeys);
+
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
