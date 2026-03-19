@@ -368,7 +368,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
 
     // If worker diable shared-memory transfer but the request still carries shmUnitId, client-to-worker data transfer
     // is through UB; we need clean memoryRefTable to avoid memory leak.
-    if (!ShmEnable() && !shmUnitId.Empty()) {
+    if (!shmUnitId.Empty() && !(ShmEnable() && ClientShmEnabled(clientId))) {
         memoryRefTable_->RemoveShmUnit(clientId, shmUnitId);
     }
 
