@@ -24,7 +24,7 @@
 namespace datasystem {
 namespace bench {
 struct KVArgs : public ArgsBase {
-    KVArgs(const std::string &command);
+    explicit KVArgs(const std::string &command);
     Status Parse(int argc, char *argv[]) override;
     std::string Usage(const std::string &argv0);
     std::string ToString();

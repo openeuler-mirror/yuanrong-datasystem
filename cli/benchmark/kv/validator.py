@@ -35,6 +35,8 @@ def check_duplicate_args(args: Any):
     """Ensure that unique command-line arguments are not specified multiple times."""
     raw_args = sys.argv[1:]
     unique_params = [
+        "-c",
+        "--client_num",
         "-t",
         "--thread_num",
         "-b",
@@ -51,6 +53,7 @@ def check_duplicate_args(args: Any):
         "--numa",
         "--access_key",
         "--secret_key",
+        "--concurrent",
         "-w",
         "--worker_address_list",
     ]
@@ -67,8 +70,12 @@ def check_duplicate_args(args: Any):
 
 def validate_range_arguments(args: Any):
     """Validates the range of numerical command-line arguments."""
-    if args.thread_num is not None and not 1 <= args.thread_num <= 128:
-        logger.error(f"thread_num must be between 1 and 128.")
+    if args.client_num is not None and not 1 <= args.client_num <= 128:
+        logger.error(f"client_num must be between 1 and 128.")
+        return False
+
+    if args.thread_num is not None and args.thread_num <= 0:
+        logger.error(f"thread_num must be greater than 0.")
         return False
 
     if args.batch_num is not None and not 1 <= args.batch_num <= 10000:
@@ -156,7 +163,7 @@ def validate_mutex_arguments(args: Any):
         return False
 
     # Define a set of arguments that conflict with --all and --testcase_file
-    conflicting_run_args = {"thread_num", "batch_num", "num", "size"}
+    conflicting_run_args = {"client_num", "thread_num", "batch_num", "num", "size"}
 
     # Helper function to check if any argument in the set is set
     def _is_any_conflicting_arg_set():
@@ -167,13 +174,13 @@ def validate_mutex_arguments(args: Any):
     # Use the helper function in simplified if conditions
     if args.all and _is_any_conflicting_arg_set():
         logger.error(
-            f"When using --all, cannot specify thread_num, batch_num, num, or size."
+            f"When using --all, cannot specify client_num, thread_num, batch_num, num, or size."
         )
         return False
 
     if args.testcase_file and _is_any_conflicting_arg_set():
         logger.error(
-            f"When using --testcase_file, cannot specify thread_num, batch_num, num, or size."
+            f"When using --testcase_file, cannot specify client_num, thread_num, batch_num, num, or size."
         )
         return False
 

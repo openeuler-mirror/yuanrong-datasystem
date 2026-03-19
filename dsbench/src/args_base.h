@@ -32,6 +32,7 @@ struct ArgsBase {
     std::string command;
     std::string action;
     std::string workerAddress;
+    uint64_t clientNum;
     uint64_t threadNum;
     std::string perfPath;
     std::string perfWorkers;

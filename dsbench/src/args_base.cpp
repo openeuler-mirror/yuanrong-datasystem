@@ -26,7 +26,7 @@
 namespace datasystem {
 namespace bench {
 ArgsBase::ArgsBase(const std::string &command)
-    : command(command), action(""), workerAddress(""), threadNum(1), perfPath("./perf.log")
+    : command(command), action(""), workerAddress(""), clientNum(1), threadNum(1), perfPath("./perf.log")
 {
 }
 
