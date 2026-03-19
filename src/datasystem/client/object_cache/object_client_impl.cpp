@@ -602,9 +602,13 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
             continue;
         }
         if (!WaitStandbyWorkerReady(workerApi_[next])) {
+            LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
+                                       workerApi_[next]->hostPort_.ToString());
             continue;
         }
         currentNode_ = next;
+        LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
+                                  workerApi_[currentNode_]->hostPort_.ToString());
         result = true;
         break;
     }
@@ -672,18 +676,12 @@ bool ObjectClientImpl::WaitStandbyWorkerReady(const std::shared_ptr<IClientWorke
         }
         switchPost_.WaitFor(waitIntervalMs);
     } while (timer.ElapsedMilliSecond() <= waitMilliseconds && !success);
-    if (success) {
-        LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
-                                  clientWorkerApi->hostPort_.ToString());
-    } else {
-        LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
-                                   clientWorkerApi->hostPort_.ToString());
-    }
     return success;
 }
 
 Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi)
 {
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
     WorkerNode id = currentNode_;
     workerApi = workerApi_[id];
     if (workerApi == nullptr) {
@@ -696,6 +694,7 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi>
 Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi,
                                                std::unique_ptr<Raii> &raii)
 {
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
     WorkerNode id = currentNode_;
     workerApi = workerApi_[id];
     if (workerApi == nullptr) {
