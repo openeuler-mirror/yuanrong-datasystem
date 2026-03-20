@@ -737,12 +737,12 @@ public:
     // of this class will close the underlying msgQue_.
     // If we have two identical copies, undesirable behavior
     // will happen if one of them goes out of scope.
-    MsgQueRef<W, R>(const MsgQueRef<W, R> &other) = delete;
+    MsgQueRef(const MsgQueRef &other) = delete;
     MsgQueRef<W, R> &operator=(const MsgQueRef<W, R> &other) = delete;
 
     // Move constructors are supported. But mainly if one
     // of them is null to begin with.
-    MsgQueRef<W, R>(MsgQueRef<W, R> &&other) noexcept : msgQue_(other.msgQue_)
+    MsgQueRef(MsgQueRef &&other) noexcept : msgQue_(other.msgQue_)
     {
         other.msgQue_.reset();
     }

@@ -2505,11 +2505,12 @@ public:
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
         DS_ASSERT_OK(serviceDiscovery->Init());
 
-        ConnectOptions connectOptions{ .connectTimeoutMs = 60000,
-                                       .requestTimeoutMs = 0,
-                                       .accessKey = "QTWAOYTTINDUT2QVKYUC",
-                                       .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
-                                       .serviceDiscovery = serviceDiscovery };
+        ConnectOptions connectOptions;
+        connectOptions.connectTimeoutMs = 60000;
+        connectOptions.requestTimeoutMs = 0;
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        connectOptions.serviceDiscovery = serviceDiscovery;
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }

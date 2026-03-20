@@ -228,16 +228,17 @@ public:
 
     void InitAkSkTestKVClient(std::shared_ptr<KVClient> &client)
     {
-        ConnectOptions connectOptions{ .host = workerAddr_.Host(),
-                                       .port = workerAddr_.Port(),
-                                       .connectTimeoutMs = 60 * 1000,  // 60s
-                                       .requestTimeoutMs = 0,
-                                       .token = "",
-                                       .clientPublicKey = "",
-                                       .clientPrivateKey = "",
-                                       .serverPublicKey = "",
-                                       .accessKey = "QTWAOYTTINDUT2QVKYUC",
-                                       .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc" };
+        ConnectOptions connectOptions;
+        connectOptions.host = workerAddr_.Host();
+        connectOptions.port = workerAddr_.Port();
+        connectOptions.connectTimeoutMs = 60 * 1000;  // 60s
+        connectOptions.requestTimeoutMs = 0;
+        connectOptions.token = "";
+        connectOptions.clientPublicKey = "";
+        connectOptions.clientPrivateKey = "";
+        connectOptions.serverPublicKey = "";
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }

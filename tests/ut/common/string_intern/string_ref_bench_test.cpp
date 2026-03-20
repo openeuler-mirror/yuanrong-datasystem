@@ -17,6 +17,7 @@
 /**
  * Description: Testing StringRef.
  */
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <random>

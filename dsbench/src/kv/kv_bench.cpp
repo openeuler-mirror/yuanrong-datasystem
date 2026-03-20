@@ -16,6 +16,7 @@
 
 #include "kv_bench.h"
 
+#include <algorithm>
 #include <numeric>
 #include <random>
 

@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_UTIL_STRINGS_UTIL_H
 #define DATASYSTEM_COMMON_UTIL_STRINGS_UTIL_H
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>

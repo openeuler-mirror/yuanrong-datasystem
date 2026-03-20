@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/object_cache/buffer_composer.h"
 
+#include <algorithm>
 #include <numeric>
 
 #include "datasystem/common/util/status_helper.h"

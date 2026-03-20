@@ -470,7 +470,7 @@ class KVBenchOutputHandler(BenchOutputHandler):
 
     def _format_benchmark_values(
         self, value_list: list[str]
-    ) -> tuple[bool, dict | list]:
+    ) -> tuple[bool, Union[dict, list]]:
         """
         Tries to format a list of benchmark value strings into a dictionary
         with proper types. Returns a tuple: (success_flag, result_dict_or_raw_list).
