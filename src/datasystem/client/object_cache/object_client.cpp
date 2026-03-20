@@ -78,14 +78,14 @@ Status ObjectClient::Create(const std::string &objectKey, uint64_t size, const C
 }
 
 Status ObjectClient::GIncreaseRef(const std::vector<std::string> &objectKeys,
-                                  std::vector<std::string> &failedObjectKeys)
+                                  std::vector<std::string> &failedObjectKeys, const std::string &remoteClientId)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_GINCREASEREF);
-    Status rc = impl_->GIncreaseRef(objectKeys, failedObjectKeys, "");
+    Status rc = impl_->GIncreaseRef(objectKeys, failedObjectKeys, remoteClientId);
     RequestParam reqParam;
     reqParam.objectKey = objectKeysToString(objectKeys);
-    reqParam.remoteClientId = "";
+    reqParam.remoteClientId = remoteClientId;
     accessPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
     return rc;
 }
@@ -102,13 +102,13 @@ Status ObjectClient::ReleaseGRefs(const std::string &remoteClientId)
 }
 
 Status ObjectClient::GDecreaseRef(const std::vector<std::string> &objectKeys,
-                                  std::vector<std::string> &failedObjectKeys)
+                                  std::vector<std::string> &failedObjectKeys, const std::string &remoteClientId)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_GDECREASEREF);
-    Status rc = impl_->GDecreaseRef(objectKeys, failedObjectKeys, "");
+    Status rc = impl_->GDecreaseRef(objectKeys, failedObjectKeys, remoteClientId);
     RequestParam reqParam;
-    reqParam.remoteClientId = "";
+    reqParam.remoteClientId = remoteClientId;
     reqParam.objectKey = objectKeysToString(objectKeys);
     accessPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
     return rc;

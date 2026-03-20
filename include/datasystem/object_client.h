@@ -74,22 +74,30 @@ public:
     /// \param[in] objectKeys The object keys to increase, it cannot be empty. ID should not be empty and should only
     ///  contains english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
     /// \param[out] failedObjectKeys Increase failed object keys.
+    /// \param[in] remoteClientId The remote client id of the client that outside the cloud. Resolve scenarios that ELB
+    ///  forwards requests to different gateways, resulting in incorrect increase or decrease in reference counts, and
+    ///  system availability after gateway crash.
     ///
     /// \return K_OK on any object success, the failedObjectKeys indicate the failed list.
     ///         K_RPC_UNAVAILABLE: Disconnect from worker or master.
     ///         K_INVALID: The parameter is invalid.
-    Status GIncreaseRef(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys);
+    Status GIncreaseRef(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
+                        const std::string &remoteClientId = "");
 
     /// \brief Decrease the global reference count to objects in the data system.
     ///
     /// \param[in] objectKeys The object keys to decrease, it cannot be empty. ID should not be empty and should only
     ///  contains english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
     /// \param[out] failedObjectKeys Decrease failed object keys.
+    /// \param[in] remoteClientId The remote client id of the client that outside the cloud. Resolve scenarios that ELB
+    ///  forwards requests to different gateways, resulting in incorrect increase or decrease in reference counts, and
+    ///  system availability after gateway crash.
     ///
     /// \return K_OK on any object success, the failedObjectKeys indicate the failed list.
     ///         K_RPC_UNAVAILABLE: Disconnect from worker or master.
     ///         K_INVALID: The parameter is invalid.
-    Status GDecreaseRef(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys);
+    Status GDecreaseRef(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKey,
+                        const std::string &remoteClientId = "");
 
     /// \brief Release obj Ref of remote client id when remote client that outside the cloud crash.
     ///
