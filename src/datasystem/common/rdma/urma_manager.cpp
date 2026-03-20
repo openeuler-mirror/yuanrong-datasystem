@@ -20,7 +20,6 @@
 #include "datasystem/common/rdma/urma_manager.h"
 
 #include <sys/mman.h>
-#include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_opcode.h>
 
 #include "datasystem/common/constants.h"
@@ -94,6 +93,7 @@ UrmaManager::~UrmaManager()
     UrmaDeleteJfce();
     UrmaDeleteContext();
     UrmaUninit();
+    urma_dlopen::Cleanup();
     if (memoryBuffer_ != nullptr) {
         munmap(memoryBuffer_, ubTransportMemSize_);
         memoryBuffer_ = nullptr;
@@ -289,9 +289,12 @@ Status UrmaManager::InitLocalUrmaInfo(const HostPort &hostport)
 Status UrmaManager::UrmaInit()
 {
     LOG(INFO) << "UrmaManager::UrmaInit()";
+    if (!datasystem::urma_dlopen::Init()) {
+        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, "Failed to initialize URMA dlopen loader");
+    }
     LOG_IF_ERROR(RegisterUrmaLog(), "Failed to register urma log to datasystem, may check log in /var/log/umdk/urma");
     urma_init_attr_t urmaInitAttribute = { 0, 0 };
-    urma_status_t ret = urma_init(&urmaInitAttribute);
+    urma_status_t ret = ds_urma_init(&urmaInitAttribute);
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma init, ret = %d", ret));
     }
@@ -302,7 +305,7 @@ Status UrmaManager::UrmaInit()
 Status UrmaManager::UrmaUninit()
 {
     LOG(INFO) << "UrmaManager::UrmaUninit()";
-    urma_status_t ret = urma_uninit();
+    urma_status_t ret = ds_urma_uninit();
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma uninit, ret = %d", ret));
     }
@@ -327,7 +330,7 @@ Status UrmaManager::RegisterUrmaLog()
         }
     };
 
-    urma_status_t ret = urma_register_log_func(urmaLogCallback_);
+    urma_status_t ret = ds_urma_register_log_func(urmaLogCallback_);
     if (ret != URMA_SUCCESS) {
         urmaLogCallback_ = nullptr;
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma register log, ret = %d", ret));
@@ -341,7 +344,7 @@ Status UrmaManager::UnRegisterUrmaLog()
     if (!urmaLogCallback_) {
         return Status::OK();
     }
-    urma_status_t ret = urma_unregister_log_func();
+    urma_status_t ret = ds_urma_unregister_log_func();
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma unRegister log, ret = %d", ret));
     }
@@ -369,7 +372,7 @@ Status UrmaManager::UrmaGetEffectiveDevice(std::string &urmaDevName)
     LOG(INFO) << FormatString("Start UrmaGetEffectiveDevice() with %d", urmaDevName);
     int devNums = 0;
     urma_device_t **list = nullptr;
-    list = urma_get_device_list(&devNums);
+    list = ds_urma_get_device_list(&devNums);
     if (list == nullptr) {
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
                                 FormatString("Got empty[%d] ub device list with errno = %d", devNums, errno));
@@ -388,7 +391,7 @@ Status UrmaManager::UrmaGetEffectiveDevice(std::string &urmaDevName)
 Status UrmaManager::UrmaGetDeviceByName(const std::string &deviceName, urma_device_t *&urmaDevice)
 {
     LOG(INFO) << "UrmaManager::UrmaGetDeviceByName()";
-    urmaDevice = urma_get_device_by_name(const_cast<char *>(deviceName.c_str()));
+    urmaDevice = ds_urma_get_device_by_name(const_cast<char *>(deviceName.c_str()));
     if (urmaDevice) {
         LOG(INFO) << "urma get device by name success";
         return Status::OK();
@@ -399,7 +402,7 @@ Status UrmaManager::UrmaGetDeviceByName(const std::string &deviceName, urma_devi
 Status UrmaManager::UrmaQueryDevice(urma_device_t *&urmaDevice)
 {
     LOG(INFO) << "UrmaManager::UrmaQueryDevice()";
-    urma_status_t ret = urma_query_device(urmaDevice, &urmaDeviceAttribute_);
+    urma_status_t ret = ds_urma_query_device(urmaDevice, &urmaDeviceAttribute_);
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma query device, ret = %d", ret));
     }
@@ -410,7 +413,7 @@ Status UrmaManager::UrmaQueryDevice(urma_device_t *&urmaDevice)
 Status UrmaManager::UrmaGetEidList(urma_device_t *&urmaDevice, urma_eid_info_t *&eidList, uint32_t &eidCount)
 {
     LOG(INFO) << "UrmaManager::UrmaGetEidList()";
-    eidList = urma_get_eid_list(urmaDevice, &eidCount);
+    eidList = ds_urma_get_eid_list(urmaDevice, &eidCount);
     if (eidList) {
         LOG(INFO) << "urma get eid list success";
         return Status::OK();
@@ -429,7 +432,7 @@ Status UrmaManager::GetEidIndex(urma_device_t *&urmaDevice, int &eidIndex)
 
     Raii freeEidList([&eidList]() {
         if (eidList) {
-            urma_free_eid_list(eidList);
+            ds_urma_free_eid_list(eidList);
         }
     });
 
@@ -445,7 +448,7 @@ Status UrmaManager::UrmaCreateContext(urma_device_t *&urmaDevice, uint32_t eidIn
     LOG(INFO) << "UrmaManager::UrmaCreateContext() with eidIndex:" << eidIndex;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!urmaContext_, K_DUPLICATED,
                                          "Failed to urma create context, context already exist");
-    urmaContext_ = urma_create_context(urmaDevice, eidIndex);
+    urmaContext_ = ds_urma_create_context(urmaDevice, eidIndex);
     if (urmaContext_) {
         LOG(INFO) << "urma create context success";
         return Status::OK();
@@ -457,7 +460,7 @@ Status UrmaManager::UrmaDeleteContext()
 {
     LOG(INFO) << "UrmaManager::UrmaDeleteContext()";
     if (urmaContext_) {
-        urma_status_t ret = urma_delete_context(urmaContext_);
+        urma_status_t ret = ds_urma_delete_context(urmaContext_);
         if (ret != URMA_SUCCESS) {
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma delete context, ret = %d", ret));
         }
@@ -472,7 +475,7 @@ Status UrmaManager::UrmaCreateJfce()
     LOG(INFO) << "UrmaManager::UrmaCreateJfce()";
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!urmaJfce_, K_DUPLICATED, "Failed to urma create jfce, jfce already exist");
 
-    urmaJfce_ = urma_create_jfce(urmaContext_);
+    urmaJfce_ = ds_urma_create_jfce(urmaContext_);
     if (urmaJfce_) {
         LOG(INFO) << "urma create jfce success";
         return Status::OK();
@@ -484,7 +487,7 @@ Status UrmaManager::UrmaDeleteJfce()
 {
     LOG(INFO) << "UrmaManager::UrmaDeleteJfce()";
     if (urmaJfce_) {
-        urma_status_t ret = urma_delete_jfce(urmaJfce_);
+        urma_status_t ret = ds_urma_delete_jfce(urmaJfce_);
         if (ret != URMA_SUCCESS) {
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma delete jfce, ret = %d", ret));
         }
@@ -508,10 +511,10 @@ Status UrmaManager::UrmaCreateJfc(custom_unique_ptr<urma_jfc_t> &out)
     jfcConfig.user_ctx = 0;
     jfcConfig.ceqn = 0;
 
-    out = MakeCustomUnique<urma_jfc_t>(urma_create_jfc(urmaContext_, &jfcConfig), [](urma_jfc_t *p) {
+    out = MakeCustomUnique<urma_jfc_t>(ds_urma_create_jfc(urmaContext_, &jfcConfig), [](urma_jfc_t *p) {
         std::stringstream oss;
         oss << "urma_delete_jfc ... ";
-        auto ret = urma_delete_jfc(p);
+        auto ret = ds_urma_delete_jfc(p);
         if (ret == URMA_SUCCESS) {
             oss << "success";
         } else {
@@ -529,7 +532,7 @@ Status UrmaManager::UrmaCreateJfc(custom_unique_ptr<urma_jfc_t> &out)
 Status UrmaManager::UrmaRearmJfc(const custom_unique_ptr<urma_jfc_t> &jfc)
 {
     LOG(INFO) << "UrmaManager::UrmaRearmJfc()";
-    urma_status_t ret = urma_rearm_jfc(jfc.get(), false);
+    urma_status_t ret = ds_urma_rearm_jfc(jfc.get(), false);
     if (ret != URMA_SUCCESS) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma rearm jfc, ret = %d", ret));
     }
@@ -559,10 +562,10 @@ Status UrmaManager::UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, cust
     }
 #endif
 
-    out = MakeCustomUnique<urma_jfs_t>(urma_create_jfs(urmaContext_, &jfsConfig), [](urma_jfs_t *p) {
+    out = MakeCustomUnique<urma_jfs_t>(ds_urma_create_jfs(urmaContext_, &jfsConfig), [](urma_jfs_t *p) {
         std::stringstream oss;
         oss << "urma_delete_jfs ... ";
-        auto ret = urma_delete_jfs(p);
+        auto ret = ds_urma_delete_jfs(p);
         if (ret == URMA_SUCCESS) {
             oss << "success";
         } else {
@@ -593,10 +596,10 @@ Status UrmaManager::UrmaCreateJfr(const custom_unique_ptr<urma_jfc_t> &jfc, cust
     jfrConfig.max_sge = 1;
     jfrConfig.user_ctx = (uint64_t)NULL;
 
-    out = MakeCustomUnique<urma_jfr_t>(urma_create_jfr(urmaContext_, &jfrConfig), [](urma_jfr_t *p) {
+    out = MakeCustomUnique<urma_jfr_t>(ds_urma_create_jfr(urmaContext_, &jfrConfig), [](urma_jfr_t *p) {
         std::stringstream oss;
         oss << "urma_delete_jfr ... ";
-        auto ret = urma_delete_jfr(p);
+        auto ret = ds_urma_delete_jfr(p);
         if (ret == URMA_SUCCESS) {
             oss << "success";
         } else {
@@ -687,7 +690,7 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
             segmentConfig.iova = 0;
             segmentConfig.token_id = nullptr;
             PerfPoint point(PerfKey::URMA_REGISTER_SEGMENT);
-            auto *segment = urma_register_seg(urmaContext_, &segmentConfig);
+            auto *segment = ds_urma_register_seg(urmaContext_, &segmentConfig);
             point.Record();
             if (segment == nullptr) {
                 localSegmentMap_->BlockingErase(accessor);
@@ -853,7 +856,7 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
 
     if (IsEventModeEnabled()) {
         // wait for the event
-        cnt = urma_wait_jfc(urmaJfce_, 1, RPC_POLL_TIME, &ev_jfc);
+        cnt = ds_urma_wait_jfc(urmaJfce_, 1, RPC_POLL_TIME, &ev_jfc);
         if (cnt < 0 || cnt > 1 || (cnt == 1 && urmaJfc != ev_jfc)) {
             // This is error case
             // cnt can be 0 or 1 and jfc should match
@@ -865,7 +868,7 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
 
         // Got the event, now get CR for the event
         // Event mode can poll one CR at a time
-        cnt = urma_poll_jfc(urmaJfc, numPollCRS, &completeRecords[0]);
+        cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, &completeRecords[0]);
         INJECT_POINT("UrmaManager.CheckCompletionRecordStatus", [&completeRecords]() {
             completeRecords[0].status = URMA_CR_REM_ACCESS_ABORT_ERR;
             return Status::OK();
@@ -878,8 +881,8 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
         } else if (cnt > 0) {
             // Ack the event and rearm jfc to process next event
             uint32_t ack_cnt = 1;
-            urma_ack_jfc((urma_jfc_t **)&ev_jfc, &ack_cnt, 1);
-            auto status = urma_rearm_jfc(urmaJfc, false);
+            ds_urma_ack_jfc((urma_jfc_t **)&ev_jfc, &ack_cnt, 1);
+            auto status = ds_urma_rearm_jfc(urmaJfc, false);
             if (status != URMA_SUCCESS) {
                 RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to rearm jfc, status = %d", status));
             }
@@ -890,7 +893,7 @@ Status UrmaManager::PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const 
 
     // trys maxTryCount times to get an event
     for (uint64_t i = 0; i < maxTryCount; ++i) {
-        cnt = urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
+        cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
         if (cnt == 0) {
             // If there is nothing to poll, just sleep.
             // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
@@ -944,7 +947,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
     for (uint i = 0; i < urmaInfo.jfrIds.size(); ++i) {
         remoteJfr.jfr_id.id = urmaInfo.jfrIds[i];
         PerfPoint point1a(PerfKey::URMA_IMPORT_JFR);
-        auto *tjfr = urma_import_jfr(urmaContext_, &remoteJfr, &urmaToken_);
+        auto *tjfr = ds_urma_import_jfr(urmaContext_, &remoteJfr, &urmaToken_);
         point1a.Record();
         if (tjfr == nullptr) {
             tbbRemoteDeviceMap_.erase(accessor);
@@ -952,8 +955,8 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &urmaInfo)
         }
         PerfPoint point1b(PerfKey::URMA_ADVISE_JFR);
         auto jfs = urmaJfsVec_[jfsIndex].get();
-        if (urma_advise_jfr(jfs, tjfr) != URMA_SUCCESS) {
-            (void)urma_unimport_jfr(tjfr);
+        if (ds_urma_advise_jfr(jfs, tjfr) != URMA_SUCCESS) {
+            (void)ds_urma_unimport_jfr(tjfr);
             tbbRemoteDeviceMap_.erase(accessor);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to advise jfr"));
         }
@@ -1073,7 +1076,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!remoteJfrs.empty(), K_RUNTIME_ERROR, "Write got empty remote jfrs.");
         urma_target_jetty_t *importJfr = remoteJfrs[0].get();
         PerfPoint point4a(PerfKey::URMA_WRITE);
-        urma_status_t ret = urma_write(
+        urma_status_t ret = ds_urma_write(
             urmaJfs, importJfr, remoteSegAccessor.entry->data.segment_.get(),
             localSegAccessor.entry->data.segment_.get(), segVa + urmaInfo.seg_data_offset() + readOffset + writtenSize,
             localObjectAddress + readOffset + metaDataSize + writtenSize, writeSize, flag, key);
@@ -1140,9 +1143,9 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t jfrIndex = key % remoteJfrs.size();
         urma_target_jetty_t *importJfr = remoteJfrs[jfrIndex].get();
         urma_status_t ret =
-            urma_read(urmaJfs, importJfr, localSegAccessor.entry->data.segment_.get(),
-                      remoteSegAccessor.entry->data.segment_.get(), localObjectAddress + metaDataSize + readOffset,
-                      segVa + urmaInfo.seg_data_offset() + readOffset, readSize, flag, key);
+            ds_urma_read(urmaJfs, importJfr, localSegAccessor.entry->data.segment_.get(),
+                         remoteSegAccessor.entry->data.segment_.get(), localObjectAddress + metaDataSize + readOffset,
+                         segVa + urmaInfo.seg_data_offset() + readOffset, readSize, flag, key);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             ret == URMA_SUCCESS, K_RUNTIME_ERROR,
             FormatString("Failed to urma read object with key = %zu, ret = %d", key, ret));
@@ -1225,7 +1228,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     }
     urma_jfs_t *urmaJfs = urmaJfsVec_[requestId_ % FLAGS_urma_connection_size].get();
     urma_jfs_wr_t *bad_wr = NULL;
-    auto ret = urma_post_jfs_wr(urmaJfs, &wrList[0], &bad_wr);
+    auto ret = ds_urma_post_jfs_wr(urmaJfs, &wrList[0], &bad_wr);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(ret == URMA_SUCCESS, K_RUNTIME_ERROR,
                                          FormatString("Failed to urma write object, ret = %d", ret));
     if (blocking) {
@@ -1239,7 +1242,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
 
 urma_target_seg_t *UrmaManager::ImportSegment(urma_seg_t &remoteSegment)
 {
-    return urma_import_seg(urmaContext_, &remoteSegment, &urmaToken_, 0, importSegmentFlag_);
+    return ds_urma_import_seg(urmaContext_, &remoteSegment, &urmaToken_, 0, importSegmentFlag_);
 }
 
 Status UrmaManager::UnimportSegment(const HostPort &remoteAddress, const uint64_t segmentAddress)
@@ -1372,10 +1375,10 @@ void Segment::Set(urma_target_seg_t *seg, const bool local)
     segment_ = MakeCustomUnique<urma_target_seg_t>(seg, [this](urma_target_seg_t *p) {
         if (p) {
             if (local_) {
-                urma_status_t ret = urma_unregister_seg(p);
+                urma_status_t ret = ds_urma_unregister_seg(p);
                 LOG_IF(ERROR, ret != URMA_SUCCESS) << "Failed to unregister segment, ret = " << ret;
             } else {
-                urma_status_t ret = urma_unimport_seg(p);
+                urma_status_t ret = ds_urma_unimport_seg(p);
                 LOG_IF(ERROR, ret != URMA_SUCCESS) << "Failed to unimport segment, ret = " << ret;
             }
         }
@@ -1398,7 +1401,7 @@ void RemoteDevice::SetJfrs(std::vector<urma_target_jetty_t *> &jetties)
     for (auto &jetty : jetties) {
         importJfrs_.emplace_back(MakeCustomUnique<urma_target_jetty_t>(jetty, [](urma_target_jetty_t *p) {
             if (p) {
-                auto ret = urma_unimport_jfr(p);
+                auto ret = ds_urma_unimport_jfr(p);
                 LOG_IF(ERROR, ret != URMA_SUCCESS) << "Failed to unimport jfr, ret = " << ret;
             }
         }));

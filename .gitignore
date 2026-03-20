@@ -82,3 +82,7 @@ build_zh_cn
 build_en
 docs/source_en/generated
 false
+
+# ai context
+AGENTS.md
+docs/agent
