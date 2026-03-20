@@ -90,6 +90,7 @@ struct GetParam {
     const std::vector<ReadParam> &readParams;
     bool queryL2Cache;
     bool isRH2DSupported = false;
+    uint64_t ubTotalSize = 0;  // Pre-fetched total UB data size; 0 means not pre-fetched.
 };
 
 class IClientWorkerApi : virtual public client::IClientWorkerCommonApi {

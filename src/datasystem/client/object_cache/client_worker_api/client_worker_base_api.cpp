@@ -67,10 +67,19 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
 
 #ifdef USE_URMA
 void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
-                                            uint8_t *&ubBufferPtr, uint64_t &ubBufferSize)
+                                            uint8_t *&ubBufferPtr, uint64_t &ubBufferSize, uint64_t requiredSize)
 {
     if (IsUrmaEnabled() && !IsShmEnable()) {
-        Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubBufferHandle);
+        if (requiredSize == 0) {
+            return;
+        }
+        uint64_t maxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
+        if (requiredSize > maxGetSize) {
+            LOG(WARNING) << "UB Get buffer size " << requiredSize
+                         << " exceeds max " << maxGetSize << ", fallback to TCP/IP payload.";
+            return;
+        }
+        Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubBufferHandle, requiredSize);
         if (ubRc.IsOk() && ubBufferHandle != nullptr) {
             UrmaRemoteAddrPb urmaInfo;
             ubRc = UrmaManager::Instance().GetMemoryBufferInfo(ubBufferHandle, ubBufferPtr, ubBufferSize, urmaInfo);
@@ -80,7 +89,8 @@ void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaM
             }
         }
         if (ubRc.IsError()) {
-            LOG(WARNING) << "Prepare UB Get request failed: " << ubRc.ToString() << ", fallback to TCP/IP payload.";
+            LOG(WARNING) << "UB Get buffer allocation failed (size " << requiredSize
+                         << "): " << ubRc.ToString() << ", fallback to TCP/IP payload.";
             ubBufferHandle.reset();
             ubBufferPtr = nullptr;
             ubBufferSize = 0;
@@ -197,8 +207,9 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
     (void)length;
 #ifdef USE_URMA
     const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
+    uint64_t allocSize = std::min(totalSize, UrmaManager::Instance().GetUBMaxSetBufferSize());
     std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
-    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle, totalSize));
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle, allocSize));
     if (!bufHandle || !bufHandle->GetPointer()) {
         return Status(K_RUNTIME_ERROR, "Failed to get memory buffer handle");
     }

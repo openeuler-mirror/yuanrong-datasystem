@@ -136,6 +136,10 @@ public:
                           std::shared_timed_mutex &mtx) override;
 
 private:
+#ifdef USE_URMA
+    uint64_t ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId);
+#endif
+
     /**
      * @brief Try to get Shm lock for decrease buffer.
      * @param[in] timeoutStruct Time out for futex wait.

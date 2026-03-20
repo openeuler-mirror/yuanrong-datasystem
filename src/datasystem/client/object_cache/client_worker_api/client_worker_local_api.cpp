@@ -72,15 +72,6 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     shmBuf->offset = static_cast<ptrdiff_t>(rsp.offset());
     shmBuf->id = ShmKey::Intern(rsp.shm_id());
     metadataSize = rsp.metadata_size();
-#ifdef USE_URMA
-    // Extract URMA info from response when enabled (for Create+MemoryCopy+Publish path).
-    if (IsUrmaEnabled() && rsp.has_urma_info()) {
-        if (urmaDataInfo == nullptr) {
-            urmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
-        }
-        urmaDataInfo->CopyFrom(rsp.urma_info());
-    }
-#endif
     version = workerVersion_.load(std::memory_order_relaxed);
     return Status::OK();
 }
@@ -164,12 +155,6 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
-#ifdef USE_URMA
-    std::shared_ptr<UrmaManager::BufferHandle> ubBufferHandle;
-    uint8_t *ubBufferPtr = nullptr;
-    uint64_t ubBufferSize = 0;
-    PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize);
-#endif
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req), "Fail to generate signature when get date.");
     std::promise<std::pair<GetRspPb, Status>> promise;
     auto future = promise.get_future();
@@ -189,9 +174,6 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
         return Status(K_RUNTIME_ERROR, "get failed");
     }
     RETURN_IF_NOT_OK(result.second);
-#ifdef USE_URMA
-    RETURN_IF_NOT_OK(FillUrmaBuffer(ubBufferHandle, rsp, payloads, ubBufferPtr, ubBufferSize));
-#endif
     version = workerVersion_.load(std::memory_order_relaxed);
     return Status::OK();
 }

@@ -1773,12 +1773,169 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     const std::vector<std::string> &objectsNeedToGet = getParam.objectKeys;
     const std::vector<ReadParam> &readParams = getParam.readParams;
     CHECK_FAIL_RETURN_STATUS(buffers.size() == objectsNeedToGet.size(), K_INVALID, "buffers size does not match");
+
+#ifdef USE_URMA
+    // For UB mode, pre-fetch object sizes via GetObjMetaInfo and split into batches if needed.
+    if (IsUrmaEnabled() && workerApi != nullptr && !workerApi->IsShmEnable()) {
+        std::vector<ObjMetaInfo> objMetas;
+        std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
+        Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
+        if (metaRc.IsError()) {
+            LOG(WARNING) << "GetObjMetaInfo failed: " << metaRc.ToString();
+        } else if (objMetas.size() != objectsNeedToGet.size()) {
+            LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size()
+                         << " but got " << objMetas.size();
+        } else {
+            uint64_t ubMaxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
+            uint64_t totalSize = 0;
+            for (const auto &meta : objMetas) {
+                totalSize += meta.objSize;
+            }
+            if (totalSize <= ubMaxGetSize) {
+                // common case: everything fits in one buffer. Pass total batch size and perform a single Get.
+                getParam.ubTotalSize = totalSize;
+            } else {
+                // batch special case: total size exceeds buffer limit. Split into sub-batches.
+                return GetBuffersFromWorkerBatched(workerApi, getParam, buffers, objMetas, ubMaxGetSize);
+            }
+        }
+    }
+#endif
+
     GetRspPb rsp;
     std::vector<RpcMessage> payloads;
     uint32_t version = 0;
 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Get(getParam, version, rsp, payloads), "Get error");
 
+    std::vector<std::string> failedObjectKey;
+    RETURN_IF_NOT_OK(
+        ProcessGetResponse(objectsNeedToGet, readParams, rsp, version, payloads, buffers, failedObjectKey));
+
+    RETURN_OK_IF_TRUE(objectsNeedToGet.size() > failedObjectKey.size());
+
+    Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    return recvRc.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : recvRc;
+}
+
+#ifdef USE_URMA
+struct UBGetBatch {
+    std::vector<size_t> indices;
+    uint64_t totalSize = 0;
+};
+
+static std::vector<UBGetBatch> BuildUBGetBatches(const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize)
+{
+    std::vector<UBGetBatch> batches;
+    UBGetBatch currentBatch;
+
+    for (size_t i = 0; i < objMetas.size(); ++i) {
+        uint64_t objSize = objMetas[i].objSize;
+
+        if (objSize > ubMaxGetSize) {
+            if (!currentBatch.indices.empty()) {
+                batches.push_back(std::move(currentBatch));
+                currentBatch = UBGetBatch{};
+            }
+            // Oversized key gets its own TCP-only batch.
+            // Pass actual size so PrepareUrmaBuffer rejects it without a redundant GetObjMetaInfo RPC.
+            UBGetBatch tcpBatch;
+            tcpBatch.indices.push_back(i);
+            tcpBatch.totalSize = objSize;
+            batches.push_back(std::move(tcpBatch));
+            continue;
+        }
+
+        if (!currentBatch.indices.empty() &&
+            currentBatch.totalSize + objSize > ubMaxGetSize) {
+            batches.push_back(std::move(currentBatch));
+            currentBatch = UBGetBatch{};
+        }
+
+        currentBatch.indices.push_back(i);
+        currentBatch.totalSize += objSize;
+    }
+
+    if (!currentBatch.indices.empty()) {
+        batches.push_back(std::move(currentBatch));
+    }
+    return batches;
+}
+
+Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> workerApi,
+                                                     const GetParam &getParam,
+                                                     std::vector<std::shared_ptr<Buffer>> &buffers,
+                                                     const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize)
+{
+    const auto &objectKeys = getParam.objectKeys;
+    const auto &readParams = getParam.readParams;
+
+    auto batches = BuildUBGetBatches(objMetas, ubMaxGetSize);
+    LOG(INFO) << "UB batch Get: " << objectKeys.size() << " objects split into " << batches.size() << " batches";
+
+    size_t totalSuccessCount = 0;
+    Status lastError;
+
+    for (const auto &batch : batches) {
+        std::vector<std::string> subKeys;
+        subKeys.reserve(batch.indices.size());
+        for (size_t idx : batch.indices) {
+            subKeys.push_back(objectKeys[idx]);
+        }
+
+        std::vector<ReadParam> subReadParams;
+        if (!readParams.empty()) {
+            subReadParams.reserve(batch.indices.size());
+            for (size_t idx : batch.indices) {
+                subReadParams.push_back(readParams[idx]);
+            }
+        }
+
+        std::vector<std::shared_ptr<Buffer>> subBuffers(batch.indices.size());
+
+        GetParam subGetParam{ .objectKeys = subKeys,
+                              .subTimeoutMs = getParam.subTimeoutMs,
+                              .readParams = subReadParams,
+                              .queryL2Cache = getParam.queryL2Cache,
+                              .isRH2DSupported = getParam.isRH2DSupported,
+                              .ubTotalSize = batch.totalSize };
+
+        GetRspPb rsp;
+        std::vector<RpcMessage> payloads;
+        uint32_t version = 0;
+
+        Status rc = workerApi->Get(subGetParam, version, rsp, payloads);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Batch Get failed for " << subKeys.size() << " objects: " << rc.ToString();
+            lastError = rc;
+            continue;
+        }
+
+        std::vector<std::string> failedObjectKey;
+        rc = ProcessGetResponse(subKeys, subReadParams, rsp, version, payloads, subBuffers, failedObjectKey);
+        if (rc.IsError()) {
+            LOG(WARNING) << "ProcessGetResponse failed in batch: " << rc.ToString();
+            lastError = rc;
+            continue;
+        }
+
+        for (size_t k = 0; k < batch.indices.size(); ++k) {
+            buffers[batch.indices[k]] = std::move(subBuffers[k]);
+        }
+        totalSuccessCount += (subKeys.size() - failedObjectKey.size());
+    }
+
+    RETURN_OK_IF_TRUE(totalSuccessCount > 0);
+    return lastError.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : lastError;
+}
+#endif
+
+Status ObjectClientImpl::ProcessGetResponse(const std::vector<std::string> &objectKeys,
+                                            const std::vector<ReadParam> &readParams, GetRspPb &rsp, uint32_t version,
+                                            std::vector<RpcMessage> &payloads,
+                                            std::vector<std::shared_ptr<Buffer>> &buffers,
+                                            std::vector<std::string> &failedObjectKey)
+{
     size_t shmCount = static_cast<size_t>(rsp.objects().size());
     size_t noShmCount = static_cast<size_t>(rsp.payload_info().size());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -1790,24 +1947,18 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
             payloadSum += p.part_index().size();
         }
     }
-    CHECK_FAIL_RETURN_STATUS(shmCount + noShmCount == objectsNeedToGet.size() && payloadSum == payloads.size(),
+    CHECK_FAIL_RETURN_STATUS(shmCount + noShmCount == objectKeys.size() && payloadSum == payloads.size(),
                              K_UNKNOWN_ERROR, "The response count in GetRspPb does not match with objects count.");
-    std::vector<std::string> failedObjectKey;
-    RETURN_IF_NOT_OK(GetObjectBuffers(objectsNeedToGet, rsp, version, readParams, payloads, buffers, failedObjectKey));
+    RETURN_IF_NOT_OK(GetObjectBuffers(objectKeys, rsp, version, readParams, payloads, buffers, failedObjectKey));
 
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     if (recvRc.IsError()) {
-        LOG(WARNING) << "request to worker may be failed, status:" << recvRc.ToString()
+        LOG(WARNING) << "Get request may have failed, status:" << recvRc.ToString()
                      << " failed id:" << VectorToString(failedObjectKey);
     } else if (!failedObjectKey.empty()) {
         LOG(WARNING) << "Not all expected objects were obtained, failed id:" << VectorToString(failedObjectKey);
     }
-
-    if (objectsNeedToGet.size() > failedObjectKey.size()) {
-        return Status::OK();
-    }
-
-    return recvRc.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : recvRc;
+    return Status::OK();
 }
 
 Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &objectsNeedToGet, const GetRspPb &rsp,

@@ -100,7 +100,7 @@ protected:
                                       uint64_t realSize);
 
     void PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
-                           uint8_t *&ubBufferPtr, uint64_t &ubBufferSize);
+                           uint8_t *&ubBufferPtr, uint64_t &ubBufferSize, uint64_t requiredSize);
     Status FillUrmaBuffer(std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, GetRspPb &rsp,
                           std::vector<RpcMessage> &payloads, uint8_t *ubBufferPtr, uint64_t ubBufferSize);
 #endif
