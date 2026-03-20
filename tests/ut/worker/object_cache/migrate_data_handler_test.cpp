@@ -38,7 +38,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
+#include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
@@ -95,15 +95,15 @@ TEST_F(ScaleDownNodeSelectorTest, TestCheckCondition)
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 }
 
-class MigrateDataLimiterTest : public CommonTest {
+class DataLimiterTest : public CommonTest {
 };
 
-TEST_F(MigrateDataLimiterTest, TestLimiterBasicFunction)
+TEST_F(DataLimiterTest, TestLimiterBasicFunction)
 {
     LOG(INFO) << "Test migrate data limiter basic function";
     uint64_t rate = 40 * 1024ul * 1024ul;
     uint64_t requireSize = 80 * 1024ul * 1024ul;
-    MigrateDataLimiter limiter(rate);
+    DataLimiter limiter(rate);
     Timer timer;
     limiter.WaitAllow(requireSize);
     ASSERT_GE(timer.ElapsedMilliSecond(), double(950));
@@ -118,12 +118,12 @@ TEST_F(MigrateDataLimiterTest, TestLimiterBasicFunction)
     ASSERT_GE(timer.ElapsedMilliSecond(), double(120));
 }
 
-TEST_F(MigrateDataLimiterTest, TestLimiterVerySmallSize)
+TEST_F(DataLimiterTest, TestLimiterVerySmallSize)
 {
     LOG(INFO) << "Test migrate data limiter very small sizes";
     uint64_t rate = 40 * 1024ul * 1024ul;
     uint64_t requireSize = 1024ul;
-    MigrateDataLimiter limiter(rate);
+    DataLimiter limiter(rate);
     Timer timer;
     for (size_t i = 0; i < 80 * 1024ul; ++i) {
         limiter.WaitAllow(requireSize);
@@ -131,18 +131,47 @@ TEST_F(MigrateDataLimiterTest, TestLimiterVerySmallSize)
     ASSERT_GE(timer.ElapsedMilliSecond(), double(950));
 }
 
-TEST_F(MigrateDataLimiterTest, TestBoundaryCase)
+TEST_F(DataLimiterTest, TestBoundaryCase)
 {
     LOG(INFO) << "Test migrate data limiter boundary case";
     uint64_t rate = UINT64_MAX / 2;
     uint64_t requireSize = UINT64_MAX;
-    MigrateDataLimiter limiter(rate);
+    DataLimiter limiter(rate);
     Timer timer;
     limiter.WaitAllow(requireSize);
     ASSERT_GE(timer.ElapsedMilliSecond(), double(950));
     timer.Reset();
     limiter.WaitAllow(requireSize);
     ASSERT_GE(timer.ElapsedMilliSecond(), double(1950));
+}
+
+TEST_F(DataLimiterTest, TestRequestLargeSize)
+{
+    LOG(INFO) << "Test migrate data limiter boundary case";
+    uint64_t rate = 100;
+    uint64_t requireSize = 500;
+    DataLimiter limiter(rate, rate);
+    Timer timer;
+    limiter.WaitAllow(requireSize);
+    ASSERT_GE(timer.ElapsedMilliSecond(), double(3900));
+    timer.Reset();
+    limiter.WaitAllow(requireSize);
+    ASSERT_GE(timer.ElapsedMilliSecond(), double(4900));
+}
+
+TEST_F(DataLimiterTest, TestMaxLimitSize)
+{
+    LOG(INFO) << "Test migrate data limiter boundary case";
+    uint64_t rate = 100;
+    uint64_t requireSize = 500;
+    DataLimiter limiter(rate, rate);
+    datasystem::inject::Set("migrate.limiter.elapsed.longtime", "1*call()");
+    Timer timer;
+    limiter.WaitAllow(requireSize);
+    ASSERT_GE(timer.ElapsedMilliSecond(), double(0));
+    timer.Reset();
+    limiter.WaitAllow(requireSize);
+    ASSERT_GE(timer.ElapsedMilliSecond(), double(4900));
 }
 
 class MigrateDataHandlerTest : public CommonTest, public EvictionManagerCommon {

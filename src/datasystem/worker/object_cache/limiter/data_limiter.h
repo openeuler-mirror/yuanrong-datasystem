@@ -29,11 +29,11 @@
 
 namespace datasystem {
 namespace object_cache {
-class MigrateDataLimiter {
+class DataLimiter {
 public:
-    MigrateDataLimiter(uint64_t rate);
+    DataLimiter(uint64_t rate, uint64_t maxTokenSize = UINT64_MAX);
 
-    ~MigrateDataLimiter() = default;
+    ~DataLimiter() = default;
 
     /**
      * @brief Wait util tokens match the require size.
@@ -75,11 +75,14 @@ private:
     mutable std::mutex mtx_;
 
     std::condition_variable cond_;
+
+    uint64_t maxTokenSize_ = UINT64_MAX;
 };
 
 class MigrateDataRateLimiter {
 public:
-    MigrateDataRateLimiter(uint64_t maxBandwidthBytes) : maxBandwidth(maxBandwidthBytes), currentBandwidth(0)
+    MigrateDataRateLimiter(uint64_t maxBandwidthBytes)
+        : maxBandwidth(maxBandwidthBytes), currentBandwidth(0)
     {
     }
 

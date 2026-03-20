@@ -37,13 +37,30 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_uint64(spill_size_limit);
+DS_DEFINE_uint64(
+    l2_cache_async_write_queue_size, 10000,
+    "The size of the per-thread asynchronous queue for writing to the secondary cache. With 8 threads, the "
+    "system supports a maximum total capacity of 8 * l2_cache_async_write_queue_size key-value pairs pending write.");
+DS_DEFINE_uint32(l2_cache_async_write_rate_limit_mb, 200, "Data write to l2cache rate limit for every node");
+DS_DEFINE_validator(l2_cache_async_write_rate_limit_mb, [](const char *flagName, uint32_t value) {
+    (void)flagName;
+    return value > 0;
+});
+
+DS_DEFINE_validator(l2_cache_async_write_queue_size, [](const char *flagName, uint64_t value) {
+    (void)flagName;
+    return value > 0;
+});
 
 namespace datasystem {
 namespace object_cache {
 
 AsyncSendManager::AsyncSendManager(std::shared_ptr<PersistenceApi> api,
                                    std::shared_ptr<WorkerOcEvictionManager> evictionManager)
-    : persistenceApi_(api), evictionManager_(std::move(evictionManager))
+    : persistenceApi_(api),
+      evictionManager_(std::move(evictionManager)),
+      limiter_(FLAGS_l2_cache_async_write_rate_limit_mb * 1024ul * 1024ul,
+               FLAGS_l2_cache_async_write_rate_limit_mb * 1024ul * 1024ul)
 {
 }
 
@@ -56,7 +73,7 @@ Status AsyncSendManager::Init()
 {
     running_ = true;
     for (int i = 0; i < QUEUE_NUM; i++) {
-        queues_.emplace_back(std::make_shared<BlockingList>(QUEUE_CAPACITY));
+        queues_.emplace_back(std::make_shared<BlockingList>(FLAGS_l2_cache_async_write_queue_size));
     }
     for (int i = 0; i < QUEUE_NUM; i++) {
         threadPool_.emplace_back(Thread(&AsyncSendManager::Sender, this, i, queues_[i]));
@@ -126,6 +143,7 @@ Status AsyncSendManager::RLockAndSendToRemote(const std::string &objectKey, std:
     auto &entry = *entryPtr;
     uint64_t createTime;
     auto buf = std::make_shared<std::stringstream>();
+    uint64_t dataSize = 0;
     {
         RETURN_IF_NOT_OK(entryPtr->TryRLock());
         Raii readUnlock([&entryPtr]() { entryPtr->RUnlock(); });
@@ -146,20 +164,21 @@ Status AsyncSendManager::RLockAndSendToRemote(const std::string &objectKey, std:
         buf->write(static_cast<char *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize(),
                    entry->GetDataSize());
         createTime = entry->GetCreateTime();
+        dataSize = entry->GetDataSize();
     }
-    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, beginTime));
+    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, beginTime));
     return AfterSendToRemote(objectKey, entry, createTime);
 }
 
 Status AsyncSendManager::SendToRemoteOnLock(const std::string &objectKey, std::shared_ptr<std::stringstream> buf,
-                                            uint64_t createTime,
+                                            uint64_t createTime, uint64_t &dataSize,
                                             std::chrono::time_point<std::chrono::steady_clock> &beginTime)
 {
     static const int timeout = 60000;
     uint64_t elapsed = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - beginTime).count());
     LOG(INFO) << FormatString("The elapsed time of async l2cache is %llu.", elapsed);
-    // l2 cache is redis, write back not set to redis.
+    limiter_.WaitAllow(dataSize);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(persistenceApi_->Save(objectKey, createTime, timeout, buf, elapsed),
                                      FormatString("Call save to l2cache failed. objectKey:%s", objectKey));
     VLOG(1) << FormatString("[ObjectKey %s] Send to l2cache success.", objectKey);
@@ -185,13 +204,13 @@ Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::
     uint64_t createTime;
     std::unique_ptr<char[]> data;
     auto buf = std::make_shared<std::stringstream>();
+    uint64_t dataSize = 0;
     {
         RETURN_IF_NOT_OK(entryPtr->TryWLock());
         Raii wUnlock([&entryPtr]() { entryPtr->WUnlock(); });
-
+        dataSize = entry->GetDataSize();
         if (entry->IsSpilled()) {
             if (entry->GetShmUnit() == nullptr) {
-                auto dataSize = entry->GetDataSize();
                 try {
                     data = std::make_unique<char[]>(dataSize);
                 } catch (const std::bad_alloc &e) {
@@ -216,7 +235,7 @@ Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::
         }
         createTime = entry->GetCreateTime();
     }
-    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, beginTime));
+    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, beginTime));
     return AfterSendToRemote(objectKey, entry, createTime);
 }
 

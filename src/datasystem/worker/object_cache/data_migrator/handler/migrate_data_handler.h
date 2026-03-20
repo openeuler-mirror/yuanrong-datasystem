@@ -26,7 +26,7 @@
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/base_data_unit.h"
-#include "datasystem/worker/object_cache/data_migrator/basic/migrate_data_limiter.h"
+#include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_progress.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/migrate_transport.h"
@@ -169,7 +169,7 @@ private:
     uint64_t currBatchSize_;
     uint64_t currBatchCount_;
 
-    MigrateDataLimiter limiter_;
+    DataLimiter limiter_;
     std::shared_ptr<SelectionStrategy> strategy_;
     std::shared_ptr<MigrateProgress> progress_{ nullptr };
     std::shared_ptr<MigrateTransport> transport_;

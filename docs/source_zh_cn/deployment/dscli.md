@@ -781,6 +781,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |-----|------|---------|-------------|
 | l2_cache_type | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`] |
 | l2_cache_delete_thread_num | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
+| l2_cache_async_write_queue_size | int | `10000` | 用于写入二级缓存的每线程异步队列大小。共有 8 个线程，支持的最大总容量为 8 * l2_cache_async_write_queue_size 个待写入的键值对 |
+| l2_cache_async_write_rate_limit_mb | int | `200` | 配置写入二级缓存异步任务速率(以MB/s为单位) |
 | obs_access_key | string | `""` | 对象存储服务(OBS) AK/SK认证的访问密钥(Access Key) |
 | obs_secret_key | string | `""` | 对象存储服务(OBS) AK/SK认证的密钥(Secret Key) |
 | obs_endpoint | string | `""` | 对象存储服务(OBS) 访问域名 |

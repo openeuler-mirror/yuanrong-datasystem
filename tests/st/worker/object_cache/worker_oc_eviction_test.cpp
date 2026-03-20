@@ -54,6 +54,13 @@ DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(shared_disk_directory);
+DS_DECLARE_string(obs);
+DS_DECLARE_string(obs_endpoint);
+DS_DECLARE_string(obs_access_key);
+DS_DECLARE_string(obs_secret_key);
+DS_DECLARE_string(obs_bucket);
+DS_DECLARE_uint32(l2_cache_async_write_rate_limit_mb);
+DS_DECLARE_uint64(l2_cache_async_write_queue_size);
 
 namespace datasystem {
 namespace st {
@@ -364,6 +371,61 @@ protected:
     std::unique_ptr<EtcdStore> etcdStore_;
     std::shared_ptr<ThreadPool> memCpyThreadPool_;
 };
+
+class AsyncSendManagerWriteSpeedTest : public EvictionManagerAndMasterTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 2;
+        opts.numEtcd = 1;
+        opts.numOBS = 1;
+        std::string hostIp = "127.0.0.1";
+        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+        opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+        for (auto addr : opts.workerConfigs) {
+            workerAddress_.emplace(addr.ToString());
+        }
+        opts.workerGflagParams = " -v=3";
+        opts.injectActions = "worker.Spill.Sync:return()";
+    }
+};
+
+TEST_F(AsyncSendManagerWriteSpeedTest, TestAsyncWriteBigElement)
+{
+    HostPort obsAddr;
+    DS_ASSERT_OK(cluster_->GetOBSAddr(0, obsAddr));
+    FLAGS_l2_cache_type="obs";
+    FLAGS_obs_endpoint=obsAddr.ToString();
+    FLAGS_obs_access_key="3rtJpvkP4zowTDsx6XiE";
+    FLAGS_obs_secret_key="SJx5Zecs7SL7I6Au9XpylG9LwPF29kMwIxisI5Xs";
+    FLAGS_obs_bucket="test";
+    FLAGS_l2_cache_async_write_rate_limit_mb = 1;
+    FLAGS_l2_cache_async_write_queue_size = 10000;
+    std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
+    InitClusterManager(worker0Addr_);
+    std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager =
+        std::make_shared<object_cache::WorkerOcEvictionManager>(objectTable, worker0Addr_, metaAddr_, nullptr);
+    evictionManager->SetClusterManager(cm_.get());
+    DS_EXPECT_OK(evictionManager->Init(std::make_shared<ObjectGlobalRefTable<ClientKey>>(), akSkManager_));
+
+    std::shared_ptr<PersistenceApi> api = std::make_shared<PersistenceApi>();
+    DS_ASSERT_OK(api->Init());
+
+    // Put
+    std::shared_ptr<SafeObjType> entry;
+    uint64_t dataSize = 1024 * 1024 * 5;
+    std::string objectKey = GetStringUuid();
+    DS_EXPECT_OK(CreateObject(objectKey, dataSize, WriteMode::WRITE_BACK_L2_CACHE, true));  // Async send object.
+    DS_EXPECT_OK(objectTable_->Get(objectKey, entry));
+    AsyncSendManager asyncMgr(api, evictionManager);
+    asyncMgr.Init();
+    std::future<datasystem::Status> future;
+    Timer timer;
+    asyncMgr.Add(objectKey, entry, future);
+    auto status = future.get();
+    ASSERT_GT(timer.ElapsedMilliSecond(), 4000);
+    asyncMgr.Stop();
+}
 
 TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotExistInObjTable)
 {

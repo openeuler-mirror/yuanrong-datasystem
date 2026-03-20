@@ -323,6 +323,14 @@
         "value": "true",
         "description": "Whether to enable reconciliation, default is true."
     },
+    "l2_cache_async_write_queue_size": {
+        "value": "10000",
+        "description": "The size of the per-thread asynchronous queue for writing to the secondary cache. With 8 threads, the system supports a maximum total capacity of 8 * l2_cache_async_write_queue_size key-value pairs pending write."
+    },
+    "l2_cache_async_write_rate_limit_mb": {
+        "value": "200",
+        "description": "Data write to l2cache rate limit for every node."
+    },
     "data_migrate_rate_limit_mb": {
         "value": "40",
         "description": "Data migrate rate limit for every node when scale down happen."
