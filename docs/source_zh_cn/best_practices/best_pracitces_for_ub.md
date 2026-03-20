@@ -31,6 +31,12 @@ git clone https://gitcode.com/openeuler/yuanrong-datasystem.git
 
 默认配置下数据系统会启用异构能力的编译，需要编译环境中具备CANN依赖，如无需异构能力支持，可禁用异构能力。
 
+编译数据系统时，请确保编译环境中的 URMA 版本与运行环境中的 URMA 版本一致，否则可能导致 UB 能力异常。可通过以下命令查看当前环境中的 URMA 版本：
+
+```bash
+rpm -qa | grep urma
+```
+
 ::::{tab-set}
 
 :::{tab-item}  启用 UB 支持
