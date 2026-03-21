@@ -41,6 +41,7 @@ class KVMode(Enum):
 class KVArgs:
     num: int
     size: str
+    client_num: int
     thread_num: int
     batch_num: int
 
@@ -104,6 +105,7 @@ class KVBenchTestCase(BenchTestCase):
             "prefix": args.prefix,
             "num": kv_args.num,
             "size": kv_args.size,
+            "client_num": kv_args.client_num,
             "thread_num": kv_args.thread_num,
             "batch_num": kv_args.batch_num,
             "perf_path": perf_path,
@@ -118,10 +120,10 @@ class KVBenchTestCase(BenchTestCase):
         """Formats a full command string from arguments and binary path."""
         # Extract numa parameter if present
         numa = command_args.pop("numa", "")
-        
+
         command_args_str = BenchCommandTask.concat_args("--", command_args)
         base_command = [bin_path, self.command, command_args_str]
-        
+
         # If numa is specified, wrap the command with taskset -c
         if numa:
             return f"taskset -c {numa} {' '.join(base_command)}"
@@ -209,6 +211,24 @@ class KVBenchTestCase(BenchTestCase):
             parallel_task = BenchParallelCommandTask(set_tasks)
             self.add_task(parallel_task)
 
+    def add_prefill_task(self, kv_args: KVArgs):
+        """Adds 'prefill' tasks for all configured 'set' worker nodes, sorted by worker_address."""
+        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
+        set_tasks = []
+        for index, worker_address in enumerate(set_workers):
+            command_args = self.to_base_command_args(kv_args)
+            command_args["action"] = "prefill"
+            command_args["worker_address"] = worker_address
+            command_args["worker_num"] = index
+
+            task = self.add_task_from_command_args(command_args)
+            if task:
+                set_tasks.append(task)
+
+        if set_tasks:
+            parallel_task = BenchParallelCommandTask(set_tasks)
+            self.add_task(parallel_task)
+
     def add_get_task(self, kv_args: KVArgs):
         """Adds 'get' tasks for all configured 'get' worker nodes, sorted by worker_address."""
         get_workers = sorted(self.bench_args.args.get_worker_addresses.split(","))
@@ -225,6 +245,36 @@ class KVBenchTestCase(BenchTestCase):
         # Create and add parallel command task for all get tasks
         if get_tasks:
             parallel_task = BenchParallelCommandTask(get_tasks)
+            self.add_task(parallel_task)
+
+    def add_concurrent_task(self, kv_args: KVArgs):
+        """Adds concurrent 'set' and 'get' tasks and runs them in parallel."""
+        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
+        get_workers = sorted(self.bench_args.args.get_worker_addresses.split(","))
+        concurrent_tasks = []
+
+        for index, worker_address in enumerate(set_workers):
+            command_args = self.to_base_command_args(kv_args)
+            command_args["action"] = "set"
+            command_args["worker_address"] = worker_address
+            command_args["worker_num"] = index
+            task = self.add_task_from_command_args(command_args)
+            if task:
+                concurrent_tasks.append(task)
+
+        for worker_address in get_workers:
+            command_args = self.to_base_command_args(kv_args)
+            command_args["action"] = "get"
+            command_args["worker_num"] = len(
+                self.bench_args.args.set_worker_addresses.split(",")
+            )
+            command_args["worker_address"] = worker_address
+            task = self.add_task_from_command_args(command_args)
+            if task:
+                concurrent_tasks.append(task)
+
+        if concurrent_tasks:
+            parallel_task = BenchParallelCommandTask(concurrent_tasks)
             self.add_task(parallel_task)
 
     def add_del_task(self, kv_args: KVArgs):
@@ -247,9 +297,6 @@ class KVBenchTestCase(BenchTestCase):
             task.run(self.handler)
 
 
-
-
-
 class KVBenchOutputHandler(BenchOutputHandler):
     bench_args: BenchArgs
     index: int
@@ -257,10 +304,11 @@ class KVBenchOutputHandler(BenchOutputHandler):
     # Class attributes for column definitions and headers
     column_definitions = {
         "index": {"width": 5, "align": " >"},
-        "action": {"width": 6, "align": " >"},
+        "action": {"width": 8, "align": " >"},
         "size": {"width": 8, "align": " >"},
         "count": {"width": 8, "align": " >"},
         "batch": {"width": 6, "align": " >"},
+        "client": {"width": 6, "align": " >"},
         "thread": {"width": 6, "align": " >"},
         "worker": {"width": 21, "align": " >"},
         "avg[ms]": {"width": 14, "align": " >"},
@@ -343,14 +391,15 @@ class KVBenchOutputHandler(BenchOutputHandler):
 
         try:
             meta_parts = metadata_str.split("-")
-            if len(meta_parts) < 5:
+            if len(meta_parts) < 6:
                 logger.error(
                     f"Failed to parse metadata: {metadata_str} from line: {line_str}"
                 )
                 return None
 
             parsed_meta = {
-                "action": "-".join(meta_parts[:-4]).strip(),
+                "action": "-".join(meta_parts[:-5]).strip(),
+                "client": meta_parts[-5].strip(),
                 "thread": meta_parts[-4].strip(),
                 "num": meta_parts[-3].strip(),
                 "size": meta_parts[-2].strip(),
@@ -379,6 +428,7 @@ class KVBenchOutputHandler(BenchOutputHandler):
             "size": parsed_meta["size"],
             "count": parsed_meta["num"],
             "batch": parsed_meta["batch"],
+            "client": parsed_meta["client"],
             "thread": parsed_meta["thread"],
             "worker": worker_host,
             "avg[ms]": (

@@ -33,8 +33,6 @@ from yr.datasystem.cli.benchmark.task import BenchArgs
 logger = logging.getLogger("dsbench")
 
 _SIZE_PATTERN = r"^\d+(?:B|KB|MB|GB)?$"
-_THREAD_NUM_PATTERN = r"^[1-9]\d*$"
-_BATCH_NUM_PATTERN = r"^[1-9]\d*$"
 _NUM_PATTERN = r"^[1-9]\d*$"
 
 
@@ -51,8 +49,7 @@ def get_kv_mode(args: Any) -> KVMode:
 def validate_kv_args_config(tc_config: dict):
     """
     Validates the configuration for KVArgs from a test case.
-    Checks for the presence and format/validity of 'num', 'size',
-    'thread_num', and 'batch_num'.
+    Checks for the presence and format/validity of 'num', 'size', 'client_num', 'thread_num', and 'batch_num'.
 
     Args:
         tc_config: The dictionary representation of a single test case.
@@ -61,7 +58,7 @@ def validate_kv_args_config(tc_config: dict):
         bool: True if the configuration is valid, False otherwise.
     """
     # 1. Check for required parameters
-    required_params = ["num", "size", "thread_num", "batch_num"]
+    required_params = ["num", "size", "client_num", "thread_num", "batch_num"]
     for param in required_params:
         if param not in tc_config:
             logger.error(
@@ -84,15 +81,22 @@ def validate_kv_args_config(tc_config: dict):
         )
         return False
 
+    client_val = tc_config.get("client_num")
+    if not re.match(_NUM_PATTERN, str(client_val)):
+        logger.error(
+            f"Parameter 'client_num' ('{client_val}') must be a positive integer. Config: {tc_config}"
+        )
+        return False
+
     thread_val = tc_config.get("thread_num")
-    if not re.match(_THREAD_NUM_PATTERN, str(thread_val)):
+    if not re.match(_NUM_PATTERN, str(thread_val)):
         logger.error(
             f"Parameter 'thread_num' ('{thread_val}') must be a positive integer. Config: {tc_config}"
         )
         return False
 
     batch_val = tc_config.get("batch_num")
-    if not re.match(_BATCH_NUM_PATTERN, str(batch_val)):
+    if not re.match(_NUM_PATTERN, str(batch_val)):
         logger.error(
             f"Parameter 'batch_num' ('{batch_val}') must be a positive integer. Config: {tc_config}"
         )
@@ -100,13 +104,20 @@ def validate_kv_args_config(tc_config: dict):
 
     # 3. Validate ranges
     try:
+        client_num_int = int(client_val)
         thread_num_int = int(thread_val)
         batch_num_int = int(batch_val)
         num_int = int(num_val)
 
-        if not (1 <= thread_num_int <= 128):
+        if not (1 <= client_num_int <= 128):
             logger.error(
-                f"Parameter 'thread_num' value '{thread_val}' must be between 1 and 128. Config: {tc_config}"
+                f"Parameter 'client_num' value '{client_val}' must be between 1 and 128. Config: {tc_config}"
+            )
+            return False
+
+        if thread_num_int <= 0:
+            logger.error(
+                f"Parameter 'thread_num' value '{thread_val}' must be greater than 0. Config: {tc_config}"
             )
             return False
 
@@ -162,7 +173,8 @@ class KVBenchSuiteBuilder:
             kv_args = KVArgs(
                 num=args.num if args.num is not None else 100,
                 size=args.size if args.size is not None else "1MB",
-                thread_num=args.thread_num if args.thread_num is not None else 8,
+                client_num=args.client_num if args.client_num is not None else 8,
+                thread_num=args.thread_num if args.thread_num is not None else 1,
                 batch_num=args.batch_num if args.batch_num is not None else 1,
             )
             self.testcases.append(kv_args)
@@ -180,10 +192,11 @@ class KVBenchSuiteBuilder:
             if not validate_kv_args_config(tc):
                 raise ValueError(f"Invalid testcase configuration: {tc}")
             kv_args = KVArgs(
-                num=tc["num"],
+                num=int(tc["num"]),
                 size=tc["size"],
-                thread_num=tc["thread_num"],
-                batch_num=tc["batch_num"],
+                client_num=int(tc["client_num"]),
+                thread_num=int(tc["thread_num"]),
+                batch_num=int(tc["batch_num"]),
             )
             self.testcases.append(kv_args)
 
@@ -248,7 +261,12 @@ class KVBenchSuiteBuilder:
         self, kv_args: KVArgs, testcase_index: int
     ) -> BenchTestCase:
         args = self.bench_args.args
-        name = f"{args.prefix}_n{kv_args.num}_{kv_args.size}_b{kv_args.batch_num}_t{kv_args.thread_num}"
+        name = (
+            f"{args.prefix}_n{kv_args.num}_{kv_args.size}"
+            f"_c{kv_args.client_num}_t{kv_args.thread_num}_b{kv_args.batch_num}"
+        )
+        if args.concurrent:
+            name = f"{name}_concurrent"
 
         # Create a separate handler for each test case
         testcase_handler = KVBenchOutputHandler(self.bench_args, testcase_index)
@@ -258,7 +276,11 @@ class KVBenchSuiteBuilder:
             testcase_handler.final_csv_filepath = self.final_csv_filepath
 
         testcase = KVBenchTestCase(name, self.bench_args, testcase_handler, testcase_index)
-        testcase.add_set_task(kv_args)
-        testcase.add_get_task(kv_args)
+        if args.concurrent:
+            testcase.add_prefill_task(kv_args)
+            testcase.add_concurrent_task(kv_args)
+        else:
+            testcase.add_set_task(kv_args)
+            testcase.add_get_task(kv_args)
         testcase.add_del_task(kv_args)
         return testcase

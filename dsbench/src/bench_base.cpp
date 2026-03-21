@@ -16,6 +16,7 @@
 
 #include "bench_base.h"
 
+#include <limits>
 #include <thread>
 
 #include "datasystem/common/util/status_helper.h"
@@ -52,22 +53,26 @@ Status BenchBase::Start()
 
 Status BenchBase::ParallelRun()
 {
-    auto threadNum = argsBase_.threadNum;
-    if (threadNum <= 0) {
+    if (argsBase_.threadNum > 0 &&
+        argsBase_.clientNum > std::numeric_limits<uint64_t>::max() / argsBase_.threadNum) {
+        return Status(K_INVALID, "Invalid argument: clientNum * threadNum overflow");
+    }
+    auto totalThreadNum = argsBase_.threadNum * argsBase_.clientNum;
+    if (totalThreadNum == 0) {
         return Status(K_INVALID, "Invalid argument: threadNum must be positive");
     }
     perThreadStatus_.clear();
-    perThreadStatus_.resize(threadNum);
+    perThreadStatus_.resize(totalThreadNum);
     perThreadCostDetail_.clear();
-    perThreadCostDetail_.resize(threadNum);
+    perThreadCostDetail_.resize(totalThreadNum);
     perThreadCost_.clear();
-    perThreadCost_.resize(threadNum);
+    perThreadCost_.resize(totalThreadNum);
 
     std::vector<std::thread> threads;
-    threads.reserve(threadNum);
-    Barrier barrier(threadNum);
+    threads.reserve(totalThreadNum);
+    Barrier barrier(totalThreadNum);
     RETURN_IF_NOT_OK(Prepare());
-    for (uint32_t t = 0; t < threadNum; t++) {
+    for (size_t t = 0; t < totalThreadNum; ++t) {
         threads.emplace_back([this, t, &barrier] { perThreadStatus_[t] = Run(t, barrier); });
     }
 

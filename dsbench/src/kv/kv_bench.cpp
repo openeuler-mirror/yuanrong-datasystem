@@ -54,9 +54,11 @@ Status KVBench::Prepare()
     if (!args_.ownerWorker.empty()) {
         RETURN_IF_NOT_OK(FetchOwnerId(args_.ownerWorker, args_.accessKey, args_.secretKey, args_.ownerId));
     }
+    CHECK_FAIL_RETURN_STATUS(args_.clientNum > 0, K_INVALID, "client_num must > 0");
     CHECK_FAIL_RETURN_STATUS(args_.threadNum > 0, K_INVALID, "thread_num must > 0");
+    auto totalThreadNum = args_.clientNum * args_.threadNum;
     std::vector<std::string> keys;
-    if (args_.action == "set") {
+    if (args_.action == "set" || args_.action == "prefill") {
         GenerateSetKeys(keys);
     } else if (args_.action == "get" || args_.action == "del") {
         CHECK_FAIL_RETURN_STATUS(args_.workerNum >= 0, K_INVALID, "worker_index must >= 0");
@@ -68,11 +70,27 @@ Status KVBench::Prepare()
     std::shuffle(keys.begin(), keys.end(), std::mt19937{ std::random_device{}() });
 
     perThreadKeys_.clear();
-    perThreadKeys_.resize(args_.threadNum);
+    perThreadKeys_.resize(totalThreadNum);
 
+    size_t keyThreadIdx = 0;
     for (size_t index = 0; index < keys.size(); index++) {
-        auto idx = index % args_.threadNum;
-        perThreadKeys_[idx].emplace_back(std::move(keys[index]));
+        perThreadKeys_[keyThreadIdx].emplace_back(std::move(keys[index]));
+        keyThreadIdx++;
+        if (keyThreadIdx >= totalThreadNum) {
+            keyThreadIdx = 0;
+        }
+    }
+
+    ConnectOptions connectOptions;
+    RETURN_IF_NOT_OK(bench::StrToHostPort(args_.workerAddress, connectOptions.host, connectOptions.port));
+    connectOptions.accessKey = args_.accessKey;
+    connectOptions.secretKey = args_.secretKey;
+    clients_.clear();
+    clients_.reserve(args_.clientNum);
+    for (size_t i = 0; i < args_.clientNum; ++i) {
+        auto client = std::make_unique<KVClient>(connectOptions);
+        RETURN_IF_NOT_OK(client->Init());
+        clients_.emplace_back(std::move(client));
     }
 
     return Status::OK();
@@ -118,6 +136,7 @@ Status KVBench::PrintBenchmarkInfo()
 
 std::string KVBench::GetBenchCost()
 {
+    auto totalThreadNum = args_.clientNum * args_.threadNum;
     std::vector<uint64_t> costVec;
     for (const auto &costs : perThreadCostDetail_) {
         for (const auto &cost : costs) {
@@ -125,7 +144,7 @@ std::string KVBench::GetBenchCost()
         }
     }
     std::stringstream ss;
-    ss << args_.action << "-" << args_.threadNum << "-" << args_.keyNum;
+    ss << args_.action << "-" << args_.clientNum << "-" << args_.threadNum << "-" << args_.keyNum;
     ss << "-" << args_.keySize << "-" << args_.batchNum;
     std::sort(costVec.begin(), costVec.end());
     if (costVec.empty()) {
@@ -148,7 +167,7 @@ std::string KVBench::GetBenchCost()
     double totalTimeCost = std::accumulate(costVec.begin(), costVec.end(), 0.0);  // MicroSecond
     uint64_t totalKeyNum;
     uint64_t totalValueSize;
-    if (args_.action == "set") {
+    if (args_.action == "set" || args_.action == "prefill") {
         // For set operations, total keys = keyNum (distributed across threads)
         totalKeyNum = args_.keyNum;
         totalValueSize = args_.keyNum * valueSize;  // bytes
@@ -160,7 +179,7 @@ std::string KVBench::GetBenchCost()
 
     double threadCostSum = std::accumulate(perThreadCost_.begin(), perThreadCost_.end(), 0.0);
     double timeCostPerThread =
-        threadCostSum / args_.threadNum / MICROSECONDS_TO_MILLISECONDS / MICROSECONDS_TO_MILLISECONDS;  // Second
+        threadCostSum / totalThreadNum / MICROSECONDS_TO_MILLISECONDS / MICROSECONDS_TO_MILLISECONDS;  // Second
 
     float avg = totalTimeCost / costVec.size();
     auto count = costVec.size();
@@ -177,20 +196,13 @@ std::string KVBench::GetBenchCost()
 
 Status KVBench::Run(uint64_t threadIndex, Barrier &barrier)
 {
-    std::unique_ptr<KVClient> client;
-    auto init = [&] {
-        ConnectOptions connectOptions;
-        RETURN_IF_NOT_OK(bench::StrToHostPort(args_.workerAddress, connectOptions.host, connectOptions.port));
-        connectOptions.accessKey = args_.accessKey;
-        connectOptions.secretKey = args_.secretKey;
-        client = std::make_unique<KVClient>(connectOptions);
-        return client->Init();
-    };
-    auto rc = init();
     barrier.Wait();
-    RETURN_IF_NOT_OK(rc);
+    CHECK_FAIL_RETURN_STATUS(!clients_.empty(), K_RUNTIME_ERROR, "KV client is not initialized");
+    auto clientIndex = threadIndex / args_.threadNum;
+    CHECK_FAIL_RETURN_STATUS(clientIndex < clients_.size(), K_RUNTIME_ERROR, "client index out of range");
+    auto &client = *clients_[clientIndex];
 
-    if (args_.action == "set") {
+    if (args_.action == "set" || args_.action == "prefill") {
         RETURN_IF_NOT_OK(Set(client, threadIndex));
     } else if (args_.action == "get") {
         RETURN_IF_NOT_OK(Get(client, threadIndex));
@@ -232,7 +244,7 @@ Status KVBench::FetchOwnerId(const std::string &ownerWorkerAddr, const std::stri
     return Status::OK();
 }
 
-Status KVBench::Set(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
+Status KVBench::Set(KVClient &client, uint64_t threadIndex)
 {
     auto &costs = perThreadCostDetail_[threadIndex];
     auto &allKeys = perThreadKeys_[threadIndex];
@@ -248,7 +260,7 @@ Status KVBench::Set(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     if (args_.batchNum == 1) {
         for (const auto &key : allKeys) {
             Timer timer;
-            RETURN_IF_NOT_OK(client->Set(key, data));
+            RETURN_IF_NOT_OK(client.Set(key, data));
             costs.emplace_back(timer.ElapsedMicroSecond());
         }
         perThreadCost_[threadIndex] = totalTimer.ElapsedMicroSecond();
@@ -267,7 +279,7 @@ Status KVBench::Set(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
         if (keys.size() == args_.batchNum) {
             Timer timer;
             std::vector<std::string> failedKeys;
-            Status rc = client->MSet(keys, valuesView, failedKeys);
+            Status rc = client.MSet(keys, valuesView, failedKeys);
             if (!rc.IsOk()) {
                 return rc;
             }
@@ -280,7 +292,7 @@ Status KVBench::Set(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     if (!keys.empty()) {
         Timer timer;
         std::vector<std::string> failedKeys;
-        Status rc = client->MSet(keys, valuesView, failedKeys);
+        Status rc = client.MSet(keys, valuesView, failedKeys);
         if (!rc.IsOk()) {
             return rc;
         }
@@ -291,7 +303,7 @@ Status KVBench::Set(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     return Status::OK();
 }
 
-Status KVBench::Get(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
+Status KVBench::Get(KVClient &client, uint64_t threadIndex)
 {
     auto &costs = perThreadCostDetail_[threadIndex];
     auto &allKeys = perThreadKeys_[threadIndex];
@@ -301,11 +313,11 @@ Status KVBench::Get(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     std::vector<std::string> keys;
     keys.reserve(args_.batchNum);
     for (const auto &key : allKeys) {
-        keys.emplace_back(std::move(key));
+        keys.emplace_back(key);
         if (keys.size() == args_.batchNum) {
             std::vector<Optional<ReadOnlyBuffer>> readOnlyBuffers;
             Timer timer;
-            RETURN_IF_NOT_OK(client->Get(keys, readOnlyBuffers));
+            RETURN_IF_NOT_OK(client.Get(keys, readOnlyBuffers));
             costs.emplace_back(timer.ElapsedMicroSecond());
             keys.clear();
         }
@@ -313,7 +325,7 @@ Status KVBench::Get(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     if (!keys.empty()) {
         std::vector<Optional<ReadOnlyBuffer>> readOnlyBuffers;
         Timer timer;
-        RETURN_IF_NOT_OK(client->Get(keys, readOnlyBuffers));
+        RETURN_IF_NOT_OK(client.Get(keys, readOnlyBuffers));
         costs.emplace_back(timer.ElapsedMicroSecond());
     }
 
@@ -321,7 +333,7 @@ Status KVBench::Get(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     return Status::OK();
 }
 
-Status KVBench::Del(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
+Status KVBench::Del(KVClient &client, uint64_t threadIndex)
 {
     auto &costs = perThreadCostDetail_[threadIndex];
     auto &allKeys = perThreadKeys_[threadIndex];
@@ -331,11 +343,11 @@ Status KVBench::Del(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     std::vector<std::string> keys;
     keys.reserve(args_.batchNum);
     for (const auto &key : allKeys) {
-        keys.emplace_back(std::move(key));
+        keys.emplace_back(key);
         if (keys.size() == args_.batchNum) {
             std::vector<std::string> failedKeys;
             Timer timer;
-            RETURN_IF_NOT_OK(client->Del(keys, failedKeys));
+            RETURN_IF_NOT_OK(client.Del(keys, failedKeys));
             costs.emplace_back(timer.ElapsedMicroSecond());
             keys.clear();
         }
@@ -343,7 +355,7 @@ Status KVBench::Del(std::unique_ptr<KVClient> &client, uint64_t threadIndex)
     if (!keys.empty()) {
         std::vector<std::string> failedKeys;
         Timer timer;
-        RETURN_IF_NOT_OK(client->Del(keys, failedKeys));
+        RETURN_IF_NOT_OK(client.Del(keys, failedKeys));
         costs.emplace_back(timer.ElapsedMicroSecond());
     }
     perThreadCost_[threadIndex] = totalTimer.ElapsedMicroSecond();

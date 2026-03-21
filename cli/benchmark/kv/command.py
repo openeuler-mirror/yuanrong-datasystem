@@ -180,9 +180,9 @@ class KVCommand(BenchmarkBaseCommand):
             Testcase file (must be .json).
             Format example:
             [
-                {"num": 1000, "size": "1MB", "thread_num": 1, "batch_num": 1},
-                {"num": 250, "size": "1MB", "thread_num": 4, "batch_num": 1},
-                {"num": 125, "size": "1MB", "thread_num": 8, "batch_num": 1}
+                {"num": 1000, "size": "1MB", "client_num": 1, "thread_num": 1, "batch_num": 1},
+                {"num": 250, "size": "1MB", "client_num": 4, "thread_num": 1, "batch_num": 1},
+                {"num": 125, "size": "1MB", "client_num": 8, "thread_num": 1, "batch_num": 1}
             ]
             """,
         )
@@ -190,11 +190,18 @@ class KVCommand(BenchmarkBaseCommand):
     def _add_run_config_arguments(self, parser: argparse.ArgumentParser):
         """Adds arguments related to the benchmark runtime configuration."""
         parser.add_argument(
+            "-c",
+            "--client_num",
+            type=int,
+            default=None,
+            help="Number of clients per worker (default: 8, max 128)",
+        )
+        parser.add_argument(
             "-t",
             "--thread_num",
             type=int,
             default=None,
-            help="Number of threads to use (default: 8, max 128)",
+            help="Number of threads per client (default: 1)",
         )
         parser.add_argument(
             "-b",
@@ -204,7 +211,11 @@ class KVCommand(BenchmarkBaseCommand):
             help="Batch number (default: 1, max 10000)",
         )
         parser.add_argument(
-            "-n", "--num", type=int, default=None, help="Number of data items (default: 100)"
+            "-n",
+            "--num",
+            type=int,
+            default=None,
+            help="Number of keys per worker process, distributed across all clients,threads (default: 100)"
         )
         parser.add_argument(
             "-s",
@@ -235,6 +246,13 @@ class KVCommand(BenchmarkBaseCommand):
             metavar="",
             help="Bind to specific numa (e.g. 0-3,10-20,1,2,3) (default: empty)",
         )
+        parser.add_argument(
+            "--concurrent",
+            action="store_true",
+            help="Run concurrent set/get workload. Instead of the default sequential flow "
+            "(set -> get -> del), this mode runs: prefill -> concurrent set/get -> del. "
+            "Use this to stress-test concurrent read/write performance on the same data.",
+        )
 
     def _add_cluster_config_arguments(self, parser: argparse.ArgumentParser):
         """Adds arguments related to cluster setup, authentication, and tools."""
@@ -255,9 +273,6 @@ class KVCommand(BenchmarkBaseCommand):
         )
         parser.add_argument("--access_key", type=str, default="", metavar="", help="Access key (default: empty)")
         parser.add_argument("--secret_key", type=str, default="", metavar="", help="Secret key (default: empty)")
-
-
-
 
     def _log_worker_version(self, result: Any):
         if isinstance(result, BenchCommandOutput):

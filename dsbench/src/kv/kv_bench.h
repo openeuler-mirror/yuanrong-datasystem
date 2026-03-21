@@ -45,14 +45,15 @@ protected:
     Status FetchOwnerId(const std::string &ownerWorkerAddr, const std::string &accessKey, const std::string &secretKey,
                         std::string &ownerId);
 
-    Status Set(std::unique_ptr<KVClient> &client, uint64_t threadIndex);
-    Status Get(std::unique_ptr<KVClient> &client, uint64_t threadIndex);
-    Status Del(std::unique_ptr<KVClient> &client, uint64_t threadIndex);
+    Status Set(KVClient &client, uint64_t threadIndex);
+    Status Get(KVClient &client, uint64_t threadIndex);
+    Status Del(KVClient &client, uint64_t threadIndex);
 
 private:
     void GenerateSetKeys(std::vector<std::string> &keys);
     void GenerateGetOrDelKeys(std::vector<std::string> &keys);
     std::vector<std::vector<std::string>> perThreadKeys_;
+    std::vector<std::unique_ptr<KVClient>> clients_;
     KVArgs &args_;
 };
 }  // namespace bench
