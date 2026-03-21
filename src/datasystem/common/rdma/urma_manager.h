@@ -63,7 +63,7 @@ public:
     /**
      * @brief Create a new Segment object.
      */
-    Segment() : segment_(nullptr), local_(true){};
+    Segment() : segment_(nullptr), local_(true) {};
     ~Segment();
 
     /**
@@ -599,12 +599,22 @@ private:
     static Status UrmaRearmJfc(const custom_unique_ptr<urma_jfc_t> &jfc);
 
     /**
+     * @brief Gets the priority and sl for CTP.
+     * @param[out] priority The priority index for current tp_type
+     * @param[out] sl The sl for current tp_type
+     * @return Whether the priority/sl is fetched from device capability.
+     */
+    bool GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const;
+
+    /**
      * @brief Create a Jfs and sets jfc for completion queue
      * @param[in] jfc jfc wrapped in a unique pointer with custom deleter
+     * @param[in] priority priority index for jfs
      * @param[out] out jfs wrapped in a unique pointer with custom deleter
      * @return Status of the call
      */
-    Status UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, custom_unique_ptr<urma_jfs_t> &out);
+    Status UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, uint8_t priority,
+                         custom_unique_ptr<urma_jfs_t> &out);
 
     /**
      * @brief Create a Jfr and sets jfc for completion queue
@@ -742,9 +752,9 @@ private:
     std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
-    uint64_t ubTransportMemSize_ = 128 * 1024 * 1024;   // 128 MB
-    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;      // 32 MB
-    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;     // 8 MB
+    uint64_t ubTransportMemSize_ = 128 * 1024 * 1024;  // 128 MB
+    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;     // 32 MB
+    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;    // 8 MB
 };
 
 }  // namespace datasystem
