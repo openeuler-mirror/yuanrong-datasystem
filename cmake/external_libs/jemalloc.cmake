@@ -8,6 +8,7 @@ set(jemalloc_SHA256 "fcd383b168b72904f777e500631996366a633d1c40714f1601b7e739eb0
 
 set(jemalloc_CONF_OPTIONS
     --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63
+    --disable-cache-oblivious
     --disable-zone-allocator
     --without-export
     --disable-shared
