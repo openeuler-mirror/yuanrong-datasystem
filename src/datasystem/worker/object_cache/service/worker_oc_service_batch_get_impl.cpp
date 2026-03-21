@@ -164,20 +164,26 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     size_t index = 0;
     auto traceId = Trace::Instance().GetTraceID();
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_RUN);
+    std::mutex lastRcMutex;
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
 
         auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceId] {
+                     &tempFailedMetas, index, traceId, &lastRcMutex] {
+            Status tmpRc = Status::OK();
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
-                lastRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
-                                                        tempNeedRetryIds[index], tempFailedIds[index],
-                                                        tempFailedMetas[index]);
+                tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
+                                                       tempNeedRetryIds[index], tempFailedIds[index],
+                                                       tempFailedMetas[index]);
             }
-            return lastRc;
+            {
+                std::lock_guard<std::mutex> lock(lastRcMutex);
+                lastRc = tmpRc;
+            }
+            return tmpRc;
         };
         if (index + 1 == groupedQueryMetas.size()) {
             LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
