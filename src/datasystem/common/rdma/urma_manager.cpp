@@ -159,6 +159,12 @@ Status UrmaManager::Init(const HostPort &hostport)
     urma_device_t *urmaDevice = nullptr;
     RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
     RETURN_IF_NOT_OK(UrmaQueryDevice(urmaDevice));
+    uint8_t priority = 0;
+    uint32_t sl = 0;
+    bool foundPriority = GetJfsPriorityInfoForCTP(priority, sl);
+    LOG(INFO) << "UrmaManager CTP priority=" << static_cast<uint32_t>(priority) << ", SL=" << sl
+              << ", useDefaultPriority=" << !foundPriority;
+
     if (eidIndex < 0) {
         RETURN_IF_NOT_OK(GetEidIndex(urmaDevice, eidIndex));
     }
@@ -171,7 +177,7 @@ Status UrmaManager::Init(const HostPort &hostport)
     urmaJfsVec_.resize(FLAGS_urma_connection_size);
     urmaJfrVec_.resize(FLAGS_urma_connection_size);
     for (uint i = 0; i < FLAGS_urma_connection_size; ++i) {
-        RETURN_IF_NOT_OK(UrmaCreateJfs(urmaJfc_, urmaJfsVec_[i]));
+        RETURN_IF_NOT_OK(UrmaCreateJfs(urmaJfc_, priority, urmaJfsVec_[i]));
         RETURN_IF_NOT_OK(UrmaCreateJfr(urmaJfc_, urmaJfrVec_[i]));
     }
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
@@ -545,14 +551,40 @@ Status UrmaManager::UrmaRearmJfc(const custom_unique_ptr<urma_jfc_t> &jfc)
     return Status::OK();
 }
 
-Status UrmaManager::UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, custom_unique_ptr<urma_jfs_t> &out)
+bool UrmaManager::GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const
+{
+    constexpr uint8_t defaultPriorityForCTP = 6;
+    constexpr uint32_t defaultSLForCTP = 6;
+    urma_tp_type_en tpTypeEn;
+    tpTypeEn.value = 0;
+    tpTypeEn.bs.ctp = 1;
+
+    for (uint32_t i = 0; i <= URMA_MAX_PRIORITY; ++i) {
+        auto &priorityInfo = urmaDeviceAttribute_.dev_cap.priority_info[i];
+        VLOG(1) << "Checking priority " << i << " with tp_type: " << priorityInfo.tp_type.value
+                << " expect tp_type: " << tpTypeEn.value;
+        if (priorityInfo.tp_type.value == tpTypeEn.value) {
+            priority = i;
+            sl = priorityInfo.SL;
+            return true;
+        }
+    }
+    // Older URMA versions may not populate priority_info, so fall back
+    // to the default priority and SL for CTP.
+    priority = defaultPriorityForCTP;
+    sl = defaultSLForCTP;
+    return false;
+}
+
+Status UrmaManager::UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, uint8_t priority,
+                                  custom_unique_ptr<urma_jfs_t> &out)
 {
     LOG(INFO) << "UrmaManager::UrmaCreateJfs()";
 
     urma_jfs_cfg_t jfsConfig;
     jfsConfig.depth = JETTY_SIZE_;
     jfsConfig.trans_mode = URMA_TM_RM;
-    jfsConfig.priority = URMA_MAX_PRIORITY; /* Highest priority */
+    jfsConfig.priority = priority;
     const auto maxSge = 13;
     jfsConfig.max_sge = maxSge;
     jfsConfig.max_inline_data = 0;
