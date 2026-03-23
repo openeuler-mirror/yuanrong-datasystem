@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+message SenderData {
+  uint32 sendNpuIpv4 = 1;
+};
+
+message ReceiverData {
+  uint32 recvNpuIpv4 = 1;
+  uint32 recvListenPort = 2;
+  string tag = 3;
+};
+
+message ReceiverNpuResources {
+  repeated uint64 recvBuffAddrs = 1;
+  repeated uint64 qpBaseAddrs = 2;
+  repeated uint64 sendDoneNotifyAddrOffsets = 3;
+};
+
+message SenderNpuResources {
+  repeated uint64 sendBuffAddrs = 1;
+  repeated uint64 qpBaseAddrs = 2;
+  repeated uint64 recvReadyNotifyAddrOffsets = 3;
+  uint64 recvCompleteNotifyAddrOffset = 4;
+  uint64 notifySrcValAddr = 5;
+};

@@ -1,0 +1,32 @@
+# CMake / C++ build artifacts
+/build/
+/build_*/
+/cmake-build-*/
+/Testing/
+/CMakeCache.txt
+/CMakeFiles/
+/compile_commands.json
+/cmake_install.cmake
+/Makefile
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Python packaging outputs
+/dist/
+/wheelhouse/
+*.egg-info/
+.eggs/
+
+# Local virtual environments
+.venv/
+venv/
+
+# Pybind11 built extension output
+/python/transfer_engine/_transfer_engine*.so
+/python/transfer_engine/lib*.so
+/python/transfer_engine/lib*.so.*

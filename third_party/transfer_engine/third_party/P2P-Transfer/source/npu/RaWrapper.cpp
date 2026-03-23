@@ -1,0 +1,374 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "npu/RaWrapper.h"
+#include <array>
+#include <cstring>
+#include <chrono>
+#include <thread>
+#include "tools/npu-error.h"
+
+constexpr int64_t LINK_TIMEOUT_S = 120;
+
+Status RaInitWrapper(struct ra_init_config *config)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_INIT(config);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_init: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_init: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaDeinitWrapper(struct ra_init_config *config)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_DEINIT(config);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_deinit: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_deinit: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaSocketListenStartWrapper(struct socket_listen_info_t conn[], uint32_t num)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_SOCKET_LISTEN_START(conn, num);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_socket_listen_start: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else if (ret == SOCK_EADDRINUSE) {
+            return Status::Error(ErrorCode::ERR_SOCK_EADDRINUSE, "Port already in use");
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "Failed to perform ra_socket_listen_start: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaSocketListenStopWrapper(struct socket_listen_info_t conn[], uint32_t num)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_SOCKET_LISTEN_STOP(conn, num);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_socket_listen_stop: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "Failed to perform ra_socket_listen_stop: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaRdevInitV2Wrapper(struct rdev_init_info init_info, struct rdev rdev_info, void **rdma_handle, bool &initialized)
+{
+    // Check if the RDMA device is already initialized to avoid conflict initialization
+    if (RA_RDEV_GET_HANDLE(rdev_info.phy_id, rdma_handle) == ACL_SUCCESS) {
+        return Status::Success();
+    }
+    ACL_CHECK_STATUS(RA_RDEV_INIT_V2(init_info, rdev_info, rdma_handle));
+    initialized = true;
+    return Status::Success();
+}
+
+Status RaRdevDeinitWrapper(void *rdma_handle, unsigned int notify_type, bool initialized)
+{
+    // Deinitialize the RDMA device only if it was initialized by the current instance
+    if (initialized) {
+        ACL_CHECK_STATUS(RA_RDEV_DEINIT(rdma_handle, notify_type));
+    }
+    return Status::Success();
+}
+
+Status RaGetSocketsWrapper(uint32_t role, struct socket_info_t conn[], uint32_t num, uint32_t *connected_num)
+{
+    ACL_CHECK_STATUS(RA_GET_SOCKETS(role, conn, num, connected_num));
+    return Status::Success();
+}
+
+Status RaSocketBatchConnectWrapper(struct socket_connect_info_t conn[], uint32_t num)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_SOCKET_BATCH_CONNECT(conn, num);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_socket_batch_connect: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "Failed to perform ra_socket_batch_connect: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaSocketBatchCloseWrapper(struct socket_close_info_t conn[], unsigned int num)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_SOCKET_BATCH_CLOSE(conn, num);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_socket_batch_close: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "Failed to perform ra_socket_batch_close: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaSocketWhiteListAddWrapper(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num)
+{
+    ACL_CHECK_STATUS(RA_SOCKET_WHITE_LIST_ADD(socket_handle, white_list, num));
+    return Status::Success();
+}
+
+Status RaSocketWhiteListDelWrapper(void *socket_handle, struct socket_wlist_info_t white_list[], unsigned int num)
+{
+    ACL_CHECK_STATUS(RA_SOCKET_WHITE_LIST_DEL(socket_handle, white_list, num));
+    return Status::Success();
+}
+
+Status RaQpCreateWithAttrsWrapper(void *rdev_handle, struct qp_ext_attrs *ext_attrs, void **qp_handle)
+{
+    ACL_CHECK_STATUS(RA_QP_CREATE_WITH_ATTRS(rdev_handle, ext_attrs, qp_handle));
+    return Status::Success();
+}
+
+Status RaQpDestroyWrapper(void *qp_handle)
+{
+    ACL_CHECK_STATUS(RA_QP_DESTROY(qp_handle));
+    return Status::Success();
+}
+
+Status RaSetQpAttrQosWrapper(void *qp_handle, struct qos_attr *attr)
+{
+    ACL_CHECK_STATUS(RA_SET_QP_ATTR_QOS(qp_handle, attr));
+    return Status::Success();
+}
+
+Status RaSetQpAttrTimeoutWrapper(void *qp_handle, uint32_t *timeout)
+{
+    ACL_CHECK_STATUS(RA_SET_QP_ATTR_TIMEOUT(qp_handle, timeout));
+    return Status::Success();
+}
+
+Status RaSetQpAttrRetryCntWrapper(void *qp_handle, uint32_t *retry_cnt)
+{
+    ACL_CHECK_STATUS(RA_SET_QP_ATTR_RETRY_CNT(qp_handle, retry_cnt));
+    return Status::Success();
+}
+
+Status RaMrRegWrapper(void *qp_handle, struct mr_info *info)
+{
+    ACL_CHECK_STATUS(RA_MR_REG(qp_handle, info));
+    return Status::Success();
+}
+
+Status RaMrDeRegWrapper(void *qp_handle, struct mr_info *info)
+{
+    ACL_CHECK_STATUS(RA_MR_DEREG(qp_handle, info));
+    return Status::Success();
+}
+
+Status RaGlobalMrRegWrapper(void *rdma_handle, struct mr_info *info, void **mr_handle)
+{
+    ACL_CHECK_STATUS(RA_REGISTER_MR(rdma_handle, info, mr_handle));
+    return Status::Success();
+}
+
+Status RaGlobalMrDeRegWrapper(void *rdma_handle, void *mr_handle)
+{
+    ACL_CHECK_STATUS(RA_DEREGISTER_MR(rdma_handle, mr_handle));
+    return Status::Success();
+}
+
+Status RaQpConnectAsyncWrapper(void *qp_handle, const void *fd_handle)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_QP_CONNECT_ASYNC(qp_handle, fd_handle);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_qp_connect_async: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "Failed to perform ra_qp_connect_async: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaGetQpStatusWrapper(void *qp_handle, ra_qp_status *status)
+{
+    ACL_CHECK_STATUS(RA_GET_QP_STATUS(qp_handle, status));
+    return Status::Success();
+}
+
+Status RaSendWrlistExtWrapper(void *qp_handle, struct send_wrlist_data_ext wr[], struct send_wr_rsp op_rsp[],
+                       uint32_t send_num, uint32_t *complete_num)
+{
+    ACL_CHECK_STATUS(RA_SEND_WRLIST_EXT(qp_handle, wr, op_rsp, send_num, complete_num));
+    return Status::Success();
+}
+
+Status RaGetNotifyBaseAddrWrapper(void *rdev_handle, unsigned long long *va, unsigned long long *size)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_GET_NOTIFY_BASE_ADDR(rdev_handle, va, size);
+        if (!ret) {
+            break;
+        } else if (ret == SOCK_EAGAIN) {
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform ra_get_notify_base_addr: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "Failed to perform ra_get_notify_base_addr: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaSendWrWrapper(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_SEND_WR(qp_handle, wr, op_rsp);
+        if (!ret) {
+            break;
+        } else if ((ret == SOCK_ENOENT) || (ret == SOCK_EAGAIN)
+                   || (ret
+                       == ROCE_ENOMEM)) {  // Not sure if we should do the last one, or maybe we should do it only once.
+                                           // But fixes our error. Or maybe need to have rate limiting somewhere else
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform RaSendWr: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform RaSendWr: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaTypicalSendWrWrapper(void *qp_handle, struct send_wr *wr, struct send_wr_rsp *op_rsp)
+{
+    int32_t ret = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(LINK_TIMEOUT_S);
+    while (true) {
+        ret = RA_TYPICAL_SEND_WR(qp_handle, wr, op_rsp);
+        if (!ret) {
+            break;
+        } else if ((ret == SOCK_ENOENT) || (ret == SOCK_EAGAIN)
+                   || (ret
+                       == ROCE_ENOMEM)) {  // Not sure if we should do the last one, or maybe we should do it only once.
+                                           // But fixes our error. Or maybe need to have rate limiting somewhere else
+            if ((std::chrono::steady_clock::now() - startTime) >= timeout) {
+                return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform RaSendWr: timed out");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            return Status::Error(ErrorCode::ACL_ERROR, "Failed to perform RaSendWr: return " + std::to_string(ret));
+        }
+    }
+
+    return Status::Success();
+}
+
+Status RaGetIfaddrsWrapper(struct ra_get_ifattr *config, struct interface_info interface_infos[], unsigned int *num)
+{
+    ACL_CHECK_STATUS(RA_GET_IFADDRS(config, interface_infos, num));
+    return Status::Success();
+}
+
+Status RaGetIfNumWrapper(struct ra_get_ifattr *config, unsigned int *num)
+{
+    ACL_CHECK_STATUS(RA_GET_IFNUM(config, num));
+    return Status::Success();
+}
