@@ -90,6 +90,10 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
     memcpy_s(&rootHandle, sizeof(rootHandle), rootInfo->internal, sizeof(rootHandle));
     std::string identifier(rootHandle.identifier, ROOTHANDLE_INDENTIFIER_MAX_LENGTH);
 
+    if (commManager.IsFailedIdentifier(identifier)) {
+        return HCCL_E_INTERNAL;
+    }
+
     // Get root communicator associated with identifier. If no root communicator is found, P2PCommInitRootInfo
     // was called on the client side and we need to create a new communicator to connect to the root communicator.
     std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetAndRemoveUnboundCommunicator(identifier);
@@ -111,8 +115,12 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
                          options->enableTwoSidedBuffer};
 
     // Establish connection between root and client communicators
-    CHECK_STATUS_HCCL(p2pComm->EstablishConnection(args, commManager.GetBufferPool(),
-                                                   options->heartbeatCallback));
+    Status status = p2pComm->EstablishConnection(args, commManager.GetBufferPool(), options->heartbeatCallback);
+    if (!status.IsSuccess()) {
+        commManager.AddFailedIdentifier(identifier);
+        std::cerr << "[P2P] " << status.ToString() << std::endl;
+        return HCCL_E_INTERNAL;
+    }
 
     P2PComm resComm = p2pComm.get();
     commManager.AddCommunicator(resComm, p2pComm);

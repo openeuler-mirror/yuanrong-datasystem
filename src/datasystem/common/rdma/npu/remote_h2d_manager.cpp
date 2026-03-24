@@ -275,6 +275,7 @@ Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const Remot
         RETURN_OK_IF_TRUE(p2pComm->initialized != RemoteH2DContext::InitState::UNINITIALIZED);
     }
 
+    INJECT_POINT("RemoteH2DManager.P2PCommInitRootInfo.delay");
     if (threadPool) {
         p2pComm = nullptr;
         auto traceId = Trace::Instance().GetTraceID();

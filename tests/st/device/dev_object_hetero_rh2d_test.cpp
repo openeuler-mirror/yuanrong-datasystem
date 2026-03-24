@@ -793,5 +793,71 @@ TEST_F(DevObjectHeteroRH2DSixSetWorkersTest, DISABLED_RemoteH2DTestMultiSetWorke
     RunDistributedMGetH2DTest(numSetWorkers, numObjChoices, blkSzChoices, blksPerObj);
 }
 
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestClientInitDelay)
+{
+    // Test Remote H2D when there is a delay in client's initiation.
+    InitAcl(deviceId_);
+    inject::Set("RemoteH2DManager.P2PCommInitRootInfo.delay", "1*sleep(45000)");
+
+    std::shared_ptr<DsClient> client1;
+    std::shared_ptr<DsClient> client2;
+    InitTestDsClientForRemoteH2D(0, client1);
+    InitTestDsClientForRemoteH2D(1, client2);
+
+    const size_t blkSz = 73 * 1024;
+    const size_t numOfObjs = 1;
+    const size_t blksPerObj = 31;
+
+    std::vector<DeviceBlobList> setBlobListUseless;
+    std::vector<DeviceBlobList> getBlobList;
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, setBlobListUseless, getBlobList, deviceId_);
+    std::vector<std::string> inObjectIds;
+
+    for (auto i = 0ul; i < numOfObjs; i++) {
+        inObjectIds.emplace_back(GetStringUuid());
+    }
+
+    std::vector<DeviceBlobList> setBlobList;
+    std::vector<std::vector<std::string>> verifyList;
+    std::vector<std::string> failedList;
+    PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
+    DS_ASSERT_OK(client1->Hetero()->MSetD2H(inObjectIds, setBlobList));
+    DS_ASSERT_NOT_OK(client2->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+}
+
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestWorkerInitDelay)
+{
+    // Test Remote H2D when there is a delay in worker's initiation.
+    InitAcl(deviceId_);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER,
+                                           0,
+                                           "RemoteH2DManager.P2PCommInitRootInfo.delay",
+                                           "1*sleep(45000)"));
+    std::shared_ptr<DsClient> client1;
+    std::shared_ptr<DsClient> client2;
+    InitTestDsClientForRemoteH2D(0, client1);
+    InitTestDsClientForRemoteH2D(1, client2);
+
+    const size_t blkSz = 73 * 1024;
+    const size_t numOfObjs = 1;
+    const size_t blksPerObj = 31;
+
+    std::vector<DeviceBlobList> setBlobListUseless;
+    std::vector<DeviceBlobList> getBlobList;
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, setBlobListUseless, getBlobList, deviceId_);
+    std::vector<std::string> inObjectIds;
+
+    for (auto i = 0ul; i < numOfObjs; i++) {
+        inObjectIds.emplace_back(GetStringUuid());
+    }
+
+    std::vector<DeviceBlobList> setBlobList;
+    std::vector<std::vector<std::string>> verifyList;
+    std::vector<std::string> failedList;
+    PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
+    DS_ASSERT_OK(client1->Hetero()->MSetD2H(inObjectIds, setBlobList));
+    DS_ASSERT_OK(client2->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+}
+
 }  // namespace st
 }  // namespace datasystem
