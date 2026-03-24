@@ -153,7 +153,7 @@ void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
     // for ut test
     INJECT_POINT("buffer.release", [this]() { isShm_ = false; });
     do {
-        if (!isShm_ || isReleased_) {
+        if (isReleased_) {
             break;
         }
         if (clientPtr) {
@@ -234,6 +234,9 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     Status status = clientImplSharedPtr->Publish(bufferInfo_, nestedKeys, isShm_);
     if (isShm_) {
         SetVisibility(status.IsOk());
+    } else {
+        // worker already release shmUnit for this case.
+        isReleased_ = !bufferInfo_->shmId.Empty() && status.IsOk();
     }
     return status;
 }

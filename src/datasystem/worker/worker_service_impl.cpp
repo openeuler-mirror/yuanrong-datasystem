@@ -122,6 +122,7 @@ Status WorkerServiceImpl::Init()
             listenFd_ = scmSockFd.GetFd();
             shmWorkerPort_ = tcpPort;
         } else {
+            INJECT_POINT("worker.bind_unix_path");
             std::string sockDir = FLAGS_unix_domain_socket_dir;
             RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(sockDir, FLAGS_unix_domain_socket_dir, ""));
             const int defaultUDSDirMode = 0750;

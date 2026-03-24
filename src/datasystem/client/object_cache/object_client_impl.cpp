@@ -1359,7 +1359,7 @@ void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, s
 void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version)
 {
     std::shared_lock<std::shared_timed_mutex> lck(shutdownMux_);
-    if (asyncReleasePool_ == nullptr) {
+    if (asyncReleasePool_ == nullptr || shmId.Empty()) {
         return;
     }
     bool async = true;
@@ -1399,11 +1399,12 @@ void ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm,
 Status ObjectClientImpl::DecreaseRefCntByAccessor(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor,
                                                   bool isShm)
 {
+    (void)isShm;
     bool needDecreaseWorkerRef = false;
     RETURN_IF_NOT_OK(memoryRefCount_.DecreaseRef(accessor, needDecreaseWorkerRef));
     VLOG(1) << FormatString("Try decrease ref count for shmId %s on clientId %s, needDecreaseWorkerRef %d", shmId,
                             workerApi_[LOCAL_WORKER]->clientId_, needDecreaseWorkerRef);
-    if (!needDecreaseWorkerRef || !isShm) {
+    if (!needDecreaseWorkerRef) {
         return Status::OK();
     }
     RETURN_IF_NOT_OK(CheckConnection());
