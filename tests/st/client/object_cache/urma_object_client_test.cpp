@@ -1035,6 +1035,54 @@ TEST_F(UrmaObjectClientTest, UrmaGetMultipleWorkers)
     LOG(INFO) << "Testcase UrmaGetMultipleWorkers Finished";
 }
 
+class UrmaClientWorkerDisableUDS : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams +=
+            " -urma_mode=UB -ipc_through_shared_memory=true --enable_data_replication=false "
+            "-inject_actions=worker.bind_unix_path:return(K_OK) ";
+    }
+};
+
+TEST_F(UrmaClientWorkerDisableUDS, CreateBufferOnly)
+{
+    FLAGS_v = 1;
+    const int ttlSecond = 120;
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    const int numPuts = 1000;
+    const int testSize = 8 * 1024 * 1024;
+    for (int i = 0; i < numPuts; i++) {
+        std::string key = NewObjectKey();
+        SetParam param;
+        param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+        param.ttlSecond = ttlSecond;
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(key, testSize, param, buffer));
+    }
+}
+
+TEST_F(UrmaClientWorkerDisableUDS, CreateBufferAndPublish)
+{
+    FLAGS_v = 1;
+    const int ttlSecond = 120;
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    const int numPuts = 1000;
+    const int testSize = 8 * 1024 * 1024;
+    for (int i = 0; i < numPuts; i++) {
+        std::string key = NewObjectKey();
+        SetParam param;
+        param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+        param.ttlSecond = ttlSecond;
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(key, testSize, param, buffer));
+        DS_ASSERT_OK(buffer->Publish());
+    }
+}
+
 class UrmaObjectClientTestMismatch : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
