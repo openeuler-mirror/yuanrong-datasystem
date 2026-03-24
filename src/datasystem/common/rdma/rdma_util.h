@@ -67,8 +67,7 @@ public:
     {
         std::unique_lock<std::mutex> lock(mtx_);
         if (!cv_.wait_for(lock, timeout, [&] { return !ready_.empty(); })) {
-            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
-                                    FormatString("Timed out waiting for any event"));
+            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED, FormatString("Timed out waiting for any event"));
         }
         event = ready_.front();
         ready_.pop();
@@ -151,6 +150,7 @@ struct RemoteSegInfo {
     std::string host;    // the host of remote urma endpoint
     int32_t port;        // the host of remote urma endpoint
 };
+
 /**
  * @brief Get the Ethernet device name from the destination ip.
  * @param[in] ipAddr The destination ip address.

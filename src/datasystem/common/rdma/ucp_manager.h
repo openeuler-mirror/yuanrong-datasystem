@@ -122,8 +122,7 @@ public:
      * @return Status of the call.
      */
     Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize,
-                        const std::vector<LocalSgeInfo> &objInfos, bool blocking,
-                        std::vector<uint64_t> &eventKeys);
+                        const std::vector<LocalSgeInfo> &objInfos, bool blocking, std::vector<uint64_t> &eventKeys);
 
     /**
      * @brief Remove Remote Endpoint and all associated segments

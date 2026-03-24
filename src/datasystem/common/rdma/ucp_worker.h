@@ -30,6 +30,7 @@
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
 #include "datasystem/common/rdma/ucp_endpoint.h"
@@ -39,6 +40,14 @@
 namespace datasystem {
 
 class UcpManager;
+
+/**
+ * @brief Structure representing a local memory segment for IOV transfer.
+ */
+struct IovSegment {
+    uintptr_t localAddr;  // Local memory address
+    size_t size;          // Size of the segment in bytes
+};
 
 class UcpWorker {
 public:
@@ -72,6 +81,19 @@ public:
                          size_t localSegSize, uint64_t requestID);
 
     /**
+     * @brief Write multiple memory segments to a contiguous remote memory region using IOV mode.
+     * @param remoteRkey Remote rkey in the form of a string.
+     * @param remoteBaseAddr Base address of the remote contiguous memory region.
+     * @param remoteWorkerAddr Remote worker address in the form of a string.
+     * @param ipAddr IP address of the remote node.
+     * @param segments Vector of local memory segments to transfer.
+     * @param requestID Request ID passed in by UcpManager to track progress.
+     * @return Status::OK if successful, otherwise Status with error message.
+     */
+    virtual Status WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr, const std::string &remoteWorkerAddr,
+                          const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID);
+
+    /**
      * @brief remove ep tied to a remote worker
      * @param[in] ipAddr IP address of the remote server
      * @return Status::OK() if successful, otherwise Status with error message
@@ -93,6 +115,13 @@ private:
     void ProgressLoop();
 
     /**
+     * @brief Prepare IOV buffer for ucp_put_nbx with IOV datatype.
+     * @param segments Vector of local memory segments.
+     * @return Pointer to allocated IOV buffer vector.
+     */
+    std::vector<ucp_dt_iov_t> *PrepareIovBuffer(const std::vector<IovSegment> &segments);
+
+    /**
      * @brief bind remote endpoint to the ucp worker, stored in remoteEndpointMap_
      * @param[in] remoteWorkerAddr ucp endpoint ptr in the form of a string
      * @return a pointer to a UcpEndpoint instance.
@@ -106,8 +135,10 @@ private:
         UcpWorker *worker;
         uint64_t request_id;
         void *put_request;
+        std::vector<ucp_dt_iov_t> *iov;
 
-        CallbackContext(UcpWorker *w, uint64_t id, void *req) : worker(w), request_id(id), put_request(req)
+        CallbackContext(UcpWorker *w, uint64_t id, void *req, std::vector<ucp_dt_iov_t> *iovVec = nullptr)
+            : worker(w), request_id(id), put_request(req), iov(iovVec)
         {
         }
     };
