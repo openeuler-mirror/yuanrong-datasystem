@@ -47,6 +47,7 @@ struct ConnectOptions {
     bool enableExclusiveConnection = false;
     bool enableRemoteH2D = false;
     std::shared_ptr<ServiceDiscovery> serviceDiscovery = nullptr;
+    uint64_t fastTransportMemSize = 128 * 1024 * 1024; // 128M
 };
 }  // namespace datasystem
 

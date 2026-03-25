@@ -2078,7 +2078,7 @@ class STCStandByTest : public STCScaleTest {
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -v=2 -node_timeout_s=1 -node_dead_timeout_s=3 -heartbeat_interval_ms=500"
-            " -auto_del_dead_node=true -add_node_wait_time_s=0 -client_reconnect_wait_s=1s";
+            " -auto_del_dead_node=true -add_node_wait_time_s=0 -client_reconnect_wait_s=1";
         opts.waitWorkerReady = false;
     }
 };

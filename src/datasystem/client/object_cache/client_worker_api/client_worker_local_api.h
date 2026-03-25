@@ -55,7 +55,7 @@ public:
      * @return K_OK on success; the error code otherwise.
      *         K_INVALID: the input ip or port is invalid.
      */
-    Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs) override;
+    Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) override;
 
     std::shared_ptr<IClientWorkerApi> CloneWith(
         HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,

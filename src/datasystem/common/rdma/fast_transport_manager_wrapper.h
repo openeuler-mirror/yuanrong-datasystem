@@ -78,8 +78,9 @@ bool IsUrmaEnabled();
 /**
  * @brief Set the fast transport mode for the client.
  * @param[in] fastTransportMode The fast transport mode, e.g. UB.
+ * @param[in] transportSize The size of the client transport.
  */
-void SetClientFastTransportMode(FastTransportMode fastTransportMode);
+void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize);
 
 /**
  * @brief Check if Ucp is enabled.

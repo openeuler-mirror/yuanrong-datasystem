@@ -69,7 +69,12 @@ inline unsigned long StrToUnsignedLong(const std::string &str)
     if (IsNegative(str)) {
         throw std::out_of_range("The string " + str + " is out of range for unsigned long type.");
     }
-    return std::stoul(str);
+    size_t pos;
+    unsigned long result = std::stoul(str, &pos);
+    if (pos != str.length()) {
+        throw std::invalid_argument("The string contains non-numeric characters.");
+    }
+    return result;
 }
 }  // namespace datasystem
 

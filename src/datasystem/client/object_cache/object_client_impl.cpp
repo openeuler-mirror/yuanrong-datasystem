@@ -209,6 +209,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
                  "RpcAuthKeys SetServerKey failed");
     enableRemoteH2D_ = connectOptions.enableRemoteH2D;
     serviceDiscovery_ = connectOptions.serviceDiscovery;
+    fastTransportMemSize_ = connectOptions.fastTransportMemSize;
 }
 
 ObjectClientImpl::~ObjectClientImpl()
@@ -335,7 +336,7 @@ Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool init
         workerApi_[LOCAL_WORKER] = std::make_shared<ClientWorkerLocalApi>(ipAddress_, embeddedClientWorkerApi_, worker_,
                                                                           heartbeatType, signature_.get(), false);
     }
-    RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_));
+    RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
     ConstructTreadPool();
 
@@ -582,7 +583,7 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
                                                  tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_,
                                                  embeddedClientWorkerApi_, worker_);
         workerApi_[next]->isUseStandbyWorker_ = true;
-        Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_);
+        Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("[Switch] Worker(%s) init failed, error msg: %s", standbyWorker.ToString(),
                                        rc.ToString());
