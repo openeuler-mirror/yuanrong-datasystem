@@ -89,6 +89,10 @@ function log() {
   printf "[%3d%%] %s\n" "$progress" "$1"
 }
 
+function log_failed() {
+  log "$1"
+}
+
 function get_progress_percent() {
   local completed_count=$(ls -1 "${PROGRESS_DIR}" 2>/dev/null | wc -l)
   local percent=$((completed_count * 100 / TOTAL_LIBS))
@@ -104,8 +108,10 @@ function on_exit() {
   if [ $exit_status -eq 0 ]; then
     echo "$total_duration" > "${TIME_DIR}/${lib_name}.time"
     touch "${PROGRESS_DIR}/${lib_name}.complete"
+    touch "${DEPENDENCY_DIR}/${lib_name}.complete"
     log "$lib_name build success - ${total_duration}s"
   else
+    touch "${DEPENDENCY_DIR}/${lib_name}.failed"
     log "$lib_name build failed, see ${tmp_compile_dir}/log for details"
   fi
 }
@@ -127,12 +133,20 @@ function wait_for_dependencies() {
     for ((i=1; i<=timeout; i++)); do
       all_files_created=true
       missing_deps=()
+      failed_deps=()
       for file in "${lib_dependencies[@]}"; do
-        if [ ! -f "${DEPENDENCY_DIR}/${file}.complete" ]; then
+        if [ -f "${DEPENDENCY_DIR}/${file}.failed" ]; then
+          failed_deps+=("$file")
+        elif [ ! -f "${DEPENDENCY_DIR}/${file}.complete" ]; then
           all_files_created=false
           missing_deps+=("$file")
         fi
       done
+
+      if [ ${#failed_deps[@]} -gt 0 ]; then
+        log_failed "$lib_name failed because dependencies failed: ${failed_deps[*]}"
+        return 1
+      fi
 
       if [ "$all_files_created" = true ]; then
         local current_time=$(date +%s)
@@ -192,7 +206,6 @@ EOF
       mkdir -p build && cd build
       cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
       cmake --build . >> "${tmp_compile_dir}/log" 2>&1
-      touch ${DEPENDENCY_DIR}/${lib_name}.complete
     ) &
   done
 
@@ -239,7 +252,6 @@ EOF
       mkdir -p build && cd build
       cmake "${CMAKE_OPTIONS[@]}" .. >> "${tmp_compile_dir}/log" 2>&1
       cmake --build . -j "${BUILD_THREAD_NUM}" >> "${tmp_compile_dir}/log" 2>&1
-      touch ${DEPENDENCY_DIR}/${lib_name}.complete
     ) &
   done
   wait
