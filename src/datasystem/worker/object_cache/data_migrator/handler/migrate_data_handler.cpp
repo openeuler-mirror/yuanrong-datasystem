@@ -29,10 +29,6 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
-DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_t value) {
-    (void)flagName;
-    return value > 0;
-});
 
 namespace datasystem {
 namespace object_cache {

@@ -199,6 +199,9 @@ TEST_F(FlagsTest, TestSetValue)
     ASSERT_TRUE(errMsg.empty());
     ASSERT_EQ(defaultCount, 1);
     ASSERT_EQ(modifyCount, 0);
+
+    ASSERT_TRUE(SetCommandLineOption("uint32_flag", "123 ", errMsg));
+    ASSERT_EQ(FLAGS_uint32_flag, 123UL);
 }
 
 TEST_F(FlagsTest, TestOutOfRangeValue)
@@ -249,19 +252,23 @@ TEST_F(FlagsTest, TestSetIllegalValue)
     ASSERT_ABNORMAL_VALUE(uint32_flag, "xxx", 32u, "illegal value");
     ASSERT_ABNORMAL_VALUE(uint32_flag, "", 32u, "illegal value");
     ASSERT_ABNORMAL_VALUE(uint32_flag, "-100", 32u, "illegal value");
+    ASSERT_ABNORMAL_VALUE(uint32_flag, "123abc", 32u, "illegal value");
 
     // int32_t
     ASSERT_ABNORMAL_VALUE(int32_flag, "xxx", 32, "illegal value");
     ASSERT_ABNORMAL_VALUE(int32_flag, "", 32, "illegal value");
+    ASSERT_ABNORMAL_VALUE(int32_flag, "123abc", 32, "illegal value");
 
     // uint64_t
     ASSERT_ABNORMAL_VALUE(uint64_flag, "xxx", 64ul, "illegal value");
     ASSERT_ABNORMAL_VALUE(uint64_flag, "", 64ul, "illegal value");
     ASSERT_ABNORMAL_VALUE(uint64_flag, "-100", 64ul, "illegal value");
+    ASSERT_ABNORMAL_VALUE(uint64_flag, "123abc", 64ul, "illegal value");
 
     // int64_t
     ASSERT_ABNORMAL_VALUE(int64_flag, "xxx", 64, "illegal value");
     ASSERT_ABNORMAL_VALUE(int64_flag, "", 64, "illegal value");
+    ASSERT_ABNORMAL_VALUE(int64_flag, "123abc", 64, "illegal value");
 }
 
 TEST_F(FlagsTest, TestFailValidation)

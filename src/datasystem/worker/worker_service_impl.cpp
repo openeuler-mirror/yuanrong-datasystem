@@ -65,6 +65,7 @@ DS_DECLARE_uint32(page_size);
 DS_DEFINE_bool(authorization_enable, false, "Indicates whether to enable the tenant authentication, default is false.");
 DS_DECLARE_bool(ipc_through_shared_memory);
 DS_DEFINE_uint32(shared_memory_worker_port, 0, "The worker port for shared memory communication.");
+DS_DEFINE_validator(shared_memory_worker_port, &Validator::ValidatePort);
 DS_DEFINE_uint32(max_client_num, 200,
                  "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]");
 DS_DEFINE_validator(max_client_num, &Validator::ValidateClientNum);

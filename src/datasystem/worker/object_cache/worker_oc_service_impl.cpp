@@ -116,6 +116,10 @@ DS_DEFINE_bool(oc_io_from_l2cache_need_metadata, true,
                "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it "
                "indicates that the metadata is not stored in etcd.");
 DS_DEFINE_uint32(data_migrate_rate_limit_mb, 40, "Data migrate rate limit for every node when scale down happen");
+DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_t value) {
+    (void)flagName;
+    return value > 0;
+});
 
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_string(worker_address);
@@ -158,7 +162,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
     asyncRollbackManager_ = std::make_shared<AsyncRollbackManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
-    
+
     // Set async send manager and persistence api to eviction manager
     evictionManager_->SetAsyncSendManager(asyncSendManager_);
 }
