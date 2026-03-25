@@ -389,6 +389,9 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         ipAddress_ = HostPort(workerIp, workerPort);
     }
     std::string hostPortStr = ipAddress_.ToString();
+    if (hostPortStr.empty()) {
+        return Status(K_INVALID, "ConnectOptions was not configured with a host and port or serviceDiscovery.");
+    }
 
     CHECK_FAIL_RETURN_STATUS(
         Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
