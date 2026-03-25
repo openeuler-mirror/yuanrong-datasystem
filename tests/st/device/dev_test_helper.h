@@ -35,6 +35,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "datasystem/common/device/device_manager_base.h"
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/nvidia/cuda_device_manager.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -64,10 +65,25 @@ constexpr int SHORT_WAIT_TIME = 5;
 constexpr int LONG_WAIT_TIME = 10;
 constexpr int PRINT_STR_LIMIT = 100;
 
+inline DeviceManagerBase *GetDefaultDeviceManager()
+{
+    auto *mgr = DeviceManagerFactory::GetDeviceManager();
+    if (mgr != nullptr) {
+        return mgr;
+    }
+#ifdef USE_GPU
+    return CudaDeviceManager::Instance();
+#elif defined(USE_NPU)
+    return AclDeviceManager::Instance();
+#else
+    return nullptr;
+#endif
+}
+
 class DevPtrQueue {
 public:
     explicit DevPtrQueue(DeviceManagerBase *mgr = nullptr)
-        : mgr_(mgr ? mgr : static_cast<DeviceManagerBase *>(AclDeviceManager::Instance())) {}
+        : mgr_(mgr ? mgr : GetDefaultDeviceManager()) {}
 
     // per object dataType [3], count [262144], list len : 64 DATA_TYPE_FP16
     void Fill(uint32_t objectCount, uint32_t infoCount, DataType dataType, uint32_t count, int32_t deviceIdx = -1,
@@ -166,7 +182,7 @@ public:
     static void CheckDevPtrContent(const void *devPtr, size_t size, std::string content,
                                     DeviceManagerBase *mgr = nullptr)
     {
-        if (!mgr) mgr = AclDeviceManager::Instance();
+        if (!mgr) mgr = GetDefaultDeviceManager();
         void *hostPtr = malloc(size);
         DS_ASSERT_OK(mgr->MemCopyD2H(hostPtr, size, devPtr, size));
         auto result = std::string(static_cast<char *>(hostPtr), size);
@@ -182,7 +198,7 @@ public:
 
     void SetContentToDevPtr(void *devPtr, size_t size, std::string content, DeviceManagerBase *mgr = nullptr)
     {
-        if (!mgr) mgr = AclDeviceManager::Instance();
+        if (!mgr) mgr = GetDefaultDeviceManager();
         DS_ASSERT_OK(mgr->MemCopyH2D(devPtr, size, content.data(), size));
     }
 
@@ -278,7 +294,7 @@ public:
                                   std::vector<std::vector<std::string>> &verifyList,
                                   DeviceManagerBase *mgr = nullptr)
     {
-        if (!mgr) mgr = AclDeviceManager::Instance();
+        if (!mgr) mgr = GetDefaultDeviceManager();
         swapBlobList.clear();
         verifyList.clear();
         for (uint32_t i = 0; i < numOfObjs; i++) {
@@ -323,7 +339,7 @@ public:
     static Status IsSameContent(std::vector<DeviceBlobList> &testBlobList, std::vector<DeviceBlobList> &reference,
                                 char fillChar, DeviceManagerBase *mgr = nullptr)
     {
-        if (!mgr) mgr = AclDeviceManager::Instance();
+        if (!mgr) mgr = GetDefaultDeviceManager();
         auto contentEqual = [mgr](const void *devPtr, size_t size, std::string content) -> Status {
             void *hostPtr = malloc(size);
             RETURN_IF_NOT_OK(mgr->MemCopyD2H(hostPtr, size, devPtr, size));
@@ -377,7 +393,7 @@ public:
                            std::vector<DeviceBlobList> &devBlobList, const char fillChar = 'a',
                            DeviceManagerBase *mgr = nullptr)
     {
-        if (!mgr) mgr = AclDeviceManager::Instance();
+        if (!mgr) mgr = GetDefaultDeviceManager();
         auto rn = gen();
         for (auto i = 0u; i < objectCount; i++) {
             DeviceBlobList deviceBlobs{ {}, deviceId };
@@ -398,7 +414,7 @@ public:
     static void AllocAsBlobSize(const std::vector<std::vector<uint64_t>> blobSizes, const int deviceId,
                                 std::vector<DeviceBlobList> &devBlobList, DeviceManagerBase *mgr = nullptr)
     {
-        if (!mgr) mgr = AclDeviceManager::Instance();
+        if (!mgr) mgr = GetDefaultDeviceManager();
         for (auto sizes : blobSizes) {
             DeviceBlobList deviceBlobs{ {}, deviceId };
             for (auto size : sizes) {
@@ -440,7 +456,7 @@ class DeviceBlobListHelper {
 public:
     DeviceBlobListHelper(size_t operatorCount, size_t keysCountPerOp, size_t blobNum, size_t blobSize = 0,
                          DeviceManagerBase *mgr = nullptr)
-        : mgr_(mgr ? mgr : static_cast<DeviceManagerBase *>(AclDeviceManager::Instance()))
+        : mgr_(mgr ? mgr : GetDefaultDeviceManager())
     {
         this->operatorCount = operatorCount;
         this->keysCountPerOp = keysCountPerOp;

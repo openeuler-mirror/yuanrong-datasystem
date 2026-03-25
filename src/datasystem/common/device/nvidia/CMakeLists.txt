@@ -4,6 +4,7 @@ set(CUDA_DEVICE_DEPEND_LIBS
 )
 add_library(common_cuda_device STATIC
     cuda_device_manager.cpp
+    cuda_resource_manager.cpp
 )
 target_link_libraries(common_cuda_device PRIVATE ${CUDA_DEVICE_DEPEND_LIBS})
 
