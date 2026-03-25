@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package transfer_engine;
+
+message ExchangeRootInfoReq {
+  string requester_host = 1;
+  uint32 requester_port = 2;
+  int32 requester_device_id = 3;
+  int32 owner_device_id = 4;
+  bytes root_info = 5;
+}
+
+message ExchangeRootInfoRsp {
+  int32 code = 1;
+  string msg = 2;
+  int32 owner_device_id = 3;
+}
+
+message QueryConnReadyReq {
+  string requester_host = 1;
+  uint32 requester_port = 2;
+  int32 requester_device_id = 3;
+  int32 owner_device_id = 4;
+}
+
+message QueryConnReadyRsp {
+  int32 code = 1;
+  string msg = 2;
+  bool ready = 3;
+}
+
+message ReadTriggerReq {
+  uint64 request_id = 1;
+  string requester_host = 2;
+  uint32 requester_port = 3;
+  int32 requester_device_id = 4;
+  int32 owner_device_id = 5;
+  uint64 remote_addr = 6;
+  uint64 length = 7;
+}
+
+message ReadTriggerRsp {
+  int32 code = 1;
+  string msg = 2;
+}
+
+service TransferControlService {
+  rpc ExchangeRootInfo(ExchangeRootInfoReq) returns (ExchangeRootInfoRsp);
+  rpc QueryConnReady(QueryConnReadyReq) returns (QueryConnReadyRsp);
+  rpc ReadTrigger(ReadTriggerReq) returns (ReadTriggerRsp);
+}
