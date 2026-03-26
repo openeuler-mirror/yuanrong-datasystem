@@ -20,6 +20,8 @@
 #ifndef DATASYSTEM_COMMON_FLAGS_STRING_TO_LONG_H
 #define DATASYSTEM_COMMON_FLAGS_STRING_TO_LONG_H
 
+#include <cstddef>
+#include <cctype>
 #include <map>
 #include <mutex>
 #include <set>
@@ -50,12 +52,12 @@ inline bool IsNegative(const std::string &str)
  * @param[in] str string to be interpreted.
  * @return Converted number.
  */
-inline unsigned long long StrToUnsignedLongLong(const std::string &str)
+inline unsigned long long StrToUnsignedLongLong(const std::string &str, std::size_t *pos = nullptr)
 {
     if (IsNegative(str)) {
         throw std::out_of_range("The string " + str + " is out of range for unsigned long long type.");
     }
-    return std::stoull(str);
+    return std::stoull(str, pos);
 }
 
 /**
@@ -64,17 +66,12 @@ inline unsigned long long StrToUnsignedLongLong(const std::string &str)
  * @param[in] str string to be interpreted.
  * @return Converted number.
  */
-inline unsigned long StrToUnsignedLong(const std::string &str)
+inline unsigned long StrToUnsignedLong(const std::string &str, std::size_t *pos = nullptr)
 {
     if (IsNegative(str)) {
         throw std::out_of_range("The string " + str + " is out of range for unsigned long type.");
     }
-    size_t pos;
-    unsigned long result = std::stoul(str, &pos);
-    if (pos != str.length()) {
-        throw std::invalid_argument("The string contains non-numeric characters.");
-    }
-    return result;
+    return std::stoul(str, pos);
 }
 }  // namespace datasystem
 

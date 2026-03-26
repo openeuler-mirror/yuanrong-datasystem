@@ -23,10 +23,12 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <iostream>
 
 #include "datasystem/common/flags/string_to_long.h"
+#include "datasystem/common/util/format.h"
 
 DS_DECLARE_bool(help);
 DS_DECLARE_bool(version);
@@ -173,6 +175,42 @@ void Flag::UpdateModified()
 namespace {
 const char *kTrue[] = { "1", "t", "true", "y", "yes" };
 const char *kFalse[] = { "0", "f", "false", "n", "no" };
+
+bool HasOnlyTrailingSpaces(const std::string &value, std::size_t pos)
+{
+    while (pos < value.size()) {
+        if (!std::isspace(static_cast<unsigned char>(value[pos]))) {
+            return false;
+        }
+        ++pos;
+    }
+    return true;
+}
+
+template <typename T>
+struct AlwaysFalse : public std::false_type {};
+
+template <typename IntegerType>
+bool ParseIntegerStrict(const std::string &value, IntegerType &res)
+{
+    std::size_t pos = 0;
+    if constexpr (std::is_same_v<IntegerType, uint32_t>) {
+        unsigned long parsed = StrToUnsignedLong(value, &pos);
+        res = static_cast<uint32_t>(parsed);
+        if (static_cast<unsigned long>(res) != parsed) {
+            return false;
+        }
+    } else if constexpr (std::is_same_v<IntegerType, int32_t>) {
+        res = std::stoi(value, &pos);
+    } else if constexpr (std::is_same_v<IntegerType, uint64_t>) {
+        res = StrToUnsignedLongLong(value, &pos);
+    } else if constexpr (std::is_same_v<IntegerType, int64_t>) {
+        res = std::stoll(value, &pos);
+    } else {
+        static_assert(AlwaysFalse<IntegerType>::value, "Unsupported integer type");
+    }
+    return HasOnlyTrailingSpaces(value, pos);
+}
 }  // namespace
 
 bool Flag::ParseAssignFromBoolean(const std::string &value, std::string &errMsg)
@@ -221,9 +259,7 @@ bool Flag::ParseAssignFromUint32(const std::string &value, std::string &errMsg)
     uint32_t res;
     bool success = false;
     try {
-        uint64_t res64 = StrToUnsignedLong(value);
-        res = static_cast<uint32_t>(res64);
-        success = static_cast<uint64_t>(res) == res64;
+        success = ParseIntegerStrict<uint32_t>(value, res);
     } catch (std::invalid_argument &e) {
         success = false;
     } catch (const std::out_of_range &e) {
@@ -255,8 +291,7 @@ bool Flag::ParseAssignFromInt32(const std::string &value, std::string &errMsg)
     int32_t res;
     bool success = false;
     try {
-        res = std::stoi(value);
-        success = true;
+        success = ParseIntegerStrict<int32_t>(value, res);
     } catch (std::invalid_argument &e) {
         success = false;
     } catch (const std::out_of_range &e) {
@@ -288,8 +323,7 @@ bool Flag::ParseAssignFromUint64(const std::string &value, std::string &errMsg)
     uint64_t res;
     bool success = false;
     try {
-        res = StrToUnsignedLongLong(value);
-        success = true;
+        success = ParseIntegerStrict<uint64_t>(value, res);
     } catch (std::invalid_argument &e) {
         success = false;
     } catch (const std::out_of_range &e) {
@@ -321,8 +355,7 @@ bool Flag::ParseAssignFromInt64(const std::string &value, std::string &errMsg)
     int64_t res;
     bool success = false;
     try {
-        res = std::stoll(value);
-        success = true;
+        success = ParseIntegerStrict<int64_t>(value, res);
     } catch (std::invalid_argument &e) {
         success = false;
     } catch (const std::out_of_range &e) {
@@ -535,7 +568,8 @@ bool FlagManager::RegisterValidator(void *flag, void *func)
     } else if (func == it->second->validator_) {
         return true;
     } else if (func != nullptr && it->second->validator_ != nullptr) {
-        ReportError("WARNING: Ignore register validator for flag: validator already registered\n");
+        ReportError("WARNING: Ignore register validator for flag %s: validator already registered\n",
+                    it->second->name_.c_str());
         return false;
     } else {
         it->second->validator_ = func;
