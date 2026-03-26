@@ -37,7 +37,7 @@
         }                                                                                        \
     } while (0)
 
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
 namespace datasystem {
 namespace ffts {
 constexpr uint32_t RT_INFO_TYPE_PHY_CHIP_ID = 18;

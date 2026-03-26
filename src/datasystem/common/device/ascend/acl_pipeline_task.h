@@ -27,7 +27,6 @@
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/ascend/callback_thread.h"
 #include "datasystem/common/device/ascend/ffts_dispatcher.h"
-#include "datasystem/common/device/device_config.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -65,7 +64,9 @@ public:
     {
         deviceImpl_ = DeviceManagerFactory::GetDeviceManager();
         deviceId = devId;
-        bool skipFfts = USE_GPU;
+
+        bool skipFfts = DeviceManagerFactory::ProbeBackend() != DeviceBackend::NPU;
+
         INJECT_POINT("NO_USE_FFTS", [&skipFfts]() {
             skipFfts = true;
             return Status::OK();
@@ -112,7 +113,8 @@ public:
     void Release()
     {
         // GPU mode or NO_USE_FFTS injection: only destroy streams, skip FFTS/Notify cleanup
-        bool skipFfts = USE_GPU;
+        bool skipFfts = DeviceManagerFactory::ProbeBackend() != DeviceBackend::NPU;
+
         INJECT_POINT("NO_USE_FFTS", [&skipFfts]() {
             skipFfts = true;
         });
@@ -153,7 +155,7 @@ public:
     Status NotifyStart()
     {
         // GPU mode or NO_USE_FFTS injection: skip RtNotifyRecord (NPU-specific API)
-        bool skipFfts = USE_GPU;
+        bool skipFfts = DeviceManagerFactory::ProbeBackend() != DeviceBackend::NPU;
         INJECT_POINT("NO_USE_FFTS", [&skipFfts]() {
             skipFfts = true;
             return Status::OK();

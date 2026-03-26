@@ -15,95 +15,127 @@
  */
 
 /**
- * Description: Device manager factory for selecting between NPU (ACL) and GPU (CUDA) backends.
+ * Description: Device manager factory with runtime device detection.
+ * Both NPU and GPU backends are compiled in (when USE_NPU/USE_GPU defined).
+ * The actual backend is selected at runtime by probing /dev/davinci* or /dev/nvidia*.
  */
 #ifndef DATASYSTEM_COMMON_DEVICE_DEVICE_MANAGER_FACTORY_H
 #define DATASYSTEM_COMMON_DEVICE_DEVICE_MANAGER_FACTORY_H
 
 #include "datasystem/common/device/device_manager_base.h"
-#include "datasystem/common/device/device_config.h"
+#include "datasystem/common/log/log.h"
+#if defined(USE_NPU) || defined(USE_GPU)
+#include "datasystem/common/util/file_util.h"
+#endif
 
-// Include the appropriate device manager header based on configuration
-#if USE_NPU
+#ifdef USE_NPU
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #endif
 
-#if USE_GPU
+#ifdef USE_GPU
 #include "datasystem/common/device/nvidia/cuda_device_manager.h"
 #endif
 
 namespace datasystem {
 
+enum class DeviceBackend { NPU, GPU, UNKNOWN };
+
 /**
- * @brief Device Manager Factory
- * This factory provides a unified way to get the appropriate device manager
- * based on compile-time configuration (USE_NPU or USE_GPU).
+ * @brief Device Manager Factory with runtime device detection.
+ *
+ * When both USE_NPU and USE_GPU are defined (universal wheel build),
+ * the factory probes /dev/davinci* and /dev/nvidia* at runtime to
+ * decide which backend to use. Only the selected backend's plugin
+ * is dlopen'd.
+ *
  * Usage:
- *   DeviceManagerBase* manager = DeviceManagerFactory::GetDeviceManager();
- *   manager->Init(nullptr);
- *   // ... use manager ...
- * The returned pointer is a singleton managed by the underlying device manager class.
- * Do NOT delete the returned pointer.
+ *   DeviceManagerBase* mgr = DeviceManagerFactory::GetDeviceManager();
  */
 class DeviceManagerFactory {
 public:
-    /**
-     * @brief Get the device manager instance based on compile-time configuration
-     * @return Pointer to the device manager singleton (AclDeviceManager or CudaDeviceManager)
-     * @note The returned pointer should NOT be deleted by the caller
-     */
     static DeviceManagerBase *GetDeviceManager()
     {
-#if USE_NPU
-        return acl::AclDeviceManager::Instance();
-#elif USE_GPU
-        return cuda::CudaDeviceManager::Instance();
-#endif
+        static DeviceManagerBase *inst = Detect();
+        return inst;
     }
 
-    /**
-     * @brief Check if NPU backend is enabled
-     * @return true if USE_NPU is enabled
-     */
-    static constexpr bool IsNpuEnabled()
+    static DeviceBackend ProbeBackend()
     {
-#if USE_NPU
-        return true;
-#else
-        return false;
+#ifdef USE_NPU
+        if (HasDevNode("/dev/davinci[0-16]*")) return DeviceBackend::NPU;
 #endif
-    }
-
-    /**
-     * @brief Check if GPU backend is enabled
-     * @return true if USE_GPU is enabled
-     */
-    static constexpr bool IsGpuEnabled()
-    {
-#if USE_GPU
-        return true;
-#else
-        return false;
+#ifdef USE_GPU
+        if (HasDevNode("/dev/nvidia[0-9]*")) return DeviceBackend::GPU;
 #endif
-    }
-
-    /**
-     * @brief Get the name of the current device backend
-     * @return "NPU" or "GPU"
-     */
-    static const char *GetBackendName()
-    {
-#if USE_NPU
-        return "NPU";
-#elif USE_GPU
-        return "GPU";
-#endif
+        return DeviceBackend::UNKNOWN;
     }
 
 private:
-    // Prevent instantiation - this is a static-only class
     DeviceManagerFactory() = delete;
     ~DeviceManagerFactory() = delete;
+
+    static bool HasDevNode(const char *pattern)
+    {
+#if defined(USE_NPU) || defined(USE_GPU)
+        std::vector<std::string> paths;
+        Status rc = Glob(pattern, paths);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Glob failed for pattern " << pattern << ", rc: " << rc.ToString();
+            return false;
+        }
+        return !paths.empty();
+#else
+        (void)pattern;
+        return false;
+#endif
+    }
+
+    static DeviceManagerBase *Detect()
+    {
+        bool hasNpu = false;
+        bool hasGpu = false;
+#ifdef USE_NPU
+        hasNpu = HasDevNode("/dev/davinci[0-16]*");
+#endif
+#ifdef USE_GPU
+        hasGpu = HasDevNode("/dev/nvidia[0-9]*");
+#endif
+        if (hasNpu && hasGpu) {
+            LOG(WARNING) << "Both NPU (/dev/davinci*) and GPU (/dev/nvidia*) devices detected. "
+                            "By policy, NPU backend is preferred.";
+#ifdef USE_NPU
+            return acl::AclDeviceManager::Instance();
+#endif
+#ifdef USE_GPU
+            return cuda::CudaDeviceManager::Instance();
+#endif
+            return nullptr;
+        }
+#ifdef USE_NPU
+        if (hasNpu) {
+            LOG(INFO) << "Detected NPU device (/dev/davinci*), using Ascend ACL backend.";
+            return acl::AclDeviceManager::Instance();
+        }
+#endif
+#ifdef USE_GPU
+        if (hasGpu) {
+            LOG(INFO) << "Detected GPU device (/dev/nvidia*), using CUDA backend.";
+            return cuda::CudaDeviceManager::Instance();
+        }
+#endif
+        LOG(ERROR) << "No accelerator device detected. "
+                      "Checked:"
+#ifdef USE_NPU
+                      " /dev/davinci[0-16]*"
+#endif
+#ifdef USE_GPU
+                      " /dev/nvidia[0-9]*"
+#endif
+                      ". Ensure the device driver is installed and "
+                      "the device node exists.";
+                      
+        return nullptr;
+    }
 };
 
 }  // namespace datasystem

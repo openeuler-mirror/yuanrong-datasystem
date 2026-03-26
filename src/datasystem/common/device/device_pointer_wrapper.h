@@ -21,6 +21,7 @@
 
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/ascend/cann_types.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 /**

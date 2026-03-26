@@ -58,6 +58,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_device
         common_acl_device
         common_shared_memory
+        client_mmap_static
         common_rdma
         common_parallel
         dl
@@ -65,6 +66,10 @@ list(APPEND CLIENT_DEPEND_LIBS
         gRPC::grpc++
         common_etcd_client
         worker_transport_api)
+
+if (BUILD_HETERO_GPU)
+    list(APPEND CLIENT_DEPEND_LIBS common_cuda_device)
+endif()
 
 if (ENABLE_PERF)
     file(GLOB_RECURSE PERF_CLIENT_SRC RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} perf_client/*.cpp )

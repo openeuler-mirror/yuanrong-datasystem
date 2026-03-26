@@ -258,31 +258,36 @@ add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_embedded_client TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
-file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
-        test_main.cpp
-        "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"
-        )
-add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS})
-
 if (BUILD_HETERO)
-    set(DS_DEVICE_LLT_DEPEND_LIB
-            cluster
-            ${ASCEND_LIBRARY}
-            ${HCCL_LIBRARY}
-            binmock)
-    # copy acl plugin shared library to the same directory of ds_st.
-    add_custom_command(
-            TARGET ds_device_llt POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_BINARY_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so
-            ${CMAKE_BINARY_DIR}/tests/st
-    )
-else()
-    set(DS_DEVICE_LLT_DEPEND_LIB
-            cluster
-            binmock)
-endif()
+        file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
+                test_main.cpp
+                "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"
+                )
+        add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS})
 
-target_link_libraries(ds_device_llt PRIVATE ${DS_DEVICE_LLT_DEPEND_LIB})
-target_compile_definitions(ds_device_llt PRIVATE ${BIN_PATH_LIST})
-add_datasystem_test(ds_device_llt TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+        set(DS_DEVICE_LLT_DEPEND_LIB
+                cluster
+                ${ASCEND_LIBRARY}
+                ${HCCL_LIBRARY}
+                binmock)
+        # copy acl plugin shared library to the same directory of ds_st.
+        if (BUILD_HETERO_NPU)
+                add_custom_command(
+                TARGET ds_device_llt POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy
+                ${CMAKE_BINARY_DIR}/src/datasystem/common/device/ascend/plugin/libacl_plugin.so
+                ${CMAKE_BINARY_DIR}/tests/st
+                )
+        endif()
+        if (BUILD_HETERO_GPU)
+                add_custom_command(
+                TARGET ds_device_llt POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy
+                ${CMAKE_BINARY_DIR}/src/datasystem/common/device/nvidia/plugin/libcuda_plugin.so
+                ${CMAKE_BINARY_DIR}/tests/st
+                )
+        endif()
+        target_link_libraries(ds_device_llt PRIVATE ${DS_DEVICE_LLT_DEPEND_LIB})
+        target_compile_definitions(ds_device_llt PRIVATE ${BIN_PATH_LIST})
+        add_datasystem_test(ds_device_llt TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+endif()
