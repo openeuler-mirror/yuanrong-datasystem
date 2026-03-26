@@ -3367,12 +3367,12 @@ TEST_F(KVClientVoluntaryScaleDownTest, CreateClientWithServiceDiscoveryDuringSca
         opts.etcdAddress = etcdAddress;
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
         DS_ASSERT_OK(serviceDiscovery->Init());
-
-        ConnectOptions connectOptions{ .connectTimeoutMs = 3000,
-                                       .requestTimeoutMs = 0,
-                                       .accessKey = "QTWAOYTTINDUT2QVKYUC",
-                                       .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc",
-                                       .serviceDiscovery = serviceDiscovery };
+        ConnectOptions connectOptions;
+        connectOptions.connectTimeoutMs = 3000;
+        connectOptions.requestTimeoutMs = 0;
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        connectOptions.serviceDiscovery = serviceDiscovery;
         std::shared_ptr<KVClient> newClient = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(newClient->Init());
 

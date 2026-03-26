@@ -205,7 +205,11 @@ int main(int argc, char *argv[])
         return FAILED;
     }
 
-    ConnectOptions connectOptions{ .host = ip, .port = port, .connectTimeoutMs = 3 * 1000 };
+    ConnectOptions connectOptions;
+    constexpr int32_t connectTimeoutMs = 3000;
+    connectOptions.host = ip;
+    connectOptions.port = port;
+    connectOptions.connectTimeoutMs = connectTimeoutMs;
     dsClient_ = std::make_shared<DsClient>(connectOptions);
     (void)Context::SetTraceId("init");
     Status status = dsClient_->Init();

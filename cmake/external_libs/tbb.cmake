@@ -14,7 +14,9 @@ endif ()
 
 string(FIND "${tbb_VERSION}" "2020.3" tbb_need_patch)
 if (NOT found EQUAL -1)
-  set(tbb_PATCHES ${CMAKE_SOURCE_DIR}/third_party/patches/tbb/2020.3/soft-link.patch)
+  set(tbb_PATCHES
+    ${CMAKE_SOURCE_DIR}/third_party/patches/tbb/2020.3/soft-link.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/tbb/2020.3/adapt-task.h-to-gcc-14.patch)
 endif ()
 
 set(tbb_CMAKE_OPTIONS

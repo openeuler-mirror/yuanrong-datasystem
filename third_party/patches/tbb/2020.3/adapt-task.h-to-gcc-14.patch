@@ -1,0 +1,25 @@
+From 0507c4c8a5a1055b6b4ddee3981d0abd1dc1b92a Mon Sep 17 00:00:00 2001
+From: liudongliang <1639591987@qq.com>
+Date: Fri, 20 Mar 2026 15:29:39 +0800
+Subject: [PATCH] patch: adapt task.h to gcc 14
+
+---
+ include/tbb/task.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/tbb/task.h b/include/tbb/task.h
+index 5e137c69..f1997503 100644
+--- a/include/tbb/task.h
++++ b/include/tbb/task.h
+@@ -297,7 +297,7 @@ namespace internal {
+         tbb::task* next;
+ 
+         //! The task corresponding to this task_prefix.
+-        tbb::task& task() {return *reinterpret_cast<tbb::task*>(this+1);}
++        tbb::task& task_ref() {return *reinterpret_cast<tbb::task*>(this+1);}
+     };
+ 
+ } // namespace internal
+-- 
+2.34.1
+

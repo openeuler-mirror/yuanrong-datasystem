@@ -19,14 +19,18 @@ set(rocksdb_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 set(rocksdb_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
-add_thirdparty_lib(RocksDB 
+set(rocksdbPATCHES
+    ${CMAKE_SOURCE_DIR}/third_party/patches/rocksdb/include-algorithm-for-gcc-14.patch)
+
+add_thirdparty_lib(RocksDB
   URL ${rocksdb_URL}
   SHA256 ${rocksdb_SHA256}
   FAKE_SHA256 ${rocksdb_FAKE_SHA256}
   VERSION ${rocksdb_VERSION}
   CONF_OPTIONS ${rocksdb_CMAKE_OPTIONS}
   CXX_FLAGS ${rocksdb_CXX_FLAGS}
-  C_FLAGS ${rocksdb_C_FLAGS})
+  C_FLAGS ${rocksdb_C_FLAGS}
+  PATCHES ${rocksdbPATCHES})
 
 set(RocksDB_DIR ${RocksDB_ROOT})
 find_package(RocksDB ${rocksdb_VERSION} REQUIRED)

@@ -1269,9 +1269,13 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
                                              "Gather write got empty remote jfrs.");
         uint64_t index = key % remoteJfrs.size();
         urma_target_jetty_t *importJfr = remoteJfrs[index].get();
-        wrList[dstSgeIdx] = {
-            .opcode = URMA_OPC_WRITE, .flag = flag, .tjetty = importJfr, .user_ctx = key, .rw = rw, .next = NULL
-        };
+        auto &wr = wrList[dstSgeIdx];
+        wr.opcode = URMA_OPC_WRITE;
+        wr.flag = flag;
+        wr.tjetty = importJfr;
+        wr.user_ctx = key;
+        wr.rw = rw;
+        wr.next = NULL;
         eventKeys.emplace_back(key);
         std::shared_ptr<Event> event;
         RETURN_IF_NOT_OK(CreateEvent(key, event));

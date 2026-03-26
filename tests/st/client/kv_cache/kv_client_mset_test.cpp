@@ -1181,17 +1181,18 @@ public:
     {
         std::string returnVal = "return(" + token + ", " + tenant + ")";
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.auth", returnVal));
-        ConnectOptions connectOptions{ .host = workerAddr_.Host(),
-                                       .port = workerAddr_.Port(),
-                                       .connectTimeoutMs = 60 * 1000,  // 60s
-                                       .requestTimeoutMs = 0,
-                                       .token = token,
-                                       .clientPublicKey = "",
-                                       .clientPrivateKey = "",
-                                       .serverPublicKey = "",
-                                       .accessKey = ak,
-                                       .secretKey = sk,
-                                       .tenantId = tenant };
+        ConnectOptions connectOptions;
+        connectOptions.host = workerAddr_.Host();
+        connectOptions.port = workerAddr_.Port();
+        connectOptions.connectTimeoutMs = 60 * 1000;  // 60s
+        connectOptions.requestTimeoutMs = 0;
+        connectOptions.token = token;
+        connectOptions.clientPublicKey = "";
+        connectOptions.clientPrivateKey = "";
+        connectOptions.serverPublicKey = "";
+        connectOptions.accessKey = ak;
+        connectOptions.secretKey = sk;
+        connectOptions.tenantId = tenant;
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
