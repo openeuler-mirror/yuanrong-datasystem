@@ -68,6 +68,8 @@ public:
 
     void GetMultiObjectSuccess(int64_t size);
 
+    void PutGetDeleteTest(int64_t size);
+
     void SetUp() override
     {
         ImmutableStringPool::Instance().Init();
@@ -259,17 +261,12 @@ TEST_F(ObjectClientTest, DISABLED_LEVEL1_TestAsynPublishAndShutdown)
     }
 }
 
-TEST_F(ObjectClientTest, CreateShmBufferSuccess)
+TEST_F(ObjectClientTest, CreateBufferSuccessByShmOrNonShm)
 {
     // Shared memory, non-Keep scenario
     CreateParam param{};
     CreateBufferSuccess(SHM_SIZE, param);
-}
-
-TEST_F(ObjectClientTest, CreateNonShmBufferSuccess)
-{
     // Non-shared memory, Keep scenario
-    CreateParam param{};
     CreateBufferSuccess(NON_SHM_SIZE, param);
 }
 
@@ -292,18 +289,16 @@ TEST_F(ObjectClientTest, RepeatedCreateTest)
     DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, data4));
 }
 
-TEST_F(ObjectClientTest, PutGetDeleteShmTest)
+void ObjectClientTest::PutGetDeleteTest(int64_t size)
 {
-    FLAGS_v = 1;
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
     std::string objectKey = NewObjectKey();
-    std::string data = GenRandomString(SHM_SIZE);
+    std::string data = GenRandomString(size);
 
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
-    DS_ASSERT_OK(
-        client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), SHM_SIZE, CreateParam{}));
+    DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), size, CreateParam{}));
     std::vector<Optional<Buffer>> buffers;
     DS_ASSERT_OK(client->Get({ objectKey }, 0, buffers));
     ASSERT_TRUE(NotExistsNone(buffers));
@@ -312,24 +307,12 @@ TEST_F(ObjectClientTest, PutGetDeleteShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
-TEST_F(ObjectClientTest, PutGetDeleteNonShmTest)
+TEST_F(ObjectClientTest, PutGetDeleteAllWithShmOrNonShm)
 {
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-    std::string objectKey = NewObjectKey();
-    std::string data = GenRandomString(NON_SHM_SIZE);
-
-    std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
-    DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), NON_SHM_SIZE,
-                             CreateParam{}));
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(client->Get({ objectKey }, 0, buffers));
-    ASSERT_TRUE(NotExistsNone(buffers));
-    ASSERT_EQ(data,
-              std::string(reinterpret_cast<const char *>((*buffers[0]).ImmutableData()), (*buffers[0]).GetSize()));
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), size_t(0));
+    // share memory
+    PutGetDeleteTest(SHM_SIZE);
+    // non share memory
+    PutGetDeleteTest(NON_SHM_SIZE);
 }
 
 TEST_F(ObjectClientTest, DISABLED_RepeatPutTest)
@@ -350,43 +333,27 @@ TEST_F(ObjectClientTest, DISABLED_RepeatPutTest)
                              CreateParam{}));
 }
 
-TEST_F(ObjectClientTest, EndToEndSuccessWithShmSealSuccess)
+TEST_F(ObjectClientTest, EndToEndSuccessAllScenarios)
 {
+    // SHM + Seal
     EndToEndSuccess(SHM_SIZE, true);
-}
-
-TEST_F(ObjectClientTest, EndToEndSuccessWithShmPubSuccess)
-{
+    // SHM + Publish
     EndToEndSuccess(SHM_SIZE, false);
-}
-
-TEST_F(ObjectClientTest, EndToEndSuccessWithNonShmSealSuccess)
-{
+    // NonSHM + Seal
     EndToEndSuccess(NON_SHM_SIZE, true);
-}
-
-TEST_F(ObjectClientTest, EndToEndSuccessWithNonShmPubSuccess)
-{
+    // NonSHM + Publish
     EndToEndSuccess(NON_SHM_SIZE, false);
 }
 
-TEST_F(ObjectClientTest, EndToEndRemoteGetWithShmSealSuccess)
+TEST_F(ObjectClientTest, EndToEndRemoteGetScenarios)
 {
+    // SHM + Seal
     EndToEndRemoteGet(SHM_SIZE, true);
-}
-
-TEST_F(ObjectClientTest, EndToEndRemoteGetWithShmPubSuccess)
-{
+    // SHM + Publish
     EndToEndRemoteGet(SHM_SIZE, false);
-}
-
-TEST_F(ObjectClientTest, EndToEndRemoteGetWithNonShmSealSuccess)
-{
+    // NonSHM + Seal
     EndToEndRemoteGet(NON_SHM_SIZE, true);
-}
-
-TEST_F(ObjectClientTest, LEVEL1_EndToEndRemoteGetWithNonShmPubSuccess)
-{
+    // NonSHM + Publish
     EndToEndRemoteGet(NON_SHM_SIZE, false);
 }
 
@@ -494,13 +461,9 @@ TEST_F(ObjectClientTest, InvalidateBufferAfterRemoteGet)
     ASSERT_TRUE(failedObjectKeys.empty());
 }
 
-TEST_F(ObjectClientTest, GetMultiObjectWithShmSuccess)
+TEST_F(ObjectClientTest, GetMultiObjectSuccessWithShmOrNonShm)
 {
     GetMultiObjectSuccess(SHM_SIZE);
-}
-
-TEST_F(ObjectClientTest, GetMultiObjectWithNonShmSuccess)
-{
     GetMultiObjectSuccess(NON_SHM_SIZE);
 }
 
@@ -619,28 +582,28 @@ TEST_F(ObjectClientTest, ImmutableObjectTest)
     DS_ASSERT_NOT_OK(buffer->Seal());
 }
 
-TEST_F(ObjectClientTest, PublishAfterSealTest)
+TEST_F(ObjectClientTest, TestPublishSealOrderConstraint)
 {
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Seal());
-    ASSERT_NE(buffer, nullptr);
-    DS_ASSERT_NOT_OK(buffer->Publish());
-}
-
-TEST_F(ObjectClientTest, SealAfterPublishTest)
-{
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Publish());
-    ASSERT_NE(buffer, nullptr);
-    DS_ASSERT_OK(buffer->Seal());
+    // Seal followed by Publish should fail
+    {
+        std::string objectKey = NewObjectKey();
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
+        ASSERT_NE(buffer, nullptr);
+        DS_ASSERT_OK(buffer->Seal());
+        DS_ASSERT_NOT_OK(buffer->Publish());
+    }
+    // Publish followed by Seal should success
+    {
+        std::string objectKey = NewObjectKey();
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
+        ASSERT_NE(buffer, nullptr);
+        DS_ASSERT_OK(buffer->Publish());
+        DS_ASSERT_OK(buffer->Seal());
+    }
 }
 
 TEST_F(ObjectClientTest, LatestObjectGetTest)
