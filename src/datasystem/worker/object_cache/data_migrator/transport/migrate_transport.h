@@ -40,6 +40,9 @@ public:
         std::string localAddr;
         uint64_t batchSize{0};
         std::shared_ptr<MigrateProgress> progress{nullptr};
+        bool isSlotMigration{false};
+        bool isRetry{false};
+        uint32_t slotId{0};
     };
 
     struct Response {

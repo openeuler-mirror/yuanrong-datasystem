@@ -41,7 +41,7 @@ public:
     MigrateDataHandler(MigrateType type, const std::string &localAddr,
                        const std::vector<ImmutableString> &needMigrateDataIds, std::shared_ptr<ObjectTable> objectTable,
                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi, std::shared_ptr<SelectionStrategy> strategy,
-                       std::shared_ptr<MigrateProgress> progress = nullptr);
+                       std::shared_ptr<MigrateProgress> progress = nullptr, bool isRetry = false, uint32_t slotId = 0);
 
     ~MigrateDataHandler() = default;
 
@@ -57,9 +57,10 @@ public:
 
     /**
      * @brief Migrate object data to remote node.
+     * @param[in] isSlotMigration Whether this is a slot migration (no batching).
      * @return Migrate result contains ip address, status, success ids, failed ids and skip ids.
      */
-    MigrateResult MigrateDataToRemote();
+    MigrateResult MigrateDataToRemote(bool isSlotMigration = false);
 
     /**
      * @brief Pretty print the migrate result.
@@ -67,6 +68,17 @@ public:
      * @return migrate result in string.
      */
     static std::string ResultToString(const MigrateResult &result);
+
+    /**
+     * @brief Migrate data to remote rpc, if meets RPC error, it would retry.
+     * @param[in] api Remote worker api.
+     * @param[in] req Migrate data request.
+     * @param[in] payloads Need migrate data.
+     * @param[out] rsp Migrate data response.
+     * @return K_OK if success, the error otherwise.
+     */
+    Status MigrateDataToRemoteRetry(const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
+                                    const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
 
 private:
     /**
@@ -97,19 +109,9 @@ private:
 
     /**
      * @brief Send data to remote node.
+     * @param[in] isSlotMigration Whether this is a slot migration.
      */
-    void SendDataToRemote();
-
-    /**
-     * @brief Migrate data to remote rpc, if meets RPC error, it would retry.
-     * @param[in] api Remote worker api.
-     * @param[in] req Migrate data request.
-     * @param[in] payloads Need migrate data.
-     * @param[out] rsp Migrate data response.
-     * @return K_OK if success, the error otherwise.
-     */
-    Status MigrateDataToRemoteRetry(const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
-                                    const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
+    void SendDataToRemote(bool isSlotMigration = false);
 
     /**
      * @brief Try update rate by response for 5 times.
@@ -148,6 +150,30 @@ private:
     void SplitByCacheType(std::vector<std::string> &memoryDataIds, std::vector<std::string> &diskDataIds);
 
     /**
+     * @brief Migrate data for one cache type.
+     * @param[in] type The cache type.
+     * @param[in] needMigrateDataIds Objects to migrate.
+     * @param[in] isSlotMigration Whether this is a slot migration.
+     * @return K_OK if success, the error otherwise.
+     */
+    Status MigrateDataByCacheType(CacheType type, std::vector<std::string> &needMigrateDataIds, bool isSlotMigration);
+
+    /**
+     * @brief Prepare remote state before migrating a cache type.
+     * @param[in] type The cache type.
+     * @param[in] needMigrateDataIds Objects to migrate.
+     * @return K_OK if success, the error otherwise.
+     */
+    Status PrepareRemoteMigration(CacheType type, const std::vector<std::string> &needMigrateDataIds);
+
+    /**
+     * @brief Collect one object into the current migrate batch.
+     * @param[in] objectKey Object key.
+     * @param[in] isSlotMigration Whether this is a slot migration.
+     */
+    void CollectObjectForMigration(const std::string &objectKey, bool isSlotMigration);
+
+    /**
      * @brief Indicate whether to use fast transport for migration.
      * @return True if fast transport should be used.
      */
@@ -166,6 +192,10 @@ private:
     std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi_;
 
     uint64_t maxBatchSize_;
+    uint64_t remoteMemoryRemainSize_;
+    uint64_t remoteDiskRemainSize_;
+    uint64_t currentMemorySize_;
+    uint64_t currentDiskSize_;
     uint64_t currBatchSize_;
     uint64_t currBatchCount_;
 
@@ -173,6 +203,8 @@ private:
     std::shared_ptr<SelectionStrategy> strategy_;
     std::shared_ptr<MigrateProgress> progress_{ nullptr };
     std::shared_ptr<MigrateTransport> transport_;
+    bool isRetry_{ false };
+    uint32_t slotId_{ 0 };
 
     std::unordered_set<ImmutableString> successIds_;
     std::unordered_set<ImmutableString> failedIds_;

@@ -60,6 +60,16 @@ constexpr double MIGRATE_SCALE_DOWN_HIGH_WATER_FACTOR = 0.95;
 namespace datasystem {
 namespace object_cache {
 
+namespace {
+std::unordered_set<std::string> CollectRequestObjectKeys(const ObjInfoPbList &objects)
+{
+    std::unordered_set<std::string> objectKeys;
+    std::transform(objects.begin(), objects.end(), std::inserter(objectKeys, objectKeys.end()),
+                   [](const auto &info) { return info.object_key(); });
+    return objectKeys;
+}
+}  // namespace
+
 WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                        std::shared_ptr<ThreadPool> memcpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager,
@@ -71,6 +81,27 @@ WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam 
       localAddr_(localAddr),
       rateLimiter_(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul)
 {
+}
+
+Status WorkerOcServiceMigrateImpl::PrepareMigrateData(
+    const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
+    std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
+{
+    if (req.is_slot_migration()) {
+        auto allocRc = BatchAllocateObjectGroupBySlot(req, units);
+        if (IsNoSpace(allocRc)) {
+            auto failedIds = CollectRequestObjectKeys(req.objects());
+            FillMigrateDataResponse(req, {}, failedIds, true, rsp);
+            return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
+        }
+        RETURN_IF_NOT_OK(allocRc);
+    }
+    if (etcdCM_ != nullptr && etcdCM_->IsDataMigrationStarted()) {
+        auto failedIds = CollectRequestObjectKeys(req.objects());
+        FillMigrateDataResponse(req, {}, failedIds, false, rsp);
+        RETURN_STATUS(StatusCode::K_NOT_READY, "Data migration already in progress");
+    }
+    return Status::OK();
 }
 
 Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
@@ -99,29 +130,24 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
 Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                                std::vector<RpcMessage> payloads)
 {
-    LOG(INFO) << FormatString("[Migrate Data] Type: %d, Count: %d, Objects: %s", static_cast<int>(req.type()),
-                              req.objects_size(), VectorToString(GetObjects(req)));
+    LOG(INFO) << FormatString("[Migrate Data] Type: %d, Count: %d, Objects: %s, is_slot_migration: %d, slot_id: %u",
+                              static_cast<int>(req.type()), req.objects_size(), VectorToString(GetObjects(req)),
+                              req.is_slot_migration(), req.slot_id());
     INJECT_POINT("worker.migrate_service.return");
     RETURN_IF_NOT_OK(CheckResource(req, rsp));
+    std::unordered_map<std::string, std::shared_ptr<ShmUnit>> units;
+    RETURN_IF_NOT_OK(PrepareMigrateData(req, rsp, units));
+
     // 1. Lock objects.
     LockedEntryMap lockedEntries;
     std::unordered_set<std::string> successIds;
     std::unordered_set<std::string> failedIds;
     LockedEntryMap needModifyPrimary;
     BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
-    Raii raii([this, &lockedEntries, needModifyPrimary]() {
+    Raii raii([this, &lockedEntries, &needModifyPrimary]() {
         BatchUnlock(lockedEntries);
         BatchUnlock(needModifyPrimary);
     });
-
-    if (etcdCM_ != nullptr && etcdCM_->IsDataMigrationStarted()) {
-        std::unordered_set<std::string> failedIds;
-        std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
-                       [](const auto &info) { return info.object_key(); });
-        FillMigrateDataResponse(req, {}, failedIds, false, rsp);
-        RETURN_STATUS(StatusCode::K_NOT_READY, "Data migration already in progress");
-    }
-
     // 2. Get object metadata from master.
     std::unordered_set<std::string> needQueryIds;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
@@ -135,7 +161,8 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
 
     // 3. Fill data and metadata to object entry.
     ObjectInfoMap needSendMasterIds;
-    Status status = FillObjectsLocked(req, lockedEntries, metas, payloads, successIds, failedIds, needSendMasterIds);
+    Status status =
+        FillObjectsLocked(req, lockedEntries, metas, payloads, successIds, failedIds, needSendMasterIds, units);
     bool oom = IsNoSpace(status);
 
     for (const auto &[objectKey, it] : needModifyPrimary) {
@@ -148,6 +175,11 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
 
     // 5. Fill response.
     FillMigrateDataResponse(req, successIds, failedIds, oom, rsp);
+    // if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
+    //  auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
+    //  LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
+    //  req.slot_id(), merStatus.ToString()));
+    // }
     LOG(INFO) << "[Migrate Data] Migrate finish, success size: " << successIds.size()
               << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
     return successIds.empty() ? status : Status::OK();
@@ -170,7 +202,8 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectError(const MigrateDa
     std::unordered_set<std::string> failedIds;
     std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
                    [](const auto &info) { return info.object_key(); });
-    FillMigrateDataDirectResponse(failedIds, code == StatusCode::K_OUT_OF_MEMORY, rsp);
+    const bool noSpace = (code == StatusCode::K_OUT_OF_MEMORY || code == StatusCode::K_NO_SPACE);
+    FillMigrateDataDirectResponse(failedIds, noSpace, rsp);
     LOG(INFO) << "[Migrate Data] " << message;
     return Status(code, message);
 }
@@ -190,22 +223,13 @@ Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDi
     return Status::OK();
 }
 
-Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirectReqPb &req,
-                                                         MigrateDataDirectRspPb &rsp)
+Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
+    const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp, PerfPoint &point, LockedEntryMap &lockedEntries,
+    std::unordered_set<std::string> &successIds, std::unordered_set<std::string> &failedIds,
+    LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds)
 {
-    // 1. Lock objects.
-    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_LOCK);
-    LockedEntryMap lockedEntries;
-    std::unordered_set<std::string> successIds;
-    std::unordered_set<std::string> failedIds;
-    LockedEntryMap needModifyPrimary;
     BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
-    Raii raii([this, &lockedEntries, needModifyPrimary]() {
-        BatchUnlock(lockedEntries);
-        BatchUnlock(needModifyPrimary);
-    });
 
-    // 2. Get object metadata from master.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_QUERY_META);
     std::unordered_set<std::string> needQueryIds;
     std::transform(lockedEntries.begin(), lockedEntries.end(), std::inserter(needQueryIds, needQueryIds.end()),
@@ -217,18 +241,32 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
         return rc;
     }
 
-    // 3. Fill metadata to object entry.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_META);
-    ObjectInfoMap needReadDataIds;
     FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds);
+    return Status::OK();
+}
 
-    // 4. Fill data to object entry.
-    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
-    ObjectInfoMap needSendMasterIds;
-    Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds);
-    bool oom = IsNoSpace(status);
+Status WorkerOcServiceMigrateImpl::HandleMigrateDataDirectNoSpace(const MigrateDataDirectReqPb &req,
+                                                                  MigrateDataDirectRspPb &rsp,
+                                                                  const ObjectInfoMap &needReadDataIds,
+                                                                  std::unordered_set<std::string> &failedIds,
+                                                                  Status status)
+{
+    RETURN_OK_IF_TRUE(!req.is_slot_migration() || !IsNoSpace(status));
+    for (const auto &object : req.objects()) {
+        failedIds.insert(object.object_key());
+    }
+    RollbackObjects(failedIds, needReadDataIds);
+    FillMigrateDataDirectResponse(failedIds, true, rsp);
+    LOG(WARNING) << "[Migrate Data] Slot migration allocate memory failed, retry all objects.";
+    return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
+}
 
-    // 5. Send replace primary copy to master.
+void WorkerOcServiceMigrateImpl::ReplacePrimaryForMigrateDataDirect(
+    const MigrateDataDirectReqPb &req, PerfPoint &point, const LockedEntryMap &needModifyPrimary,
+    const ObjectInfoMap &needReadDataIds, std::unordered_set<std::string> &successIds,
+    std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds, Status &status)
+{
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_REPLACE_PRIMARY);
     for (const auto &[objectKey, it] : needModifyPrimary) {
         needSendMasterIds.emplace(objectKey, std::make_pair(it.first, false));
@@ -239,10 +277,41 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
     if (!failedIds.empty()) {
         RollbackObjects(failedIds, needReadDataIds);
     }
+}
 
-    // 6. Fill response.
+Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirectReqPb &req,
+                                                         MigrateDataDirectRspPb &rsp)
+{
+    PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_LOCK);
+    LockedEntryMap lockedEntries;
+    std::unordered_set<std::string> successIds;
+    std::unordered_set<std::string> failedIds;
+    LockedEntryMap needModifyPrimary;
+    ObjectInfoMap needReadDataIds;
+    Raii raii([this, &lockedEntries, &needModifyPrimary]() {
+        BatchUnlock(lockedEntries);
+        BatchUnlock(needModifyPrimary);
+    });
+    RETURN_IF_NOT_OK(PrepareMigrateDataDirectEntries(req, rsp, point, lockedEntries, successIds, failedIds,
+                                                     needModifyPrimary, needReadDataIds));
+
+    point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
+    ObjectInfoMap needSendMasterIds;
+    Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds);
+    Status noSpaceStatus = HandleMigrateDataDirectNoSpace(req, rsp, needReadDataIds, failedIds, status);
+    if (noSpaceStatus.IsError()) {
+        return noSpaceStatus;
+    }
+    bool oom = IsNoSpace(status);
+    ReplacePrimaryForMigrateDataDirect(req, point, needModifyPrimary, needReadDataIds, successIds, failedIds,
+                                       needSendMasterIds, status);
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_RSP);
     FillMigrateDataDirectResponse(failedIds, oom, rsp);
+    // if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
+    //  auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
+    //  LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
+    //  req.slot_id(), merStatus.ToString()));
+    // }
     LOG(INFO) << "[Migrate Data] Migrate direct finish, success size: " << successIds.size()
               << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
     return successIds.empty() ? status : Status::OK();
@@ -356,11 +425,11 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
     return failedSize == objectKeys.size() ? lastRc : Status::OK();
 }
 
-Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const MigrateDataReqPb &req, LockedEntryMap &lockedEntries,
-                                                     const QueryMetaMap &metas, std::vector<RpcMessage> &payloads,
-                                                     std::unordered_set<std::string> &successIds,
-                                                     std::unordered_set<std::string> &failedIds,
-                                                     ObjectInfoMap &needSendMasterIds)
+Status WorkerOcServiceMigrateImpl::FillObjectsLocked(
+    const MigrateDataReqPb &req, LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
+    std::vector<RpcMessage> &payloads, std::unordered_set<std::string> &successIds,
+    std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds,
+    const std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
 {
     Status lastRc;
     const auto &infoList = req.objects();
@@ -380,8 +449,10 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(const MigrateDataReqPb &req
             }
             continue;
         }
-        Status status =
-            FillOneObjectLocked(lockedIt->second.first, *it, metaIt->second, payloads, req.type(), needSendMasterIds);
+        const auto &unitIter = units.find(objectKey);
+        std::shared_ptr<ShmUnit> unit = unitIter == units.end() ? nullptr : unitIter->second;
+        Status status = FillOneObjectLocked(lockedIt->second.first, *it, metaIt->second, payloads, req.type(),
+                                            needSendMasterIds, unit);
         if (IsNoSpace(status)) {
             std::transform(it, infoList.end(), std::inserter(failedIds, failedIds.end()),
                            [](const MigrateDataReqPb::ObjectInfoPb &info) { return info.object_key(); });
@@ -449,22 +520,22 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
                                                            std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
                                                            std::vector<uint32_t> &shmIndexMapping)
 {
-    // Calculate total size of small objects (< 1MB) that need to be aggregated and
-    // verify memory availability for them before attempting aggregate allocation.
+    // Calculate total size of objects that need aggregate pre-allocation:
+    // small objects only by default, or all objects for slot migration.
     constexpr uint64_t smallObjectThreshold = 1UL * 1024UL * 1024UL;
-    uint64_t sumSmallObjects = 0;
+    const bool includeLargeObjects = req.is_slot_migration();
+    uint64_t sumObjects = 0;
     for (int i = 0; i < req.objects_size(); ++i) {
         const auto &object = req.objects(i);
         if (needReadDataIds.find(object.object_key()) == needReadDataIds.end()) {
             continue;
         }
-        if (object.data_size() < smallObjectThreshold) {
-            sumSmallObjects =
-                (sumSmallObjects > UINT64_MAX - object.data_size()) ? UINT64_MAX : sumSmallObjects + object.data_size();
+        if (includeLargeObjects || object.data_size() < smallObjectThreshold) {
+            sumObjects = (sumObjects > UINT64_MAX - object.data_size()) ? UINT64_MAX : sumObjects + object.data_size();
         }
     }
     static constexpr double factor = 1.2;
-    uint64_t checkSize = static_cast<uint64_t>(static_cast<double>(sumSmallObjects) * factor);
+    uint64_t checkSize = static_cast<uint64_t>(static_cast<double>(sumObjects) * factor);
     if (!IsMemoryAvailable(checkSize, MigrateType::SPILL)) {
         return Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
     }
@@ -474,7 +545,7 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> traversalHelper =
         [&req, &needReadDataIds, &metaSz](const std::function<void(uint64_t, uint64_t, uint32_t)> &collector,
                                           bool &needAggregate) {
-            needAggregate = req.objects_size() > 1;
+            needAggregate = req.is_slot_migration() || req.objects_size() > 1;
             for (int i = 0; i < req.objects_size(); i++) {
                 const auto &object = req.objects(i);
                 if (needReadDataIds.find(object.object_key()) == needReadDataIds.end()) {
@@ -484,7 +555,8 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
             }
         };
     const auto &firstObjectKey = req.objects().begin()->object_key();
-    return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping, false);
+    return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping, false,
+                             includeLargeObjects);
 }
 
 Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDirectReqPb &req,
@@ -492,13 +564,16 @@ Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDire
                                                            ObjectInfoMap &needSendMasterIds,
                                                            std::unordered_set<std::string> &failedIds)
 {
-    // 1. Aggregate allocated memory for small objects.
+    // 1. Aggregate pre-allocated memory for objects.
     PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_ALLOCATE_AGGREGATE);
     std::vector<uint32_t> shmIndexMapping(req.objects_size(), std::numeric_limits<uint32_t>::max());
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
     Status rc = AggregateAllocateHelper(req, needReadDataIds, shmOwners, shmIndexMapping);
     if (rc.IsError()) {
         LOG(ERROR) << "[Migrate Data] Aggregate allocate memory failed: " << rc.ToString();
+        if (req.is_slot_migration() && IsNoSpace(rc)) {
+            return Status(StatusCode::K_NO_SPACE, "Slot migration aggregate allocate memory failed");
+        }
         shmOwners.clear();
     }
 
@@ -881,7 +956,7 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
                                                        const MigrateDataReqPb::ObjectInfoPb &info,
                                                        const master::QueryMetaInfoPb &meta,
                                                        std::vector<RpcMessage> &payloads, const MigrateType &type,
-                                                       ObjectInfoMap &needSendMasterIds)
+                                                       ObjectInfoMap &needSendMasterIds, std::shared_ptr<ShmUnit> &unit)
 {
     const auto &objectKey = info.object_key();
     if (meta.meta().version() != info.version()) {
@@ -895,7 +970,7 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
     }
     bool isNewCreate = IsNewCreatedObject(entry);
     SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry);
-    RETURN_IF_NOT_OK(SaveDataWithObjectLocked(entry, info, payloads, type));
+    RETURN_IF_NOT_OK(SaveDataWithObjectLocked(entry, info, payloads, type, unit));
     if ((*entry)->IsMemoryCache() && (*entry)->GetShmUnit() == nullptr) {
         (*entry)->stateInfo.SetSpillState(true);
     }
@@ -911,7 +986,8 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
 
 Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<SafeObjType> &entry,
                                                             const MigrateDataReqPb::ObjectInfoPb &info,
-                                                            std::vector<RpcMessage> &payloads, const MigrateType &type)
+                                                            std::vector<RpcMessage> &payloads, const MigrateType &type,
+                                                            std::shared_ptr<ShmUnit> unit)
 {
     const auto &objectKey = info.object_key();
     const auto &indexs = info.part_index();
@@ -936,7 +1012,7 @@ Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<Safe
 
     Status rc = Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
     if (IsResourceAvailable(type, (*entry)->modeInfo.GetCacheType(), info.data_size())) {
-        rc = AllocateAndAssignData(objectKey, entry, pairs, info.data_size());
+        rc = AllocateAndAssignData(objectKey, entry, pairs, info.data_size(), unit);
         VLOG(1) << FormatString("[ObjectKey %s] Save data to memory, result: %s", objectKey, rc.ToString());
     }
     if (type == MigrateType::SCALE_DOWN && (*entry)->IsMemoryCache() && rc.IsError()
@@ -949,19 +1025,43 @@ Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<Safe
     return rc;
 }
 
+Status WorkerOcServiceMigrateImpl::BatchAllocateObjectGroupBySlot(
+    const MigrateDataReqPb &req, std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
+{
+    for (const auto &info : req.objects()) {
+        const auto &objectKey = info.object_key();
+        auto shmUnit = std::make_shared<ShmUnit>();
+        auto metaSize = GetMetadataSize();
+        auto needSize = info.data_size() + metaSize;
+        auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
+        auto status = shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
+                                              static_cast<memory::CacheType>(info.cache_type()));
+        if (IsNoSpace(status)) {
+            LOG(ERROR) << FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize);
+            return status;
+        }
+        shmUnit->id = ShmKey::Intern(GetStringUuid());
+        units[objectKey] = shmUnit;
+    }
+    return Status::OK();
+}
+
 Status WorkerOcServiceMigrateImpl::AllocateAndAssignData(
     const std::string &objectKey, std::shared_ptr<SafeObjType> &entry,
-    const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size)
+    const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size, std::shared_ptr<ShmUnit> unit)
 {
-    auto shmUnit = std::make_shared<ShmUnit>();
     auto metaSize = GetMetadataSize();
     auto needSize = size + metaSize;
-    auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
-                                static_cast<memory::CacheType>((*entry)->modeInfo.GetCacheType())),
-        FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize));
-    shmUnit->id = ShmKey::Intern(GetStringUuid());
+    std::shared_ptr<ShmUnit> shmUnit = unit;
+    if (shmUnit == nullptr) {
+        shmUnit = std::make_shared<ShmUnit>();
+        auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
+                                    static_cast<memory::CacheType>((*entry)->modeInfo.GetCacheType())),
+            FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize));
+        shmUnit->id = ShmKey::Intern(GetStringUuid());
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         shmUnit->MemoryCopy(payloads, memcpyThreadPool_, metaSize),
         FormatString("[Migrate Data] Memory copy failed, offset: %ld, size: %ld", metaSize, needSize));

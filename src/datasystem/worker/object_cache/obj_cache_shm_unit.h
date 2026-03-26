@@ -219,13 +219,14 @@ Status DistributeMemoryForObject(const std::string &objectKey, const uint64_t da
  * @param[out] shmOwners The allocated shared memory chunks.
  * @param[out] shmIndexMapping The object id to shmOwners index mapping.
  * @param[in] retryOnOOM Indicate need retry on OOM or not.
+ * @param[in] includeLargeObjects Indicate whether include large objects in aggregate allocation.
  * @return Status of the call.
  */
 Status AggregateAllocate(
     const std::string &firstObjectKey,
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> &traversalHelper,
     std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-    std::vector<uint32_t> &shmIndexMapping, bool retryOnOOM = true);
+    std::vector<uint32_t> &shmIndexMapping, bool retryOnOOM = true, bool includeLargeObjects = false);
 
 /**
  * @brief Allocate Shm unit and init its id.

@@ -177,6 +177,13 @@ Status EtcdClusterManager::Shutdown()
     HashRingEvent::SyncClusterNodes::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     HashRingEvent::GetFailedWorkers::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     HashRingEvent::GetDbPrimaryLocation::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
+    GetHashRangeNonBlockEvent::GetInstance().RemoveSubscriber("GET_HASH_RANGE_NON_BLOCK");
+    GetLocalWorkerUuidEvent::GetInstance().RemoveSubscriber("GET_LOCAL_WORKER_UUID");
+    HashRingEvent::CheckNeedRedirect::GetInstance().RemoveSubscriber("NEED_REDIRECT");
+    EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().RemoveSubscriber(
+        "QUERY_MASTER_ADDR_IN_OTHER_AZ");
+    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().RemoveSubscriber(
+        "CHECK_IF_OTHER_AZ_NODE_CONNECTED");
 
     // Clean up the node demotion thread if it was running
     if (thread_) {

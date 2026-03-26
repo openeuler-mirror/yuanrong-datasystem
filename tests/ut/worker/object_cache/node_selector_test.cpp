@@ -17,6 +17,7 @@
 /**
  * Description: Test EvictionManager.
  */
+#include <set>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -30,6 +31,9 @@
 #include "datasystem/master/resource_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
+#include "eviction_manager_common.h"
 
 using namespace ::testing;
 using namespace datasystem::object_cache;
@@ -87,7 +91,7 @@ public:
 
     void InitNodeSelector()
     {
-        auto etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
+        etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
         etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get(), false);
         apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
@@ -583,6 +587,350 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots) {
     rsp.Clear();
     ReportResource(req, rsp);
     EXPECT_EQ(rsp.stats_size(), 1);
+}
+
+class EtcdCmHelper : public EtcdClusterManager {
+public:
+    EtcdCmHelper(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB)
+        : EtcdClusterManager(workerAddress, masterAddress, etcdDB, false)
+    {
+    }
+
+    void SetHashRing(std::unique_ptr<worker::HashRing> &ring, HashRingPb &ringPb)
+    {
+        hashRing_ = std::move(ring);
+        DS_ASSERT_OK(hashRing_->InitWithoutEtcd(false, ringPb.SerializeAsString()));
+    }
+};
+
+class MigrateL2DataTest : public NodeSelectorTest, public EvictionManagerCommon {
+public:
+
+    void SetUp()
+    {
+        CommonTest::SetUp();
+        HostPort addr("127.0.0.1", 1111);
+        localAddr_ = addr;
+        const uint64_t memSize = 1024ul * 1024ul * 1024ul;
+        DS_ASSERT_OK(memory::Allocator::Instance()->Init(memSize));
+        akSkManager_ = std::make_shared<AkSkManager>();
+        objectTable_ = std::make_shared<ObjectTable>();
+        InitNodeSelector();
+        InitRing();
+        datasystem::inject::Set("TestGroupL2CacheObjectsBySlot", "call()");
+    }
+
+    void TearDown() override
+    {
+        RELEASE_STUBS
+        CommonTest::TearDown();
+    }
+
+    void InitNodeSelector()
+    {
+        std::vector<NodeInfo> nodes;
+        std::vector<NodeInfo> expectNodes;
+        GetNodeInfosHelper(nodes, expectNodes);
+        MockCollectClusterInfo(nodes);
+        etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
+        etcdStore_->Init();
+        etcdCM_ = std::make_shared<EtcdCmHelper>(localAddr_, localAddr_, etcdStore_.get());
+        apiManager_ = std::make_shared<datasystem::worker::WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
+        NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_.get(), apiManager_);
+    }
+
+    void InsertWorker(HashRingPb &pb, const std::string &id, WorkerPb &&workerPb)
+    {
+        workerPb.set_worker_uuid(GetStringUuid());
+        pb.mutable_workers()->insert({ id, workerPb });
+    }
+
+    WorkerPb MakeWorkerPb(std::initializer_list<uint32_t> &&tokens, WorkerPb::StatePb state = WorkerPb::ACTIVE)
+    {
+        WorkerPb pb;
+        for (auto token : tokens) {
+            pb.mutable_hash_tokens()->Add(std::move(token));
+        }
+        pb.set_state(state);
+        return pb;
+    }
+
+    void InitRing()
+    {
+        HashRingPb ringPb;
+        ringPb.set_cluster_id("");
+        ringPb.set_cluster_has_init(true);
+        InsertWorker(ringPb, "127.0.0.1:1111", MakeWorkerPb({ 357913941, 1431655764, 2505397587, 3579139410 }));
+        InsertWorker(ringPb, "127.0.0.1:1112", MakeWorkerPb({ 715827882, 1789569705, 2863311528, 3937053351 }));
+        InsertWorker(ringPb, "127.0.0.1:1113", MakeWorkerPb({ 1073741823, 2147483646, 3221225469, 3221225469 }));
+        std::unique_ptr<worker::HashRing> ring = std::make_unique<worker::HashRing>("127.0.0.1:1111", etcdStore_.get());
+        etcdCM_->SetHashRing(ring, ringPb);
+    }
+
+    void MockWorkerMigrateData(MigrateDataReqPb &outReq)
+    {
+        BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+            .WillRepeatedly(Invoke([&outReq](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
+                                             MigrateDataRspPb &rsp) {
+                constexpr uint64_t remainBytes = 1024ul * 1024ul * 1024ul;
+                rsp.set_available_ratio(60);
+                rsp.set_disk_available_ratio(60);
+                rsp.set_scale_down_state(MigrateDataRspPb::NONE);
+                rsp.set_limit_rate(200);
+                rsp.set_remain_bytes(remainBytes);
+                rsp.set_disk_remain_bytes(remainBytes);
+                if (req.objects_size() > 0) {
+                    outReq = req;
+                    for (const auto &obj : req.objects()) {
+                        rsp.add_success_ids(obj.object_key());
+                    }
+                }
+                (void)payloads;
+                return Status::OK();
+            }));
+    }
+
+    void MockMigrateDataToRemoteRetry()
+    {
+        BINEXPECT_CALL(&MigrateDataHandler::MigrateDataToRemoteRetry, (_, _, _, _))
+            .WillRepeatedly(Invoke([](const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
+                                      const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
+                if (api->Address() == "127.0.0.1:1112") {
+                    rsp.set_available_ratio(60);
+                    rsp.set_limit_rate(200);
+                    rsp.set_remain_bytes(1024*1024*1024);
+                }
+                (void)req;
+                (void)payloads;
+                return Status::OK();
+            }));
+    }
+
+
+protected:
+    std::shared_ptr<AkSkManager> akSkManager_;
+    std::shared_ptr<EtcdCmHelper> etcdCM_;
+    HostPort localAddr_;
+    std::shared_ptr<datasystem::worker::WorkerMasterOcApiManager> apiManager_;
+    std::unique_ptr<EtcdStore> etcdStore_;
+};
+
+TEST_F(MigrateL2DataTest, MigrateL2Data)
+{
+    std::vector<std::string> needMigrateL2CacheIds;
+    uint64_t dataSize = 100;
+    for (int i = 0; i < 100; i++) {
+        auto key = "a_key_for_test_" + std::to_string(i);
+        needMigrateL2CacheIds.emplace_back(key);
+        CreateObject(key, dataSize);
+    }
+
+    HostPort addr;
+    DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
+    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    migrator.Init();
+    MigrateDataReqPb req;
+    MockWorkerMigrateData(req);
+    MockMigrateDataToRemoteRetry();
+    BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
+        .WillRepeatedly(Invoke([this](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
+                                               const HostPort &workerAddr) {
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            return Status::OK();
+        }));
+    DS_ASSERT_OK(migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds));
+    ASSERT_EQ(req.objects_size(), 100);
+    ASSERT_EQ(req.worker_addr(), "127.0.0.1:1111");
+    ASSERT_TRUE(req.is_slot_migration());
+}
+
+TEST_F(MigrateL2DataTest, MigrateL2DataSameNodeRetryMax)
+{
+    std::vector<std::string> needMigrateL2CacheIds{ "l2_retry_max_key" };
+    CreateObject(needMigrateL2CacheIds[0], 128);
+
+    HostPort addr;
+    DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
+    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    migrator.Init();
+
+    BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
+        .WillRepeatedly(Invoke([this](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
+                                      const HostPort &workerAddr) {
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&MigrateDataHandler::MigrateDataToRemoteRetry, (_, _, _, _))
+        .WillRepeatedly(Invoke([](const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
+                                  const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
+            (void)api;
+            (void)req;
+            (void)payloads;
+            rsp.set_available_ratio(60);
+            rsp.set_limit_rate(200);
+            rsp.set_remain_bytes(1024 * 1024 * 1024);
+            rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+            return Status::OK();
+        }));
+
+    uint32_t sendCount = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([&sendCount](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
+                                            MigrateDataRspPb &rsp) {
+            (void)payloads;
+            if (req.objects_size() == 0) {
+                rsp.set_available_ratio(60);
+                rsp.set_limit_rate(200);
+                rsp.set_remain_bytes(1024 * 1024 * 1024);
+                rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+                return Status::OK();
+            }
+            ++sendCount;
+            for (const auto &obj : req.objects()) {
+                rsp.add_success_ids(obj.object_key());
+                rsp.add_fail_ids(obj.object_key());
+            }
+            rsp.set_available_ratio(60);
+            rsp.set_limit_rate(200);
+            rsp.set_remain_bytes(1024 * 1024 * 1024);
+            rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+            return Status::OK();
+        }));
+
+    DS_ASSERT_OK(migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds));
+    ASSERT_EQ(sendCount, 11);  // first send + 10 same-node retries
+}
+
+TEST_F(MigrateL2DataTest, MigrateL2DataPartialSuccessThenNoSpaceKeepSameNode)
+{
+    std::vector<std::string> needMigrateL2CacheIds{ "l2_partial_keep_same_node_0", "l2_partial_keep_same_node_1" };
+    for (const auto &key : needMigrateL2CacheIds) {
+        CreateObject(key, 128);
+    }
+
+    HostPort addr;
+    DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
+    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    migrator.Init();
+
+    std::set<std::string> connectedAddrs;
+    BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
+        .WillRepeatedly(Invoke([this, &connectedAddrs](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
+                                                       const HostPort &workerAddr) {
+            connectedAddrs.insert(workerAddr.ToString());
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&MigrateDataHandler::MigrateDataToRemoteRetry, (_, _, _, _))
+        .WillRepeatedly(Invoke([](const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
+                                  const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
+            (void)api;
+            (void)req;
+            (void)payloads;
+            rsp.set_available_ratio(60);
+            rsp.set_limit_rate(200);
+            rsp.set_remain_bytes(1024 * 1024 * 1024);
+            rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+            return Status::OK();
+        }));
+
+    uint32_t sendCount = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([&sendCount](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
+                                            MigrateDataRspPb &rsp) {
+            (void)payloads;
+            if (req.objects_size() == 0) {
+                rsp.set_available_ratio(60);
+                rsp.set_limit_rate(200);
+                rsp.set_remain_bytes(1024 * 1024 * 1024);
+                rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+                return Status::OK();
+            }
+            ++sendCount;
+            if (sendCount == 1) {
+                rsp.add_success_ids(req.objects(0).object_key());
+                rsp.add_fail_ids(req.objects(1).object_key());
+                rsp.set_available_ratio(60);
+                rsp.set_limit_rate(200);
+                rsp.set_remain_bytes(1024 * 1024 * 1024);
+                rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+                return Status::OK();
+            }
+            return Status(StatusCode::K_NO_SPACE, "same node retry no space");
+        }));
+
+    DS_ASSERT_OK(migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds));
+    ASSERT_EQ(sendCount, 11);  // first send + 10 same-node retries
+    ASSERT_EQ(connectedAddrs.size(), static_cast<size_t>(1));
+}
+
+TEST_F(MigrateL2DataTest, MigrateL2DataAllFailedThenRedirectRetry)
+{
+    std::vector<std::string> needMigrateL2CacheIds;
+    for (int i = 0; i < 4; ++i) {
+        auto key = "l2_all_fail_redirect_" + std::to_string(i);
+        needMigrateL2CacheIds.emplace_back(key);
+        CreateObject(key, 64);
+    }
+
+    HostPort addr;
+    DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
+    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    migrator.Init();
+
+    std::set<std::string> connectedAddrs;
+    BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
+        .WillRepeatedly(Invoke([this, &connectedAddrs](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
+                                                       const HostPort &workerAddr) {
+            connectedAddrs.insert(workerAddr.ToString());
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&MigrateDataHandler::MigrateDataToRemoteRetry, (_, _, _, _))
+        .WillRepeatedly(Invoke([](const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
+                                  const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
+            (void)api;
+            (void)req;
+            (void)payloads;
+            rsp.set_available_ratio(60);
+            rsp.set_limit_rate(200);
+            rsp.set_remain_bytes(1024 * 1024 * 1024);
+            rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+            return Status::OK();
+        }));
+
+    uint32_t sendCount = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([&sendCount](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
+                                            MigrateDataRspPb &rsp) {
+            (void)payloads;
+            if (req.objects_size() == 0) {
+                rsp.set_available_ratio(60);
+                rsp.set_limit_rate(200);
+                rsp.set_remain_bytes(1024 * 1024 * 1024);
+                rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+                return Status::OK();
+            }
+            ++sendCount;
+            if (sendCount == 1) {
+                return Status(StatusCode::K_RUNTIME_ERROR, "first send fail all");
+            }
+            for (const auto &obj : req.objects()) {
+                rsp.add_success_ids(obj.object_key());
+            }
+            rsp.set_available_ratio(60);
+            rsp.set_limit_rate(200);
+            rsp.set_remain_bytes(1024 * 1024 * 1024);
+            rsp.set_disk_remain_bytes(1024 * 1024 * 1024);
+            return Status::OK();
+        }));
+
+    DS_ASSERT_OK(migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds));
+    ASSERT_GE(sendCount, 2);
+    ASSERT_GE(connectedAddrs.size(), static_cast<size_t>(2));
 }
 }  // namespace ut
 }  // namespace datasystem

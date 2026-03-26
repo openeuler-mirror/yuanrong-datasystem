@@ -515,7 +515,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateBigObjectsWithLimitedRate)
 TEST_F(MigrateDataHandlerTest, TestPayloadData)
 {
     std::vector<RpcMessage> data;
-    auto payloadData = std::make_unique<PayloadData>("111", 0, std::move(data), 2);
+    auto payloadData = std::make_unique<PayloadData>("111", 0, std::move(data), 2, datasystem::CacheType::MEMORY);
     const size_t payloadDataSize = 2;
     ASSERT_EQ(payloadData->Size(), payloadDataSize);
     std::vector<MemView> memViews = payloadData->GetMemViews();

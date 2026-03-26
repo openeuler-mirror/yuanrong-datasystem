@@ -448,7 +448,7 @@ TEST_F(MigrateDataServiceTest, TestAllocateAndAssignDataBasicFunction)
 
     std::vector<uint8_t> data(size, 0);
     std::vector<std::pair<const uint8_t *, uint64_t>> payloads = { { data.data(), data.size() } };
-    DS_ASSERT_OK(impl_->AllocateAndAssignData(objectKey, entry, payloads, size));
+    DS_ASSERT_OK(impl_->AllocateAndAssignData(objectKey, entry, payloads, size, nullptr));
     auto shmUnit = (*entry)->GetShmUnit();
     ShmGuard guard(shmUnit, GetMetadatSize(), shmUnit->GetSize() - GetMetadatSize());
     DS_ASSERT_OK(guard.TryRLatch(true));
@@ -513,11 +513,17 @@ TEST_F(MigrateDataServiceTest, TestSaveDataWithSpillType)
     std::string data = "1";
     payloads[0].CopyString(data);
     // Will oom, don't spill to disk
-    ASSERT_EQ(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL).GetCode(),
+    ASSERT_EQ(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL, nullptr).GetCode(),
               StatusCode::K_OUT_OF_MEMORY);
     info.set_data_size(1);
-    DS_ASSERT_OK(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL));
+    DS_ASSERT_OK(impl_->SaveDataWithObjectLocked(entry, info, payloads, MigrateType::SPILL, nullptr));
 }
 
+class MigrateL2DataServiceTest : public MigrateDataServiceTest {};
+
+TEST_F(MigrateL2DataServiceTest, TestMigrateL2Data)
+{
+    
+}
 }  // namespace ut
 }  // namespace datasystem

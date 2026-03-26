@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <shared_mutex>
@@ -95,6 +96,8 @@ enum LockMode { Read = 0, Write = 1 };
 
 class WorkerOCServiceImpl : public WorkerOCService {
 public:
+    using AsyncTasksDoneChecker = std::function<Status(const std::string &)>;
+
     /**
      * @brief Construct WorkerOCServiceImpl.
      * @param[in] serverAddr The address of local worker node.
@@ -141,10 +144,12 @@ public:
      * @param[out] failedIds Failed Ids.
      * @param[out] needMigrateIds need to migrate ids.
      * @param[out] needWaitIds Need wait ids.
+     * @param[out] needMigrateL2CacheIds Need migrate L2 cache ids.
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds)
+                            std::vector<std::string> &needWaitIds,
+                            std::vector<std::string> &needMigrateL2CacheIds)
     {
         INJECT_POINT("ProcessVoluntaryScaledown", [this] {
             Timer timer;
@@ -164,7 +169,7 @@ public:
         });
         getProc_->GroupAndRemoveMeta(objKeys, removeCase, localAddress_.ToString(),
                                      std::unordered_map<std::string, uint64_t>{}, failedIds, needMigrateIds,
-                                     needWaitIds);
+                                     needWaitIds, needMigrateL2CacheIds);
     }
 
     /**
@@ -191,12 +196,19 @@ public:
     Status ProcessVoluntaryScaledown(const std::string &taskId);
 
     /**
+     * @brief Register callback for waiting until async tasks in server are done.
+     * @param[in] checker callback waits internally and returns status.
+     */
+    void RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker checker);
+
+    /**
      * @brief Before migrate data process.
      * @param[out] needMigrateDataIds Need migrate data object ld list.
      * @param[out] needWaitIds Need wait finished object key list.
      */
     Status BeforeMigrateData(const std::string &taskId, std::vector<std::string> &needMigrateDataIds,
-                             std::vector<std::string> &needWaitIds);
+                             std::vector<std::string> &needWaitIds,
+                             std::vector<std::string> &needMigrateL2CacheIds);
 
     /**
      * @brief Migrate data when scale down happen.
@@ -225,7 +237,15 @@ public:
     Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId);
 
     /**
-     * @brief Handle Put/Publish/Seal request from the client.
+     * @brief Migrate L2 cache data with slot-based grouping.
+     * @param[in] needMigrateL2CacheIds L2 cache object keys to migrate.
+     * @param[in] taskId Task ID for tracking.
+     * @return Status of the call.
+     */
+    Status MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds, const std::string &taskId);
+
+    /**
+     * @brief Handle Put/Publish/Seal request from client.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      * @param[in] payloads The rpc request payload.
@@ -1085,6 +1105,7 @@ private:
     std::shared_ptr<WorkerOcServiceMigrateImpl> gMigrateProc_{ nullptr };
 
     std::shared_ptr<WorkerOcServiceExpireImpl> expireProc_{ nullptr };
+    AsyncTasksDoneChecker asyncTasksDoneChecker_{ nullptr };
 };
 }  // namespace object_cache
 }  // namespace datasystem

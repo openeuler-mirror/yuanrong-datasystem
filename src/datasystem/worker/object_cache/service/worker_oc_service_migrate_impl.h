@@ -94,6 +94,9 @@ public:
 #else
 private:
 #endif
+    Status PrepareMigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
+                              std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
+
     /**
      * @brief Batch lock objects.
      * @param[in] infoList Object info list.
@@ -162,7 +165,8 @@ private:
      */
     Status FillObjectsLocked(const MigrateDataReqPb &req, LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
                              std::vector<RpcMessage> &payloads, std::unordered_set<std::string> &successIds,
-                             std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds);
+                             std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds,
+                             const std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
 
     /**
      * @brief Fill one object data in lock state.
@@ -176,7 +180,8 @@ private:
      */
     Status FillOneObjectLocked(std::shared_ptr<SafeObjType> &entry, const MigrateDataReqPb::ObjectInfoPb &info,
                                const master::QueryMetaInfoPb &meta, std::vector<RpcMessage> &payloads,
-                               const MigrateType &type, ObjectInfoMap &needSendMasterIds);
+                               const MigrateType &type, ObjectInfoMap &needSendMasterIds,
+                               std::shared_ptr<ShmUnit> &unit);
 
     /**
      * @brief Fill metadata to object entries.
@@ -351,7 +356,8 @@ private:
      * @return K_OK on success, the error otherwise.
      */
     Status SaveDataWithObjectLocked(std::shared_ptr<SafeObjType> &entry, const MigrateDataReqPb::ObjectInfoPb &info,
-                                    std::vector<RpcMessage> &payloads, const MigrateType &type);
+                                    std::vector<RpcMessage> &payloads, const MigrateType &type,
+                                    std::shared_ptr<ShmUnit> unit);
 
     /**
      * @brief Allocate memory and assign data to object.
@@ -362,7 +368,11 @@ private:
      * @return K_OK on success, the error otherwise.
      */
     Status AllocateAndAssignData(const std::string &objectKey, std::shared_ptr<SafeObjType> &entry,
-                                 const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size);
+                                 const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size,
+                                 std::shared_ptr<ShmUnit> unit);
+
+    Status BatchAllocateObjectGroupBySlot(const MigrateDataReqPb &req,
+                                          std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
 
     /**
      * @brief For test mock purpose.
@@ -546,6 +556,55 @@ private:
      */
     Status MigrateDataDirectImpl(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
 
+    /**
+     * @brief Prepare locked entries and metadata for migrate data direct.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @param[in,out] point Performance point recorder.
+     * @param[out] lockedEntries Locked object list.
+     * @param[out] successIds Success object key list.
+     * @param[out] failedIds Failed object key list.
+     * @param[out] needModifyPrimary Need modify primary copy list.
+     * @param[out] needReadDataIds Need read data object keys.
+     * @return Status of the call.
+     */
+    Status PrepareMigrateDataDirectEntries(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp,
+                                           PerfPoint &point, LockedEntryMap &lockedEntries,
+                                           std::unordered_set<std::string> &successIds,
+                                           std::unordered_set<std::string> &failedIds,
+                                           LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds);
+
+    /**
+     * @brief Handle slot migration no-space case for migrate data direct.
+     * @param[in] req Migrate data direct request.
+     * @param[out] rsp Migrate data direct response.
+     * @param[in] needReadDataIds Need read data object keys.
+     * @param[in,out] failedIds Failed object key list.
+     * @param[in] status Fill data status.
+     * @return Status::OK if no early return is needed, the error otherwise.
+     */
+    Status HandleMigrateDataDirectNoSpace(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp,
+                                          const ObjectInfoMap &needReadDataIds,
+                                          std::unordered_set<std::string> &failedIds, Status status);
+
+    /**
+     * @brief Replace primary copies and rollback failed objects for migrate data direct.
+     * @param[in] req Migrate data direct request.
+     * @param[in,out] point Performance point recorder.
+     * @param[in] needModifyPrimary Need modify primary copy list.
+     * @param[in] needReadDataIds Need read data object keys.
+     * @param[in,out] successIds Success object key list.
+     * @param[in,out] failedIds Failed object key list.
+     * @param[in,out] needSendMasterIds Need send master object keys.
+     * @param[in,out] status Current status.
+     */
+    void ReplacePrimaryForMigrateDataDirect(const MigrateDataDirectReqPb &req, PerfPoint &point,
+                                            const LockedEntryMap &needModifyPrimary,
+                                            const ObjectInfoMap &needReadDataIds,
+                                            std::unordered_set<std::string> &successIds,
+                                            std::unordered_set<std::string> &failedIds,
+                                            ObjectInfoMap &needSendMasterIds, Status &status);
+
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ThreadPool> memcpyThreadPool_{ nullptr };
@@ -561,6 +620,9 @@ private:
     std::string localAddr_;
 
     MigrateDataRateLimiter rateLimiter_;
+    
+    std::shared_timed_mutex unitMutex_;
+    std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

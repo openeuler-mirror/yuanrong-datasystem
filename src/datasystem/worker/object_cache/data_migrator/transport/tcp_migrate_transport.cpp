@@ -31,6 +31,9 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
     reqPb.set_worker_addr(req.localAddr);
     reqPb.set_bytes_send(req.batchSize);
     reqPb.set_type(req.type);
+    reqPb.set_is_slot_migration(req.isSlotMigration);
+    reqPb.set_is_retry(req.isRetry);
+    reqPb.set_slot_id(req.slotId);
     std::vector<MemView> payloads;
     uint32_t currPartIndex = 0;
     for (const auto &data : *req.datas) {
@@ -46,6 +49,7 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
         objInfo->set_object_key(data->Id());
         objInfo->set_version(data->Version());
         objInfo->set_data_size(data->Size());
+        objInfo->set_cache_type(static_cast<uint32_t>(data->GetCacheType()));
         auto memViews = data->GetMemViews();
         for (uint32_t i = currPartIndex; i < currPartIndex + memViews.size(); ++i) {
             objInfo->add_part_index(i);

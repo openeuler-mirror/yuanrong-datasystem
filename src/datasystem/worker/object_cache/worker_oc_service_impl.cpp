@@ -101,6 +101,7 @@
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -450,6 +451,11 @@ Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, Ho
     return Status::OK();
 }
 
+void WorkerOCServiceImpl::RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker checker)
+{
+    asyncTasksDoneChecker_ = std::move(checker);
+}
+
 Status WorkerOCServiceImpl::ProcessVoluntaryScaledown(const std::string &taskId)
 {
     INJECT_POINT("ScaleUpTask.NotRunVoluntaryDownTask");
@@ -457,22 +463,28 @@ Status WorkerOCServiceImpl::ProcessVoluntaryScaledown(const std::string &taskId)
               << " task id:" << taskId;
     std::vector<std::string> needMigrateDataIds;
     std::vector<std::string> needWaitIds;
-    RETURN_IF_NOT_OK(BeforeMigrateData(taskId, needMigrateDataIds, needWaitIds));
+    std::vector<std::string> needMigrateL2CacheIds;
+    RETURN_IF_NOT_OK(BeforeMigrateData(taskId, needMigrateDataIds, needWaitIds, needMigrateL2CacheIds));
     INJECT_POINT("VoluntaryScaledown.MigrateData.Delay");
     RETURN_IF_NOT_OK(MigrateData(needMigrateDataIds, taskId));
     // When we have finish migrate data task, we can remove the location.
     std::vector<std::string> removeFailedIds;
     GroupAndRemoveMeta(needMigrateDataIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds,
-                       needWaitIds);
+                       needWaitIds, needMigrateL2CacheIds);
     LOG(INFO) << "ProcessVoluntaryScaledown finished";
 
     std::lock_guard<std::shared_timed_mutex> l(clearIdsMutex_);
     voluntaryScaleDownClearIds_ = std::move(needWaitIds);
+    if (asyncTasksDoneChecker_ != nullptr) {
+        RETURN_IF_NOT_OK(asyncTasksDoneChecker_(taskId));
+    }
+    RETURN_IF_NOT_OK(MigrateL2CacheData(needMigrateL2CacheIds, taskId));
     return Status::OK();
 }
 
 Status WorkerOCServiceImpl::BeforeMigrateData(const std::string &taskId, std::vector<std::string> &needMigrateDataIds,
-                                              std::vector<std::string> &needWaitIds)
+                                              std::vector<std::string> &needWaitIds,
+                                              std::vector<std::string> &needMigrateL2CacheIds)
 {
     std::vector<std::string> objectKeysNeedRemovelocation, objKeysNeedGiveupPrimary;
     for (const auto &kv : *objectTable_) {
@@ -492,11 +504,11 @@ Status WorkerOCServiceImpl::BeforeMigrateData(const std::string &taskId, std::ve
     LOG(INFO) << "Need remove location object size: " << objectKeysNeedRemovelocation.size()
               << ", need give up location object size: " << objKeysNeedGiveupPrimary.size();
     GroupAndRemoveMeta(objectKeysNeedRemovelocation, master::RemoveMetaReqPb::NORMAL, removeFailedIds,
-                       needMigrateDataIds, needWaitIds);
+                       needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
 
     std::vector<std::string> giveupMetaFailedIds;
     GroupAndRemoveMeta(objKeysNeedGiveupPrimary, master::RemoveMetaReqPb::GIVEUP_PRIMARY, giveupMetaFailedIds,
-                       needMigrateDataIds, needWaitIds);
+                       needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
 
     // retry for failed ids.
     const int intervalMs = 500;
@@ -523,11 +535,11 @@ Status WorkerOCServiceImpl::BeforeMigrateData(const std::string &taskId, std::ve
         giveupMetaFailedIds.clear();
         if (!objectKeysNeedRemovelocation.empty()) {
             GroupAndRemoveMeta(objectKeysNeedRemovelocation, master::RemoveMetaReqPb::NORMAL, removeFailedIds,
-                               needMigrateDataIds, needWaitIds);
+                               needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
         }
         if (!objKeysNeedGiveupPrimary.empty()) {
             GroupAndRemoveMeta(objKeysNeedGiveupPrimary, master::RemoveMetaReqPb::GIVEUP_PRIMARY, giveupMetaFailedIds,
-                               needMigrateDataIds, needWaitIds);
+                               needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
         retryTime++;
@@ -554,7 +566,9 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
     std::vector<std::string> removeFailedIds;
     std::vector<std::string> needMigrateDataIds;
     std::vector<std::string> needWaitIds;
-    GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds, needWaitIds);
+    std::vector<std::string> unUseNeedMigrateL2DataIds;
+    GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds, needWaitIds,
+                       unUseNeedMigrateL2DataIds);
 
     // if all worker exist, this voluntary sacle down node not exit, remove meta cant success, so we try 10 times for
     // removemeta here
@@ -570,7 +584,7 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
         removeFailedIds.clear();
         if (!clearIds.empty()) {
             GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds,
-                               needWaitIds);
+                               needWaitIds, unUseNeedMigrateL2DataIds);
         }
     }
     LOG(INFO) << "RemoveWriteBackIdsLocation finished, removeFailedIds :" << VectorToString(removeFailedIds);
@@ -596,6 +610,14 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
     DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_, localAddress_, akSkManager_, objectTable_, taskId);
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
+}
+
+Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds,
+                                               const std::string &taskId)
+{
+    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_, localAddress_, akSkManager_, objectTable_, taskId);
+    migrator.Init();
+    return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
 
 void WorkerOCServiceImpl::FindObjectKeyNotInRsp(std::vector<master::QueryMetaInfoPb> &queryMetas,
