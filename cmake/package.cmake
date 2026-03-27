@@ -344,12 +344,21 @@ if (BUILD_PYTHON_API)
     set(DEPEND_TARGETS
         datasystem
         ds_client_py)
+    set(TRANSFER_ENGINE_WHEEL_LIB_TARGETS)
+    set(TRANSFER_ENGINE_WHEEL_TOPLEVEL_TARGETS)
+    set(TRANSFER_ENGINE_PYTHON_LIB_PATTERNS)
 
         if (BUILD_HETERO AND BUILD_HETERO_NPU)
             list(APPEND DEPEND_TARGETS acl_plugin)
         endif()
         if (BUILD_HETERO AND BUILD_HETERO_GPU)
             list(APPEND DEPEND_TARGETS cuda_plugin)
+        endif()
+        if (BUILD_TRANSFER_ENGINE AND TARGET _transfer_engine)
+            list(APPEND TRANSFER_ENGINE_WHEEL_TOPLEVEL_TARGETS _transfer_engine)
+        endif()
+        if (BUILD_TRANSFER_ENGINE AND TARGET p2p_transfer)
+            list(APPEND TRANSFER_ENGINE_WHEEL_LIB_TARGETS p2p_transfer)
         endif()
 
     set(PYTHON_LIBPATH ${CMAKE_BINARY_DIR}/python_lib)
@@ -362,9 +371,25 @@ if (BUILD_PYTHON_API)
            "${CURL_LIB_PATH}/libcurl.so*"
            ${RPC_LIB_PATH}
     )
+    if (TRANSFER_ENGINE_GLOG_LIB_PATH)
+        list(APPEND TRANSFER_ENGINE_PYTHON_LIB_PATTERNS
+            "${TRANSFER_ENGINE_GLOG_LIB_PATH}/libglog.so*")
+    endif()
+    if (TRANSFER_ENGINE_PROTOBUF_LIB_PATH)
+        list(APPEND TRANSFER_ENGINE_PYTHON_LIB_PATTERNS
+            "${TRANSFER_ENGINE_PROTOBUF_LIB_PATH}/libprotobuf.so*"
+            "${TRANSFER_ENGINE_PROTOBUF_LIB_PATH}/libprotoc.so*")
+    endif()
+    if (TRANSFER_ENGINE_ABSL_LIB_PATH)
+        list(APPEND TRANSFER_ENGINE_PYTHON_LIB_PATTERNS
+            "${TRANSFER_ENGINE_ABSL_LIB_PATH}/libabsl*.so*")
+    endif()
+    list(APPEND PYTHON_LIB_PATTERNS ${TRANSFER_ENGINE_PYTHON_LIB_PATTERNS})
 
     package_datasystem_wheel(datasystem
         CMAKE_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}
         DEPEND_TARGETS ${DEPEND_TARGETS}
+        WHEEL_LIB_TARGETS ${TRANSFER_ENGINE_WHEEL_LIB_TARGETS}
+        WHEEL_TOPLEVEL_TARGETS ${TRANSFER_ENGINE_WHEEL_TOPLEVEL_TARGETS}
         THIRDPATRY_LIBS_PATTERN ${PYTHON_LIB_PATTERNS})
 endif()

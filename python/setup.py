@@ -95,9 +95,12 @@ def get_all_dependencies():
     """
     get all dependencies for datasystem
     """
-    all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so"}
+    all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so", "libp2p_transfer.so"}
     src = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'lib')
+    transfer_engine_module_matches = list(Path(os.path.dirname(__file__)).joinpath('yr', 'datasystem').glob('_transfer_engine*.so'))
     src_path = Path(src)
+    for module_path in transfer_engine_module_matches:
+        all_dependencies.update(get_dependencies(str(module_path)))
     for item in src_path.rglob('*'):
         all_dependencies.update(get_dependencies(item))
     return all_dependencies

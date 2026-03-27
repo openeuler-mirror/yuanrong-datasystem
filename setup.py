@@ -68,7 +68,7 @@ def recursive_package_files(directory):
 
 package_datas = {
     '': (
-        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py', 'VERSION', 'README.md', '.commit_id',
+        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py', '*.so*', 'VERSION', 'README.md', '.commit_id',
         'worker_config.json', 'cluster_config.json', 'kv.json'] +
         recursive_package_files('include') +
         recursive_package_files('helm_chart') +
@@ -144,12 +144,16 @@ def get_all_dependencies():
     """
     get all dependencies for datasystem
     """
-    all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so", "libcuda_plugin.so"}
+    all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so", "libcuda_plugin.so",
+                        "libp2p_transfer.so"}
     src = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'lib')
     worker = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'datasystem_worker')
+    transfer_engine_module_matches = list(Path(os.path.dirname(__file__)).joinpath('yr', 'datasystem').glob('_transfer_engine*.so'))
     src_path = Path(src)
     bin_path = Path(worker)
     all_dependencies.update(get_dependencies(bin_path))
+    for module_path in transfer_engine_module_matches:
+        all_dependencies.update(get_dependencies(module_path))
     for item in src_path.rglob('*'):
         all_dependencies.update(get_dependencies(item))
     return all_dependencies
