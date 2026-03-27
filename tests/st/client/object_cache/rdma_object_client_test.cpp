@@ -402,7 +402,7 @@ TEST_F(RdmaObjectClientTest, TestBatchRemoteGetErrorCode2)
     ASSERT_EQ(client1->Set(key2, value2), Status::OK());
     ASSERT_EQ(client1->Set(key3, value3), Status::OK());
     ASSERT_EQ(client1->Set(key4, value4), Status::OK());
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.batch_get_failure_for_keys", "return"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.batch_get_failure_for_keys", "call()"));
 
     // TestCase0: single-key scenario, key fails with OOM
     ASSERT_EQ(client0->Get({ key0 }, valsGet).GetCode(), StatusCode::K_OUT_OF_MEMORY);

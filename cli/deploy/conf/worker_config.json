@@ -515,6 +515,10 @@
         "value": "UB",
         "description": "Option to enable URMA over IB or UB, default UB to run with URMA over UB."
     },
+    "enable_transport_fallback": {
+        "value": "true",
+        "description": "Enable the fast transport fallback to tcp transport."
+    },
     "logfile_mode": {
         "value": "416",
         "description": "Log file mode/permissions."

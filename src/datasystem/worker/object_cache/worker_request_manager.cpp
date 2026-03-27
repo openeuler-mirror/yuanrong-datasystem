@@ -409,9 +409,9 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddressBase, localSegAddress, localSegSize);
         UrmaRemoteAddrPb urmaInfo = ubUrmaInfo_;
         urmaInfo.set_seg_data_offset(ubUrmaInfo_.seg_data_offset() + ubWriteOffset);
-        std::vector<uint64_t> keys;
+        std::vector<uint64_t> eventKeys;
         Status ubRc = UrmaWritePayload(urmaInfo, localSegAddress, localSegSize, localObjectAddressBase + readOffset, 0,
-                                       readSize, metaSize, true, keys);
+                                       readSize, metaSize, true, eventKeys);
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
             GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();

@@ -220,12 +220,12 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
         FormatString("Got unexpected buffer size with total:%llu real:%llu", totalSize, realSize));
 
     if (totalSize == realSize) {
-        std::vector<uint64_t> keys;
+        std::vector<uint64_t> eventKeys;
         void *poolBuf = bufHandle->GetPointer();
         memcpy_s(poolBuf, realSize, data, totalSize);
         Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
                                               bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
-                                              bufferInfo->dataSize, bufferInfo->metadataSize, true, keys);
+                                              bufferInfo->dataSize, bufferInfo->metadataSize, true, eventKeys);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
                                          FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
         bufferInfo->ubDataSentByMemoryCopy = true;

@@ -196,10 +196,9 @@ bool UcpManager::IsRegisterWholeArenaEnabled()
 
 Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress,
                                  const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                 bool blocking, std::vector<uint64_t> &keys)
+                                 bool blocking, std::vector<uint64_t> &eventKeys)
 {
-    // Note that the returned keys only contain the new key(s).
-    keys.clear();
+    eventKeys.clear();
     const std::string &remoteWorkerAddr = ucpInfo.remote_worker_addr();
     const uint64_t &remoteBuf = ucpInfo.remote_buf();
     const std::string &rkey = ucpInfo.rkey();
@@ -222,7 +221,7 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
                                                     key, status.ToString().c_str());
             RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, detailed_msg);
         }
-        keys.emplace_back(key);
+        eventKeys.emplace_back(key);
 
         remainSize -= writeSize;
         writtenSize += writeSize;
@@ -231,8 +230,8 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
     if (blocking) {
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        RETURN_IF_NOT_OK(WaitFastTransportEvent(keys, remainingTime, errorHandler));
-        keys.clear();
+        RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
+        eventKeys.clear();
     }
     return Status::OK();
 }

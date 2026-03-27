@@ -121,12 +121,15 @@ private:
         std::shared_ptr<ShmUnit> batchShmUnit = nullptr;
         uint64_t batchCursor = 0;
         std::vector<LocalSgeInfo> localSgeInfos;
+        std::vector<RpcMessage> fallbackPayloads;  // store the rpc message for fallback in batch handler
     };
 
     struct ParallelRes {
         std::vector<GetObjectRemoteRspPb> respPbs;
-        std::vector<RpcMessage> pays;
-        std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> kps;
+        std::vector<std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>>> kps;
+        std::vector<RpcMessage> fallbackPayloads;
+        std::vector<uint64_t> eventKeys;
+        uint64_t subIndex = 0;
     };
 
     /**
@@ -141,7 +144,7 @@ private:
      * @return Status of the call.
      */
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                               std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &keys,
+                               std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &eventKeys,
                                std::shared_ptr<AggregateMemory> batchPtr = nullptr,
                                RemoteH2DRootInfoPb *batchRootInfo = nullptr);
 
@@ -157,10 +160,8 @@ private:
      * @return Status of the call.
      */
     Status GetObjectRemoteBatchWrite(uint32_t subIndex, const GetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                   std::vector<RpcMessage> &payload,
-                                   std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys,
-                                   std::vector<ParallelRes> &parallelRes,
-                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr);
+                                     std::vector<ParallelRes> &parallelRes,
+                                     std::shared_ptr<AggregateMemory> batchPtr = nullptr);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to process batched requests and wait fast transport events.
@@ -173,6 +174,49 @@ private:
                                     std::vector<RpcMessage> &payload);
 
     /**
+     * @brief Prepare and validate a batch remote get request before execution.
+     * @param[in, out] req Remote get batch request.
+     * @return Status of the call.
+     */
+    Status PrepareBatchGetObjectRemoteReq(BatchGetObjectRemoteReqPb &req);
+
+    /**
+     * @brief Run batch remote get with retry on recoverable transport errors.
+     * @param[in] req Remote get batch request.
+     * @param[out] rsp Remote get batch response.
+     * @param[out] payload Out payloads.
+     * @return Status of the call.
+     */
+    Status RunBatchGetObjectRemoteWithRetry(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
+                                            std::vector<RpcMessage> &payload);
+
+    /**
+     * @brief Merge parallel batch get results to final response and payload.
+     * @param[in, out] parallelRes Parallel result list.
+     * @param[out] rsp Remote get batch response.
+     * @param[out] payload Out payloads.
+     * @param[in, out] lastRc Last retryable status seen during result merge.
+     * @return Status of the call.
+     */
+    Status MergeParallelBatchGetResult(std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteRspPb &rsp,
+                                       std::vector<RpcMessage> &payload, Status &lastRc);
+
+    /**
+     * @brief Wait fast transport events and fallback to payload when needed.
+     * @param[in, out] loc Local parallel result slot.
+     * @param[in, out] kp Event key and fallback payload pair.
+     * @param[out] rsp Remote get batch response.
+     * @param[out] payload Out payloads.
+     * @param[in, out] index Current response index.
+     * @param[in, out] lastRc Last retryable status seen during waiting.
+     * @return Status of the call.
+     */
+    Status WaitFastTransportAndFallback(
+        ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
+        BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, Status &lastRc,
+        uint64_t coveredRespNum);
+
+    /**
      * @brief Helper function to BatchGetObjectRemote to process requests in parallel.
      * @param[in] req Remote get batch request.
      * @param[out] rsp Remote get batch response.
@@ -181,9 +225,8 @@ private:
      * @param[out] lastRc The last try-again status seen during parallel processing.
      * @return Status of the call.
      */
-    Status ParallelBatchGetObject(
-        BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
-        std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys, Status &lastRc);
+    Status ParallelBatchGetObject(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
+                                  std::vector<ParallelRes> &parallelRes);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.
@@ -192,28 +235,6 @@ private:
      * @return Status of the call.
      */
     Status PrepareAggregateMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info);
-
-    /**
-     * @brief Helper function to BatchGetObjectRemote to allocate the aggregate memory.
-     * @param[in] parallelIndex Parallel index of the parallel list.
-     * @param[in] info Aggregated info.
-     * @param[out] batchPtr Batch ptr, default is nullptr means not in aggregate path.
-     * @return Status of the call.
-     */
-    Status AllocateAggregateMemory(uint64_t parallelIndex, AggregateInfo &info,
-                                   std::shared_ptr<AggregateMemory> &batchPtr);
-
-    /**
-     * @brief Helper function to BatchGetObjectRemote to send the aggregate memory.
-     * @param[in] subIndex Sub slot index of the parallel list.
-     * @param[in] info Aggregated info.
-     * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
-     * @param[out] parallelRes Parallel result.
-     * @param[in] req Remote get request.
-     * @return Status of the call.
-     */
-    Status AggregatedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
-                                std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to send the aggregate memory without merge small data in remote
@@ -239,7 +260,7 @@ private:
      * @return Status of the call.
      */
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                  std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &keys,
+                                  std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &eventKeys,
                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr,
                                   RemoteH2DRootInfoPb *batchRootInfo = nullptr);
 

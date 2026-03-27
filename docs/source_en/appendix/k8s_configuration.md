@@ -423,6 +423,7 @@ global:
 | global.performance.urmaRegisterWholeArena | bool | `true` | Register the whole arena as segment during init, otherwise, register each object as a segment |
 | global.performance.urmaConnectionSize | int | `16` | Number of jfs and jfr pair |
 | global.performance.urmaEventMode | bool | `false` | Uses interrupt mode to poll completion events |
+| global.performance.enableTransportFallback | bool | `true` | Enable fast transport fallback to tcp transport |
 | global.performance.sharedDiskDirectory | string | `""` | Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled |
 | global.performance.sharedDiskSize | int | `0` | Upper limit of the shared disk, the unit is mb |
 | global.performance.sharedDiskArenaPerTenant  | int | `8` | The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared disk allocation for the first time, but each arena will use one more fd. The valid range is 0 to 32 |

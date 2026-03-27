@@ -639,6 +639,8 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
 Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
+    INJECT_POINT("UrmaManager.UrmaWaitError",
+                 []() { return Status(K_RPC_DEADLINE_EXCEEDED, "Injcect urma wait error"); });
     if (timeoutMs < 0) {
         RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED, FormatString("timedout waiting for request: %d", requestId_));
     }
@@ -914,10 +916,10 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeRspPb &rsp)
 Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                                      const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                     bool blocking, std::vector<uint64_t> &keys, std::shared_ptr<EventWaiter> waiter)
+                                     bool blocking, std::vector<uint64_t> &eventKeys,
+                                     std::shared_ptr<EventWaiter> waiter)
 {
-    // Note that the returned keys only contain the new key(s).
-    keys.clear();
+    eventKeys.clear();
     PerfPoint point(PerfKey::URMA_IMPORT_AND_WRITE_PAYLOAD);
     const uint64_t segVa = urmaInfo.seg_va();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
@@ -962,6 +964,8 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
         const uint64_t key = requestId_.fetch_add(1);
         PerfPoint pointWrite(PerfKey::URMA_WRITE);
+        INJECT_POINT("UrmaManager.UrmaWriteError",
+                     []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
         urma_status_t ret =
             ds_urma_write(jfs->Raw(), tjfr, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
                           segVa + urmaInfo.seg_data_offset() + readOffset + writtenSize,
@@ -974,15 +978,15 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         writtenSize += writeSize;
 
         RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, waiter));
-        keys.emplace_back(key);
+        eventKeys.emplace_back(key);
     }
     point.Record();
     // If it is blocking wait, we will wait for the write to finish here.
     if (blocking) {
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        RETURN_IF_NOT_OK(WaitFastTransportEvent(keys, remainingTime, errorHandler));
-        keys.clear();
+        RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
+        eventKeys.clear();
     }
     return Status::OK();
 }
@@ -1074,6 +1078,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     auto totalWriteSize = 0U;
     std::shared_ptr<UrmaJfs> jfs;
     RETURN_IF_NOT_OK(GetJfsFromConnection(connection, jfs));
+    INJECT_POINT("UrmaManager.GatherWriteError", []() { return Status(K_RUNTIME_ERROR, "Injcect urma wait error"); });
     for (auto dstSgeIdx = 0U, srcSgeIdx = 0U; dstSgeIdx < dstSgeNum; dstSgeIdx++) {
         auto singleDstWriteSize = 0;
         urma_sg_t srcSg = { .sge = &srcSgeList[srcSgeIdx], .num_sge = static_cast<uint32_t>(srcSgeIdx) };

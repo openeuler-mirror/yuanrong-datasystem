@@ -242,7 +242,7 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
-                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys,
+                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &eventKeys,
                         std::shared_ptr<EventWaiter> waiter)
 {
     (void)urmaInfo;
@@ -253,12 +253,12 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     (void)readSize;
     (void)metaDataSize;
     (void)blocking;
-    (void)keys;
+    (void)eventKeys;
     (void)waiter;
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(urmaInfo, localSegAddress, localSegSize,
                                                               localObjectAddress, readOffset, readSize, metaDataSize,
-                                                              blocking, keys, waiter));
+                                                              blocking, eventKeys, waiter));
 #endif
     return Status::OK();
 }
@@ -307,7 +307,8 @@ Status FillUcpInfo(uint64_t segAddress, uint64_t dataOffset, const std::string &
 }
 
 Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
-                     const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys)
+                     const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
+                     std::vector<uint64_t> &eventKeys)
 {
     (void)ucpInfo;
     (void)localObjectAddress;
@@ -315,11 +316,11 @@ Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObject
     (void)readSize;
     (void)metaDataSize;
     (void)blocking;
-    (void)keys;
+    (void)eventKeys;
 #ifdef USE_RDMA
     LOG(INFO) << FormatString("[FastTransportWrapper] Doing Ucp Put Payload (Size = %d)", readSize);
     RETURN_IF_NOT_OK(UcpManager::Instance().UcpPutPayload(ucpInfo, localObjectAddress, readOffset, readSize,
-                                                          metaDataSize, blocking, keys));
+                                                          metaDataSize, blocking, eventKeys));
 #endif
     return Status::OK();
 }
