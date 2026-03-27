@@ -164,6 +164,8 @@ public:
     void RemoveSubscribe(const std::string &key);
 
 private:
+    Status CheckDeviceRuntimeAvailable(const char *operation) const;
+
     DeviceManagerBase *devInterImpl_;
     ObjectClientImpl *objClientImpl_;
     std::unique_ptr<DeviceResourceManager> resourceMgr_;
