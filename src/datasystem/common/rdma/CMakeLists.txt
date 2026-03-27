@@ -12,7 +12,12 @@ set(URMA_DEPEND_LIBS
 set(RDMA_DEPEND_LIBS
     common_rdma_util)
 if (BUILD_WITH_URMA)
-    list(APPEND URMA_SRCS urma_manager.cpp urma_info.cpp urma_dlopen_util.cpp)
+    list(APPEND URMA_SRCS
+        urma_manager.cpp
+        urma_info.cpp
+        urma_resource.cpp
+        urma_dlopen_util.cpp
+    )
     list(APPEND URMA_DEPEND_LIBS dl)
     list(APPEND URMA_DEPEND_LIBS ${TBB_LIBRARY})
 endif()

@@ -156,11 +156,34 @@ private:
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @return Status of the call.
      */
-    void GetObjectRemoteBatchWrite(uint32_t subIndex, const GetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
+    Status GetObjectRemoteBatchWrite(uint32_t subIndex, const GetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
                                    std::vector<RpcMessage> &payload,
                                    std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys,
                                    std::vector<ParallelRes> &parallelRes,
                                    std::shared_ptr<AggregateMemory> batchPtr = nullptr);
+
+    /**
+     * @brief Helper function to BatchGetObjectRemote to process batched requests and wait fast transport events.
+     * @param[in] req Remote get batch request.
+     * @param[out] rsp Remote get batch response.
+     * @param[out] payload Out payloads.
+     * @return Status of the call.
+     */
+    Status BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
+                                    std::vector<RpcMessage> &payload);
+
+    /**
+     * @brief Helper function to BatchGetObjectRemote to process requests in parallel.
+     * @param[in] req Remote get batch request.
+     * @param[out] rsp Remote get batch response.
+     * @param[out] payload Out payloads.
+     * @param[out] keys The request id to wait for if not blocking.
+     * @param[out] lastRc The last try-again status seen during parallel processing.
+     * @return Status of the call.
+     */
+    Status ParallelBatchGetObject(
+        BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+        std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys, Status &lastRc);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.
@@ -189,8 +212,8 @@ private:
      * @param[in] req Remote get request.
      * @return Status of the call.
      */
-    Status AggregaedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
-                               std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
+    Status AggregatedMemorySend(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> batchPtr,
+                                std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to send the aggregate memory without merge small data in remote

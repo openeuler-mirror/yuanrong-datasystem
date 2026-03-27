@@ -33,6 +33,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
+#include "datasystem/common/rdma/urma_resource.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
@@ -58,90 +59,10 @@ const std::string UB_MAX_GET_DATA_SIZE = "UB_MAX_GET_DATA_SIZE";
 const std::string UB_MAX_SET_BUFFER_SIZE = "UB_MAX_SET_BUFFER_SIZE";
 
 #define MAX_POLL_JFC_TRY_CNT 10
-class Segment {
-public:
-    /**
-     * @brief Create a new Segment object.
-     */
-    Segment() : segment_(nullptr), local_(true) {};
-    ~Segment();
+using TbbUrmaConnectionMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<UrmaConnection>>;
 
-    /**
-     * @brief Sets segment object
-     * @param[in] seg target segment object
-     * @param[in] local if local no need to unimport the segment
-     * @return Status of the call.
-     */
-    void Set(urma_target_seg_t *seg, bool local);
-
-    /**
-     * @brief Sets all Jfrs for the device
-     * @param[in] jetties list of imported jfs
-     * @return Status of the call.
-     */
-    void Clear();
-    custom_unique_ptr<urma_target_seg_t> segment_;
-    bool local_;
-};
-
-using SegmentMap = LockMap<uint64_t, Segment>;
-
-class RemoteDevice {
-public:
-    /**
-     * @brief Create a new RemoteDevice object.
-     */
-    RemoteDevice()
-    {
-        remoteSegments_ = std::make_unique<SegmentMap>();
-    };
-
-    ~RemoteDevice();
-
-    /**
-     * @brief Sets all Jfrs for the device
-     * @param[in] jetties list of imported jfs
-     * @return Status of the call.
-     */
-    void SetJfrs(std::vector<urma_target_jetty_t *> &jetties);
-
-    /**
-     * @brief Get remote segment from the device
-     * @param[in] segVa The remote segment address
-     * @param[out] constAccessor Accessor in segment table
-     * @return Status of the call.
-     */
-    Status GetRemoteSeg(uint64_t segVa, SegmentMap::ConstAccessor &constAccessor) const;
-
-    /**
-     * @brief Import remote segment and keep record in the device
-     * @param[in] urmaContext The urma context
-     * @param[in] UrmaImportSegmentPb Pb with remote segment info
-     * @return Status of the call.
-     */
-    Status ImportRemoteSeg(urma_context_t *urmaContext, const UrmaImportSegmentPb &urmaInfo);
-
-    /**
-     * @brief Unimport a remote segment
-     * @param[in] segmentAddress segment address
-     * @return Status of the call.
-     */
-    Status UnimportRemoteSeg(uint64_t segmentAddress);
-
-    /**
-     * @brief Clears all remote Jfrs
-     */
-    void Clear();
-    UrmaJfrInfo urmaInfo_;
-    std::vector<custom_unique_ptr<urma_target_jetty_t>> importJfrs_;
-    std::unique_ptr<SegmentMap> remoteSegments_;
-    size_t jfsIndex_;
-};
-
-using TbbRemoteDeviceMap = tbb::concurrent_hash_map<std::string, RemoteDevice>;
-
-using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
-using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<Event>>;
+using EventMap = LockMap<uint64_t, std::shared_ptr<UrmaEvent>>;
+using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<UrmaEvent>>;
 using TbbJfrMap = tbb::concurrent_hash_map<std::string, uint32_t>;
 
 class UrmaManager {
@@ -403,13 +324,6 @@ public:
     Status ImportRemoteJfr(const UrmaJfrInfo &urmaInfo);
 
     /**
-     * @brief Import segment
-     * @param[in] remoteSegment Remote segment information
-     * @return Urma imported target segment
-     */
-    urma_target_seg_t *ImportSegment(urma_seg_t &remoteSegment);
-
-    /**
      * @brief Urma write operation waits on the CV to check completion status
      * @param[in] requestId unique id for the urma request (passed as user_ctx in urma_write)
      * @param[in] timeoutMs timeout waiting for the request to end
@@ -535,13 +449,6 @@ private:
     Status UrmaGetDeviceByName(const std::string &deviceName, urma_device_t *&urmaDevice);
 
     /**
-     * @brief Gets device attributes into urmaDeviceAttribute_
-     * @param[in] urmaDevice Urma device object
-     * @return Status of the call.
-     */
-    Status UrmaQueryDevice(urma_device_t *&urmaDevice);
-
-    /**
      * @brief Gets list of all Eids in local device
      * @param[in] urmaDevice local Urma device
      * @param[out] eidList list of eids
@@ -559,72 +466,6 @@ private:
     Status GetEidIndex(urma_device_t *&urmaDevice, int &eidIndex);
 
     /**
-     * @brief Creates Urma context
-     * @param[in] urmaDevice local Urma device
-     * @param[in] eidIndex eid index of the device
-     * @return Status of the call.
-     */
-    Status UrmaCreateContext(urma_device_t *&urmaDevice, uint32_t eidIndex);
-
-    /**
-     * @brief Deletes Urma context object
-     * @return Status of the call.
-     */
-    Status UrmaDeleteContext();
-
-    /**
-     * @brief Creates Jfce object
-     * @return Status of the call.
-     */
-    Status UrmaCreateJfce();
-
-    /**
-     * @brief Deletes Jfce object
-     * @return Status of the call.
-     */
-    Status UrmaDeleteJfce();
-
-    /**
-     * @brief Creates a JFC object
-     * @param[out] out jfc wrapped in a unique pointer with custom deleter
-     * @return Status of the call.
-     */
-    Status UrmaCreateJfc(custom_unique_ptr<urma_jfc_t> &out);
-
-    /**
-     * @brief Resets Event handling of Jfc
-     * @param[in] jfc jfc wrapped in a unique pointer with custom deleter
-     * @return Status of the call.
-     */
-    static Status UrmaRearmJfc(const custom_unique_ptr<urma_jfc_t> &jfc);
-
-    /**
-     * @brief Gets the priority and sl for CTP.
-     * @param[out] priority The priority index for current tp_type
-     * @param[out] sl The sl for current tp_type
-     * @return Whether the priority/sl is fetched from device capability.
-     */
-    bool GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const;
-
-    /**
-     * @brief Create a Jfs and sets jfc for completion queue
-     * @param[in] jfc jfc wrapped in a unique pointer with custom deleter
-     * @param[in] priority priority index for jfs
-     * @param[out] out jfs wrapped in a unique pointer with custom deleter
-     * @return Status of the call
-     */
-    Status UrmaCreateJfs(const custom_unique_ptr<urma_jfc_t> &jfc, uint8_t priority,
-                         custom_unique_ptr<urma_jfs_t> &out);
-
-    /**
-     * @brief Create a Jfr and sets jfc for completion queue
-     * @param[in] jfc jfc wrapped in a unique pointer with custom deleter
-     * @param[out] out jfr wrapped in a unique pointer with custom deleter
-     * @return Status of the call
-     */
-    Status UrmaCreateJfr(const custom_unique_ptr<urma_jfc_t> &jfc, custom_unique_ptr<urma_jfr_t> &out);
-
-    /**
      * @brief Continously running Event handler thread that polls JFC
      * @return Status of the call.
      */
@@ -633,26 +474,35 @@ private:
     /**
      * @brief Polls the Jfc(s) for maxTryCount times
      * @param[in] maxTryCount number of times to try polling
-     * @param[out] successCompletedReqs list of successful request ids
-     * @param[out] failedCompletedReqs list of failed request ids
+     * @param[out] successCompletedReqs set of successful request ids
+     * @param[out] failedCompletedReqs map of failed request ids to status codes
      * @param[in] numPollCRS number of jfcs to poll
      * @return Status of the call.
      */
-    Status PollJfcWait(const custom_unique_ptr<urma_jfc_t> &jfc, const uint64_t maxTryCount,
-                       std::vector<uint64_t> &successCompletedReqs, std::vector<uint64_t> &failedCompletedReqs,
-                       const uint64_t numPollCRS = 1);
+    Status PollJfcWait(urma_jfc_t *jfc, const uint64_t maxTryCount, std::unordered_set<uint64_t> &successCompletedReqs,
+                       std::unordered_map<uint64_t, int> &failedCompletedReqs, const uint64_t numPollCRS = 1);
 
     /**
      * @brief Given list of CRs, fills successful req and failed req lists
      * @param[in] completeRecords list of CRs from polling
      * @param[in] count number of CRs in the list
-     * @param[out] successCompletedReqs list of successful request ids
-     * @param[out] failedCompletedReqs list of failed request ids
+     * @param[out] successCompletedReqs set of successful request ids
+     * @param[out] failedCompletedReqs map of failed request ids to status codes
      * @return Status of the call.
      */
     Status CheckCompletionRecordStatus(urma_cr_t completeRecords[], int count,
-                                       std::vector<uint64_t> &successCompletedReqs,
-                                       std::vector<uint64_t> &failedCompletedReqs);
+                                       std::unordered_set<uint64_t> &successCompletedReqs,
+                                       std::unordered_map<uint64_t, int> &failedCompletedReqs);
+
+    Status HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event);
+
+    /**
+     * @brief Get a valid JFS from the connection, and rotate to the next one if needed.
+     * @param[in] connection URMA connection.
+     * @param[out] jfs Valid JFS bound to the connection.
+     * @return Status of the call.
+     */
+    Status GetJfsFromConnection(const std::shared_ptr<UrmaConnection> &connection, std::shared_ptr<UrmaJfs> &jfs);
 
     /**
      * @brief Register segment
@@ -662,7 +512,7 @@ private:
      * @return Status of the call.
      */
     Status GetOrRegisterSegment(const uint64_t &segAddress, const uint64_t &segSize,
-                                SegmentMap::ConstAccessor &constAccessor);
+                                UrmaLocalSegmentMap::const_accessor &constAccessor);
 
     /**
      * @brief UnImport segment
@@ -690,20 +540,20 @@ private:
      * @param[out] event event object for the request
      * @return Status of the call.
      */
-    Status GetEvent(uint64_t requestId, std::shared_ptr<Event> &event);
+    Status GetEvent(uint64_t requestId, std::shared_ptr<UrmaEvent> &event);
 
     /**
-     * @brief Create Event object for the request.
+     * @brief Create UrmaEvent object for the request.
      * @param[in] requestId Unique id for the Urma request.
-     * @param[out] event Event object for the request.
+     * @param[in] connection The connection associated with the request.
      * @param[in] waiter Optional event waiter.
      * @return Status of the call.
      */
-    Status CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event,
-                       std::shared_ptr<EventWaiter> waiter = nullptr);
+    Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
+                       const std::shared_ptr<UrmaJfs> &jfs, std::shared_ptr<EventWaiter> waiter = nullptr);
 
     /**
-     * @brief Deletes the Event object for the request
+     * @brief Deletes the UrmaEvent object for the request
      * @param[in] requestId unique id for the Urma request
      * @return Status of the call.
      */
@@ -720,32 +570,24 @@ private:
     // Polling thread
     std::unique_ptr<std::thread> serverEventThread_{ nullptr };
 
-    urma_device_attr_t urmaDeviceAttribute_;
-    urma_context_t *urmaContext_ = nullptr;
-    urma_jfce_t *urmaJfce_ = nullptr;
-    custom_unique_ptr<urma_jfc_t> urmaJfc_ = nullptr;
-    std::vector<custom_unique_ptr<urma_jfs_t>> urmaJfsVec_;
-    std::vector<custom_unique_ptr<urma_jfr_t>> urmaJfrVec_;
-    urma_token_t urmaToken_ = { 0 };
+    std::unique_ptr<UrmaResource> urmaResource_;
     std::atomic<uint64_t> requestId_{ 0 };
-    uint32_t JETTY_SIZE_ = 256;
     urma_reg_seg_flag_t registerSegmentFlag_;
     urma_import_seg_flag_t importSegmentFlag_;
     UrmaJfrInfo localUrmaInfo_;
     std::atomic<uint32_t> localJfrIndex_{ 0 };
-    std::atomic<uint32_t> localJfsIndex_{ 0 };
     TbbJfrMap urmaSenderRelationtable_;
 
     // protect for segment maps.
     mutable std::shared_timed_mutex localMapMutex_;
     mutable std::shared_timed_mutex remoteMapMutex_;
     // Memory address to local segment mapping.
-    std::unique_ptr<SegmentMap> localSegmentMap_;
+    std::unique_ptr<UrmaLocalSegmentMap> localSegmentMap_;
     // Eid to segment maps mapping for remote jfr and segment.
-    TbbRemoteDeviceMap tbbRemoteDeviceMap_;
+    TbbUrmaConnectionMap urmaConnectionMap_;
     TbbEventMap tbbEventMap_;
     std::unordered_set<uint64_t> finishedRequests_;
-    std::unordered_set<uint64_t> failedRequests_;
+    std::unordered_map<uint64_t, int> failedRequests_;
     std::atomic<bool> serverStop_{ false };
     urma_log_cb_t urmaLogCallback_;
 

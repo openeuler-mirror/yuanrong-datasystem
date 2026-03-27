@@ -129,16 +129,16 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     return Status::OK();
 }
 
-void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
+Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
     uint32_t paraIndex, const GetObjectRemoteReqPb &subReq, BatchGetObjectRemoteRspPb &rsp,
     std::vector<RpcMessage> &payload,
     std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys,
     std::vector<ParallelRes> &parallelRes, std::shared_ptr<AggregateMemory> batchPtr)
 {
-    bool disabledParrallel = parallelRes.empty();
+    bool parallelDisabled = parallelRes.empty();
 
     GetObjectRemoteRspPb &subRsp =
-        disabledParrallel ? *(rsp.add_responses()) : parallelRes[paraIndex].respPbs.emplace_back();
+        parallelDisabled ? *(rsp.add_responses()) : parallelRes[paraIndex].respPbs.emplace_back();
 
     std::vector<RpcMessage> subPayload;
     std::vector<uint64_t> fastTransportEventKeys;
@@ -148,23 +148,24 @@ void WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(
     if (status.IsError()) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
-        return;
+        return status;
     }
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
     if (isGatherWrite) {
-        return;
+        return Status::OK();
     }
     // If keys are empty, we 1) get payload from spill or 2) urma is not enabled.
     // In both cases we send payload as part of the response.
     // Otherwise we extend the lifecycle of payload only until urma_write is done.
     if (fastTransportEventKeys.empty()) {
-        auto &localPayload = disabledParrallel ? payload : parallelRes[paraIndex].pays;
+        auto &localPayload = parallelDisabled ? payload : parallelRes[paraIndex].pays;
         localPayload.insert(localPayload.end(), std::make_move_iterator(subPayload.begin()),
                             std::make_move_iterator(subPayload.end()));
     } else if (batchPtr == nullptr) {
-        auto &localKps = disabledParrallel ? keys : parallelRes[paraIndex].kps;
+        auto &localKps = parallelDisabled ? keys : parallelRes[paraIndex].kps;
         localKps.emplace(paraIndex, std::make_pair(std::move(fastTransportEventKeys), std::move(subPayload)));
     }
+    return Status::OK();
 }
 
 Status WorkerWorkerOCServiceImpl::AllocateAggregateMemory(uint64_t parallelIndex, AggregateInfo &info,
@@ -238,10 +239,10 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::AggregaedMemorySend(uint64_t subIndex, AggregateInfo &info,
-                                                      std::shared_ptr<AggregateMemory> aggregatedMem,
-                                                      std::vector<ParallelRes> &parallelRes,
-                                                      BatchGetObjectRemoteReqPb &req)
+Status WorkerWorkerOCServiceImpl::AggregatedMemorySend(uint64_t subIndex, AggregateInfo &info,
+                                                       std::shared_ptr<AggregateMemory> aggregatedMem,
+                                                       std::vector<ParallelRes> &parallelRes,
+                                                       BatchGetObjectRemoteReqPb &req)
 {
     if (!info.canBatchHandler) {
         return Status::OK();
@@ -296,14 +297,12 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
             .host = urmaInfo.request_address().host(),
             .port = urmaInfo.request_address().port(),
         };
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, subKeys),
-            "Failed in aggregate memory urma write");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, subKeys),
+                                         "Failed in aggregate memory urma write");
     } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            UcpGatherPut(subReq->ucp_info(), ocClientWorkerSvc_->GetMetadataSize(), aggregatedMem->localSgeInfos,
-                         false, subKeys),
-            "Failed in aggregate memory ucp gather put");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(UcpGatherPut(subReq->ucp_info(), ocClientWorkerSvc_->GetMetadataSize(),
+                                                      aggregatedMem->localSgeInfos, false, subKeys),
+                                         "Failed in aggregate memory ucp gather put");
     }
     ParallelRes &loc = parallelRes[subIndex];
     loc.kps.emplace(startPos, std::make_pair(std::move(subKeys), std::move(subPayload)));
@@ -409,8 +408,8 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     // Send segment info to client
     pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_FILL_SEG);
     auto *segmentPb = rsp.mutable_host_info()->mutable_remote_host_segment();
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(
-        localSegSize, shmUnit->GetOffset() + metadataSize, localSegAddress, *segmentPb, devId));
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(localSegSize, shmUnit->GetOffset() + metadataSize,
+                                                                  localSegAddress, *segmentPb, devId));
 
     // Send offset info to client
     pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_FILL_DATA);
@@ -618,84 +617,21 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
-    std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
-    std::vector<GetObjectRemoteRspPb> getObjRemoteSubRsp;
-    LOG(INFO) << "BatchGetObjectRemote request (objectKey, reqeustId, readOffset, readSize): "
+    LOG(INFO) << "BatchGetObjectRemote request (objectKey, requestId, readOffset, readSize): "
               << VectorToString(req.requests());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    auto *signleReq = req.mutable_requests(0);
-    *(signleReq->mutable_urma_instance_id()) = req.urma_instance_id();
-    RETURN_IF_NOT_OK(CheckConnectionStable(*signleReq));
-    if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
-        tbb::task_arena limited;
-        if (FLAGS_oc_worker_worker_parallel_nums > 0) {
-            limited.initialize(FLAGS_oc_worker_worker_parallel_nums);
-        }
-        std::vector<ParallelRes> parallelRes;
-
-        AggregateInfo info;
-        CHECK_FAIL_RETURN_STATUS(PrepareAggregateMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");
-        uint64_t parallelSize = info.canBatchHandler ? info.batchReqSize.size() : req.requests_size();
-
-        parallelRes.resize(parallelSize);
-        limited.execute([&] {
-            tbb::parallel_for(
-                tbb::blocked_range<uint64_t>(0, parallelSize), [&](const tbb::blocked_range<uint64_t> &r) {
-                    PerfPoint totalTime(PerfKey::WORKER_PARALLEL_BATCH_ASYNC_SEND);
-                    for (uint64_t i = r.begin(); i != r.end(); ++i) {
-                        uint64_t startPos = info.canBatchHandler ? info.batchStartIndex[i] : i;
-                        uint64_t endPos = info.canBatchHandler ? startPos + info.batchReqSize[i] : startPos + 1;
-                        std::shared_ptr<AggregateMemory> batchPtr = nullptr;
-                        if (info.canBatchHandler) {
-                            batchPtr = std::make_shared<AggregateMemory>();
-                            batchPtr->localSgeInfos.reserve(endPos - startPos);
-                        }
-                        for (uint64_t j = startPos; j < endPos; ++j) {
-                            auto *subReq = req.mutable_requests(j);
-                            GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, parallelRes, batchPtr);
-                        }
-                        PerfPoint pDo(PerfKey::URMA_GATHER_WRITE_DO);
-                        LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req), "gather write error!");
-                    }
-                });
-        });
-
-        for (ParallelRes &loc : parallelRes) {
-            for (auto &resp : loc.respPbs) {
-                rsp.add_responses()->Swap(&resp);
-            }
-
-            payload.insert(payload.end(), std::make_move_iterator(loc.pays.begin()),
-                           std::make_move_iterator(loc.pays.end()));
-
-            for (auto &[idx, kp] : loc.kps) {
-                keys.emplace(idx, std::move(kp));
-            }
-        }
-    } else {
-        for (int i = 0; i < req.requests_size(); i++) {
-            std::vector<ParallelRes> emptyRes = {};
-            auto *subReq = req.mutable_requests(i);
-            *(subReq->mutable_comm_id()) = req.comm_id();
-            GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, emptyRes);
-        }
-    }
-    // Wait for fast transport events if the events are created and not already waited.
-
-    pointImpl.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);
-    for (auto &pair : keys) {
-        int index = pair.first;
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
-        auto errorHandler = [index, &rsp](Status &status) {
-            rsp.mutable_responses()->at(index).mutable_error()->set_error_code(status.GetCode());
-            rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(status.GetMsg());
-            return status;
-        };
-        (void)WaitFastTransportEvent(pair.second.first, remainingTime, errorHandler);
-        // Early release of ShmGuard.
-        pair.second.second.clear();
-    }
-
+    auto *singleReq = req.mutable_requests(0);
+    *(singleReq->mutable_urma_instance_id()) = req.urma_instance_id();
+    RETURN_IF_NOT_OK(CheckConnectionStable(*singleReq));
+    auto timeout = reqTimeoutDuration.CalcRealRemainingTime();
+    RETURN_IF_NOT_OK(RetryOnErrorRepent(
+        timeout,
+        [this, &req, &rsp, &payload](int32_t) {
+            rsp.clear_responses();
+            payload.clear();
+            return BatchGetObjectRemoteImpl(req, rsp, payload);
+        },
+        []() { return Status::OK(); }, { StatusCode::K_URMA_TRY_AGAIN }));
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
@@ -704,6 +640,100 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     pointImpl.Record();
     VLOG(1) << FormatString("pull success");
     point.Record();
+    return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req,
+                                                           BatchGetObjectRemoteRspPb &rsp,
+                                                           std::vector<RpcMessage> &payload)
+{
+    PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
+    Status lastRc;
+    std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> keys;
+    if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
+        RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, payload, keys, lastRc));
+    } else {
+        for (int i = 0; i < req.requests_size(); i++) {
+            std::vector<ParallelRes> emptyRes = {};
+            auto *subReq = req.mutable_requests(i);
+            *(subReq->mutable_comm_id()) = req.comm_id();
+            auto rc = GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, emptyRes);
+            if (rc.GetCode() == K_URMA_TRY_AGAIN) {
+                lastRc = rc;
+            }
+        }
+    }
+
+    point.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);
+    for (auto &pair : keys) {
+        int index = pair.first;
+        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto errorHandler = [index, &rsp, &lastRc](Status &status) {
+            if (status.GetCode() == K_URMA_TRY_AGAIN) {
+                lastRc = status;
+            }
+            rsp.mutable_responses()->at(index).mutable_error()->set_error_code(status.GetCode());
+            rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(status.GetMsg());
+            return status;
+        };
+        (void)WaitFastTransportEvent(pair.second.first, remainingTime, errorHandler);
+        // Early release of ShmGuard.
+        pair.second.second.clear();
+    }
+    return lastRc;
+}
+
+Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
+    BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+    std::map<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &keys, Status &lastRc)
+{
+    tbb::task_arena limited;
+    if (FLAGS_oc_worker_worker_parallel_nums > 0) {
+        limited.initialize(FLAGS_oc_worker_worker_parallel_nums);
+    }
+    std::vector<ParallelRes> parallelRes;
+
+    AggregateInfo info;
+    CHECK_FAIL_RETURN_STATUS(PrepareAggregateMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");
+    uint64_t parallelSize = info.canBatchHandler ? info.batchReqSize.size() : req.requests_size();
+
+    parallelRes.resize(parallelSize);
+    limited.execute([&] {
+        tbb::parallel_for(tbb::blocked_range<uint64_t>(0, parallelSize), [&](const tbb::blocked_range<uint64_t> &r) {
+            PerfPoint totalTime(PerfKey::WORKER_PARALLEL_BATCH_ASYNC_SEND);
+            for (uint64_t i = r.begin(); i != r.end(); ++i) {
+                uint64_t startPos = info.canBatchHandler ? info.batchStartIndex[i] : i;
+                uint64_t endPos = info.canBatchHandler ? startPos + info.batchReqSize[i] : startPos + 1;
+                std::shared_ptr<AggregateMemory> batchPtr = nullptr;
+                if (info.canBatchHandler) {
+                    batchPtr = std::make_shared<AggregateMemory>();
+                    batchPtr->localSgeInfos.reserve(endPos - startPos);
+                }
+                for (uint64_t j = startPos; j < endPos; ++j) {
+                    auto *subReq = req.mutable_requests(j);
+                    GetObjectRemoteBatchWrite(i, *subReq, rsp, payload, keys, parallelRes, batchPtr);
+                }
+                PerfPoint pDo(PerfKey::URMA_GATHER_WRITE_DO);
+                LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req), "gather write error!");
+            }
+        });
+    });
+
+    for (ParallelRes &loc : parallelRes) {
+        for (auto &resp : loc.respPbs) {
+            rsp.add_responses()->Swap(&resp);
+            if (resp.error().error_code() == K_URMA_TRY_AGAIN) {
+                lastRc = Status(K_URMA_TRY_AGAIN, resp.error().error_msg());
+            }
+        }
+
+        payload.insert(payload.end(), std::make_move_iterator(loc.pays.begin()),
+                       std::make_move_iterator(loc.pays.end()));
+
+        for (auto &[idx, kp] : loc.kps) {
+            keys.emplace(idx, std::move(kp));
+        }
+    }
     return Status::OK();
 }
 }  // namespace object_cache

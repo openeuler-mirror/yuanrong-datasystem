@@ -674,7 +674,7 @@ TEST_F(UrmaObjectClientDisableDataReplicationTest, TestMultiLocalGet)
 #ifdef USE_URMA
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetSmallWithError)
 {
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "call(0)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "call(0, 9)"));
 
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
@@ -900,7 +900,7 @@ public:
 
 TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmallWithError)
 {
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "call(0)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "call(0, 9)"));
 
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
@@ -1166,6 +1166,187 @@ TEST_F(UrmaObjectClientTestMismatch, UrmaRemoteGetDirection2)
     }
     LOG(INFO) << "Test case UrmaRemoteGetSmall success";
 }
+
+class UrmaCqeErrorTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+    }
+};
+
+TEST_F(UrmaCqeErrorTest, RemoteWorkerPollCqeErrorBaseCase)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const size_t dataSize = 1024 * 512UL;
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client1->Set("key1", value));
+    DS_ASSERT_OK(client1->Set("key2", value));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
+    std::string getValue;
+    DS_ASSERT_OK(client2->Get("key1", getValue));
+    ASSERT_EQ(value, getValue);
+    DS_ASSERT_OK(client2->Get("key2", getValue));
+    ASSERT_EQ(value, getValue);
+}
+
+TEST_F(UrmaCqeErrorTest, RemoteWorkerGetShareJfs)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    std::shared_ptr<KVClient> client3;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+    InitTestKVClient(2, client3);
+
+    const int keyCount = 200;
+    const size_t dataSize = 1024 * 512UL;
+    std::string value(dataSize, 'a');
+    for (int i = 0; i < keyCount; i++) {
+        std::string key = "key-" + std::to_string(i);
+        DS_ASSERT_OK(client1->Set(key, value));
+    }
+
+    std::string getValue;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
+    DS_ASSERT_OK(client2->Get("key-1", getValue));
+    ASSERT_EQ(value, getValue);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
+    DS_ASSERT_OK(client3->Get("key-100", getValue));
+    ASSERT_EQ(value, getValue);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus",
+                                           "100*call(0, 0)->1*call(0, 9)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetJfsFromConnection", "1*return()"));
+    std::vector<std::thread> threads;
+    threads.emplace_back([&client2, &value] {
+        for (int i = 0; i < keyCount / 2; i++) {
+            std::string key = "key-" + std::to_string(i);
+            std::string getValue;
+            DS_ASSERT_OK(client2->Get(key, getValue));
+            ASSERT_EQ(value, getValue);
+        }
+    });
+
+    threads.emplace_back([&client3, &value] {
+        for (int i = keyCount / 2; i < keyCount; i++) {
+            std::string key = "key-" + std::to_string(i);
+            std::string getValue;
+            DS_ASSERT_OK(client3->Get(key, getValue));
+            ASSERT_EQ(value, getValue);
+        }
+    });
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+}
+
+TEST_F(UrmaCqeErrorTest, RemoteWorkerMultiGetShareJfs)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    std::shared_ptr<KVClient> client3;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+    InitTestKVClient(2, client3);
+
+    const int keyCount = 500;
+    const size_t dataSize = 1024 * 512UL;
+    std::string value(dataSize, 'a');
+    for (int i = 0; i < keyCount; i++) {
+        std::string key = "key-" + std::to_string(i);
+        DS_ASSERT_OK(client1->Set(key, value));
+    }
+
+    std::string getValue;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
+    DS_ASSERT_OK(client2->Get("key-1", getValue));
+    ASSERT_EQ(value, getValue);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
+    DS_ASSERT_OK(client3->Get("key-100", getValue));
+    ASSERT_EQ(value, getValue);
+
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus", "10*call(0, 0)->1*call(0, 9)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetJfsFromConnection", "1*return()"));
+    std::vector<std::thread> threads;
+    const int batchSize = 10;
+    threads.emplace_back([&client2, &value, batchSize] {
+        std::vector<std::string> keys;
+        for (int i = 0; i < keyCount / 2; i++) {
+            std::string key = "key-" + std::to_string(i);
+            keys.emplace_back(std::move(key));
+            if (keys.size() == batchSize) {
+                std::vector<std::string> getValues;
+                DS_ASSERT_OK(client2->Get(keys, getValues));
+                for (const auto &val : getValues) {
+                    ASSERT_EQ(value, val);
+                }
+                keys.clear();
+            }
+        }
+    });
+
+    threads.emplace_back([&client3, &value, batchSize] {
+        std::vector<std::string> keys;
+        for (int i = keyCount / 2; i < keyCount; i++) {
+            std::string key = "key-" + std::to_string(i);
+            keys.emplace_back(std::move(key));
+            if (keys.size() == batchSize) {
+                std::vector<std::string> getValues;
+                DS_ASSERT_OK(client3->Get(keys, getValues));
+                for (const auto &val : getValues) {
+                    ASSERT_EQ(value, val);
+                }
+                keys.clear();
+            }
+        }
+    });
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+}
+
+TEST_F(UrmaCqeErrorTest, ClientToWorkerSetBaseCase)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = 1024 * 512UL;
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(inject::Set("UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
+    DS_ASSERT_OK(client->Set("key1", value));
+    DS_ASSERT_OK(client->Set("key2", value));
+    std::string getValue;
+    DS_ASSERT_OK(client->Get("key1", getValue));
+    ASSERT_EQ(value, getValue);
+    DS_ASSERT_OK(client->Get("key2", getValue));
+    ASSERT_EQ(value, getValue);
+}
+
+TEST_F(UrmaCqeErrorTest, WorkerToClientGetBaseCase)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = 1024 * 512UL;
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client->Set("key1", value));
+    DS_ASSERT_OK(client->Set("key2", value));
+    std::string getValue;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
+    DS_ASSERT_OK(client->Get("key1", getValue));
+    ASSERT_EQ(value, getValue);
+    DS_ASSERT_OK(client->Get("key2", getValue));
+    ASSERT_EQ(value, getValue);
+}
+
 #endif
 }  // namespace st
 }  // namespace datasystem

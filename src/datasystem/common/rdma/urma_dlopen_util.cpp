@@ -245,6 +245,12 @@ urma_status_t ds_urma_delete_jfs(urma_jfs_t *jfs)
     return CallRet<urma_status_t, decltype(&ds_urma_delete_jfs)>("urma_delete_jfs", kUrmaDlopenErrorStatus, jfs);
 }
 
+urma_status_t ds_urma_modify_jfs(urma_jfs_t *jfs, urma_jfs_attr_t *attr)
+{
+    return CallRet<urma_status_t, decltype(&ds_urma_modify_jfs)>("urma_modify_jfs", kUrmaDlopenErrorStatus, jfs,
+                                                                 attr);
+}
+
 urma_jfr_t *ds_urma_create_jfr(urma_context_t *context, const urma_jfr_cfg_t *config)
 {
     return static_cast<urma_jfr_t *>(CallPtr<decltype(&ds_urma_create_jfr)>("urma_create_jfr", context, config));
