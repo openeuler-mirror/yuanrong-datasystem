@@ -82,11 +82,9 @@ int MemCopyH2D(void *dst, const void *src, size_t srcSize)
     return cudaMemcpy(dst, src, srcSize, cudaMemcpyHostToDevice);
 }
 
-int DSCudartMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpyKind kind,
-                        cudaStream_t stream)
+int DSCudartMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpyKind kind, cudaStream_t stream)
 {
-    (void)kind;
-    return cudaMemcpyAsync(dst, src, count, cudaMemcpyDeviceToDevice, stream);
+    return cudaMemcpyAsync(dst, src, count, kind, stream);
 }
 
 int GetDeviceIdx(int32_t &deviceIdx)
@@ -131,7 +129,7 @@ int DSCudartSetDevice(int deviceId)
 }
 
 int DSCudartResetDevice(int deviceId)
-{   
+{
     int originDevice;
     cudaGetDevice(&originDevice);
     cudaSetDevice(deviceId);
@@ -192,14 +190,12 @@ int DSNcclCommInitRootInfo(int nRanks, const ncclUniqueId *rootInfo, int rank, n
     return ncclCommInitRank(comm, nRanks, *rootInfo, rank);
 }
 
-int DSNcclSend(void *sendBuf, size_t count, ncclDataType_t dataType, int destRank, ncclComm_t comm,
-               cudaStream_t stream)
+int DSNcclSend(void *sendBuf, size_t count, ncclDataType_t dataType, int destRank, ncclComm_t comm, cudaStream_t stream)
 {
     return ncclSend(sendBuf, count, dataType, destRank, comm, stream);
 }
 
-int DSNcclRecv(void *recvBuf, size_t count, ncclDataType_t dataType, int srcRank, ncclComm_t comm,
-               cudaStream_t stream)
+int DSNcclRecv(void *recvBuf, size_t count, ncclDataType_t dataType, int srcRank, ncclComm_t comm, cudaStream_t stream)
 {
     return ncclRecv(recvBuf, count, dataType, srcRank, comm, stream);
 }
@@ -267,4 +263,3 @@ int DSCudartQueryEventStatus(cudaEvent_t event, cudaEventRecordedStatus *status)
 
     return cudaSuccess;
 }
-

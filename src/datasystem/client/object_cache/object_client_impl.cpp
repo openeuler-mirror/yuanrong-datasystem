@@ -3178,7 +3178,10 @@ Status ObjectClientImpl::ConvertToDevBufferPtrList(const std::vector<std::string
 Status ObjectClientImpl::CheckDeviceValid(std::vector<uint32_t> deviceId)
 {
     PerfPoint point(PerfKey::CLIENT_CHECK_DEVICE_VALID);
-    return DeviceManagerFactory::GetDeviceManager()->VerifyDeviceId(deviceId);
+    auto *deviceManager = DeviceManagerFactory::GetDeviceManager();
+    CHECK_FAIL_RETURN_STATUS(deviceManager != nullptr, K_RUNTIME_ERROR,
+                             "No device manager available. Enable heterogeneous support or use the mock test path.");
+    return deviceManager->VerifyDeviceId(deviceId);
 }
 
 void ObjectClientImpl::StartPerfThread()
