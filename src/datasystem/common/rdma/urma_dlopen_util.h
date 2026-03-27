@@ -54,6 +54,7 @@ urma_status_t ds_urma_delete_jfc(urma_jfc_t *jfc);
 urma_status_t ds_urma_rearm_jfc(urma_jfc_t *jfc, bool enable_events);
 urma_jfs_t *ds_urma_create_jfs(urma_context_t *context, const urma_jfs_cfg_t *config);
 urma_status_t ds_urma_delete_jfs(urma_jfs_t *jfs);
+urma_status_t ds_urma_modify_jfs(urma_jfs_t *jfs, urma_jfs_attr_t *attr);
 urma_jfr_t *ds_urma_create_jfr(urma_context_t *context, const urma_jfr_cfg_t *config);
 urma_status_t ds_urma_delete_jfr(urma_jfr_t *jfr);
 urma_target_seg_t *ds_urma_register_seg(urma_context_t *context, const urma_seg_cfg_t *config);
