@@ -27,7 +27,17 @@ from setuptools import find_namespace_packages, setup
 from setuptools.command.build_py import build_py
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
-from wheel.vendored.packaging import tags
+
+try:
+    from packaging import tags
+except ImportError:  # pragma: no cover
+    try:
+        from wheel.vendored.packaging import tags
+    except ImportError:  # pragma: no cover
+        raise ImportError(
+            "Neither 'packaging' nor 'wheel.vendored.packaging' is available. "
+            "Please install the 'packaging' package."
+        )
 
 root_dir = os.path.dirname(os.path.realpath(__file__))
 

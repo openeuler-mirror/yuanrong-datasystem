@@ -53,14 +53,27 @@ ClientDeviceObjectManager::ClientDeviceObjectManager(ObjectClientImpl *impl)
 Status ClientDeviceObjectManager::Init()
 {
     devInterImpl_ = DeviceManagerFactory::GetDeviceManager();
-    CHECK_FAIL_RETURN_STATUS(devInterImpl_ != nullptr, K_RUNTIME_ERROR,
-                             "No device manager available. Enable heterogeneous support or check the device runtime.");
-    CHECK_FAIL_RETURN_STATUS(
-        resourceMgr_ != nullptr, K_RUNTIME_ERROR,
-        "No device resource manager available. Check runtime backend detection for GPU/NPU support.");
+    if (devInterImpl_ == nullptr || resourceMgr_ == nullptr) {
+        LOG(INFO) << "Device runtime is unavailable during client initialization. "
+                     "Regular KV/object operations remain available; device APIs will return an error when invoked.";
+        return Status::OK();
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     RETURN_IF_NOT_OK(objClientImpl_->GetAvailableWorkerApi(workerApi));
     commFactory_ = std::make_shared<CommFactory>(workerApi, resourceMgr_.get());
+    return Status::OK();
+}
+
+Status ClientDeviceObjectManager::CheckDeviceRuntimeAvailable(const char *operation) const
+{
+    CHECK_FAIL_RETURN_STATUS(devInterImpl_ != nullptr, K_RUNTIME_ERROR,
+                             FormatString("%s requires a device runtime, but no device manager is available. "
+                                          "Enable heterogeneous support or check the device runtime.",
+                                          operation));
+    CHECK_FAIL_RETURN_STATUS(resourceMgr_ != nullptr, K_RUNTIME_ERROR,
+                             FormatString("%s requires a device runtime, but no device resource manager is available. "
+                                          "Check runtime backend detection for GPU/NPU support.",
+                                          operation));
     return Status::OK();
 }
 
@@ -68,6 +81,7 @@ Status ClientDeviceObjectManager::CreateDevBuffer(const std::string &devObjKey, 
                                                   const CreateDeviceParam &param,
                                                   std::shared_ptr<DeviceBuffer> &deviceBuffer)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("CreateDevBuffer"));
     auto bufferInfo = std::make_shared<DeviceBufferInfo>(devObjKey, devBlobList.deviceIdx, param.lifetime,
                                                          param.cacheLocation, TransferType::P2P);
     return CreateDevBufferImpl(bufferInfo, devBlobList, deviceBuffer);
@@ -109,6 +123,7 @@ Status ClientDeviceObjectManager::CreateDevBufferImpl(std::shared_ptr<DeviceBuff
 
 Status ClientDeviceObjectManager::PublishDeviceObject(const std::shared_ptr<DeviceBuffer> &buffer)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("PublishDeviceObject"));
     if (buffer->bufferInfo_->transferType == TransferType::HOST) {
         return PublishDeviceObjectWithHost(buffer);
     } else if (buffer->bufferInfo_->transferType == TransferType::P2P) {
@@ -148,6 +163,7 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
                                                        const ReShardingMap &map, int32_t timeoutMs,
                                                        DeviceBuffer &dstDevBuffer)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("GetDevBufferWithHost"));
     RETURN_IF_NOT_OK(objClientImpl_->IsClientReady());
     RETURN_IF_NOT_OK(ObjectClientImpl::CheckValidObjectKeyVector(devObjKeys));
     if (devObjKeys.size() > 1 || !map.empty()) {
@@ -201,6 +217,7 @@ Status ClientDeviceObjectManager::GetDevBufferWithHost(const std::vector<std::st
 
 Status ClientDeviceObjectManager::GetOrCreateP2PSubscribe(int32_t deviceId, std::shared_ptr<P2PSubscribe> &p2pSubscribe)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("GetOrCreateP2PSubscribe"));
     RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
     tbb::concurrent_hash_map<int, std::shared_ptr<P2PSubscribe>>::accessor acc;
     if (!subscribeTable_.find(acc, deviceId)) {
@@ -228,6 +245,7 @@ Status ClientDeviceObjectManager::AsyncGetDevBuffer(const std::vector<std::strin
                                                     std::vector<Future> &futureVec, int64_t prefetchTimeoutMs,
                                                     int64_t subTimeoutMs)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("AsyncGetDevBuffer"));
     CHECK_FAIL_RETURN_STATUS(futureVec.empty(), K_INVALID,
                              "The input future vector is not empty, please clear it before async get.");
     std::shared_ptr<P2PSubscribe> p2pSubscribe;
@@ -251,6 +269,7 @@ Status ClientDeviceObjectManager::AsyncGetDevBuffer(const std::vector<std::strin
 Status ClientDeviceObjectManager::GetSendStatus(const std::shared_ptr<DeviceBuffer> &buffer,
                                                 std::vector<Future> &futureVec)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("GetSendStatus"));
     const auto &bufferInfo = buffer->bufferInfo_;
     CHECK_FAIL_RETURN_STATUS(bufferInfo->lifetimeType == LifetimeType::MOVE, K_INVALID,
                              "The GetSendStatus interface is only useful when lifetime type is MOVE.");
@@ -274,6 +293,7 @@ Status ClientDeviceObjectManager::MemCopyBetweenDevAndHost(const std::vector<Dev
                                                            std::vector<Buffer *> &bufferList, MemcpyKind copyKind,
                                                            bool enableHugeTlb)
 {
+    RETURN_IF_NOT_OK(CheckDeviceRuntimeAvailable("MemCopyBetweenDevAndHost"));
     resourceMgr_->SetPolicyByHugeTlb(enableHugeTlb);
 
     INJECT_POINT("NO_USE_FFTS", [this]() {

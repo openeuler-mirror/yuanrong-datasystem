@@ -27,11 +27,9 @@
 #if defined(USE_NPU) || defined(USE_GPU)
 #include "datasystem/common/util/file_util.h"
 #endif
-
 #if defined(USE_NPU) || defined(WITH_TESTS)
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #endif
-
 #ifdef USE_GPU
 #include "datasystem/common/device/nvidia/cuda_device_manager.h"
 #endif
