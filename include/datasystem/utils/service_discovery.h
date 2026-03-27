@@ -88,9 +88,10 @@ public:
      * @brief Select a worker address.
      * @param[out] workerIp
      * @param[out] workerPort
+     * @param[out] isSameNode If non-null, set to true when the selected worker is on the same node.
      * @return Status of the call.
      */
-    Status SelectWorker(std::string &workerIp, int &workerPort);
+    Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr);
 
 private:
     /**

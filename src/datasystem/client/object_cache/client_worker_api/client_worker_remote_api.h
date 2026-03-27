@@ -129,6 +129,7 @@ public:
                   std::vector<std::string> &failedKeys) override;
     Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
     Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
+    void RecreateOCStub();
     Status PrepairForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
     Status CleanUpForDecreaseShmRefAfterWorkerLost() override;

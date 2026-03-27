@@ -112,7 +112,7 @@ Status ServiceDiscovery::ObtainWorkers()
     return Status::OK();
 }
 
-Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort)
+Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode)
 {
     if (etcdStore_ == nullptr) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Init(), "Failed to connect to etcd.");
@@ -151,6 +151,11 @@ Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort)
     auto rc = hostPort.ParseString(pickedAddr);
     workerIp = hostPort.Host();
     workerPort = hostPort.Port();
+
+    if (isSameNode != nullptr) {
+        auto it = activeWorkerInfo_.find(pickedAddr);
+        *isSameNode = !hostId_.empty() && it != activeWorkerInfo_.end() && it->second == hostId_;
+    }
     return Status::OK();
 }
 }  // namespace datasystem

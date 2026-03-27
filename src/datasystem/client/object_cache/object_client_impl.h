@@ -1053,6 +1053,19 @@ private:
     bool TrySwitchBackToLocalWorker();
 
     /**
+     * @brief Rediscover local worker via ServiceDiscovery when IP changes (e.g., pod restart, rolling upgrade).
+     * @return True if local worker was successfully rediscovered and reconnected.
+     */
+    bool RediscoverLocalWorker();
+
+    /**
+     * @brief Reconnect the local worker at a new address. Cleans up old state and re-establishes SHM.
+     * @param[in] newAddress The new worker address.
+     * @return True if reconnection succeeded.
+     */
+    bool ReconnectLocalWorkerAt(const HostPort &newAddress);
+
+    /**
      * @brief Check node is ready to exit or not.
      * @return True if node ready to exit.
      */

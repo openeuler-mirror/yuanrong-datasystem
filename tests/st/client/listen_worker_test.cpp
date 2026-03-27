@@ -387,5 +387,115 @@ TEST_F(ListenWorkerSwitchTest, TestStandbyConnectionShutdownAndRestartConcurrent
     ASSERT_EQ(count, 0);
     ASSERT_EQ(asyncSwitchWorkerPool->GetWaitingTasksNum(), 0ul);
 }
+
+class ListenWorkerRediscoverTest : public ExternalClusterTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        const char *hostIp = "127.0.0.1";
+        opts.numWorkers = 2;
+        opts.numEtcd = 1;
+        int port = GetFreePort();
+        int port1 = GetFreePort();
+        opts.workerConfigs.emplace_back(hostIp, port);
+        opts.workerConfigs.emplace_back(hostIp, port1);
+        workerHostPort_ = HostPort(hostIp, port);
+        workerHostPort1_ = HostPort(hostIp, port1);
+        opts.workerGflagParams = " -shared_memory_size_mb=64 -v=1 -node_timeout_s=1 -heartbeat_interval_ms=500 ";
+
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(400)");
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(400)");
+        datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
+    }
+
+    HostPort workerHostPort_;
+    HostPort workerHostPort1_;
+    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
+    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+    std::unique_ptr<Signature> signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
+};
+
+TEST_F(ListenWorkerRediscoverTest, TestRediscoverSkippedWhenNotSwitched)
+{
+    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_, RpcCredential(),
+                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+    int timeoutMs = 5000;
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
+    auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
+    auto listenWorker =
+        std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 0, asyncSwitchWorkerPool.get());
+    listenWorker->SetIsLocalWorker(true);
+
+    std::atomic<int> rediscoverCount{ 0 };
+    listenWorker->SetRediscoverHandle([&rediscoverCount]() {
+        rediscoverCount++;
+        return false;
+    });
+
+    DS_ASSERT_OK(listenWorker->StartListenWorker());
+    DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
+
+    cluster_->ShutdownNode(WORKER, 0);
+    sleep(3);
+
+    ASSERT_EQ(rediscoverCount.load(), 0) << "Rediscover handle should NOT be called before switch";
+}
+
+TEST_F(ListenWorkerRediscoverTest, TestRediscoverSuccessClearsSwitched)
+{
+    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_, RpcCredential(),
+                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+    int timeoutMs = 5000;
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
+    auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
+    auto listenWorker =
+        std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 0, asyncSwitchWorkerPool.get());
+    listenWorker->SetIsLocalWorker(true);
+
+    std::atomic<bool> rediscoverCalled{ false };
+    listenWorker->SetRediscoverHandle([&rediscoverCalled]() {
+        rediscoverCalled = true;
+        return true;  // Simulate: local worker found at new IP, reconnection succeeded
+    });
+
+    DS_ASSERT_OK(listenWorker->StartListenWorker());
+    DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
+    listenWorker->SetSwitched();
+
+    cluster_->ShutdownNode(WORKER, 0);
+    sleep(3);
+
+    ASSERT_TRUE(rediscoverCalled.load()) << "Rediscover handle should have been called";
+    // isSwitched_ is cleared because rediscoverHandle_ returned true.
+    // This means TrySwitchBackToLocalWorker() will no longer fire on subsequent heartbeat successes,
+    // which is the correct behavior after rediscovery has already reconnected to the new IP.
+}
+
+TEST_F(ListenWorkerRediscoverTest, TestRediscoverNotCalledForStandbyWorker)
+{
+    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort1_, RpcCredential(),
+                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+    int timeoutMs = 5000;
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
+    auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
+    auto listenWorker =
+        std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 1, asyncSwitchWorkerPool.get());
+    listenWorker->SetIsLocalWorker(false);  // This is a standby worker listener.
+
+    std::atomic<int> rediscoverCount{ 0 };
+    listenWorker->SetRediscoverHandle([&rediscoverCount]() {
+        rediscoverCount++;
+        return false;
+    });
+
+    DS_ASSERT_OK(listenWorker->StartListenWorker());
+    DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
+    listenWorker->SetSwitched();
+
+    cluster_->ShutdownNode(WORKER, 1);
+    sleep(3);
+
+    ASSERT_EQ(rediscoverCount.load(), 0) << "Rediscover should NOT be called for standby workers";
+}
 }  // namespace st
 }  // namespace datasystem

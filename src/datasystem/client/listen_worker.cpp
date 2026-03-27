@@ -166,6 +166,11 @@ void ListenWorker::SetReleaseFdCallBack(std::function<void(const std::vector<int
     fdReleaseHelper_.SetReleaseFdCallBack(std::move(callback));
 }
 
+void ListenWorker::SetRediscoverHandle(std::function<bool()> callback)
+{
+    rediscoverHandle_ = std::move(callback);
+}
+
 Status ListenWorker::CheckHeartbeat()
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(clientId_);
@@ -180,7 +185,17 @@ Status ListenWorker::CheckHeartbeat()
     auto clientDeadTimeoutMs = clientCommonWorker_->clientDeadTimeoutMs_;
     auto remainTime = clientDeadTimeoutMs;
     Timer timer;
+    bool prevSwitchedState = isSwitched_;
     while (!stop_) {
+        // Reset heartbeat timer after any switch transition (to standby or back to local
+        // via rediscovery). Without this, the stale timer accumulated during the original
+        // disconnection would instantly exceed nodeTimeoutMs and trigger another switch.
+        if (isSwitched_ != prevSwitchedState) {
+            timer.Reset();
+            lostHeartbeatTimes = 0;
+            remainTime = clientDeadTimeoutMs;
+            prevSwitchedState = isSwitched_;
+        }
         bool workerReboot, clientRemoved, isWorkerVoluntaryScaleDown;
         std::vector<int64_t> expiredWorkerFds;
         Status status =
@@ -188,8 +203,12 @@ Status ListenWorker::CheckHeartbeat()
                                                fdReleaseHelper_.GetReleasedWorkerFds(), expiredWorkerFds);
         if (status.IsError()) {
             CheckAndSetClientTimeout(timer.ElapsedMilliSecond(), clientDeadTimeoutMs, status);
+            TryRediscoverLocalWorker();
             auto interval = GetErrorWaitInterval(timer, clientDeadTimeoutMs, heartbeatIntervalMs[lostHeartbeatTimes]);
             waitPost_->WaitFor(interval);
+            if (isSwitched_ != prevSwitchedState) {
+                continue;
+            }
             remainTime = GetRemainTime(timer, clientDeadTimeoutMs);
             CheckAndSetClientTimeout(timer.ElapsedMilliSecond(), clientDeadTimeoutMs, status);
             lostHeartbeatTimes++;
@@ -316,64 +335,82 @@ void ListenWorker::SetSwitchWorkerHandle(std::function<bool(uint32_t)> callback)
     switchWorkerHandle_ = std::move(callback);
 }
 
-void ListenWorker::SwitchToRemoteWorker()
+bool ListenWorker::TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii)
 {
     if (!asyncSwitchWorkerPool_) {
-        LOG_FIRST_N(INFO, 1) << "switch thread pool is null, ignore switch worker";
-        return;
+        LOG_FIRST_N(INFO, 1) << "[Switch] Async switch worker pool is null, ignore switch worker";
+        return false;
     }
+    bool expected = false;
+    if (!isInAsyncSwitchWorkerPool_.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        VLOG(1) << "[Switch] Async switch worker pool has task executing";
+        return false;
+    }
+    raii = std::make_shared<Raii>([this]() {
+        isInAsyncSwitchWorkerPool_.store(false, std::memory_order_relaxed);
+    });
+    return true;
+}
+
+void ListenWorker::SwitchToRemoteWorker()
+{
     {
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         if (!switchWorkerHandle_) {
             return;
         }
     }
-    if (!isSwitched_) {
-        if (isInAsyncSwitchWorkerPool_.load(std::memory_order_relaxed)) {
-            VLOG(1) << "async switch worker pool have task executing...";
-            return;
-        }
-        isInAsyncSwitchWorkerPool_.exchange(true, std::memory_order_relaxed);
-        auto traceId = Trace::Instance().GetTraceID();
-        asyncSwitchWorkerPool_->Execute([this, traceId]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
-            LOG(INFO) << FormatString("[Switch] Worker(%s) will be switched, client id: %s.",
-                                      clientCommonWorker_->workerId_, clientId_);
-            isSwitched_ = switchWorkerHandle_(index_);
-            isInAsyncSwitchWorkerPool_.exchange(false, std::memory_order_relaxed);
-        });
+    std::shared_ptr<Raii> raii;
+    if (isSwitched_ || !TryAcquireAsyncSwitchPool(raii)) {
+        return;
     }
+    auto traceId = Trace::Instance().GetTraceID();
+    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+        LOG(INFO) << "[Switch] Worker " << clientCommonWorker_->workerId_
+                  << " will be switched, client id: " << clientId_;
+        isSwitched_ = switchWorkerHandle_(index_);
+    });
 }
 
 void ListenWorker::TrySwitchBackToLocalWorker()
 {
-    if (!asyncSwitchWorkerPool_) {
-        LOG_FIRST_N(INFO, 1) << "switch thread pool is null, ignore switch worker";
-        return;
-    }
     {
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         if (!switchWorkerHandle_) {
             return;
         }
     }
-    if (isInAsyncSwitchWorkerPool_.load(std::memory_order_relaxed)) {
-        VLOG(1) << "async switch worker pool have task executing...";
+    std::shared_ptr<Raii> raii;
+    if (!isSwitched_ || !isLocalWorker_ || isWorkerVoluntaryScaleDown_ || !TryAcquireAsyncSwitchPool(raii)) {
         return;
     }
-    // local worker switch back
-    if (isSwitched_ && isLocalWorker_ && !isWorkerVoluntaryScaleDown_) {
-        isInAsyncSwitchWorkerPool_.exchange(true, std::memory_order_relaxed);
-        auto traceId = Trace::Instance().GetTraceID();
-        asyncSwitchWorkerPool_->Execute([this, traceId]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
-            LOG(INFO) << FormatString("Local worker(%s) is recover.", clientCommonWorker_->workerId_);
-            isSwitched_ = !switchWorkerHandle_(index_);
-            isInAsyncSwitchWorkerPool_.exchange(false, std::memory_order_relaxed);
-        });
+    auto traceId = Trace::Instance().GetTraceID();
+    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
+        LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
+        isSwitched_ = !switchWorkerHandle_(index_);
+    });
+}
+
+void ListenWorker::TryRediscoverLocalWorker()
+{
+    std::shared_ptr<Raii> raii;
+    if (!isSwitched_ || !isLocalWorker_ || !rediscoverHandle_ || !TryAcquireAsyncSwitchPool(raii)) {
+        return;
     }
+    VLOG(1) << "[Switch] Attempting to rediscover local worker";
+    auto traceId = Trace::Instance().GetTraceID();
+    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        if (rediscoverHandle_()) {
+            LOG(INFO) << "[Switch] Local worker rediscovered successfully";
+            isSwitched_ = false;
+            waitPost_->Set();
+        }
+    });
 }
 
 void ListenWorker::SetIsLocalWorker(bool isLocalWorker)
@@ -438,28 +475,21 @@ void ListenWorker::ShutdownStandbyConnection()
 
 void ListenWorker::TryShutdownStandbyConnection()
 {
-    if (isLocalWorker_ || stop_) {
-        return;
-    }
-    if (isInAsyncSwitchWorkerPool_.load(std::memory_order_relaxed)) {
-        VLOG(1) << "async switch worker pool have task executing...";
+    std::shared_ptr<Raii> raii;
+    if (isLocalWorker_ || stop_ || !TryAcquireAsyncSwitchPool(raii)) {
         return;
     }
     INJECT_POINT("TryShutdownStandbyConnection", [] { return; });
-    isInAsyncSwitchWorkerPool_.exchange(true, std::memory_order_relaxed);
     auto weakThis = weak_from_this();
-    if (asyncSwitchWorkerPool_) {
-        auto traceId = Trace::Instance().GetTraceID();
-        asyncSwitchWorkerPool_->Execute([weakThis, traceId]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            auto listen = weakThis.lock();
-            if (listen == nullptr) {
-                return;
-            }
-            listen->ShutdownStandbyConnection();
-            listen->isInAsyncSwitchWorkerPool_.exchange(false, std::memory_order_relaxed);
-        });
-    }
+    auto traceId = Trace::Instance().GetTraceID();
+    asyncSwitchWorkerPool_->Execute([weakThis, traceId, raii]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        auto listen = weakThis.lock();
+        if (listen == nullptr) {
+            return;
+        }
+        listen->ShutdownStandbyConnection();
+    });
 }
 }  // namespace client
 }  // namespace datasystem

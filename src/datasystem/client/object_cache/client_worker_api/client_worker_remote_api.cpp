@@ -107,6 +107,25 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     return Status::OK();
 }
 
+void ClientWorkerRemoteApi::RecreateOCStub()
+{
+    // Recreate the OC service stub after hostPort_ changes (e.g., worker IP change).
+    // Connect() only updates commonWorkerSession_, not stub_.
+    auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
+    if (IsShmEnableByUDS()) {
+        channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
+                                      GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
+    }
+    int32_t stubTimeout = connectTimeoutMs_;
+    if (clientDeadTimeoutMs_ > 0) {
+        stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
+    }
+    stub_ = std::make_unique<WorkerOCService_Stub>(channel, stubTimeout);
+    if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
+        stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+    }
+}
+
 Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                      uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
                                      std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
