@@ -1,0 +1,468 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "zmq_message",
+    srcs = [
+        "zmq_message.cpp",
+    ],
+    hdrs = [
+        "zmq_message.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "@securec",
+        "@zmq",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_unary_client_impl",
+    hdrs = [
+        "zmq_unary_client_impl.h",
+    ],
+    deps = [
+        ":zmq_stream_base",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc/zmq:exclusive_conn_mgr",
+        "//src/datasystem/common/rpc/zmq:rpc_service_method",
+        "//src/datasystem/common/rpc/zmq:zmq_msg_decoder",
+        "//src/datasystem/common/rpc/zmq:zmq_msg_queue",
+        "//src/datasystem/common/rpc/zmq:zmq_stub",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_constants",
+    hdrs = [
+        "zmq_constants.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_constants",
+    ],
+)
+
+ds_cc_library(
+    name = "work_agent2",
+    srcs = [
+        "work_agent.cpp",
+    ],
+    hdrs = [
+        "work_agent.h",
+    ],
+    deps = [
+        ":zmq_msg_decoder",
+        ":zmq_service",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_service",
+    srcs = [
+        "work_agent.cpp",
+        "zmq_server_impl.cpp",
+        "zmq_service.cpp",
+    ],
+    hdrs = [
+        "work_agent.h",
+        "zmq_server_impl.h",
+        "zmq_service.h",
+    ],
+    deps = [
+        ":rpc_service_method",
+        #":work_agent",
+        ":zmq_common",
+        ":zmq_epoll",
+        ":zmq_msg_decoder",
+        ":zmq_msg_queue",
+        ":zmq_payload",
+        ":zmq_socket",
+        ":zmq_stub_conn",
+        ":zmq_auth",
+        #":zmq_server_impl",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:rpc_service_cfg",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util/queue",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_helper",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_server_impl2",
+    srcs = [
+        "zmq_server_impl.cpp",
+    ],
+    hdrs = [
+        "zmq_server_impl.h",
+    ],
+    deps = [
+        ":zmq_auth",
+        ":zmq_common",
+        ":zmq_epoll",
+        ":zmq_payload",
+        ":zmq_service",
+        ":zmq_socket",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/log:common_log",
+        #"//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_helper",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_socket_ref",
+    srcs = [
+        "zmq_socket_ref.cpp",
+    ],
+    hdrs = [
+        "zmq_socket_ref.h",
+    ],
+    deps = [
+        ":zmq_constants",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_common",
+    srcs = [
+        "zmq_common.cpp",
+    ],
+    hdrs = [
+        "zmq_common.h",
+    ],
+    deps = [
+        ":zmq_constants",
+        ":zmq_message",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+        "//src/datasystem/protos:rpc_option_cc_proto",
+        "//src/datasystem/protos:utils_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_context",
+    srcs = [
+        "zmq_context.cpp",
+    ],
+    hdrs = [
+        "zmq_context.h",
+    ],
+    deps = [
+        ":zmq_common",
+        ":zmq_constants",
+        ":zmq_socket_ref",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_service_method",
+    hdrs = [
+        "rpc_service_method.h",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_epoll",
+    srcs = [
+        "zmq_epoll.cpp",
+    ],
+    hdrs = [
+        "zmq_epoll.h",
+    ],
+    deps = [
+        ":zmq_common",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:thread",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_msg_queue",
+    hdrs = [
+        "zmq_msg_queue.h",
+    ],
+    deps = [
+        ":zmq_common",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/queue",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_stub_conn",
+    srcs = [
+        "zmq_stub_conn.cpp",
+    ],
+    hdrs = [
+        "zmq_stub_conn.h",
+    ],
+    deps = [
+        ":rpc_service_method",
+        ":zmq_common",
+        ":zmq_context",
+        ":zmq_epoll",
+        ":zmq_msg_decoder",
+        ":zmq_msg_queue",
+        ":zmq_socket",
+        ":zmq_stub",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_credential",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_msg_decoder",
+    srcs = [
+        "zmq_msg_decoder.cpp",
+    ],
+    hdrs = [
+        "zmq_msg_decoder.h",
+    ],
+    deps = [
+        ":zmq_common",
+        ":zmq_message",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_payload",
+    srcs = [
+        "zmq_payload.cpp",
+    ],
+    hdrs = [
+        "zmq_payload.h",
+    ],
+    deps = [
+        ":rpc_service_method",
+        ":zmq_common",
+        ":zmq_msg_decoder",
+        ":zmq_msg_queue",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_stub",
+    hdrs = [
+        "zmq_stub.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_stub_impl",
+    srcs = [
+        "zmq_stub.cpp",
+        "zmq_stub_impl.cpp",
+    ],
+    hdrs = [
+        "zmq_stub_impl.h",
+    ],
+    deps = [
+        ":rpc_service_method",
+        ":zmq_payload",
+        ":zmq_stub",
+        ":zmq_stub_conn",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_socket",
+    srcs = [
+        "zmq_socket.cpp",
+    ],
+    hdrs = [
+        "zmq_socket.h",
+    ],
+    deps = [
+        ":zmq_common",
+        ":zmq_constants",
+        ":zmq_context",
+        ":zmq_socket_ref",
+        ":zmq_stub",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_auth",
+    srcs = [
+        "zmq_auth.cpp",
+    ],
+    hdrs = [
+        "zmq_auth.h",
+    ],
+    deps = [
+        ":zmq_socket",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_library(
+    name = "exclusive_conn_mgr",
+    srcs = [
+        "exclusive_conn_mgr.cpp",
+    ],
+    hdrs = [
+        "exclusive_conn_mgr.h",
+    ],
+    deps = [
+        ":zmq_msg_decoder",
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_client_stream_base",
+    srcs = [
+        "zmq_client_stream_base.cpp",
+    ],
+    hdrs = [
+        "zmq_client_stream_base.h",
+    ],
+    deps = [
+        ":exclusive_conn_mgr",
+        ":rpc_service_method",
+        ":zmq_msg_decoder",
+        ":zmq_msg_queue",
+        ":zmq_stream_base",
+        ":zmq_stub",
+        ":zmq_unary_client_impl",
+        "//src/datasystem/common/rpc:rpc_client_stream_base_common",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_monitor",
+    srcs = [
+        "zmq_monitor.cpp",
+    ],
+    hdrs = [
+        "zmq_monitor.h",
+    ],
+    deps = [
+        ":zmq_context",
+        ":zmq_socket",
+        ":zmq_stub_conn",
+        "//src/datasystem/common/util:thread",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_server_stream_base",
+    srcs = [
+        "zmq_server_stream_base.cpp",
+    ],
+    hdrs = [
+        "zmq_server_stream_base.h",
+    ],
+    deps = [
+        ":zmq_service",
+        ":zmq_stream_base",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_library(
+    name = "zmq_stream_base",
+    srcs = [
+        "zmq_stream_base.cpp",
+    ],
+    hdrs = [
+        "zmq_stream_base.h",
+    ],
+    deps = [
+        ":zmq_common",
+        ":zmq_msg_queue",
+        ":zmq_payload",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:thread_local",
+    ],
+)

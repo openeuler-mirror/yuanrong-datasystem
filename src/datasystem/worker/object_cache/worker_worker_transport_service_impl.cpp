@@ -23,7 +23,6 @@
 #include <thread>
 
 #include "datasystem/utils/status.h"
-
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"

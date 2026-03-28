@@ -26,6 +26,7 @@
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/log/trace.h"
 
 namespace datasystem {
 namespace client {

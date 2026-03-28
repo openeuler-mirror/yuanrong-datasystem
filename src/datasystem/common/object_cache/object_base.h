@@ -30,7 +30,6 @@
 #include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -39,6 +38,10 @@
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
+
+#ifndef DISABLE_RDMA
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 
 namespace datasystem {
 
@@ -332,6 +335,7 @@ struct ObjectInterface {
         return GetShmUnit() != nullptr && !stateInfo.IsIncomplete();
     }
 
+    #ifndef DISABLE_RDMA
     virtual void SetRemoteHostInfo(const std::string &clientCommId,
                                    const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo)
     {
@@ -343,6 +347,7 @@ struct ObjectInterface {
     {
         return nullptr;
     }
+    #endif
 };
 
 struct ObjectBufferInfo {

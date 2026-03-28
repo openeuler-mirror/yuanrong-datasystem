@@ -22,7 +22,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rpc/rpc_credential.h"
-#include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/rpc/zmq/zmq_auth.h"

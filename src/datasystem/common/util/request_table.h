@@ -27,11 +27,59 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/worker/object_cache/object_kv.h"
 
 namespace datasystem {
+namespace object_cache {
+
+using SafeObjType = SafeObject<ObjectInterface>;
+
+class ObjectKV {
+public:
+    /**
+     * @brief Construct ObjectKV.
+     */
+    ObjectKV(const std::string &objectKey, SafeObjType &entry) : objectKey_(objectKey), entry_(entry)
+    {
+    }
+
+    ObjectKV(const std::string &objectKey, std::nullptr_t) = delete;
+    // Disable all copy and move constructors.
+    ObjectKV(const ObjectKV &) = delete;
+    ObjectKV(ObjectKV &&other) noexcept = delete;
+    ObjectKV &operator=(const ObjectKV &) = delete;
+    ObjectKV &operator=(ObjectKV &&other) noexcept = delete;
+
+    /**
+     * @brief Get the SafeObjType entry.
+     * @return The entry.
+     */
+    SafeObjType &GetObjEntry() const
+    {
+        return entry_;
+    }
+
+    /**
+     * @brief Get the object key of the SafeObjType entry in the object table.
+     * @return The object key.
+     */
+    const std::string &GetObjKey() const
+    {
+        return objectKey_;
+    }
+
+    /**
+     * @brief Deconstruct ObjectKV.
+     */
+    ~ObjectKV() = default;
+
+private:
+    const std::string &objectKey_;
+    SafeObjType &entry_;
+};
+}
 
 template <typename Request>
 class RequestTable {

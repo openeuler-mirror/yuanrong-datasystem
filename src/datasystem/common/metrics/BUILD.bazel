@@ -1,0 +1,36 @@
+# BUILD file for src/datasystem/common/metrics
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "metrics_exporter_base",
+    srcs = ["metrics_exporter.cpp"],
+    hdrs = ["metrics_exporter.h"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    ],
+)
+
+ds_cc_library(
+    name = "common_metrics",
+    srcs = [
+        "res_metric_collector.cpp",
+    ],
+    hdrs = [
+        "res_metric_collector.h",
+        "res_metric_name.h",
+        # "metrics_key.def",
+        "metrics_description.def",
+        "res_metrics.def",
+    ],
+    deps = [
+        ":metrics_exporter_base",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+    ],
+)

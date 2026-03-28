@@ -21,12 +21,12 @@
 #include "datasystem/common/shared_memory/jemalloc.h"
 
 #define JEMALLOC_NO_DEMANGLE
-#include <jemalloc/jemalloc.h>
+#include "jemalloc/jemalloc.h"
 #undef JEMALLOC_NO_DEMANGLE
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/flags/flags.h"
 
 DS_DEFINE_uint32(memory_alignment, 64, "Alignment for jemalloc");

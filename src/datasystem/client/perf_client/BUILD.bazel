@@ -1,0 +1,41 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "perf_client_worker_api",
+    srcs = [
+        "perf_client_worker_api.cpp",
+    ],
+    hdrs = [
+        "perf_client_worker_api.h",
+    ],
+    deps = [
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:perf_posix_zmq_cc_proto",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "perf_client",
+    srcs = [
+        "perf_client.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":perf_client_worker_api",
+        "//include/datasystem:headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)

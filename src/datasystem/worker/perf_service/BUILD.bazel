@@ -1,0 +1,20 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "perf_service_impl",
+    srcs = [
+        "perf_service_impl.cpp",
+    ],
+    hdrs = [
+        "perf_service_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:perf_posix_zmq_cc_proto",
+    ],
+)

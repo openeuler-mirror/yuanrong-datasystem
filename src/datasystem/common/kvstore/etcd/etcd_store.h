@@ -33,7 +33,6 @@
 #include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
-#include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/kvstore/kv_store.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"

@@ -1,0 +1,97 @@
+# BUILD file for src/datasystem/common/signal
+
+package(default_visibility = ["//visibility:public"])
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+ds_cc_library(
+    name = "util",
+    hdrs = ["util.h"],
+    deps = [
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/protos:master_stream_zmq_cc_proto",
+        "//src/datasystem/protos:master_stream_cc_proto",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "stream_meta_shm",
+    hdrs = ["stream_meta_shm.h"],
+    srcs = [
+        "stream_meta_shm.cpp",
+    ],
+    deps = [
+        "//src/datasystem/client/mmap:immap_table_entry",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:format",
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "stream_fields",
+    hdrs = ["stream_fields.h"],
+    deps = [
+        "//include/datasystem/stream:stream_headers",
+    ],
+)
+
+ds_cc_library(
+    name = "consumer_meta",
+    hdrs = ["consumer_meta.h"],
+    deps = [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+        "//src/datasystem/protos:worker_stream_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "cursor",
+    hdrs = ["cursor.h"],
+    srcs = [
+        "cursor.cpp",
+    ],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:safe_shm_lock",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:lock",
+
+    ],
+)
+
+ds_cc_library(
+    name = "stream_data_page",
+    hdrs = ["stream_data_page.h"],
+    srcs = [
+        "stream_data_page.cpp",
+    ],
+    deps = [
+        ":cursor",
+        ":stream_meta_shm",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/client/mmap:immap_table_entry",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:memory",
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/protos:stream_posix_cc_proto",
+        "//src/datasystem/common/string_intern:string_ref",
+        #"//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:bitmask_enum",
+
+    ],
+)

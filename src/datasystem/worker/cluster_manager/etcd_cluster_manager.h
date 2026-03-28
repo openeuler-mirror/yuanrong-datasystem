@@ -56,8 +56,6 @@
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 
 namespace datasystem {
-class ReplicaManager;
-
 struct ClusterInfo {
     std::vector<std::pair<std::string, std::string>> localHashRing;     // <azName, hashRingPb>
     std::vector<std::pair<std::string, std::string>> otherAzHashrings;  // <azName, hashRingPb>
@@ -80,7 +78,7 @@ public:
      * @brief Constructor
      */
     EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB,
-                       std::shared_ptr<AkSkManager> akSkManager = nullptr, ReplicaManager *replicaManager = nullptr,
+                       bool multiReplicaEnabled, std::shared_ptr<AkSkManager> akSkManager = nullptr,
                        const int pqSize = 5000);
 
     ~EtcdClusterManager();
@@ -1232,7 +1230,7 @@ private:
     std::string clusterPrefix_;
     std::atomic<bool> isLeaving_{ false };
     std::shared_ptr<AkSkManager> akSkManager_;
-    ReplicaManager *replicaManager_{ nullptr };
+    bool multiReplicaEnabled_ = false;
     std::vector<std::string> otherAZNames_;
 
     bool isEtcdAvailableWhenStart_{ true };

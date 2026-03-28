@@ -1,0 +1,43 @@
+load("@pybind11_bazel//:build_defs.bzl", "pybind_library")
+load("//bazel:build_defs.bzl", "pybind_extension_jemalloc")
+
+package(default_visibility = ["//visibility:public"])
+
+pybind_extension_jemalloc(
+    name = "libds_client_py",
+    additional_linker_inputs = ["export_symbols.lds"],
+    jemalloc_dynamic = True,
+    linkopts = [
+        "-Wl,--version-script,$(location export_symbols.lds)",
+        "-Wl,--disable-new-dtags",
+        "-Wl,-rpath,$$ORIGIN",
+        "-Wl,-rpath,$$ORIGIN/lib",
+    ],
+    deps = [
+        ":ds_client_py_lib",
+    ],
+)
+
+pybind_library(
+    name = "ds_client_py_lib",
+    srcs = [
+        "pybind_register.cpp",
+        "pybind_register_common.cpp",
+        "pybind_register_context.cpp",
+        "pybind_register_hetero.cpp",
+        "pybind_register_kv.cpp",
+        "pybind_register_object.cpp",
+        "pybind_register_stream.cpp",
+    ],
+    hdrs = [
+        "pybind_register.h",
+    ],
+    strip_include_prefix = "/src",
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/object_cache/device:page_attn_utils",
+        "//src/datasystem/client/stream_cache:consumer",
+        "//src/datasystem/common/util:status_helper",
+    ],
+    alwayslink = True,
+)

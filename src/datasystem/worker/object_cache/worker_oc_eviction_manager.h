@@ -29,6 +29,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -39,7 +40,6 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
 #include "datasystem/worker/object_cache/object_kv.h"
-#include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -57,6 +57,10 @@ class SpillEvictionTest;
 }  // namespace datasystem
 
 namespace datasystem {
+
+namespace master {
+class MasterOCServiceImpl;
+}
 class EtcdClusterManager;
 namespace object_cache {
 using datasystem::EtcdClusterManager;

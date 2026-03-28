@@ -19,7 +19,6 @@
  */
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/util/random_data.h"
-#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
 

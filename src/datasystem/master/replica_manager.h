@@ -31,13 +31,15 @@
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
-#include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 
 #ifndef DATASYSTEM_MASTER_REPLICA_MANAGER_H
 #define DATASYSTEM_MASTER_REPLICA_MANAGER_H
 
 namespace datasystem {
+namespace object_cache {
+class MasterWorkerOCServiceImpl;
+class WorkerWorkerOCServiceImpl;
+}
 struct ReplicaManagerParam {
     std::string dbRootPath;
     std::string currWorkerId;

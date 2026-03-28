@@ -30,11 +30,12 @@
 #include <unistd.h>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-
+#ifdef WITH_TESTS
+#include "datasystem/common/inject/inject_point.h"
+#endif
 namespace datasystem {
 namespace memory {
 
@@ -75,7 +76,9 @@ void SharedDiskDetecter::Detect()
     constexpr uint64_t minBytes = 1024ul * 1024ul;
     // 1. check space is full
     auto freeBytes = GetFreeSpaceBytes(path_);
+#ifdef WITH_TESTS
     INJECT_POINT("disk_detecter.free_bytes", [&freeBytes]() { freeBytes = 0; });
+#endif
     if (freeBytes < minBytes) {
         available_ = false;
         LOG(WARNING) << "[Disk Detect] Space is full, just remain " << freeBytes << " bytes";

@@ -56,7 +56,9 @@ struct GetObjEntryParams {
         params->shmUnit = safeObj->GetShmUnit();
         params->isSealed = safeObj->IsSealed();
         params->version = safeObj->GetCreateTime();
+#ifndef DISABLE_RDMA
         params->remoteH2DHostInfo = safeObj->GetRemoteHostInfo();
+#endif
         VLOG(1) << "Create GetObjEntryParams for objectKey " << objectKey << ", dataSize: " << params->dataSize
                 << ", metaSize: " << params->metaSize;
         return params;

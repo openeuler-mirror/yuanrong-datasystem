@@ -82,25 +82,36 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
     foreach (file ${ARGN})
         get_filename_component(abs_file ${file} ABSOLUTE)
         get_filename_component(file_name ${file} NAME_WE)
-        get_filename_component(file_dir ${file} PATH)
+        
+        file(RELATIVE_PATH _REL_PATH ${CMAKE_SOURCE_DIR}/src ${abs_file})
+        get_filename_component(_REL_DIR ${_REL_PATH} DIRECTORY)
+        
+        if(_REL_DIR)
+          set(_OUTPUT_PREFIX "${target_directory}/${_REL_DIR}")
+        else()
+          set(_OUTPUT_PREFIX "${target_directory}")
+        endif()
+        
+        file(MAKE_DIRECTORY ${_OUTPUT_PREFIX})
 
-        list(APPEND ${source_files} "${target_directory}/${file_name}.pb.cc")
-        list(APPEND ${header_files} "${target_directory}/${file_name}.pb.h")
-        list(APPEND ${source_files} "${target_directory}/${file_name}.service.rpc.pb.cc")
-        list(APPEND ${header_files} "${target_directory}/${file_name}.service.rpc.pb.h")
-        list(APPEND ${source_files} "${target_directory}/${file_name}.stub.rpc.pb.cc")
-        list(APPEND ${header_files} "${target_directory}/${file_name}.stub.rpc.pb.h")
+        list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.pb.cc")
+        list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.pb.h")
+        list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.cc")
+        list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.h")
+        list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.cc")
+        list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h")
+        
         set(LD_LIB_PATH "${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}")
         add_custom_command(
-            OUTPUT "${target_directory}/${file_name}.pb.cc"
-            "${target_directory}/${file_name}.pb.h"
-            "${target_directory}/${file_name}.service.rpc.pb.cc"
-            "${target_directory}/${file_name}.service.rpc.pb.h"
-            "${target_directory}/${file_name}.stub.rpc.pb.cc"
-            "${target_directory}/${file_name}.stub.rpc.pb.h"
+            OUTPUT "${_OUTPUT_PREFIX}/${file_name}.pb.cc"
+            "${_OUTPUT_PREFIX}/${file_name}.pb.h"
+            "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.cc"
+            "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.h"
+            "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.cc"
+            "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h"
             COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${LD_LIB_PATH}
                     $<TARGET_FILE:protobuf::protoc>
-            ARGS -I ${file_dir}  -I ${proto_src_directory} 
+            ARGS -I ${CMAKE_SOURCE_DIR}/src -I ${proto_src_directory}
                  --zmq_out ${target_directory} 
                  --cpp_out ${target_directory}
                  --plugin=protoc-gen-zmq=$<TARGET_FILE:zmq_plugin> 
@@ -108,12 +119,12 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
             DEPENDS ${abs_file} "${CMAKE_SOURCE_DIR}/src/datasystem/common/rpc/plugin_generator/zmq_plugin.cpp"
             COMMENT "Running c++ ZMQ compiler on ${file}" VERBATIM)
         add_custom_target(ZMQ_PROTO_LIB_DEPEND_${file_name} DEPENDS
-                "${target_directory}/${file_name}.pb.cc"
-                "${target_directory}/${file_name}.pb.h"
-                "${target_directory}/${file_name}.service.rpc.pb.cc"
-                "${target_directory}/${file_name}.service.rpc.pb.h"
-                "${target_directory}/${file_name}.stub.rpc.pb.cc"
-                "${target_directory}/${file_name}.stub.rpc.pb.h")
+                "${_OUTPUT_PREFIX}/${file_name}.pb.cc"
+                "${_OUTPUT_PREFIX}/${file_name}.pb.h"
+                "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.cc"
+                "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.h"
+                "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.cc"
+                "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h")
         add_dependencies(${ZMQ_PROTO_LIB_DEPEND} ZMQ_PROTO_LIB_DEPEND_${file_name})
     endforeach ()
 

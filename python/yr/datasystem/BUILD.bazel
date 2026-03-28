@@ -1,0 +1,19 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "datasystem_client",
+    srcs = glob(
+        ["*.py"],
+    ),
+    data = [
+        "//:libds_client_py_file",
+    ],
+    imports = [
+        "python",
+    ],
+    visibility = [
+        "//bazel:__pkg__",
+        "//python:__pkg__",
+    ],
+)

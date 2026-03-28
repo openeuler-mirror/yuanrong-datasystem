@@ -44,10 +44,18 @@
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
+#include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 
 namespace datasystem {
+enum ObjectMetaStoreEventType : uint32_t {
+    GET_HASH_RANGE_NON_BLOCK,
+    GET_LOCAL_WORKER_UUID,
+};
+
+using GetHashRangeNonBlockEvent = EventSubscribers<GET_HASH_RANGE_NON_BLOCK, std::function<void(worker::HashRange &)>>;
+
+using GetLocalWorkerUuidEvent = EventSubscribers<GET_LOCAL_WORKER_UUID, std::function<void(std::string &)>>;
+
 namespace master {
 static const std::string HEALTH_STATUS = "ready";
 // Mark whether the reference counting metadata stored in rocksdb is in or out of the cloud.
@@ -354,14 +362,6 @@ public:
     std::string GetETCDAsyncQueueUsage();
 
     /**
-     * @brief Set ETCD cluster manager.
-     */
-    void SetClusterManager(EtcdClusterManager *etcdCM)
-    {
-        etcdCM_ = etcdCM;
-    }
-
-    /**
      * @brief Check if rocksdb is trustworthy or not.
      * @return True if rocksdb is trustworthy.
      */
@@ -606,9 +606,6 @@ private:
 
     // Is persistence enabled or not.
     bool isPersistenceEnabled_;
-
-    // ETCD cluster manager to get the range.
-    EtcdClusterManager *etcdCM_ = nullptr;
 
     // Protects 'etcdKeyMap_'
     std::shared_timed_mutex etcdMtx_;

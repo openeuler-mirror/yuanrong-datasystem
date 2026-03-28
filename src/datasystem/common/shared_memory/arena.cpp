@@ -31,7 +31,9 @@
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -43,8 +45,9 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
+#ifndef DISABLE_RDMA
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-
+#endif
 DS_DEFINE_uint32(
     arena_per_tenant, 16,
     "The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for "
@@ -307,6 +310,7 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
     arenas_.resize(ARENAS_INIT_SIZE);
     Jemalloc::Init(&ArenaManager::AllocHook, &ArenaManager::DestroyHook, &ArenaManager::CommitHook);
     handleExpiredTenantThread_ = std::make_unique<ThreadPool>(handleExpiredTenantThreadNum_, 0, "TenantExpired");
+#ifndef DISABLE_RDMA
     if (populate || FLAGS_enable_huge_tlb || NeedRegisterWholeArena()) {
         // Adding multiple arenas per tenant allows parallel physical memory binding operations across different arenas.
         // For scenarios requiring pre-allocation of physical memory, a single arena is sufficient.
@@ -315,6 +319,7 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
         // phase.
         FLAGS_enable_fallocate = false;
     }
+#endif
     auto arenaNum = FLAGS_arena_per_tenant;
     if (!FLAGS_shared_disk_directory.empty()) {
         arenaNum += FLAGS_shared_disk_arena_per_tenant;
@@ -360,6 +365,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         static_cast<uint64_t>(static_cast<long double>(std::numeric_limits<uint64_t>::max()) * rate) > maxSize,
         K_RUNTIME_ERROR, "mmapSize overflow.");
     auto fakeAllocateSize = maxSize;
+#ifndef DISABLE_RDMA
     if (populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled() || FLAGS_enable_huge_tlb) {
         // Here we ensure total allocated memory
         // does not exceed max requested by user
@@ -369,6 +375,7 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         // account for extra Jemalloc overhead
         fakeAllocateSize = static_cast<uint64_t>(overhead * maxSize);
     }
+#endif
     uint64_t mmapSize = maxSize / rate;
     if (FLAGS_enable_huge_tlb) {
         mmapSize = RoundUpToNextMultiple(mmapSize);
@@ -866,7 +873,9 @@ bool Arena::AddPhysicalMemeoryUsage(uint64_t size)
 
 void Arena::SubPhysicalMemeoryUsage(uint64_t size)
 {
+#ifdef WITH_TESTS
     INJECT_POINT("arena.decommit", [&size](uint64_t num) { size += num; });
+#endif
     Allocator::Instance()->SubTotalPhysicalMemoryUsage(cacheType_, size);
     if (!physicalMemoryStats_.SubRealUsageCAS(size)) {
         LOG(WARNING) << "Arena " << arenaId_ << " sub physical memory usage failed";

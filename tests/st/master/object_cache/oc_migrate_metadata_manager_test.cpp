@@ -93,7 +93,7 @@ public:
         FLAGS_master_address = hostPort_.ToString();
         RETURN_IF_NOT_OK(etcdStore_->Init());
         replicaManager_ = std::make_unique<ReplicaManager>();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, hostPort_, etcdStore_.get());
+        etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, hostPort_, etcdStore_.get(), false);
         ClusterInfo clusterInfo;
         RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));

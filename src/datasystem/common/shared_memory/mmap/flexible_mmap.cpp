@@ -23,7 +23,9 @@
 #include <unistd.h>
 
 #include "datasystem/common/flags/flags.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"

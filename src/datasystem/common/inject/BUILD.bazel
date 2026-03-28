@@ -1,0 +1,19 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "common_inject",
+    srcs = [
+        "inject_point.cpp",
+    ],
+    hdrs = [
+        "inject_point.h",
+    ],
+    deps = [
+        #"//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:net_util",
+    ],
+)

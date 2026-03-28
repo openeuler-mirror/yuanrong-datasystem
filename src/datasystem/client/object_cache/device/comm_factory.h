@@ -28,14 +28,9 @@
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/device/hccl_comm_magr.h"
-#include "datasystem/common/device/ascend/cann_types.h"
-#include "datasystem/common/device/comm_wrapper.h"
-#include "datasystem/common/device/ascend/p2phccl_comm_wrapper.h"
-#include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_manager_factory.h"
-#include "datasystem/common/log/log.h"
-#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/device/comm_wrapper.h"
 
 namespace datasystem {
 

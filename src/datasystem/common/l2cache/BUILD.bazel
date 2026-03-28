@@ -1,0 +1,91 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "persistence_api_header",
+    hdrs = [
+        "l2cache_client.h",
+        "l2cache_object_info.h",
+        "persistence_api.h",
+    ],
+    deps = [
+        "//src/datasystem/common/httpclient:http_client",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "l2cache_client",
+    srcs = [
+        "l2cache_client.cpp",
+    ],
+    hdrs = [
+        "l2cache_client.h",
+    ],
+    deps = [
+        "//src/datasystem/common/httpclient:http_client",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "l2cache_object_info_header",
+    hdrs = [
+        "l2cache_object_info.h",
+    ],
+)
+
+ds_cc_library(
+    name = "persistence_api",
+    srcs = [
+        "persistence_api.cpp",
+    ],
+    hdrs = [
+        "persistence_api.h",
+    ],
+    deps = [
+        ":l2cache_client",
+        ":l2cache_object_info_header",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/l2cache/sfs_client",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "@curl",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "l2_storage",
+    srcs = [
+        "l2_storage.cpp",
+    ],
+    hdrs = [
+        "l2_storage.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:bitmask_enum",
+    ],
+)
+
+ds_cc_library(
+    name = "get_object_info_list_resp",
+    srcs = [
+        "get_object_info_list_resp.cpp",
+    ],
+    hdrs = [
+        "get_object_info_list_resp.h",
+    ],
+    deps = [
+        "//src/datasystem/common/l2cache:l2cache_object_info_header",
+        #"//src/datasystem/common/l2cache/obs_client:obs_client_header",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

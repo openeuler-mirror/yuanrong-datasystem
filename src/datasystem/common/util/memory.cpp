@@ -23,9 +23,12 @@
 #include <cstddef>
 #include <system_error>
 #include <thread>
-
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
+#ifdef ENABLE_PERF
 #include "datasystem/common/perf/perf_manager.h"
+#endif
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/status.h"
@@ -166,7 +169,9 @@ Status MemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src, uint64_
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(dst != nullptr && src != nullptr, K_INVALID,
                                          "dst or src pointer cannot be null.");
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::COMMON_UTIL_MEMORY_COPY);
+#endif
     if (dstMaxSize < srcSize) {
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       FormatString("dst size: %d smaller than src size: %d", dstMaxSize, srcSize));
@@ -211,7 +216,9 @@ Status HugeMemset(uint8_t *dest, size_t destSize, int value, size_t count)
 
 Status HugeMemoryCopy(uint8_t *dest, uint64_t destMax, const uint8_t *src, uint64_t srcSize)
 {
+#ifdef WITH_TESTS
     INJECT_POINT("HugeMemoryCopy");
+#endif
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(dest != nullptr && src != nullptr, K_INVALID,
                                          "dest and src pointers cannot be  null.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(srcSize > 0 && srcSize <= destMax, K_INVALID,
@@ -222,13 +229,14 @@ Status HugeMemoryCopy(uint8_t *dest, uint64_t destMax, const uint8_t *src, uint6
     auto srcLen = srcSize;
 
     uint64_t memChunkLimit = MEMCOPY_SIZE_LIMIT;
-
+#ifdef WITH_TESTS
     // To reduce running time of the UT: ObjectClientTest.HugeMemoryCopyTest.
     INJECT_POINT("memcopy.GetMemChunkLimit", [&memChunkLimit](int sizeLimit) {
         LOG(INFO) << "set memChunkLimit to " << sizeLimit;
         memChunkLimit = sizeLimit;
         return Status::OK();
     });
+#endif
     const int DEBUG_MIDDLE_LEVEL = 2;
     VLOG(DEBUG_MIDDLE_LEVEL) << "memChunkLimit = " << memChunkLimit / MEMCOPY_PARALLEL_THRESHOLD << "MB";
     VLOG(DEBUG_MIDDLE_LEVEL) << "srcLen = " << srcLen / MEMCOPY_PARALLEL_THRESHOLD << "MB";

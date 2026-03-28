@@ -1,0 +1,385 @@
+load("//:version.bzl", "DATASYSTEM_VERSION")
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# success, need wait rpc_stub_cache_mgr
+ds_cc_library(
+    name = "worker_master_api_manager_base",
+    srcs = [],
+    hdrs = [
+        "worker_master_api_manager_base.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr_header",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "worker_update_flag_check",
+    srcs = [
+        "worker_update_flag_check.cpp",
+    ],
+    hdrs = [
+        "worker_update_flag_check.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:validator",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_service_impl",
+    srcs = [
+        "worker_service_impl.cpp",
+    ],
+    hdrs = [
+        "worker_service_impl.h",
+    ],
+    defines = [
+        "DATASYSTEM_VERSION=\\\"{}\\\"".format(DATASYSTEM_VERSION),
+    ],
+    deps = [
+        "//src/datasystem/c_api:status_definition",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:fd_manager",
+        "//src/datasystem/common/util:fd_pass",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util:version",
+        "//src/datasystem/protos:share_memory_zmq_cc_proto",
+        "//src/datasystem/server:common_server",
+        "//src/datasystem/worker:authenticate",
+        "//src/datasystem/worker/client_manager",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/cluster_manager:worker_health_check",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_oc_server",
+    srcs = [
+        "worker_oc_server.cpp",
+    ],
+    hdrs = [
+        "worker_oc_server.h",
+    ],
+    deps = [
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_health",
+        "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:protobuf_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:request_counter",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/master:master_service_impl",
+        "//src/datasystem/master:replica_manager",
+        "//src/datasystem/master:replication_service_impl",
+        "//src/datasystem/master/object_cache:master_oc_service_impl",
+        "//src/datasystem/master/stream_cache:master_sc_service_impl",
+        "//src/datasystem/master/stream_cache:master_worker_sc_api",
+        "//src/datasystem/master/stream_cache:rpc_session_manager",
+        "//src/datasystem/master/stream_cache:sc_metadata_manager",
+        "//src/datasystem/server:common_server",
+        "//src/datasystem/worker:worker_liveness_check_header",
+        "//src/datasystem/worker:worker_service_impl",
+        "//src/datasystem/worker/client_manager",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/cluster_manager:worker_health_check",
+        "//src/datasystem/worker/hash_ring",
+        "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+        "//src/datasystem/worker/perf_service:perf_service_impl",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:master_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
+    ],
+    alwayslink = True,
+)
+
+# success
+ds_cc_library(
+    name = "worker_cli",
+    srcs = [
+        "worker_cli.cpp",
+    ],
+    hdrs = [
+        "worker_cli.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/hash_ring:hash_ring_pb_utils",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_liveness_check_header",
+    hdrs = [
+        "worker_liveness_check.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+    ],
+)
+
+# depend on worker_oc_server
+ds_cc_library(
+    name = "worker_liveness_check",
+    srcs = [
+        "worker_liveness_check.cpp",
+    ],
+    hdrs = [
+        "worker_liveness_check.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_credential",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:worker_oc_server",
+    ],
+    alwayslink = True,
+)
+
+# success
+ds_cc_library(
+    name = "authenticate",
+    srcs = [
+        "authenticate.cpp",
+    ],
+    hdrs = [
+        "authenticate.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/worker/client_manager",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "cluster_event_type",
+    srcs = [],
+    hdrs = [
+        "cluster_event_type.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:event_subscribers",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+# TODO:git hash && git branch
+ds_cc_library(
+    name = "worker",
+    srcs = [
+        "worker.cpp",
+    ],
+    hdrs = [
+        "worker.h",
+    ],
+    defines = [
+        "GIT_HASH=\\\"{}\\\"".format("git_hash"),
+        "GIT_BRANCH=\\\"{}\\\"".format("git_branch"),
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:failure_handler",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/signal",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/worker:worker_cli",
+        "//src/datasystem/worker:worker_oc_server",
+        "//src/datasystem/worker:worker_service_impl",
+        "//src/datasystem/worker:worker_update_flag_check",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_api_c_wrapper",
+    srcs = [
+        "worker_api_c_wrapper.cpp",
+    ],
+    hdrs = [
+        "worker_api_c_wrapper.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/worker",
+        "//src/datasystem/worker:worker_service_impl",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_main",
+    srcs = [
+        "worker_main.cpp",
+    ],
+    deps = [
+        ":add_miss_libs_fixme",
+        ":worker",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
+        "//src/datasystem/common/log:failure_handler",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/signal",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/worker:worker_cli",
+        "//src/datasystem/worker:worker_oc_server",
+        "//src/datasystem/worker:worker_update_flag_check",
+    ],
+)
+
+ds_cc_library(
+    name = "add_miss_libs_fixme",
+    deps = [
+        "//src/datasystem/common/l2cache:persistence_api",
+        "//src/datasystem/common/util:meta_route_tool",
+        "//src/datasystem/master/object_cache:master_worker_oc_local_api",
+        "//src/datasystem/master/stream_cache:master_worker_sc_api",
+        "//src/datasystem/worker:worker_liveness_check",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/object_cache:worker_request_manager",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+        "//src/datasystem/worker/object_cache:worker_worker_transport_api",
+        "//src/datasystem/worker/object_cache/device:worker_dev_req_manager",
+        "//src/datasystem/worker/object_cache/device:worker_device_oc_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_delete_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_multi_publish_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_publish_impl",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager",
+        "//src/datasystem/worker/stream_cache:stream_data_pool",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache:usage_monitor",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
+        "//src/datasystem/worker/stream_cache/page_queue:exclusive_page_queue",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_base",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_handler",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group",
+    ],
+    alwayslink = True,
+)
+
+cc_binary(
+    name = "datasystem_worker",
+    linkopts = [
+        "-Wl,--disable-new-dtags",
+        "-Wl,-rpath,$$ORIGIN/lib",
+    ],
+    deps = [
+        ":worker_main",
+    ],
+)

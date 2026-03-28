@@ -19,11 +19,11 @@
  */
 syntax = "proto3";
 package datasystem.master;
-import "object_posix.proto";
-import "worker_object.proto";
-import "utils.proto";
-import "rpc_option.proto";
-import "p2p_subscribe.proto";
+import "datasystem/protos/object_posix.proto";
+import "datasystem/protos/worker_object.proto";
+import "datasystem/protos/utils.proto";
+import "datasystem/protos/rpc_option.proto";
+import "datasystem/protos/p2p_subscribe.proto";
 
 option cc_enable_arenas = true;
 

@@ -17,7 +17,7 @@
 /**
  * Description: Defines the ascend device manager.
  */
-#include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
+#include "datasystem/common/device/acl_pipeline_p2p_task.h"
 
 #include <mutex>
 #include <numeric>

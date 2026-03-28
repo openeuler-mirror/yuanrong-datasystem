@@ -1,0 +1,133 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "object_cache_header",
+    hdrs = [
+        "client_device_object_manager.h",
+        "comm_factory.h",
+        "device_memory_unit.h",
+        "hccl_comm_magr.h",
+        "p2p_subscribe.h",
+    ],
+    deps = [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        #"//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/device:device_manager_factory",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "client_device_object_manager",
+    srcs = [
+        "client_device_object_manager.cpp",
+    ],
+    hdrs = [
+        "client_device_object_manager.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":device_memory_unit",
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/device:device_resource_manager_factory",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/device/ascend:acl_resource_manager",
+        "@tbb",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "comm_factory_and_hccl_comm",
+    srcs = [
+        "comm_factory.cpp",
+        "hccl_comm_magr.cpp",
+    ],
+    hdrs = [
+        "comm_factory.h",
+        "hccl_comm_magr.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "device_memory_unit",
+    srcs = [
+        "device_memory_unit.cpp",
+    ],
+    hdrs = [
+        "device_memory_unit.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":p2p_subscribe",
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/client/object_cache/device:future",
+        "//src/datasystem/common/device:device_manager_factory",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "future",
+    srcs = [
+        "future.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/device:device_pointer_wrapper",
+    ],
+)
+
+ds_cc_library(
+    name = "p2p_subscribe",
+    srcs = [
+        "p2p_subscribe.cpp",
+    ],
+    hdrs = [
+        "p2p_subscribe.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":comm_factory_and_hccl_comm",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/log:common_log",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "page_attn_utils",
+    srcs = [
+        "page_attn_utils.cpp",
+    ],
+    hdrs = [
+        "page_attn_utils.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

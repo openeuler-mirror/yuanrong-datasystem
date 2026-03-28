@@ -54,7 +54,7 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
 {
     inject::Set("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy", "return(K_WORKER_ABNORMAL)");
     inject::Set("OCNotifyWorkerManager.NoNeedRecoveryMeta", "return(K_OK)");
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
     EXPECT_EQ(manager->Init(), Status::OK());
     std::string worker1 = "127.0.0.1:40001";
     std::string worker2 = "127.0.0.1:40002";
@@ -85,7 +85,7 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
     }
 
     manager.reset();
-    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr, nullptr);
+    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
     EXPECT_EQ(manager->Init(), Status::OK());
     {
         ObjectMeta objectMeta;
@@ -108,7 +108,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
     auto ocMetaManager = std::make_shared<master::OCMetadataManager>(akSkManager_, nullptr, nullptr, nullptr,
                                                                      "127.0.0.1:900", nullptr, "dbName");
     auto manager =
-        std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr, ocMetaManager.get());
+        std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
 
     BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _)).WillRepeatedly(Return(Status::OK()));
     std::string newPrimaryCopy = "127.0.0.1:902";

@@ -1,0 +1,237 @@
+load("//:version.bzl", "DATASYSTEM_VERSION")
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+CLIENT_SRCS = [
+    "client_worker_common_api.cpp",
+    "listen_worker.cpp",
+    "mmap_manager.cpp",
+    "client_flags_monitor.cpp",
+    "context/context.cpp",
+    "object_cache/client_worker_api.cpp",
+    "object_cache/object_client_impl.cpp",
+    "kv_cache/read_only_buffer.cpp",
+    "kv_cache/kv_client.cpp",
+]
+
+CLIENT_HDRS = [
+    "object_cache/client_worker_api.h",
+    "mmap_manager.h",
+    "client_worker_common_api.h",
+    "client_flags_monitor.h",
+    "listen_worker.h",
+    "object_cache/object_client_impl.h",
+    "client_state_manager.h",
+]
+
+CLIENT_DEPS = [
+    "//src/datasystem/common/object_cache:object_base",
+    "//src/datasystem/common/eventloop:common_event_loop",
+    "//src/datasystem/common/log:common_log",
+    "//src/datasystem/common/ak_sk:common_ak_sk",
+    #"//src/datasystem/common/stream_cache:common_sc",
+    "//src/datasystem/common/shared_memory:common_shm_unit_info",
+    "//src/datasystem/common/util:common_util",
+    "//src/datasystem/common/immutable_string:immutable_string",
+    "//src/datasystem/common/string_intern:string_ref",
+    "//src/datasystem/common/shared_memory:common_shared_memory",
+    "//src/datasystem/common/parallel:common_parallel",
+    "//src/datasystem/common/rpc:rpc_sdk_deps",
+    "//src/datasystem/protos:posix_protos",
+    "//src/datasystem/protos:share_memory_protos",
+    "//src/datasystem/protos:worker_object_protos",
+    "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+    "//src/datasystem/protos:worker_stream_cc_proto",
+    "//src/datasystem/protos:perf_posix_protos",
+    "//src/datasystem/client/mmap:mmap_table",
+    "@com_google_protobuf//:protobuf",
+    "@nlohmann_json//:json",
+]
+
+ds_cc_library(
+    name = "mmap_manager",
+    srcs = [
+        "mmap_manager.cpp",
+    ],
+    hdrs = [
+        "mmap_manager.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client/mmap:mmap_table",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:fd_manager",
+        "//src/datasystem/protos:share_memory_zmq_cc_proto",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "client_worker_common_api",
+    srcs = [
+        "client_worker_common_api.cpp",
+    ],
+    hdrs = [
+        "client_worker_common_api.h",
+    ],
+    defines = [
+        "DATASYSTEM_VERSION=\\\"{}\\\"".format(DATASYSTEM_VERSION),
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/client:embedded_client_worker_api",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/token:client_access_token",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:fd_pass",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+        "//src/datasystem/protos:share_memory_zmq_cc_proto",
+        "//src/datasystem/worker/object_cache:worker_worker_transport_api",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "client_flags_monitor",
+    srcs = [
+        "client_flags_monitor.cpp",
+    ],
+    hdrs = [
+        "client_flags_monitor.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "listen_worker",
+    srcs = [
+        "listen_worker.cpp",
+    ],
+    hdrs = [
+        "listen_worker.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/common/inject:common_inject",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "client_state_manager",
+    hdrs = [
+        "client_state_manager.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
+ds_cc_library(
+    name = "embedded_client_worker_api",
+    srcs = [
+        "embedded_client_worker_api.cpp",
+    ],
+    hdrs = [
+        "embedded_client_worker_api.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/util:dlutils",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/protos:share_memory_cc_proto",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "add_client_miss_libs_fixme",
+    deps = [
+        "//src/datasystem/client/object_cache/device:client_device_object_manager",
+        "//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
+        "//src/datasystem/common/l2cache:persistence_api",
+        "//src/datasystem/common/object_cache:buffer",
+        "//src/datasystem/common/object_cache:device_buffer",
+        "//src/datasystem/common/util:meta_route_tool",
+        "//src/datasystem/master/object_cache:master_worker_oc_local_api",
+        "//src/datasystem/worker:worker_liveness_check",
+        "//src/datasystem/worker:worker_oc_server",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//src/datasystem/worker/object_cache/device:worker_device_oc_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_delete_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_multi_publish_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_publish_impl",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/page_queue:exclusive_page_queue",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_base",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_handler",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group",
+    ],
+)
+
+ds_cc_library(
+    name = "datasystem",
+    srcs = [
+        "datasystem.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":add_client_miss_libs_fixme",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client/context",
+        "//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/client/object_cache:object_client",
+        "//src/datasystem/client/stream_cache:stream_client",
+        "//src/datasystem/common/object_cache:buffer",
+        "//src/datasystem/common/object_cache:device_buffer",
+        "//src/datasystem/common/util:status_helper",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "service_discovery",
+    srcs = [
+        "service_discovery.cpp",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+    ],
+    alwayslink = True,
+)

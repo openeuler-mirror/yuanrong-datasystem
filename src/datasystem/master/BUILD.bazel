@@ -1,0 +1,158 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "meta_addr_info",
+    hdrs = [
+        "meta_addr_info.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:common_util_base",
+        "//src/datasystem/common/util:thread_local",
+    ],
+)
+
+ds_cc_library(
+    name = "node_descriptor",
+    srcs = [
+        "node_descriptor.cpp",
+    ],
+    hdrs = [
+        "node_descriptor.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:master_heartbeat_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "node_manager",
+    hdrs = [
+        "node_manager.h",
+    ],
+    deps = [
+        ":node_descriptor",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:master_heartbeat_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "replica_rpc_channel_impl",
+    srcs = [
+        "replica_rpc_channel_impl.cpp",
+    ],
+    hdrs = [
+        "replica_rpc_channel_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/kvstore/rocksdb:replica",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+        "//src/datasystem/worker/hash_ring",
+    ],
+)
+
+ds_cc_library(
+    name = "replica_manager",
+    srcs = [
+        "replica_manager.cpp",
+    ],
+    hdrs = [
+        "replica_manager.h",
+    ],
+    deps = [
+        ":meta_addr_info",
+        ":replica_rpc_channel_impl",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/kvstore/rocksdb:replica",
+        "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/master/stream_cache:sc_metadata_manager",
+    ],
+)
+
+ds_cc_library(
+    name = "metadata_redirect_helper",
+    srcs = ["metadata_redirect_helper.cpp"],
+    hdrs = [
+        "metadata_redirect_helper.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/protos:utils_cc_proto",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "@com_google_protobuf//:protoc_lib",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "replication_service_impl",
+    srcs = [
+        "replication_service_impl.cpp",
+    ],
+    hdrs = [
+        "replication_service_impl.h",
+    ],
+    deps = [
+        ":replica_manager",
+        "//src/datasystem/common/kvstore/rocksdb:replica",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_service_impl",
+    srcs = [
+        "master_service_impl.cpp",
+    ],
+    hdrs = [
+        "master_service_impl.h",
+    ],
+    deps = [
+        ":node_manager",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:master_heartbeat_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "resource_manager",
+    srcs = [
+        "resource_manager.cpp",
+    ],
+    hdrs = [
+        "resource_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/object_cache:node_info",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_manager",
+    srcs = [
+        "worker_manager.cpp",
+    ],
+    hdrs = [
+        "worker_manager.h",
+    ],
+    deps = [
+        ":node_manager",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:master_heartbeat_zmq_cc_proto",
+    ],
+)

@@ -1,0 +1,35 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "hetero_cache_headers",
+    hdrs = [
+        "device_buffer.h",
+        "device_util.h",
+    ],
+    deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common:common_constants",
+    ],
+)
+
+ds_cc_library(
+    name = "hetero_client",
+    srcs = [
+        "hetero_client.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":hetero_cache_headers",
+        "//include/datasystem:headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:share_memory_zmq_cc_proto",
+        "@zmq",
+    ],
+    alwayslink = True,
+)

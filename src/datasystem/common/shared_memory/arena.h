@@ -27,7 +27,9 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/shared_memory/memstat.h"
 #include "datasystem/common/shared_memory/mmap/immap.h"
@@ -372,10 +374,12 @@ private:
         bool IsExpired()
         {
             auto timeoutDurationMs = TENANT_RESOURCE_RELEASE_DELAY_MS;
+#ifdef WITH_TESTS
             INJECT_POINT("PreReleaseTenantResourceInfo.IsExpired", [&timeoutDurationMs](int timeMs) {
-                timeoutDurationMs = timeMs;
-                return true;
+               timeoutDurationMs = timeMs;
+               return true;
             });
+#endif
             return timer.ElapsedMilliSecond() > timeoutDurationMs;
         }
 

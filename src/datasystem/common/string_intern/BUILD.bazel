@@ -1,0 +1,23 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "string_ref",
+    srcs = [
+        "string_entity.cpp",
+        "string_pool.cpp",
+    ],
+    hdrs = [
+        "key_type.def",
+        "key_type.h",
+        "string_entity.h",
+        "string_pool.h",
+        "string_ptr.h",
+        "string_ref.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "@tbb//:tbb",
+    ],
+)

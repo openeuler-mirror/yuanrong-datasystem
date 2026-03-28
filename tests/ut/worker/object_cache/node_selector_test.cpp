@@ -24,6 +24,7 @@
 
 #include "../../../common/binmock/binmock.h"
 #include "common.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/master/resource_manager.h"
@@ -88,7 +89,7 @@ public:
     {
         auto etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
-        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get());
+        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get(), false);
         apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
         NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_, apiManager_);
     }

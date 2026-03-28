@@ -1,0 +1,177 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "delete_object_mediator",
+    srcs = ["delete_object_mediator.cpp"],
+    hdrs = [
+        "delete_object_mediator.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+)
+
+ds_cc_library(
+    name = "master_master_oc_api",
+    srcs = ["master_master_oc_api.cpp"],
+    hdrs = [
+        "master_master_oc_api.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/lru:lru_headers",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:template_util",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_oc_service_impl",
+    srcs = ["master_oc_service_impl.cpp"],
+    hdrs = [
+        "master_oc_service_impl.h",
+    ],
+    deps = [
+        ":master_worker_oc_api",
+        ":oc_metadata_manager",
+        ":oc_migrate_metadata_manager",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/lru:lru_headers",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/master:replica_manager",
+        "//src/datasystem/master:resource_manager",
+        "//src/datasystem/master/object_cache/device:master_dev_oc_manager",
+        "//src/datasystem/protos:worker_object_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_worker_oc_api_header",
+    hdrs = [
+        "master_worker_oc_api.h",
+    ],
+)
+
+ds_cc_library(
+    name = "master_worker_oc_api",
+    srcs = [
+        "master_worker_oc_api.cpp",
+    ],
+    hdrs = [
+        "master_worker_oc_api.h",
+    ],
+    deps = [
+        ":master_worker_oc_local_api_header",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/lru:lru_headers",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_worker_oc_local_api_header",
+    hdrs = [
+        "master_worker_oc_local_api.h",
+    ],
+)
+
+ds_cc_library(
+    name = "master_worker_oc_local_api",
+    srcs = ["master_worker_oc_local_api.cpp"],
+    hdrs = [
+        "master_worker_oc_local_api.h",
+    ],
+    deps = [
+        ":master_worker_oc_api_header",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/lru:lru_headers",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+        "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "oc_metadata_manager",
+    srcs = [
+        "expired_object_manager.cpp",
+        "oc_global_cache_delete_manager.cpp",
+        "oc_metadata_manager.cpp",
+        "oc_nested_manager.cpp",
+        "oc_notify_worker_manager.cpp",
+    ],
+    hdrs = [
+        "expired_object_manager.h",
+        "oc_global_cache_delete_manager.h",
+        "oc_metadata_manager.h",
+        "oc_nested_manager.h",
+        "oc_notify_worker_manager.h",
+    ],
+    deps = [
+        ":delete_object_mediator",
+        ":master_master_oc_api",
+        ":master_worker_oc_api_header",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/httpclient:http_client",
+        "//src/datasystem/common/l2cache:l2_storage",
+        "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_ref_info",
+        "//src/datasystem/common/parallel:common_parallel",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/master:metadata_redirect_helper",
+        "//src/datasystem/master/object_cache/device:master_dev_oc_manager",
+        "//src/datasystem/master/object_cache/store:object_meta_store",
+        "//src/datasystem/protos:master_heartbeat_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/hash_ring",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "oc_migrate_metadata_manager",
+    srcs = ["oc_migrate_metadata_manager.cpp"],
+    hdrs = [
+        "oc_migrate_metadata_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/master:replica_manager",
+        "@tbb",
+    ],
+)

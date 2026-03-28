@@ -20,10 +20,10 @@
 
 #include "datasystem/object/buffer.h"
 
-#include <securec.h>
-
 #include "datasystem/client/object_cache/object_client_impl.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"
@@ -36,9 +36,16 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
 
+#ifndef DISABLE_RDMA
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
+
 static constexpr int DEBUG_LOG_LEVEL = 2;
 
 namespace datasystem {
+
+Buffer::Buffer() = default;
+
 Buffer::Buffer(std::shared_ptr<ObjectBufferInfo> bufferInfo,
                const std::shared_ptr<object_cache::ObjectClientImpl> &clientImpl)
     : bufferInfo_(std::move(bufferInfo)), clientImpl_(clientImpl->weak_from_this()), isShm_(false)
@@ -75,7 +82,9 @@ Status Buffer::Init()
         auto *lockFrame = reinterpret_cast<uint32_t *>(bufferInfo_->pointer);
         latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize, clientImpl->GetLockId());
     }
+#ifdef WITH_TESTS
     INJECT_POINT("buffer.init");
+#endif
     return latch_->Init();
 }
 
@@ -149,9 +158,10 @@ void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
             bufferInfo_->pointer = nullptr;
         }
     }
-
+#ifdef WITH_TESTS
     // for ut test
     INJECT_POINT("buffer.release", [this]() { isShm_ = false; });
+#endif
     do {
         if (isReleased_) {
             break;
@@ -185,7 +195,9 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
+#endif
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     uint64_t dataSize = GetSize();

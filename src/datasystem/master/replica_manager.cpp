@@ -145,6 +145,21 @@ Status ReplicaManager::Init(ReplicaManagerParam param)
 
 void ReplicaManager::SubscribeEvent()
 {
+    ReplicaMagagerEvent::GetPrimaryReplicaInfoInWorker::GetInstance().AddSubscriber(
+        REPLICA_MANAGER, [this](const std::string &workerUuid, std::map<std::string, std::string> &replicaInfos) {
+            return GetPrimaryReplicaInfoInWorker(workerUuid, replicaInfos);
+        });
+
+    ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().AddSubscriber(
+        REPLICA_MANAGER, [this](const std::string &srcWorkerUuid, std::string &destWorkerUuid) {
+            return GetPrimaryReplicaLocation(srcWorkerUuid, destWorkerUuid);
+        });
+
+    ReplicaMagagerEvent::GetPrimaryReplicaDbNames::GetInstance().AddSubscriber(
+        REPLICA_MANAGER, [this](const std::string &workerUuid, std::vector<std::string> &dbNames) {
+            return GetPrimaryReplicaDbNames(workerUuid, dbNames);
+        });
+
     if (!MultiReplicaEnabled()) {
         return;
     }

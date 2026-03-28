@@ -34,7 +34,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/hetero/device_common.h"
 #include "datasystem/object/buffer.h"
-#include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"
 

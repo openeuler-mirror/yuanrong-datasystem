@@ -40,7 +40,7 @@
 #include "datasystem/worker/stream_cache/stream_producer.h"
 #include "datasystem/worker/stream_cache/worker_master_sc_api.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
-#include "datasystem/worker/authenticate.h"
+#include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 namespace datasystem {
 namespace worker {
@@ -48,6 +48,7 @@ namespace stream_cache {
 class MasterWorkerSCServiceImpl;
 class WorkerWorkerSCServiceImpl;
 class UsageMonitor;
+class RemoteWorkerManager;
 
 /**
  * @brief A simple class to save a AllocMemory Request so that it can be executed at a later time.

@@ -31,6 +31,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "cluster/base_cluster.h"
 #include "common.h"
+#include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/util/format.h"

@@ -1,0 +1,9 @@
+# src/datasystem/common/BUILD.bazel
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "common_constants",
+    hdrs = ["constants.h"],
+)

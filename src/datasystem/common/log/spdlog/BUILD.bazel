@@ -1,0 +1,37 @@
+# BUILD file for src/datasystem/common/log/spdlog
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "ds_spdlog_header",
+    hdrs = [
+        "log_message.h",
+        "log_param.h",
+    ],
+)
+
+ds_cc_library(
+    name = "ds_spdlog",
+    srcs = [
+        "log_message.cpp",
+        "log_message_impl.cpp",
+        "logger_context.cpp",
+        "logger_provider.cpp",
+        "provider.cpp",
+    ],
+    hdrs = [
+        "log_message_impl.h",
+        "log_severity.h",
+        "logger_context.h",
+        "logger_provider.h",
+        "provider.h",
+    ],
+    deps = [
+        ":ds_spdlog_header",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/perf:common_perf",
+        "@ds-spdlog//:ds-spdlog",
+    ],
+)

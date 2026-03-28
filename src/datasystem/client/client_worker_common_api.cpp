@@ -33,7 +33,9 @@
 #include <vector>
 
 #include "datasystem/common/eventloop/timer_queue.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -292,7 +294,9 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
     int32_t socketFd = INVALID_SOCKET_FD;
     ShmEnableType shmEnableType = ShmEnableType::NONE;
     bool mustUds = heartbeatType_ == HeartbeatType::UDS_HEARTBEAT || (reconnection && IsShmEnable());
+#ifdef WITH_TESTS
     INJECT_POINT_NO_RETURN("ClientWorkerCommonApi.Connect.MustUds", [&mustUds] { mustUds = true; });
+#endif
     RETURN_IF_NOT_OK(CreateConnectionForTransferShmFd(timeoutMs, isConnectSuccess, serverFd, socketFd, shmEnableType));
     if (mustUds && !isConnectSuccess) {
         return { StatusCode::K_RPC_UNAVAILABLE, "Can not create connection to worker for shm fd transfer." };
@@ -348,7 +352,9 @@ Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, const st
     // Get the server side fd and add this to the RegisterClientReqPb
     RETURN_IF_NOT_OK(fd.SetTimeout(STUB_FRONTEND_TIMEOUT));
     RETURN_IF_NOT_OK(fd.Recv32(tmpServerFd, false));
+#ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.CreateHandShakeFunc");
+#endif
     CHECK_FAIL_RETURN_STATUS(tmpServerFd <= INT32_MAX, K_RUNTIME_ERROR, "Server fd exceed range of int32_t");
 
     if (shmWorkerPort_ > 0) {
@@ -486,10 +492,12 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
     } else {
         opts.SetTimeout(heartBeatTimeoutMs_);
     }
+#ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", [&opts](int time) {
         opts.SetTimeout(time);
         return Status::OK();
     });
+#endif
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     Status status = commonWorkerSession_->Heartbeat(opts, req, rsp);
     workerReboot = false;
@@ -532,8 +540,10 @@ void ClientWorkerRemoteCommonApi::CloseSocketFd()
         LOG(ERROR) << "Close the old socket fd failed, fd = " << fd << " errno = " << errno;
     }
     RETRY_ON_EINTR(close(fd));
+#ifdef WITH_TESTS
     INJECT_POINT("client.CloseSocketFd",
                  [](int delayMs) { std::this_thread::sleep_for(std::chrono::milliseconds(delayMs)); });
+#endif
     socketFd_ = INVALID_SOCKET_FD;
 }
 
@@ -549,11 +559,12 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_enable_exclusive_connection(enableExclusiveConnection_);
     req.set_pod_name(Logging::PodName());
     req.set_support_multi_shm_ref_count(true);
+#ifdef WITH_TESTS
     INJECT_POINT("client.RegisterClient.multi_shm_ref_count", [&req](bool multiShmRefCount) {
         req.set_support_multi_shm_ref_count(multiShmRefCount);
         return Status::OK();
     });
-
+#endif
     RegisterClientRspPb rsp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << IsShmEnable()
@@ -613,10 +624,12 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     // Millions of objects will cost worker dozens of seconds to process, set 10 min RPC timeout to prevent the client
     // from timeout error while the worker doesn't finish processing.
     int rpcTimeoutMs = 10 * 60 * 1000;
+#ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.Disconnect.ShutdownQuickily", [&rpcTimeoutMs](int time) {
         rpcTimeoutMs = time;
         return Status::OK();
     });
+#endif
     RpcOptions opts;
     opts.SetTimeout(rpcTimeoutMs);
     RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
@@ -660,7 +673,9 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
     if (!IsShmEnable() || socketFd_ == INVALID_SOCKET_FD) {
         return { K_RUNTIME_ERROR, "Current client can not support uds, so query client fd failed." };
     }
+#ifdef WITH_TESTS
     PerfPoint point(PerfKey::RPC_WORKER_GET_CLIENT_FDS);
+ #endif
     GetClientFdReqPb req;
     GetClientFdRspPb rsp;
     req.set_client_id(clientId_);
@@ -687,7 +702,9 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
 
     // Notice: GetClientFd should not be retried. Otherwise, Fd resources may remain or the process may be suspended.
     Status status = commonWorkerSession_->GetClientFd(opts, req, rsp);
+#ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.GetClientFd.preReceive");
+#endif
     if (status.IsOk()) {
         RecvFdAfterNotify(workerFds, requestId, time, clientFds);
     }
@@ -696,7 +713,9 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
                                                       VectorToString(workerFds), socketFd_, status.ToString()));
     VLOG(1) << FormatString("Receive fd[%s] from socket[%d] success, res: %s ", VectorToString(workerFds), socketFd_,
                             VectorToString(clientFds));
+#ifdef WITH_TESTS
     point.Record();
+#endif
     return Status::OK();
 }
 
@@ -714,8 +733,11 @@ void ClientWorkerRemoteCommonApi::PostRecvPageFd(const Status &status, uint64_t 
     } else {
         LOG(WARNING) << "recv page fd from socketFd_ " << socketFd_ << " failed, status:" << status.ToString();
     }
+
+#ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.RecvPageFd",
                  [](int32_t time) { std::this_thread::sleep_for(std::chrono::milliseconds(time)); });
+#endif
     VLOG(1) << "Finish to receive page fds: " << VectorToString(pageFds);
 }
 
@@ -743,11 +765,13 @@ void ClientWorkerRemoteCommonApi::RecvPageFd()
         VLOG(1) << "Start to wait to receive page fd";
         recvClientFdState_.recvPageWaitPost->Wait();
         recvClientFdState_.recvPageWaitPost->Clear();
+#ifdef WITH_TESTS
         INJECT_POINT("client.RecvPageFd", [this](int sleepMs) {
             if (recvClientFdState_.stopRecvPageFd) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
             }
         });
+#endif
         if (recvClientFdState_.stopRecvPageFd) {
             break;
         }

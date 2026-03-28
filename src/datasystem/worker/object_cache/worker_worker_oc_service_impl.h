@@ -23,12 +23,13 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
-#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
 namespace datasystem {
 namespace object_cache {
+class  WorkerOCServiceImpl;
+
 class WorkerWorkerOCServiceImpl : public WorkerWorkerOCService {
 public:
     /**

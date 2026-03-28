@@ -33,6 +33,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/version.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/worker/worker.h"
 #include "datasystem/worker/worker_cli.h"

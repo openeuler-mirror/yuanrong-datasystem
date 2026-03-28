@@ -60,8 +60,13 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 
 namespace datasystem {
+namespace object_cache {
+class WorkerWorkerOCServiceImpl;
+}
+
 namespace master {
 enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {

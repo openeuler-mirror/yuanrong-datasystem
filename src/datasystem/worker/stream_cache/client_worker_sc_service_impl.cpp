@@ -44,11 +44,12 @@
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
-#include "datasystem/worker/stream_cache/stream_manager.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
+#include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
+#include "datasystem/worker/stream_cache/stream_manager.h"
 
 DS_DECLARE_uint32(page_size);
 DS_DECLARE_int32(zmq_chunk_sz);

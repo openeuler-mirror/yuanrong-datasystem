@@ -23,7 +23,9 @@
 #include <unistd.h>
 
 #include "datasystem/common/flags/flags.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -42,10 +44,12 @@ Status DiskMmap::Initialize(uint64_t size, bool populate, bool hugepage)
     // Create tmp file.
     const int permission = 0600;
     fd_ = open(FLAGS_shared_disk_directory.c_str(), O_TMPFILE | O_RDWR, permission);
+#ifdef WITH_TESTS
     INJECT_POINT("DiskMmap.OpenTmpFail", []() {
         errno = EOPNOTSUPP;
         return Status::OK();
     });
+#endif
     if (errno == EOPNOTSUPP) {
         LOG(WARNING) << "The filesystem not support O_TMPFILE, falling back to mktemp.";
         std::string tmpFile = FLAGS_shared_disk_directory + "/datasystem-XXXXXX";

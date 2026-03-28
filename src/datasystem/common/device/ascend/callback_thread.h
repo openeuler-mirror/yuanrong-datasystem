@@ -21,6 +21,8 @@
 #ifndef DATASYSTEM_COMMON_DEVICE_ACL_CALLBACK_THREAD_H
 #define DATASYSTEM_COMMON_DEVICE_ACL_CALLBACK_THREAD_H
 
+#include <atomic>
+
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 

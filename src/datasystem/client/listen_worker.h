@@ -33,6 +33,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/log/log.h"

@@ -1,4 +1,4 @@
-set(PROTO_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/../protos)
+set(PROTO_BUILD_DIR ${CMAKE_BINARY_DIR}/src)
 set(PROTO_SRC_DIR ${CMAKE_SOURCE_DIR}/src/datasystem/protos)
 
 # proto_lib_depend is used for GENERATE_PROTO_CPP function
@@ -17,6 +17,8 @@ function(GEN_GLOBAL_PROTO_LIB_DEPEND)
     add_library(${LIB_NAME} STATIC ${LIB_SOURCE})
     add_dependencies(${LIB_NAME} ${LIB_DEPEND})
     set_target_properties(${LIB_NAME} PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
+
+    target_include_directories(${LIB_NAME} PUBLIC ${PROTO_BUILD_DIR})
 
     if (${LIB_CLIENT})
         list(APPEND LIB_LINK common_rpc_zmq_client)
@@ -39,6 +41,8 @@ function(GEN_GLOBAL_PROTO_LIB_DEPEND_SHARED)
     add_library(${LIB_NAME} SHARED ${LIB_SOURCE})
     add_dependencies(${LIB_NAME} ${LIB_DEPEND})
     set_target_properties(${LIB_NAME} PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
+
+    target_include_directories(${LIB_NAME} PUBLIC ${PROTO_BUILD_DIR})
 
     if (${LIB_PUB})
         target_link_libraries(${LIB_NAME} PUBLIC ${LIB_LINK})

@@ -27,6 +27,7 @@
 
 #include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
+#include "datasystem/hetero/device_common.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

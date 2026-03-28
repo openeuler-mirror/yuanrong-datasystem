@@ -1,0 +1,330 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "timeout_duration",
+    hdrs = [
+        "rpc_constants.h",
+        "timeout_duration.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "unix_sock_fd",
+    srcs = [
+        "unix_sock_fd.cpp",
+    ],
+    hdrs = [
+        "unix_sock_fd.h",
+    ],
+    deps = [
+        ":rpc_channel",
+        ":rpc_constants",
+        ":rpc_message",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:fd_manager",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+        "//src/datasystem/protos:rpc_option_cc_proto",
+        "//src/datasystem/protos:utils_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "mem_view",
+    srcs = [
+        "mem_view.cpp",
+    ],
+    hdrs = [
+        "mem_view.h",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_service_cfg",
+    srcs = [
+        "rpc_service_cfg.cpp",
+    ],
+    hdrs = [
+        "rpc_service_cfg.h",
+    ],
+    deps = [
+        ":rpc_constants",
+        ":unix_sock_fd",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:rpc_option_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_server",
+    srcs = [
+        "rpc_server.cpp",
+    ],
+    hdrs = [
+        "rpc_server.h",
+    ],
+    deps = [
+        ":rpc_auth_key_manager",
+        ":rpc_constants",
+        ":rpc_credential",
+        ":rpc_helper",
+        ":rpc_options",
+        ":rpc_service_cfg",
+        "//src/datasystem/common/rpc/zmq:zmq_auth",
+        "//src/datasystem/common/rpc/zmq:zmq_service",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_auth_key_manager",
+    srcs = [
+        "rpc_auth_key_manager.cpp",
+        "rpc_auth_key_manager_server.cpp",
+        "rpc_auth_keys.cpp",
+    ],
+    hdrs = [
+        "rpc_auth_key_manager.h",
+        "rpc_auth_keys.h",
+    ],
+    deps = [
+        ":rpc_credential",
+        #":rpc_server",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc/zmq:zmq_auth",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:validator",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_channel",
+    srcs = [
+        "rpc_channel.cpp",
+    ],
+    hdrs = [
+        "rpc_channel.h",
+    ],
+    deps = [
+        ":rpc_credential",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_constants",
+    hdrs = [
+        "rpc_constants.h",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_helper",
+    hdrs = [
+        "rpc_helper.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_message",
+    srcs = [
+        "rpc_message.cpp",
+    ],
+    hdrs = [
+        "rpc_message.h",
+    ],
+    deps = [
+        ":mem_view",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc/zmq:zmq_message",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_options",
+    srcs = [
+        "rpc_options.cpp",
+    ],
+    hdrs = [
+        "rpc_options.h",
+    ],
+    deps = [
+        ":rpc_constants",
+        "//src/datasystem/protos:rpc_option_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_stub",
+    hdrs = [
+        "rpc_stub.h",
+        "rpc_stub_base.h",
+    ],
+    deps = [
+        ":rpc_message",
+        ":rpc_options",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_credential",
+    srcs = [
+        "rpc_credential.cpp",
+    ],
+    hdrs = [
+        "rpc_credential.h",
+    ],
+    deps = [
+        ":rpc_message",
+        ":rpc_options",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_unary_client_impl",
+    hdrs = [
+        "rpc_unary_client_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc/zmq:zmq_unary_client_impl",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_server_stream_base",
+    hdrs = [
+        "rpc_server_stream_base.h",
+    ],
+    deps = [
+        ":rpc_message",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc/zmq:zmq_server_stream_base",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_client_stream_base_common",
+    hdrs = [
+        "rpc_client_stream_base_common.h",
+    ],
+    deps = [
+        ":rpc_message",
+        ":rpc_stub",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+# TODO
+# ds_cc_library(
+#    name = "rpc_stub_cache_mgr",
+#    srcs = [
+#        "rpc_stub_cache_mgr.cpp",
+#    ],
+#    hdrs = [
+#        "rpc_stub_cache_mgr.h",
+#    ],
+#    deps = [
+#        "//src/datasystem/common/ak_sk:ak_sk_manager",
+#        "//src/datasystem/common/lru:lru_headers",
+#        "//src/datasystem/common/util:bitmask_enum",
+#        "//src/datasystem/common/util:template_util",
+#        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+#        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+#        "//src/datasystem/protos:master_object_zmq_cc_proto",
+#    ],
+# )
+
+config_setting(
+    name = "build_with_urma",
+    define_values = {"build_with_urma": "true"},
+)
+
+ds_cc_library(
+    name = "rpc_stub_cache_mgr_header",
+    hdrs = [
+        "rpc_stub_cache_mgr.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/lru:lru_cache",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_credential",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:object_posix_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "rpc_stub_cache_mgr",
+    srcs = [
+        "rpc_stub_cache_mgr.cpp",
+    ],
+    hdrs = [
+        "rpc_stub_cache_mgr.h",
+    ],
+    deps = [
+        ":rpc_message",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/lru:lru_headers",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_credential",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:template_util",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
+        "//src/datasystem/protos:master_stream_cc_proto",
+        "//src/datasystem/protos:master_stream_zmq_cc_proto",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+    ],
+)

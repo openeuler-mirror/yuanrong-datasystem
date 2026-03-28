@@ -27,7 +27,9 @@
 #include <unistd.h>
 
 #include "datasystem/common/flags/flags.h"
+#ifdef ENABLE_PERF
 #include "datasystem/common/perf/perf_manager.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
@@ -35,7 +37,9 @@
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
@@ -89,10 +93,12 @@ RocksStore::RocksStore()
 std::shared_ptr<RocksStore> RocksStore::GetInstance(
     const std::string &dbPath, const std::unordered_map<std::string, rocksdb::ColumnFamilyOptions> &tableOptions)
 {
+#ifdef WITH_TESTS
     INJECT_POINT("master.disableRocksDb", []() {
         RocksStore::disableRocksDB = true;
         return nullptr;
     });
+#endif
     LOG(INFO) << "Rocksdb get instance, dbPath:" << dbPath;
     rocksdb::Options options;
     InitRocksOptions(options);
@@ -257,9 +263,12 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
+#ifdef WITH_TESTS
     INJECT_POINT("master.rocksdb.put");
-
+#endif
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::ROCKSDB_PUT);
+#endif
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
@@ -373,8 +382,9 @@ Status RocksStore::Get(const std::string &tableName, const std::string &key, std
 
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
-
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::ROCKSDB_GET);
+#endif
     tableHandle = iter->second;
     Timer timer;
     rocksdb::Status rc;
@@ -411,8 +421,9 @@ Status RocksStore::GetAll(const std::string &tableName, std::vector<std::pair<st
 
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
-
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::ROCKSDB_GET_ALL);
+#endif
     tableHandle = iter->second;
     auto readOptions = rocksdb::ReadOptions();
     Timer timer;
@@ -452,8 +463,9 @@ Status RocksStore::PrefixSearch(const std::string &tableName, const std::string 
 
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
-
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::ROCKSDB_PREFIX_SEARCH);
+#endif
     tableHandle = iter->second;
     rocksdb::ColumnFamilyDescriptor cfDesc;
     rc = tableHandle->GetDescriptor(&cfDesc);
@@ -487,13 +499,16 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
     rocksdb::Status rc;
     CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
     rocksdb::ColumnFamilyHandle *tableHandle = nullptr;
+#ifdef WITH_TESTS
     INJECT_POINT("master.rocksdb.delete");
-
+#endif
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
     Timer timer;
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::ROCKSDB_DELETE);
+#endif
     if (mode_ == RocksdbWriteMode::SYNC) {
         rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
         masterOperationTimeCost.Append("RocksDB Delete", timer.ElapsedMilliSecond());
@@ -523,8 +538,9 @@ Status RocksStore::PrefixDelete(const std::string &tableName, const std::string 
     auto iter = tables_.find(tableName);
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
-
+#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::ROCKSDB_PREFIX_DELETE);
+#endif
     std::string endKey = StringPlusOne(prefixKey);
     rocksdb::WriteOptions options;
     options.sync = FLAGS_rocksdb_sync_write;

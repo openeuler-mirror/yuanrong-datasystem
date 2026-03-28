@@ -1,0 +1,96 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# success
+ds_cc_library(
+    name = "worker_health_check",
+    srcs = [
+        "worker_health_check.cpp",
+    ],
+    hdrs = [
+        "worker_health_check.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:validator",
+    ],
+)
+
+ds_cc_library(
+    name = "etcd_cluster_manager_header",
+    hdrs = [
+        "etcd_cluster_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util/queue",
+        "//src/datasystem/master:meta_addr_info",
+        "//src/datasystem/worker/cluster_manager:worker_health_check",
+        "//src/datasystem/worker/hash_ring",
+        "@tbb",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "etcd_cluster_manager",
+    srcs = [
+        "etcd_cluster_manager.cpp",
+    ],
+    hdrs = [
+        "cluster_node.h",
+        "etcd_cluster_manager.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/signal",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:meta_route_tool_header",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/queue:common_util_queue",
+        "//src/datasystem/master:meta_addr_info",
+        "//src/datasystem/master/object_cache/store:object_meta_store",
+        "//src/datasystem/worker:cluster_event_type",
+        "//src/datasystem/worker/cluster_manager:worker_health_check",
+        "//src/datasystem/worker/hash_ring",
+        "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "@tbb",
+    ],
+    alwayslink = True,
+)

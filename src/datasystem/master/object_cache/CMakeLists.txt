@@ -4,6 +4,7 @@ set(MASTER_OC_SRCS
         oc_metadata_manager.cpp
         delete_object_mediator.cpp
         master_worker_oc_api.cpp
+        master_worker_oc_local_api.cpp
         oc_nested_manager.cpp
         oc_notify_worker_manager.cpp
         oc_global_cache_delete_manager.cpp

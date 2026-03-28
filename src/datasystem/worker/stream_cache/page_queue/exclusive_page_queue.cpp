@@ -22,6 +22,7 @@
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/lock_helper.h"

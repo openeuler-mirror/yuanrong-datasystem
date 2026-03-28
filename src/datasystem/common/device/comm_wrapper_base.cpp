@@ -16,7 +16,7 @@
 
 #include "datasystem/common/device/comm_wrapper_base.h"
 
-#include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
+#include "datasystem/common/device/acl_pipeline_p2p_task.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/inject/inject_point.h"

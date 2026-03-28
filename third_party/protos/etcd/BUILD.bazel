@@ -1,0 +1,92 @@
+load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+package(default_visibility = ["//visibility:public"])
+
+PROTO_ROOT = "/third_party/protos/"
+
+proto_library(
+    name = "auth_proto",
+    srcs = ["api/authpb/auth.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "//third_party/protos/gogoproto:gogo_proto",
+        "@com_google_protobuf//:descriptor_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "auth_cc_proto",
+    deps = [
+        ":auth_proto",
+    ],
+)
+
+proto_library(
+    name = "v3election_proto",
+    srcs = ["v3election.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":kv_proto",
+        ":rpc_proto",
+        "//third_party/protos/gogoproto:gogo_proto",
+        "//third_party/protos/google/api:annotations_proto",
+    ],
+)
+
+cc_grpc_library(
+    name = "v3election_cc_grpc",
+    srcs = [":v3election_proto"],
+    grpc_only = True,
+    deps = [":v3election_cc_proto"],
+)
+
+cc_proto_library(
+    name = "v3election_cc_proto",
+    deps = [
+        ":v3election_proto",
+    ],
+)
+
+proto_library(
+    name = "rpc_proto",
+    srcs = ["api/etcdserverpb/rpc.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":auth_proto",
+        ":kv_proto",
+        "//third_party/protos/gogoproto:gogo_proto",
+        "//third_party/protos/google/api:annotations_proto",
+    ],
+)
+
+cc_grpc_library(
+    name = "rpc_cc_grpc",
+    srcs = [":rpc_proto"],
+    grpc_only = True,
+    deps = [":rpc_cc_proto"],
+)
+
+cc_proto_library(
+    name = "rpc_cc_proto",
+    deps = [
+        ":rpc_proto",
+    ],
+)
+
+proto_library(
+    name = "kv_proto",
+    srcs = ["api/mvccpb/kv.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "//third_party/protos/gogoproto:gogo_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "kv_cc_proto",
+    deps = [
+        ":kv_proto",
+    ],
+)

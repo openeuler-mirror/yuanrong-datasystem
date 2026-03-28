@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/rpc_service_method.h"
@@ -32,7 +33,6 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {

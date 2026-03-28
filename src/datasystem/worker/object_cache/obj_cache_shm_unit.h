@@ -30,6 +30,7 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/protos/object_posix.pb.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -139,6 +140,7 @@ public:
      */
     void SetAddress(const std::string &newAddress) override;
 
+#ifndef DISABLE_RDMA
     /**
      * @brief Record the remote host info for the client.
      * @param[in] clientCommId The client communicator identifier uuid.
@@ -152,7 +154,7 @@ public:
      * @return The entire map for remote h2d host info.
      */
     std::shared_ptr<RemoteH2DHostInfoMap> GetRemoteHostInfo() const override;
-
+#endif
 private:
     std::shared_ptr<ShmUnit> shmUnit_{ nullptr };
     // The metadata and data bytes, the struct of entry is |metadata frame|data frame|

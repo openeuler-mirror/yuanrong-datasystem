@@ -1,0 +1,17 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+package(default_visibility = ["//visibility:public"])
+
+# success
+ds_cc_library(
+    name = "data_limiter",
+    srcs = [
+        "data_limiter.cpp",
+    ],
+    hdrs = [
+        "data_limiter.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/inject:common_inject",
+    ]
+)

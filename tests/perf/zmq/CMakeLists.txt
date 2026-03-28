@@ -1,7 +1,7 @@
 set(PROTO_SRC_DIR ${CMAKE_SOURCE_DIR}/src/datasystem/protos)
 set(zmq_perf_files ${PROTO_SRC_DIR}/zmq_perf.proto)
 
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend PERF_ZMQ_SRCS PERF_ZMQ_HDRS ${CMAKE_BINARY_DIR}/src/datasystem/protos ${PROTO_SRC_DIR} ${zmq_perf_files})
+GENERATE_ZMQ_CPP(zmq_proto_lib_depend PERF_ZMQ_SRCS PERF_ZMQ_HDRS ${CMAKE_BINARY_DIR}/src/ ${PROTO_SRC_DIR} ${zmq_perf_files})
 
 add_library(zmq_perf_protos STATIC ${PERF_ZMQ_SRCS})
 set_target_properties(zmq_perf_protos PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")

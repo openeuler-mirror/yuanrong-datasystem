@@ -1,0 +1,22 @@
+# BUILD file for src/datasystem/common/immutable_string
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "immutable_string",
+    srcs = [
+        "immutable_string.cpp",
+        "immutable_string_pool.cpp",
+        "ref_count_string.cpp",
+    ],
+    hdrs = [
+        "immutable_string.h",
+        "immutable_string_pool.h",
+        "ref_count_string.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "@tbb//:tbb",
+    ],
+)

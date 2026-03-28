@@ -1,0 +1,38 @@
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+package(default_visibility = ["//visibility:public"])
+
+PROTO_ROOT = "/third_party/protos/"
+
+proto_library(
+    name = "http_proto",
+    srcs = ["http.proto"],
+    deps = [
+        "@com_google_protobuf//:descriptor_proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "http_cc_proto",
+    deps = [
+        ":http_proto",
+    ],
+)
+proto_library(
+    name = "annotations_proto",
+    srcs = ["annotations.proto"],
+    deps = [
+        ":http_proto",
+        "@com_google_protobuf//:descriptor_proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "annotations_cc_proto",
+    deps = [
+        ":annotations_proto",
+    ],
+)

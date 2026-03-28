@@ -31,6 +31,10 @@
 
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/util/file_util.h"
@@ -39,6 +43,8 @@
 #include "datasystem/common/util/uri.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/object_cache/oc_nested_manager.h"
+#include "datasystem/master/object_cache/master_worker_oc_api.h"
+#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/generic_service.pb.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -114,7 +120,7 @@ public:
         FLAGS_master_address = masterAddr_.ToString();
         RETURN_IF_NOT_OK(etcdStore_->Init());
         replicaManager_ = std::make_unique<ReplicaManager>();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, etcdStore_.get());
+        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, etcdStore_.get(), false);
         ClusterInfo clusterInfo;
         RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));

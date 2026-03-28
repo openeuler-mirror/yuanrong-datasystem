@@ -30,11 +30,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <re2/re2.h>
 #include <sys/sysmacros.h>
 
+#include "re2/re2.h"
 #include "datasystem/common/flags/flags.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -426,7 +428,9 @@ Status Uri::ModifyFilesInInputDir(const std::string &inputDir, mode_t permission
         if (strcmp(filename->d_name, ".") == 0 || strcmp(filename->d_name, "..") == 0) {
             continue;
         }
+#ifdef WITH_TESTS
         INJECT_POINT("util.beforeChmod");
+#endif
         std::string fileName = filename->d_name;
         const int rc = chmod((inputDir + "/" + fileName).c_str(), permission);
         // Close dir before return.

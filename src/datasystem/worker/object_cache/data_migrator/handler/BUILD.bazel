@@ -1,0 +1,51 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# success
+ds_cc_library(
+    name = "async_resource_releaser",
+    srcs = [
+        "async_resource_releaser.cpp",
+    ],
+    hdrs = [
+        "async_resource_releaser.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/worker/object_cache:object_kv",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "migrate_data_handler",
+    srcs = [
+        "migrate_data_handler.cpp",
+    ],
+    hdrs = [
+        "migrate_data_handler.h",
+    ],
+    deps = [
+        ":async_resource_releaser",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "//src/datasystem/worker/object_cache/data_migrator/basic:base_data_unit",
+        "//src/datasystem/worker/object_cache/limiter:data_limiter",
+        "//src/datasystem/worker/object_cache/data_migrator/basic:migrate_progress",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:selection_strategy",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:migrate_transport",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:tcp_migrate_transport",
+    ],
+)

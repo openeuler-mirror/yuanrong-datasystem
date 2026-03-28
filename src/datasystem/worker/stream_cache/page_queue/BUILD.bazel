@@ -1,0 +1,193 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "shared_page_queue_header",
+    hdrs = [
+        "shared_page_queue.h",
+    ],
+    deps = [
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_base_header",
+    ],
+)
+
+ds_cc_library(
+    name = "shared_page_queue",
+    srcs = [
+        "shared_page_queue.cpp",
+    ],
+    hdrs = [
+        "shared_page_queue.h",
+    ],
+    deps = [
+        ":shared_page_queue_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_base_header",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "shared_page_queue_group_header",
+    hdrs = [
+        "shared_page_queue_group.h",
+    ],
+    deps = [
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_header",
+    ],
+)
+
+ds_cc_library(
+    name = "shared_page_queue_group",
+    srcs = [
+        "shared_page_queue_group.cpp",
+    ],
+    hdrs = [
+        "shared_page_queue_group.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        # "//src/datasystem/common/iam:tenant_auth_manager",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "page_queue_handler_header",
+    hdrs = [
+        "page_queue_handler.h",
+    ],
+    deps = [
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/stream_cache:stream_meta_shm",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_header",
+    ],
+)
+
+ds_cc_library(
+    name = "page_queue_handler",
+    srcs = [
+        "page_queue_handler.cpp",
+    ],
+    hdrs = [
+        "page_queue_handler.h",
+    ],
+    deps = [
+        ":page_queue_handler_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/stream_cache:stream_meta_shm",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache/page_queue:exclusive_page_queue",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "exclusive_page_queue_header",
+    hdrs = [
+        "exclusive_page_queue.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/stream_cache:stream_meta_shm",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/worker/stream_cache:consumer",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_base_header",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "exclusive_page_queue",
+    srcs = [
+        "exclusive_page_queue.cpp",
+    ],
+    hdrs = [
+        "exclusive_page_queue.h",
+    ],
+    deps = [
+        ":exclusive_page_queue_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/stream_cache:stream_meta_shm",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/worker/stream_cache:consumer",
+        "//src/datasystem/worker/stream_cache:stream_data_pool",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_base_header",
+        "@tbb",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "page_queue_base_header",
+    hdrs = [
+        "page_queue_base.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/string_intern:string_ref",
+    ],
+)
+
+ds_cc_library(
+    name = "page_queue_base",
+    srcs = [
+        "page_queue_base.cpp",
+    ],
+    hdrs = [
+        "page_queue_base.h",
+    ],
+    deps = [
+        ":page_queue_handler_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:request_counter",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager",
+    ],
+    alwayslink = True,
+)

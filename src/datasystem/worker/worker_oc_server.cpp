@@ -823,8 +823,8 @@ Status WorkerOCServer::Init()
         std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
-    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, etcdStore_.get(), akSkManager_,
-                                                   replicaManager_.get());
+    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, etcdStore_.get(),
+                                                   replicaManager_->MultiReplicaEnabled(), akSkManager_);
 
     RETURN_IF_NOT_OK(ClientManager::Instance().Init());
 

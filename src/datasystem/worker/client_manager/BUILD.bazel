@@ -1,0 +1,32 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "client_manager",
+    srcs = ["client_manager.cpp", "client_info.cpp"],
+    hdrs = ["client_manager.h", "client_info.h"],
+    deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        # "//src/datasystem/common/shared_memory:shm_unit",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:wait_post",
+        "@tbb//:tbb",
+    ],
+    alwayslink = True,
+)
+
+alias(
+    name = "client_info",
+    actual = "//src/datasystem/worker/client_manager:client_manager",
+)

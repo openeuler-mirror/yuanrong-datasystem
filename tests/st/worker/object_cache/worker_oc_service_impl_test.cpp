@@ -194,7 +194,7 @@ public:
         cluster_->GetEtcdAddrs(0, addrs);
         etcdStore_ = std::make_unique<EtcdStore>(addrs.first.ToString());
         etcdStore_->Init();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(localAddress_, metaAddress, etcdStore_.get(), nullptr);
+        etcdCM_ = std::make_unique<EtcdClusterManager>(localAddress_, metaAddress, etcdStore_.get(), false);
         replicaManager_ = std::make_unique<ReplicaManager>();
         objCacheMasterSvc_ = std::make_unique<datasystem::master::MasterOCServiceImpl>(
             localAddress_, nullptr, akSkManager_, replicaManager_.get(), nullptr);

@@ -21,8 +21,9 @@
 #include "datasystem/common/util/hash_algorithm.h"
 
 #include <limits>
-
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/util/strings_util.h"
 
 namespace {
@@ -91,8 +92,9 @@ uint32_t MurmurHash3_32(const uint8_t *data, size_t len, uint32_t seed)
     if (data == nullptr) {
         return 0;
     }
-
+#ifdef WITH_TESTS
     INJECT_POINT("add.node.redirect", [data, len]() { return GetNodeRedirectForInject(data, len); });
+#endif
     uint32_t result = seed;
     uint32_t k;
 
@@ -121,6 +123,7 @@ uint32_t MurmurHash3_32(const uint8_t *data, size_t len, uint32_t seed)
 
     // avalanche
     result ^= len;
+#ifdef WITH_TESTS
     INJECT_POINT("MurmurHash3", [data, len, result]() {
         std::string key(reinterpret_cast<const char *>(data), len);
         const char *prefix = "a_key_hash_to_";
@@ -141,6 +144,7 @@ uint32_t MurmurHash3_32(const uint8_t *data, size_t len, uint32_t seed)
             return Fmix(result);
         }
     });
+#endif
     return Fmix(result);
 }
 }  // namespace datasystem

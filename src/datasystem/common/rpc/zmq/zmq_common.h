@@ -39,7 +39,6 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/zmq_constants.h"
-#include "datasystem/common/rpc/zmq/zmq_context.h"
 #include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/status_helper.h"

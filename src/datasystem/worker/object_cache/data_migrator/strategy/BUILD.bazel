@@ -1,0 +1,72 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+package(default_visibility = ["//visibility:public"])
+
+# success
+ds_cc_library(
+    name = "node_selector",
+    srcs = [
+        "node_selector.cpp",
+    ],
+    hdrs = [
+        "node_selector.h",
+    ],
+    deps = [
+        "//src/datasystem/common/object_cache:node_info",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/protos:master_object_cc_proto",
+    ]
+)
+
+# success
+ds_cc_library(
+    name = "spill_node_selector",
+    srcs = [
+        "spill_node_selector.cpp",
+    ],
+    hdrs = [
+        "spill_node_selector.h",
+    ],
+    deps = [
+        ":node_selector",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:selection_strategy",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/common/inject:common_inject",
+    ]
+)
+
+# success
+ds_cc_library(
+    name = "scale_down_node_selector",
+    srcs = [
+        "scale_down_node_selector.cpp",
+    ],
+    hdrs = [
+        "scale_down_node_selector.h",
+    ],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:selection_strategy",
+        "//include/datasystem/object:object_headers"
+    ]
+)
+
+# success
+ds_cc_library(
+    name = "selection_strategy",
+    srcs = [],
+    hdrs = [
+        "selection_strategy.h",
+    ],
+    deps = [
+        "//src/datasystem/protos:worker_object_cc_proto",
+    ]
+)

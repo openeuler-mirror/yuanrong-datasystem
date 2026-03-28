@@ -32,6 +32,7 @@
 DS_DECLARE_string(obs_bucket);
 
 namespace datasystem {
+#ifndef DISABLE_OBS
 void GetObjectInfoListResp::FillInListObjectData(const ObsClient::ListObjectData &listObjData)
 {
     bucket_.clear();
@@ -50,7 +51,7 @@ void GetObjectInfoListResp::FillInListObjectData(const ObsClient::ListObjectData
             L2CacheObjectInfo{ obj.type, lastModifiedStr, obj.size, obj.key, ParseVersion(obj.key) });
     }
 }
-
+#endif
 uint64_t GetObjectInfoListResp::ParseVersion(const std::string &key)
 {
     uint64_t version = 0;

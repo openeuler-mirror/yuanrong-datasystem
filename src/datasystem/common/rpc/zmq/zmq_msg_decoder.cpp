@@ -24,7 +24,6 @@
 #include <map>
 
 #include "datasystem/common/rpc/zmq/zmq_msg_decoder.h"
-#include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"

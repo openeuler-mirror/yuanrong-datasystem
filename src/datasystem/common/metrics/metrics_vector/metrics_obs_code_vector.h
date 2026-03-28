@@ -25,7 +25,9 @@
 #include <numeric>
 #include <vector>
 
+#ifndef DISABLE_OBS
 #include <eSDKOBS.h>
+#endif
 
 #include "datasystem/common/metrics/metrics_vector/metrics_blocking_vector.h"
 
@@ -38,8 +40,10 @@ public:
      */
     virtual void BlockingEmplaceBackCode(int code) override
     {
+        #ifndef DISABLE_OBS
         auto realValue = ((code == OBS_STATUS_OK || code == OBS_STATUS_NoSuchKey) ? 1.0f : 0.0f);
         BlockingEmplaceBack(realValue);
+        #endif
     }
 };
 }  // namespace datasystem

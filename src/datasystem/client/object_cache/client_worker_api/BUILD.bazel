@@ -1,0 +1,124 @@
+load("//:version.bzl", "DATASYSTEM_VERSION")
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "client_worker_base_api",
+    srcs = [
+        "client_worker_base_api.cpp",
+    ],
+    hdrs = [
+        "client_worker_base_api.h",
+    ],
+    deps = [
+        ":iclient_worker_api",
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//include/datasystem/utils:utils_headers",
+        #"//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:p2p_subscribe_cc_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+ds_cc_library(
+    name = "client_worker_local_api",
+    srcs = [
+        "client_worker_local_api.cpp",
+    ],
+    hdrs = [
+        "client_worker_local_api.h",
+    ],
+    deps = [
+        ":client_worker_base_api",
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:embedded_client_worker_api",
+        #"//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:p2p_subscribe_cc_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+ds_cc_library(
+    name = "client_worker_remote_api",
+    srcs = [
+        "client_worker_remote_api.cpp",
+    ],
+    hdrs = [
+        "client_worker_remote_api.h",
+    ],
+    deps = [
+        ":client_worker_base_api",
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:embedded_client_worker_api",
+        #"//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:p2p_subscribe_cc_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+
+ds_cc_library(
+    name = "iclient_worker_api",
+    hdrs = [
+        "iclient_worker_api.h",
+    ],
+    deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:embedded_client_worker_api",
+        #"//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:p2p_subscribe_cc_proto",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/mmap:mmap_table",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/util:fd_pass",
+        "//src/datasystem/common/util/queue:common_util_queue",
+        "//src/datasystem/common/util:uuid_generator",
+        "//include/datasystem:headers",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+    ]
+)
+
+
+
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_info.h"
+#include "datasystem/common/rdma/urma_manager.h"
+#endif

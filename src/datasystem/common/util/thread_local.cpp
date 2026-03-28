@@ -24,11 +24,11 @@ namespace datasystem {
 thread_local TimeoutDuration timeoutDuration(RPC_TIMEOUT);
 thread_local TimeoutDuration scTimeoutDuration(RPC_TIMEOUT);
 thread_local TimeoutDuration reqTimeoutDuration(RPC_TIMEOUT);
+thread_local ZmqMessage g_SerializedMessage;
 thread_local TimeCost workerOperationTimeCost;
 thread_local TimeCost masterOperationTimeCost;
 thread_local std::string g_MetaRocksDbName;
 thread_local std::string g_ContextTenantId;
-thread_local ZmqMessage g_SerializedMessage;
 thread_local std::string g_ReqAk;
 thread_local std::string g_ReqSignature;
 thread_local uint64_t g_ReqTimestamp;

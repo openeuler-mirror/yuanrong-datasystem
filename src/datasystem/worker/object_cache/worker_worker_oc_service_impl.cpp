@@ -40,6 +40,7 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
 DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(oc_worker_worker_parallel_nums);
