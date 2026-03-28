@@ -53,21 +53,18 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
-#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 
 DS_DECLARE_string(worker_address);
 
 namespace datasystem {
 namespace master {
 OCNotifyWorkerManager::OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
-                                             std::shared_ptr<AkSkManager> akSkManager, EtcdClusterManager *etcdCM,
+                                             std::shared_ptr<AkSkManager> akSkManager,
                                              OCMetadataManager *ocMetadataManager)
     : objectStore_(std::move(objectStore)),
       interruptFlag_(false),
       backendStoreExist_(backendStoreExist),
       akSkManager_(akSkManager),
-      etcdCM_(etcdCM),
       ocMetadataManager_(ocMetadataManager)
 {
     subscriberPrefix_ = GetStringUuid();
@@ -141,7 +138,8 @@ void OCNotifyWorkerManager::ProcessObjsNeedRemoveMeta(
     for (const auto &objNeedRemoveMeta : objsNeedRemoveMeta) {
         for (const auto &azName : objNeedRemoveMeta.second.removeMetaAzNames) {
             MetaAddrInfo metaAddrInfo;
-            auto rc = etcdCM_->QueryMasterAddrInOtherAz(azName, objNeedRemoveMeta.first, metaAddrInfo);
+            auto rc = EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().NotifyAll(
+                azName, objNeedRemoveMeta.first, metaAddrInfo);
             if (rc.IsError()) {
                 continue;
             }
@@ -196,7 +194,8 @@ void OCNotifyWorkerManager::ProcessObjsNeedDeleteAllCopyMeta(
     for (const auto &objNeedDeleteAllCopyMeta : objsNeedDeleteAllCopyMeta) {
         for (const auto &azName : objNeedDeleteAllCopyMeta.second.deleteAllCopyMetaAzNames) {
             MetaAddrInfo metaAddrInfo;
-            auto rc = etcdCM_->QueryMasterAddrInOtherAz(azName, objNeedDeleteAllCopyMeta.first, metaAddrInfo);
+            auto rc = EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().NotifyAll(
+                azName, objNeedDeleteAllCopyMeta.first, metaAddrInfo);
             if (rc.IsError()) {
                 continue;
             }
@@ -1384,8 +1383,9 @@ Status OCNotifyWorkerManager::NotifyMasterRemoveMeta(const HostPort &masterAddr,
                                                      const std::unordered_map<std::string, int64_t> &objKeys,
                                                      std::unordered_set<std::string> &failedObjs)
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_->CheckIfOtherAzNodeConnected(masterAddr), K_RPC_UNAVAILABLE,
-                             "Chech connection failed: " + masterAddr.ToString());
+    bool isConnect = false;
+    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().NotifyAll(masterAddr, isConnect);
+    CHECK_FAIL_RETURN_STATUS(isConnect, K_RPC_UNAVAILABLE, "Chech connection failed: " + masterAddr.ToString());
     auto api = MasterMasterOCApi::CreateMasterMasterOCApi(masterAddr, masterAddr_, akSkManager_);
     RETURN_RUNTIME_ERROR_IF_NULL(api);
     RemoveMetaReqPb req;
@@ -1406,8 +1406,9 @@ Status OCNotifyWorkerManager::NotifyMasterRemoveMeta(const HostPort &masterAddr,
         req.Clear();
         HostPort masterAddr;
         RETURN_IF_NOT_OK(masterAddr.ParseString(redirectMetaInfo.redirect_meta_address()));
-        CHECK_FAIL_RETURN_STATUS(etcdCM_->CheckIfOtherAzNodeConnected(masterAddr), K_RPC_UNAVAILABLE,
-                                 "Chech connection failed: " + masterAddr.ToString());
+        bool isConnect = false;
+        EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().NotifyAll(masterAddr, isConnect);
+        CHECK_FAIL_RETURN_STATUS(isConnect, K_RPC_UNAVAILABLE, "Chech connection failed: " + masterAddr.ToString());
         api = MasterMasterOCApi::CreateMasterMasterOCApi(masterAddr, masterAddr_, akSkManager_);
         RETURN_RUNTIME_ERROR_IF_NULL(api);
         for (const auto &objKey : redirectMetaInfo.change_meta_ids()) {
@@ -1536,8 +1537,9 @@ Status OCNotifyWorkerManager::NotifyMasterDeleteAllCopyMeta(
     std::unordered_set<std::string> &objsWithoutMeta,
     const std::vector<std::pair<std::string, int64_t>> &objKeyWithVersion)
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_->CheckIfOtherAzNodeConnected(masterAddr), K_RPC_UNAVAILABLE,
-                             "Chech connection failed: " + masterAddr.ToString());
+    bool isConnect = false;
+    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().NotifyAll(masterAddr, isConnect);
+    CHECK_FAIL_RETURN_STATUS(isConnect, K_RPC_UNAVAILABLE, "Chech connection failed: " + masterAddr.ToString());
     auto api = MasterMasterOCApi::CreateMasterMasterOCApi(masterAddr, masterAddr_, akSkManager_);
     RETURN_RUNTIME_ERROR_IF_NULL(api);
     DeleteAllCopyMetaReqPb deleteReq;

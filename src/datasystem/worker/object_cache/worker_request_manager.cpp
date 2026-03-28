@@ -38,7 +38,7 @@
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
-#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
 namespace object_cache {

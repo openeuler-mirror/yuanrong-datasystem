@@ -24,8 +24,9 @@
 #include <utility>
 
 #include <securec.h>
-
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -76,10 +77,12 @@ Status ShmUnit::FreeMemory()
     // This call will set pointer to nullptr on success.
     VLOG(1) << "[ShmUnit] Arena FreeMemory, Tenant:" << (tenantId_.empty() ? "Default" : tenantId_)
             << ", needHardFree: " << needHardFree_;
+#ifdef WITH_TESTS
     INJECT_POINT("ShmUnit.FreeMemory", [this]() {
         needHardFree_ = true;
         return Status::OK();
     });
+#endif
     if (needHardFree_) {
         int ret = memset_s(pointer, size, 0, size);
         if (ret != EOK) {

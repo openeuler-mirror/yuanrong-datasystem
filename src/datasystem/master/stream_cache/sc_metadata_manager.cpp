@@ -35,12 +35,12 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
-#include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_int32(sc_regular_socket_num);
 DS_DECLARE_int32(sc_stream_socket_num);
 DS_DECLARE_uint32(node_dead_timeout_s);
+DS_DECLARE_bool(log_monitor);
 
 namespace datasystem {
 namespace master {
@@ -230,7 +230,7 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
     });
     StreamMetadata *metadata = accessor->second.get();
     CHECK_FAIL_RETURN_STATUS(metadata != nullptr, K_RUNTIME_ERROR, "metadata is null");
-    if (ScMetricsMonitor::Instance()->IsEnabled()) {
+    if (FLAGS_log_monitor) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
             metadata->InitStreamMetrics(),
             FormatString("[%s, S:%s] Init master sc metrics failed", LogPrefix(), streamName));
@@ -684,7 +684,7 @@ Status SCMetadataManager::CreateOrGetStreamMetadata(const std::string &streamNam
         accessor->second =
             std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(), akSkManager_,
                                              rpcSessionManager_, etcdCM_, notifyWorkerManager_.get());
-        if (ScMetricsMonitor::Instance()->IsEnabled()) {
+        if (FLAGS_log_monitor) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 accessor->second->InitStreamMetrics(),
                 FormatString("[%s, S:%s] Init master sc metrics failed", LogPrefix(), streamName));
@@ -733,7 +733,7 @@ Status SCMetadataManager::LoadMeta()
         RETURN_IF_NOT_OK(GetStreamMetadata(streamName, accessor));
         StreamMetadata *metadata = accessor->second.get();
         CHECK_FAIL_RETURN_STATUS(metadata != nullptr, K_RUNTIME_ERROR, "metadata is null");
-        if (ScMetricsMonitor::Instance()->IsEnabled()) {
+        if (FLAGS_log_monitor) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 metadata->InitStreamMetrics(),
                 FormatString("[%s, S:%s] Init master sc metrics failed", LogPrefix(), streamName));

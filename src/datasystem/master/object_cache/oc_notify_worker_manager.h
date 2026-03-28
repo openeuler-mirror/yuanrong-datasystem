@@ -38,10 +38,13 @@
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
+#include "datasystem/worker/hash_ring/hash_ring_event.h"
 
 namespace datasystem {
+namespace object_cache {
+class MasterWorkerOCServiceImpl;
+}  // namespace object_cache
 namespace master {
 using TbbNotifyWorkerOpTable = tbb::concurrent_hash_map<std::string, std::unordered_map<std::string, NotifyWorkerOp>>;
 
@@ -58,7 +61,7 @@ public:
      * @brief Construct OCNotifyWorkerManager.
      */
     OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
-                          std::shared_ptr<AkSkManager> akSkManager, EtcdClusterManager *etcdCM,
+                          std::shared_ptr<AkSkManager> akSkManager,
                           OCMetadataManager *ocMetadataManager);
 
     ~OCNotifyWorkerManager();
@@ -562,7 +565,6 @@ private:
     HostPort masterAddr_;
     const bool backendStoreExist_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };
     OCMetadataManager *ocMetadataManager_{ nullptr };
     // for diffrent ocmetamanager to add and remove Subscriber.
     std::string subscriberPrefix_ = "";

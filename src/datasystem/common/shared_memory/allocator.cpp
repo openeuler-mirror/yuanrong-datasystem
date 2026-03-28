@@ -25,12 +25,14 @@
 #include <sys/mman.h>
 
 #define JEMALLOC_NO_DEMANGLE
-#include <jemalloc/jemalloc.h>
+#include "jemalloc/jemalloc.h"
 #undef JEMALLOC_NO_DEMANGLE
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/shared_memory/resource_pool.h"
 #include "datasystem/common/util/file_util.h"
@@ -122,7 +124,9 @@ Status Allocator::InitDevHostMemory(uint64_t devHostSize)
 Status Allocator::InitDevMemory(uint64_t devDevSize)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(devDevSize > 0, K_INVALID, "Got invalid dev device memory init!");
+#ifdef WITH_TESTS
     INJECT_POINT_NO_RETURN("Allocator.InitDevMemory");
+#endif
     devDeviceMemStats_ = std::make_unique<ResourcePool>(devDevSize);
     return Status::OK();
 }
@@ -272,7 +276,9 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
                                  ptrdiff_t &offset, uint64_t &mmapSize, ServiceType serviceType, CacheType cacheType)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(arenaManager_);
+#ifdef WITH_TESTS
     INJECT_POINT("worker.Allocator.AllocateMemory");
+#endif
     if (cacheType == CacheType::DISK) {
         if (FLAGS_shared_disk_directory.empty()) {
             RETURN_STATUS(K_INVALID, "Allocate failed because shared disk is not enabled.");
@@ -319,11 +325,13 @@ Status Allocator::IncrementMemoryUsage(uint64_t needSize, ServiceType serviceTyp
     } else if (cacheType == CacheType::UB_TRANSPORT) {
         return ubTransportStats_->AddUsageCAS(needSize);
     }
+#ifdef WITH_TESTS
     INJECT_POINT("worker.Allocator.MemoryAllocatedToStream", [this](int streamMemoryUsage) {
         streamMemoryStats_->SetUsage(streamMemoryUsage);
         streamMemoryStats_->SetRealUsage(streamMemoryUsage);
         return Status::OK();
     });
+#endif
     if (serviceType == ServiceType::OBJECT) {
         return objectMemoryStats_->AddUsageCAS(
             needSize, physicalMemoryStats_->FootprintLimit() - streamMemoryStats_->RealUsage());
@@ -348,8 +356,9 @@ Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, Servic
     RETURN_IF_NOT_OK(arenaManager_->GetArenaGroup({ tenantId, cacheType }, arenaGroup));
     auto stats = GetResourcePoolByType(serviceType, cacheType);
     RETURN_IF_NOT_OK(arenaGroup->FreeMemory(pointer, bytesFree, bytesRealFree, stats->Usage()));
+#ifdef WITH_TESTS
     INJECT_POINT("Allocator.FreeMemory.PostFreeMemoryPreSubUsage");
-
+#endif
     if (arenaGroup->GetMemoryUsage() == 0) {
         arenaManager_->SetReleaseableTenant({ tenantId, cacheType });
     }
@@ -432,10 +441,12 @@ uint64_t Allocator::GetTotalPhysicalMemoryUsage(CacheType cacheType)
     if (cacheType == CacheType::UB_TRANSPORT) {
         return ubTransportStats_->RealUsage();
     }
+#ifdef WITH_TESTS
     INJECT_POINT("allocator.size", [this](int64_t usage) {
         physicalMemoryStats_->SetRealUsage(usage);
         return 0;
     });
+#endif
     return physicalMemoryStats_->GetOrUpdateRealUsage(objectMemoryStats_->RealUsage()
                                                       + streamMemoryStats_->RealUsage());
 }

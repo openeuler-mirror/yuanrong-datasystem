@@ -57,7 +57,6 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
-#include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
@@ -68,7 +67,6 @@
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
-#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 
@@ -123,7 +121,6 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
 Status OCMetadataManager::Init()
 {
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "EtcdClusterManager must be inited firstly");
-    objectStore_->SetClusterManager(etcdCM_);
     RETURN_IF_NOT_OK(objectStore_->Init());
     if (newNode_) {
         RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
@@ -131,11 +128,11 @@ Status OCMetadataManager::Init()
     // let it skips recovery from etcd
     bool skipRecoveryFromEtcd = objectStore_->CheckHealth();
 
-    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, etcdCM_);
+    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, etcdCM_->IsCentralized());
     RETURN_IF_NOT_OK(InitGlobalRef());
     asyncPool_ = std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "OcAsyncTask");
     notifyWorkerManager_ =
-        std::make_unique<OCNotifyWorkerManager>(objectStore_, skipRecoveryFromEtcd, akSkManager_, etcdCM_, this);
+        std::make_unique<OCNotifyWorkerManager>(objectStore_, skipRecoveryFromEtcd, akSkManager_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     globalCacheDeleteManager_ =
         std::make_unique<OCGlobalCacheDeleteManager>(objectStore_, persistApi_, skipRecoveryFromEtcd);

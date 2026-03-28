@@ -133,18 +133,6 @@ install_file_pattern(
 )
 
 ############################################################
-# Datasystem bazel support files.
-############################################################
-
-install(FILES ${CMAKE_SOURCE_DIR}/bazel/BUILD.bazel
-        ${CMAKE_SOURCE_DIR}/bazel/WORKSPACE
-        DESTINATION ${DATASYSTEM_BAZEL_LIBPATH})
-
-install(FILES ${CMAKE_SOURCE_DIR}/bazel/BUILD.bazel
-        ${CMAKE_SOURCE_DIR}/bazel/WORKSPACE
-        DESTINATION ${DATASYSTEM_BAZEL_NEW_LIBPATH})
-
-############################################################
 # Datasystem python share libraries.
 ############################################################
 if (BUILD_PYTHON_API)

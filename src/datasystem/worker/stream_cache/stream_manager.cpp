@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"

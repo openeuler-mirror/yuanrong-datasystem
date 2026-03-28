@@ -34,7 +34,9 @@ void ZmqRpcGenerator::CreateStubCpp(const google::protobuf::FileDescriptor &file
         "#include \"$fileName$.service.rpc.pb.h\"\n"
         "#include \"$fileName$.stub.rpc.pb.h\"\n"
         "#include \"datasystem/common/rpc/rpc_unary_client_impl.h\"\n"
+        "#ifndef DISABLE_RDMA\n"
         "#include \"datasystem/common/rdma/fast_transport_manager_wrapper.h\"\n"
+        "#endif\n"
         "#include \"datasystem/common/rpc/zmq/zmq_client_stream_base.h\"\n"
         "#include \"datasystem/common/rpc/zmq/zmq_stub_impl.h\"\n";
     printer.Print(vars, impl.c_str());

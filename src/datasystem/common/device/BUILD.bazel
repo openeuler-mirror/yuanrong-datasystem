@@ -1,0 +1,144 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "device_helper",
+    hdrs = [
+        "device_helper.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_library(
+    name = "device_manager_base",
+    hdrs = [
+        "device_manager_base.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "device_manager_factory",
+    hdrs = [
+        "device_manager_factory.h",
+    ],
+    deps = [
+        ":device_manager_base",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/util:common_util",
+    ],
+)
+
+ds_cc_library(
+    name = "device_resource_manager_factory",
+    hdrs = [
+        "device_resource_manager_factory.h",
+    ],
+    deps = [
+        ":device_manager_factory",
+        ":device_resource_manager",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/device/nvidia:cuda_resource_manager",
+    ],
+)
+
+ds_cc_library(
+    name = "device_batch_copy_helper",
+    hdrs = [
+        "device_batch_copy_helper.h",
+    ],
+    deps = [
+        ":device_resource_manager",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/object_cache:buffer_composer",
+    ],
+)
+
+ds_cc_library(
+    name = "device_pointer_wrapper",
+    hdrs = [
+        "device_pointer_wrapper.h",
+    ],
+    deps = [
+        "//src/datasystem/common/device:device_manager_factory",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/util:common_util",
+    ],
+)
+
+ds_cc_library(
+    name = "comm_wrapper_base_header",
+    hdrs = [
+        "acl_pipeline_p2p_task.h",
+        "comm_wrapper_base.h",
+    ],
+    deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/device:device_pointer_wrapper",
+        "//src/datasystem/common/device/ascend:acl_pipeline_task",
+        "//src/datasystem/common/device/ascend:acl_resource_manager",
+        "//src/datasystem/common/device/ascend:cann_types",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_library(
+    name = "comm_wrapper",
+    srcs = [
+        "acl_pipeline_p2p_task.cpp",
+        "comm_wrapper.cpp",
+        "comm_wrapper_base.cpp",
+    ],
+    hdrs = [
+        "acl_pipeline_p2p_task.h",
+        "comm_wrapper.h",
+        "comm_wrapper_base.h",
+    ],
+    deps = [
+        ":comm_wrapper_base_header",
+        "//include/datasystem/hetero:hetero_headers",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/device:device_pointer_wrapper",
+        "//src/datasystem/common/device/ascend:acl_pipeline_task",
+        "//src/datasystem/common/device/ascend:acl_resource_manager",
+        "//src/datasystem/common/device/ascend:p2phccl_types",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_library(
+    name = "device_resource_manager",
+    srcs = [
+        ":device_resource_manager.cpp",
+    ],
+    hdrs = [
+        ":device_manager_factory.h",
+        ":device_resource_manager.h",
+    ],
+    deps = [
+        ":device_helper",
+        ":device_manager_base",
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

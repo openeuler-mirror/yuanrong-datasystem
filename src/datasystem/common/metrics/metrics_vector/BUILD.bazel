@@ -1,0 +1,16 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "metrics_vector",
+    hdrs = [
+        "metrics_blocking_vector.h",
+        "metrics_obs_code_vector.h",
+        "metrics_sc_remote_vector.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    ],
+)

@@ -1,0 +1,21 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "cuda_resource_manager",
+    srcs = [
+        "cuda_resource_manager.cpp",
+    ],
+    hdrs = [
+        "cuda_resource_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/device:device_batch_copy_helper",
+        "//src/datasystem/common/device:device_manager_factory",
+        "//src/datasystem/common/device:device_resource_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

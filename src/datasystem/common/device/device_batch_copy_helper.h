@@ -23,6 +23,7 @@
 #include <numeric>
 #include <vector>
 
+#include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_resource_manager.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 

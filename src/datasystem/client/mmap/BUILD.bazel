@@ -1,0 +1,43 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "mmap_table",
+    srcs = [
+        "embedded_mmap_table.cpp",
+        "embedded_mmap_table_entry.cpp",
+        "immap_table.cpp",
+        "shm_mmap_table.cpp",
+        "shm_mmap_table_entry.cpp",
+    ],
+    hdrs = [
+        "embedded_mmap_table.h",
+        "embedded_mmap_table_entry.h",
+        "immap_table.h",
+        "shm_mmap_table.h",
+        "shm_mmap_table_entry.h",
+    ],
+    deps = [
+        ":immap_table_entry",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "immap_table_entry",
+    hdrs = [
+        "immap_table_entry.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

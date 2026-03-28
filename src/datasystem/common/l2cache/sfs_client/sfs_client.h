@@ -22,8 +22,19 @@
 #ifndef DATASYSTEM_COMMON_L2CACHE_SFS_CLIENT_SFS_CLIENT_H
 #define DATASYSTEM_COMMON_L2CACHE_SFS_CLIENT_SFS_CLIENT_H
 
-#include "datasystem/common/l2cache/l2cache_client.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/l2cache/get_object_info_list_resp.h"
+#include "datasystem/common/l2cache/l2cache_client.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/timer.h"
+#include "datasystem/common/util/validator.h"
+#include "datasystem/utils/status.h"
 
 #include <shared_mutex>
 

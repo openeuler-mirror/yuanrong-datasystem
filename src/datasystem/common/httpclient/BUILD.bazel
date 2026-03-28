@@ -1,0 +1,71 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "curl_http_client",
+    srcs = [
+        "curl_http_client.cpp",
+    ],
+    hdrs = ["curl_http_client.h"],
+    deps = [
+        ":http_client",
+        ":http_message",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "@curl",
+    ],
+)
+
+ds_cc_library(
+    name = "http_client",
+    hdrs = ["http_client.h"],
+    deps = [
+        ":http_request",
+        ":http_response",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "http_message",
+    srcs = [
+        "http_message.cpp",
+    ],
+    hdrs = ["http_message.h"],
+)
+
+ds_cc_library(
+    name = "http_request",
+    srcs = [
+        "http_request.cpp",
+    ],
+    hdrs = ["http_request.h"],
+    deps = [
+        ":http_message",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/util:ssl_authorization",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uri",
+        "@re2",
+    ],
+)
+
+ds_cc_library(
+    name = "http_response",
+    srcs = [
+        "http_response.cpp",
+    ],
+    hdrs = ["http_response.h"],
+    deps = [
+        ":http_message",
+    ],
+)

@@ -27,7 +27,7 @@
 #include <linux/memfd.h>
 #endif
 #include <poll.h>
-#include <re2/re2.h>
+#include "re2/re2.h"
 
 #include <utility>
 

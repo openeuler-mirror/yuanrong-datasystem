@@ -1,0 +1,16 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "utils_headers",
+    hdrs = [
+        "connection.h",
+        "embedded_config.h",
+        "optional.h",
+        "sensitive_value.h",
+        "service_discovery.h",
+        "status.h",
+        "string_view.h",
+    ],
+    strip_include_prefix = "/include",
+    deps = [],
+)

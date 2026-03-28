@@ -19,7 +19,6 @@
  */
 
 #include "datasystem/master/object_cache/delete_object_mediator.h"
-#include "datasystem/master/object_cache/oc_metadata_manager.h"
 
 namespace datasystem {
 namespace master {

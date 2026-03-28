@@ -1,0 +1,40 @@
+# BUILD file for src/datasystem/common/log
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "lru_headers",
+    hdrs = [
+        "lru_cache.h",
+        "lru_policy.h",
+    ],
+)
+
+ds_cc_library(
+    name = "lru_cache",
+    hdrs = [
+        "lru_cache.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/lru:lru_policy",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:template_util",
+        "//src/datasystem/common/util:thread",
+    ],
+)
+
+ds_cc_library(
+    name = "lru_policy",
+    hdrs = [
+        "lru_policy.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:status_helper",
+    ]
+)

@@ -29,15 +29,22 @@
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_string(l2_cache_type);
+#ifndef DISABLE_OBS
 DS_DECLARE_string(obs_endpoint);
 DS_DECLARE_string(obs_bucket);
+#endif
 DS_DECLARE_string(sfs_path);
 
 namespace datasystem {
 Status PersistenceApi::Init()
 {
     if (FLAGS_l2_cache_type == "obs") {
+    #ifndef DISABLE_OBS
         client_ = std::make_unique<ObsClient>(FLAGS_obs_endpoint, FLAGS_obs_bucket);
+    #else
+        LOG(FATAL) << "obs client not implemented for bazel build, set FLAGS_l2_cache_type to other type.";
+    #endif
+
     } else if (FLAGS_l2_cache_type == "sfs") {
         client_ = std::make_unique<SfsClient>(FLAGS_sfs_path);
     } else {

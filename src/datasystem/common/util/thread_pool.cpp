@@ -21,11 +21,13 @@
 
 #include <system_error>
 #include <thread>
-
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/log/log.h"
 
 namespace datasystem {
 

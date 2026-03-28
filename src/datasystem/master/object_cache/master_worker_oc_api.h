@@ -24,10 +24,21 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
-#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 
 namespace datasystem {
+
+namespace object_cache {
+class MasterWorkerOCServiceImpl;
+}
+
 namespace master {
+static constexpr int64_t MASTER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
+static constexpr float MASTER_TIMEOUT_DESCEND_FACTOR = 0.9;
+inline int64_t MasterGetRequestTimeout(int32_t timeout)
+{
+    return std::max(int64_t(timeout * MASTER_TIMEOUT_DESCEND_FACTOR), timeout - MASTER_TIMEOUT_MINUS_MILLISECOND);
+}
+
 /**
  * @brief The MasterWorkerOCApi is an abstract class that defines the interface for interactions with the object cache
  * worker service.
@@ -200,48 +211,6 @@ private:
     HostPort workerHostPort_;                                            // The HostPort of the worker node.
     std::shared_ptr<MasterWorkerOCService_Stub> rpcSession_{ nullptr };  // Session to the worker rpc service.
 };
-
-/**
- * @brief MasterLocalWorkerOCApi is the derived local version of the api for sending and receiving worker OC requests
- * where the worker exists in the same process as the service. This class will directly reference the service through a
- * pointer and does not use any RPC mechanism for communication.
- * Callers will access this class naturally through base class polymorphism.
- * See the parent interface for function argument documentation.
- */
-class MasterLocalWorkerOCApi : public MasterWorkerOCApi {
-public:
-    /**
-     * @brief Constructor for MasterLocalWorkerOCApi class, the remote version of the api.
-     * @param[in] hostPort The address of the target worker.
-     * @param[in] localHostPort The local master host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
-     */
-    explicit MasterLocalWorkerOCApi(object_cache::MasterWorkerOCServiceImpl *service, const HostPort &localHostPort,
-                                    std::shared_ptr<AkSkManager> akSkManager);
-    ~MasterLocalWorkerOCApi() override = default;
-    Status Init() override;
-    Status PublishMeta(PublishMetaReqPb &req, PublishMetaRspPb &resp) override;
-    Status UpdateNotification(UpdateObjectReqPb &req, UpdateObjectRspPb &rsp) override;
-    Status ClearData(ClearDataReqPb &req, ClearDataRspPb &rsp) override;
-    Status DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp) override;
-    Status DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag) override;
-    Status DeleteNotificationReceive(int64_t tag, DeleteObjectRspPb &rsp) override;
-    Status QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp) override;
-    Status PushMetaToWorker(PushMetaToWorkerReqPb &req, PushMetaToWorkerRspPb &rsp) override;
-    Status RequestMetaFromWorker(RequestMetaFromWorkerReqPb &req, RequestMetaFromWorkerRspPb &rsp) override;
-    Status ChangePrimaryCopy(ChangePrimaryCopyReqPb &req, ChangePrimaryCopyRspPb &rsp) override;
-    Status NotifyMasterIncNestedRefs(NotifyMasterIncNestedReqPb &req, NotifyMasterIncNestedResPb &rsp) override;
-    Status NotifyMasterDecNestedRefs(NotifyMasterDecNestedReqPb &req, NotifyMasterDecNestedResPb &rsp) override;
-
-private:
-    object_cache::MasterWorkerOCServiceImpl *workerOC_{ nullptr };
-    mutable std::shared_mutex localReqMutex_; // protects localReqMap_
-    // Map from local tag to pending DeleteObject request.
-    std::unordered_map<int64_t, std::unique_ptr<DeleteObjectReqPb>> localReqMap_;
-    // Atomic tag generator for unique local DeleteObject request identification.
-    static std::atomic<int64_t> g_localTagGen_;
-};
-
 }  // namespace master
 }  // namespace datasystem
 

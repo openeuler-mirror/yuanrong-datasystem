@@ -22,7 +22,7 @@
 #include <algorithm>
 #include <sstream>
 
-#include <re2/re2.h>
+#include "re2/re2.h"
 
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/util/status_helper.h"

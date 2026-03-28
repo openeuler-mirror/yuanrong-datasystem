@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -27,7 +28,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 #define RETRY_IF_OUT_MEMORY(rc_, statement_, maxRetryCnt_)                      \
@@ -124,6 +124,7 @@ void ObjCacheShmUnit::SetAddress(const std::string &newAddress)
     address_ = newAddress;
 }
 
+#ifndef DISABLE_RDMA
 void ObjCacheShmUnit::SetRemoteHostInfo(const std::string &clientCommId,
                                         const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo)
 {
@@ -141,6 +142,7 @@ std::shared_ptr<RemoteH2DHostInfoMap> ObjCacheShmUnit::GetRemoteHostInfo() const
 {
     return remoteH2DHostInfoMap_;
 }
+#endif
 
 Status CopyAndSplitBuffer(const std::string &tenantId, const void *data, size_t size, std::vector<RpcMessage> &messages)
 {

@@ -1,0 +1,22 @@
+# BUILD file for src/datasystem/common/parallel
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "common_parallel",
+    srcs = [
+        "detail/parallel_for_local.cpp",
+    ],
+    hdrs = [
+        "detail/barrier.h",
+        "detail/native_sem.h",
+        "detail/parallel_for_local.h",
+        "parallel_for.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+        "@tbb//:tbb",
+    ],
+)

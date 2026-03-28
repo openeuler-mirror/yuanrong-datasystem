@@ -30,8 +30,8 @@
 #include <arpa/inet.h>
 
 #include <linux/limits.h>
-#include <re2/re2.h>
 
+#include "re2/re2.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/file_util.h"

@@ -1,0 +1,17 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+ds_cc_library(
+    name = "hard_disk_exporter",
+    srcs = ["hard_disk_exporter.cpp"],
+    hdrs = ["hard_disk_exporter.h"],
+    deps = [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/metrics:metrics_exporter_base",
+        "//src/datasystem/common/log:log_base",
+    ],
+    visibility = ["//visibility:public"],
+)

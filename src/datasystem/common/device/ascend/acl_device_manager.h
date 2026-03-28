@@ -27,15 +27,13 @@
 #include <memory>
 #include <mutex>
 
-#include "datasystem/common/log/log.h"
-#include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/common/device/ascend/cann_types.h"
+#include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/device_manager_base.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/dlutils.h"
-#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
-#include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/utils/status.h"
 
 #define RETURN_CANN_RESULT(aclRet, interType)                                                                          \

@@ -44,7 +44,8 @@
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
-#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/master/object_cache/master_oc_service_impl.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DEFINE_uint32(eviction_thread_num, 1, "Thread number of eviction for object cache.");

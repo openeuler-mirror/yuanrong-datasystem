@@ -23,6 +23,7 @@
 #include <shared_mutex>
 
 #include "datasystem/common/constants.h"
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/status_helper.h"

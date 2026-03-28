@@ -963,7 +963,9 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
     }
 
     // existBufferList same as bufferList
+ #ifdef ENABLE_PERF
     point.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
+#endif
     existBufferList.clear();
     return Status::OK();
 }
@@ -1768,7 +1770,9 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     bufferInfo->version = version;
     bufferInfo->payloadPointer = payloadPointer;
     bufferInfo->mmapEntry = std::move(mmapEntry);
+#ifndef DISABLE_RDMA
     bufferInfo->remoteHostInfo = std::move(remoteHostInfo);
+#endif
     return bufferInfo;
 }
 

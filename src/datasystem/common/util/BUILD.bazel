@@ -1,0 +1,510 @@
+# BUILD file for src/datasystem/common/util
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "bitmask_enum",
+    hdrs = ["bitmask_enum.h"],
+)
+
+ds_cc_library(
+    name = "format",
+    srcs = ["format.cpp"],
+    hdrs = ["format.h"],
+)
+
+ds_cc_library(
+    name = "event_subscribers",
+    hdrs = ["event_subscribers.h"],
+    deps = [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "raii",
+    hdrs = ["raii.h"],
+)
+
+ds_cc_library(
+    name = "rpc_util",
+    hdrs = ["rpc_util.h"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "file_util",
+    srcs = [
+        "file_util.cpp",
+    ],
+    hdrs = [
+        "file_util.h",
+    ],
+    deps = [
+        ":raii",
+        ":uri",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "status_helper",
+    srcs = [
+        "status.cpp",
+    ],
+    hdrs = [
+        "status_code.def",
+        "status_helper.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":format",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/log:log_base",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "thread_pool",
+    srcs = [
+        "thread_pool.cpp",
+    ],
+    hdrs = ["thread_pool.h"],
+    deps = [
+        ":common_util_base",
+        ":format",
+        ":thread",
+        ":timer",
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "strings_util",
+    srcs = [
+        "string_util.cpp",
+    ],
+    hdrs = ["strings_util.h"],
+    deps = [
+        ":format",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "@com_google_protobuf//:protobuf",
+        "@re2",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "hash_algorithm",
+    srcs = [
+        "hash_algorithm.cpp",
+    ],
+    hdrs = [
+        "hash_algorithm.h",
+    ],
+    deps = [
+        ":meta_route_tool_header",
+        ":strings_util",
+    ],
+)
+
+ds_cc_library(
+    name = "meta_route_tool_header",
+    hdrs = [
+        "meta_route_tool.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
+ds_cc_library(
+    name = "meta_route_tool",
+    srcs = [
+        ":meta_route_tool.cpp",
+    ],
+    hdrs = [
+        "meta_route_tool.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:validator",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "validator",
+    hdrs = [
+        "validator.h",
+    ],
+    deps = [
+        ":common_util_base",
+        ":file_util",
+        ":format",
+        ":strings_util",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log_header",
+        "@re2",
+    ],
+)
+
+ds_cc_library(
+    name = "common_util_base",
+    hdrs = [
+        "format.h",
+        "net_util.h",
+        "thread.h",
+        "uri.h",
+        "wait_post.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
+ds_cc_library(
+    name = "timer",
+    hdrs = ["timer.h"],
+    deps = [],
+)
+
+ds_cc_library(
+    name = "locks",
+    srcs = [
+        "locks.cpp",
+    ],
+    hdrs = [
+        "lock_map.h",
+        "locks.h",
+    ],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "thread",
+    hdrs = [
+        "thread.h",
+    ],
+)
+
+ds_cc_library(
+    name = "random_data",
+    srcs = [
+        "random_data.cpp",
+    ],
+    hdrs = [
+        "random_data.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_library(
+    name = "uuid_generator",
+    srcs = [
+        "uuid_generator.cpp",
+    ],
+    hdrs = [
+        "uuid_generator.h",
+    ],
+    deps = [
+        ":random_data",
+        ":status_helper",
+        "//src/datasystem/common/log:common_log_header",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "net_util",
+    srcs = [
+        "net_util.cpp",
+    ],
+    hdrs = [
+        "net_util.h",
+    ],
+    deps = [
+        ":validator",
+        ":status_helper",
+        #"//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "template_util",
+    hdrs = [
+        "template_util.h",
+    ],
+    deps = [
+    ],
+)
+
+ds_cc_library(
+    name = "wait_post",
+    srcs = [
+        "wait_post.cpp",
+    ],
+    hdrs = [
+        "wait_post.h",
+    ],
+    deps = [
+        ":status_helper",
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "fd_pass",
+    srcs = [
+        "fd_pass.cpp",
+    ],
+    hdrs = [
+        "fd_pass.h",
+    ],
+    deps = [
+        ":status_helper",
+        ":strings_util",
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "fd_manager",
+    srcs = [
+        "fd_manager.cpp",
+    ],
+    hdrs = [
+        "fd_manager.h",
+    ],
+    deps = [
+        ":status_helper",
+        ":strings_util",
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "memory",
+    srcs = [
+        "memory.cpp",
+    ],
+    hdrs = [
+        "memory.h",
+    ],
+    deps = [
+        ":status_helper",
+        ":strings_util",
+        ":thread_pool",
+        "//src/datasystem/common/log:common_log_header",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "version",
+    srcs = [
+        "version.cpp",
+    ],
+    hdrs = [
+        "version.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "@re2",
+    ],
+)
+
+ds_cc_library(
+    name = "uri",
+    srcs = [
+        "uri.cpp",
+    ],
+    hdrs = [
+        "uri.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "@re2",
+    ],
+)
+
+ds_cc_library(
+    name = "thread_local",
+    srcs = [
+        "thread_local.cpp",
+    ],
+    hdrs = [
+        "thread_local.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/rpc:timeout_duration",
+        "//src/datasystem/common/rpc/zmq:zmq_message",
+    ],
+)
+
+ds_cc_library(
+    name = "dlutils",
+    hdrs = [
+        "dlutils.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "sensitive_value",
+    srcs = [
+        "sensitive_value.cpp",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "ssl_authorization",
+    srcs = [
+        "ssl_authorization.cpp",
+    ],
+    hdrs = [
+        "ssl_authorization.h",
+    ],
+    deps = [
+        ":raii",
+        ":sensitive_value",
+        ":status_helper",
+        ":strings_util",
+        "//src/datasystem/common/log:common_log_header",
+        "@boringssl//:ssl",
+    ],
+)
+
+ds_cc_library(
+    name = "safe_shm_lock",
+    srcs = [
+        "safe_shm_lock.cpp",
+    ],
+    hdrs = [
+        "safe_shm_lock.h",
+    ],
+    deps = [
+        ":format",
+        ":status_helper",
+        ":strings_util",
+        ":timer",
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "common_util",
+    deps = [
+        ":format",
+        ":safe_shm_lock",
+        ":ssl_authorization",
+        ":status_helper",
+        ":strings_util",
+        ":thread_local",
+        ":timer",
+        ":validator",
+        ":version",
+        ":wait_post",
+    ],
+)
+
+ds_cc_library(
+    name = "request_counter",
+    hdrs = ["request_counter.h"],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+# TODO
+ds_cc_library(
+    name = "container_util",
+    srcs = [],
+    hdrs = [
+        "container_util.h",
+    ],
+    deps = [
+    ],
+)
+
+ds_cc_library(
+    name = "request_table",
+    hdrs = [
+        "request_table.h",
+    ],
+)
+
+ds_cc_library(
+    name = "deadlock_util",
+    srcs = [
+        "deadlock_util.cpp",
+    ],
+    hdrs = ["deadlock_util.h"],
+    deps = [
+        ":random_data",
+        ":status_helper",
+        ":strings_util",
+        ":thread_local",
+        "//src/datasystem/common/log:common_log",
+    ],
+)
+
+ds_cc_library(
+    name = "lock_helper",
+    hdrs = ["lock_helper.h"],
+    deps = [
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_library(
+    name = "protobuf_util",
+    hdrs = ["protobuf_util.h"],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "@com_google_protobuf//:protobuf",
+    ],
+)

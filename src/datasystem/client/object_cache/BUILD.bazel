@@ -1,0 +1,77 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "client_memory_ref_table",
+    srcs = [
+        "client_memory_ref_table.cpp",
+    ],
+    hdrs = [
+        "client_memory_ref_table.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "@tbb",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "object_client_impl",
+    srcs = [
+        "object_client_impl.cpp",
+    ],
+    hdrs = [
+        "object_client_impl.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/client:service_discovery",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/client:client_flags_monitor",
+        "//src/datasystem/client:client_state_manager",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/common/device:device_helper",
+        "//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/device/ascend:acl_resource_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:buffer_composer",
+        "//src/datasystem/common/parallel:common_parallel",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:dlutils",
+        "//src/datasystem/common/util:fd_pass",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_local_api",
+        ":client_memory_ref_table",
+        # "//src/datasystem/client/object_cache/device:client_device_object_manager",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "object_client",
+    srcs = [
+        "object_client.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":object_client_impl",
+        "//include/datasystem:headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/client/object_cache:client_memory_ref_table",
+        "//src/datasystem/common/device/ascend:acl_resource_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)

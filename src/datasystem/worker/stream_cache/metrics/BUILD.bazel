@@ -1,0 +1,36 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "sc_metrics_monitor",
+    srcs = [
+        "sc_metrics.cpp",
+        "sc_metrics_monitor.cpp",
+    ],
+    deps = [
+        ":sc_metrics_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:metrics_exporter_base",
+        "//src/datasystem/common/metrics/hard_disk_exporter",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/protos:worker_stream_cc_proto",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+        "//src/datasystem/worker/stream_cache:consumer",
+        "//src/datasystem/worker/stream_cache:stream_manager_header",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "sc_metrics_header",
+    hdrs = [
+        "sc_metrics.def",
+        "sc_metrics.h",
+        "sc_metrics_monitor.h",
+    ],
+)

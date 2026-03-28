@@ -26,6 +26,7 @@
 #include "datasystem/common/util/event_subscribers.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
+#include "datasystem/master/meta_addr_info.h"
 
 namespace datasystem {
 class HashRingEvent : public EventNotifier {
@@ -46,6 +47,7 @@ class HashRingEvent : public EventNotifier {
         SCALEUP_FINISH,
         OTHER_AZ_NODE_DEAD,
         DATA_MIGRATION_READY,
+        NEED_REDIRECT,
     };
 
 public:
@@ -90,6 +92,21 @@ public:
     using ScaleupFinish = EventSubscribers<SCALEUP_FINISH, std::function<void(const std::string &)>>;
     using OtherAzNodeDeadEvent = EventSubscribers<OTHER_AZ_NODE_DEAD, std::function<Status(const std::string &)>>;
     using DataMigrationReady = EventSubscribers<DATA_MIGRATION_READY, std::function<Status(void)>>;
+    using CheckNeedRedirect = EventSubscribers<NEED_REDIRECT, std::function<void(const std::string &, HostPort &, bool &)>>;
+};
+
+class EtcdClusterMagagerEvent : public EventNotifier {
+    enum EtcdClusterMagagerEventType {
+        QUERY_MASTER_ADDR_IN_OTHER_AZ,
+        CHECK_IF_OTHER_AZ_NODE_CONNECTED,
+    };
+
+public:
+    using CheckIfOtherAzNodeConnected =
+        EventSubscribers<CHECK_IF_OTHER_AZ_NODE_CONNECTED, std::function<void(const HostPort &, bool &isConnect)>>;
+    using QueryMasterAddrInOtherAz =
+        EventSubscribers<QUERY_MASTER_ADDR_IN_OTHER_AZ,
+                         std::function<Status(const std::string &, const std::string &, MetaAddrInfo &)>>;
 };
 }  // namespace datasystem
 #endif

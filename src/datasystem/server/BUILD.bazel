@@ -1,0 +1,31 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "common_server",
+    srcs = [
+        "common_server.cpp",
+    ],
+    hdrs = [
+        "common_server.h",
+    ],
+    deps = [
+        "@com_google_protobuf//:protobuf",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_helper",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:generic_service_cc_proto",
+        # "//src/datasystem/protos:generic_service_zmq_cc_proto",
+        # "//src/datasystem/server:generic_service_impl",
+    ],
+)

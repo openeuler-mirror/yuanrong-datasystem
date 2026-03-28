@@ -1,0 +1,54 @@
+# BUILD file for src/datasystem/common/agc
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "ak_sk_manager",
+    srcs = [
+        "ak_sk_manager.cpp",
+    ],
+    hdrs = [
+        "ak_sk_manager.h",
+    ],
+    deps = [
+        ":hasher",
+        ":signature",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+ds_cc_library(
+    name = "signature",
+    srcs = [
+        "signature.cpp",
+    ],
+    hdrs = ["signature.h"],
+    deps = [
+        ":hasher",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/rpc/zmq:zmq_message",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "@boringssl//:ssl",
+    ],
+)
+
+ds_cc_library(
+    name = "hasher",
+    srcs = [
+        "hasher.cpp",
+    ],
+    hdrs = ["hasher.h"],
+    deps = [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:status_helper",
+        "@boringssl//:ssl",
+        "@securec",
+    ],
+)

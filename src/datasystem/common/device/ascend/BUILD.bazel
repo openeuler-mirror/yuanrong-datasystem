@@ -1,0 +1,158 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "cann_types",
+    hdrs = [
+        "cann_types.h",
+    ],
+    deps = [
+        "//src/datasystem/common/device:device_manager_base",
+    ],
+)
+
+ds_cc_library(
+    name = "p2phccl_types",
+    hdrs = [
+        "p2phccl_types.h",
+    ],
+    deps = [
+        ":cann_types",
+        "//src/datasystem/common/device:device_manager_base",
+    ],
+)
+
+ds_cc_library(
+    name = "acl_device_manager",
+    srcs = [
+        "acl_device_manager.cpp",
+    ],
+    hdrs = [
+        "acl_device_manager.h",
+    ],
+    deps = [
+        ":cann_types",
+        ":p2phccl_types",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:dlutils",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+# 回调线程
+ds_cc_library(
+    name = "callback_thread",
+    srcs = ["callback_thread.cpp"],
+    hdrs = ["callback_thread.h"],
+    deps = [
+        ":acl_device_manager",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+# FFTS调度器
+ds_cc_library(
+    name = "ffts_dispatcher",
+    srcs = ["ffts_dispatcher.cpp"],
+    hdrs = ["ffts_dispatcher.h"],
+    deps = [
+        ":acl_device_manager",
+        ":cann_types",
+    ],
+)
+
+# 资源管理器
+ds_cc_library(
+    name = "acl_resource_manager",
+    srcs = ["acl_resource_manager.cpp"],
+    hdrs = ["acl_resource_manager.h"],
+    deps = [
+        ":acl_device_manager",
+        ":callback_thread",
+        ":cann_types",
+        ":ffts_dispatcher",
+        "//src/datasystem/common/device:device_batch_copy_helper",
+        "//src/datasystem/common/device:device_resource_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/object_cache:buffer_composer",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+# HCCL通信包装器
+ds_cc_library(
+    name = "hccl_comm_wrapper",
+    hdrs = ["hccl_comm_wrapper.h"],
+    deps = [
+        "//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+# P2PHCCL通信包装器
+ds_cc_library(
+    name = "p2phccl_comm_wrapper",
+    srcs = ["p2phccl_comm_wrapper.cpp"],
+    hdrs = ["p2phccl_comm_wrapper.h"],
+    deps = [
+        "//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "acl_pipeline_task",
+    hdrs = ["acl_pipeline_task.h"],
+    deps = [
+        ":acl_device_manager",
+        ":callback_thread",
+        ":ffts_dispatcher",
+        "//src/datasystem/common/device:device_manager_factory",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "acl_device_manager_header",
+    srcs = [
+    ],
+    hdrs = [
+        "acl_device_manager.h",
+        "acl_pipeline_task.h",
+        "acl_resource_manager.h",
+        "callback_thread.h",
+        "cann_types.h",
+        "ffts_dispatcher.h",
+        "hccl_comm_wrapper.h",
+        "p2phccl_comm_wrapper.h",
+        "p2phccl_types.h",
+        #"acl_pointer_wrapper.h",
+        #"comm_wrapper_base.h",
+    ],
+    deps = [
+        #"//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/common/device:device_manager_factory",
+        "//src/datasystem/common/device:device_helper",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:dlutils",
+    ],
+)

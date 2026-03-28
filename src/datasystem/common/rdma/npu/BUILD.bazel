@@ -1,0 +1,63 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "remote_h2d_manager_header",
+    # srcs = [
+    #     "remote_h2d_manager.cpp",
+    # ],
+    hdrs = [
+        "remote_h2d_manager.h"
+    ],
+    deps = [
+    #     "//src/datasystem/common/log:common_log",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+    #     "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    #     "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/device/ascend:acl_device_manager_header",
+    #     "//src/datasystem/client/object_cache/device:device_memory_unit_header",
+    #     "//src/datasystem/common/immutable_string:immutable_string",
+    #     "//include/datasystem/hetero:hetero_headers",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/protos:utils_cc_proto",
+        "//include/datasystem/utils:utils_headers",
+        "@tbb",
+    ]
+)
+
+
+ds_cc_library(
+    name = "remote_h2d_manager",
+    srcs = [
+        "remote_h2d_manager.cpp",
+    ],
+    hdrs = [
+        "remote_h2d_manager.h"
+    ],
+    copts = ["-isystem external/re2"],
+    deps = [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/protos:utils_cc_proto",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:uuid_generator",
+        "//include/datasystem/object:object_headers",
+        "@re2",
+    ],
+)

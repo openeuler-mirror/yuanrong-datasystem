@@ -30,7 +30,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <re2/re2.h>
+#include "re2/re2.h"
 
 #include "datasystem/client/client_state_manager.h"
 #include "datasystem/client/embedded_client_worker_api.h"
@@ -45,7 +45,9 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_base.h"
+#ifndef DISABLE_RDMA
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -1246,7 +1248,6 @@ private:
 
     void StartPerfThread();
     void ShutdownPerfThread();
-
     /**
      * @brief Memory copy in parallel or serial mode.
      * @param[in] isParallel Enable parallel or not.

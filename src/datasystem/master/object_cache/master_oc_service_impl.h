@@ -34,7 +34,6 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
-#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 
 namespace datasystem {
 namespace master {

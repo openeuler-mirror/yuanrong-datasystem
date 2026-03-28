@@ -1,0 +1,117 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "master_dev_oc_manager",
+    srcs = ["master_dev_oc_manager.cpp"],
+    hdrs = [
+        "master_dev_oc_manager.h",
+    ],
+    deps = [
+        ":master_dev_client_meta_manager",
+        ":master_dev_dead_lock_manager",
+        ":master_dev_hccl_rootinfo",
+        ":master_dev_npu_events",
+        ":master_dev_oc_directory",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device:device_helper",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/worker:cluster_event_type",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "master_dev_dead_lock_manager",
+    srcs = ["master_dev_dead_lock_manager.cpp"],
+    hdrs = [
+        "master_dev_dead_lock_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:common_util",
+    ],
+)
+
+ds_cc_library(
+    name = "master_dev_hccl_rootinfo",
+    srcs = ["master_dev_hccl_rootinfo.cpp"],
+    hdrs = [
+        "master_dev_hccl_rootinfo.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:request_table",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "master_dev_npu_events",
+    srcs = ["master_dev_npu_events.cpp"],
+    hdrs = [
+        "master_dev_npu_events.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:request_table",
+        "//src/datasystem/common/util/queue",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
+        "//src/datasystem/protos:perf_posix_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_dev_oc_directory",
+    srcs = ["master_dev_oc_directory.cpp"],
+    hdrs = [
+        "master_dev_oc_directory.h",
+    ],
+    deps = [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device:device_helper",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:request_table",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
+        "//src/datasystem/protos:perf_posix_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_dev_client_meta_manager",
+    srcs = ["master_dev_client_meta_manager.cpp"],
+    hdrs = [
+        "master_dev_client_meta_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:p2p_subscribe_zmq_cc_proto",
+        "@tbb",
+    ],
+)

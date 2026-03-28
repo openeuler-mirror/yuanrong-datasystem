@@ -1,0 +1,133 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "hash_ring",
+    srcs = [
+        "hash_ring.cpp",
+        "hash_ring_health_check.cpp",
+        "hash_ring_task_executor.cpp",
+        "read_hash_ring.cpp",
+    ],
+    hdrs = [
+        "hash_ring.h",
+        "hash_ring_health_check.h",
+        "hash_ring_task_executor.h",
+        "read_hash_ring.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:meta_route_tool_header",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/master:meta_addr_info",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:worker_object_zmq_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker/cluster_manager:worker_health_check",
+        "//src/datasystem/worker/hash_ring:hash_ring_allocator",
+        "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "//src/datasystem/worker/hash_ring:hash_ring_tools",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "@com_google_protobuf//:protobuf",
+    ],
+    alwayslink = True,
+)
+
+# success
+ds_cc_library(
+    name = "hash_ring_allocator",
+    srcs = [
+        "hash_ring_allocator.cpp",
+    ],
+    hdrs = [
+        "hash_ring_allocator.h",
+    ],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:meta_route_tool_header",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/worker/hash_ring:hash_ring_tools",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "hash_ring_tools",
+    srcs = [
+        "hash_ring_tools.cpp",
+    ],
+    hdrs = [
+        "hash_ring_tools.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:meta_route_tool_header",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "hash_ring_event",
+    srcs = [],
+    hdrs = [
+        "hash_ring_event.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:event_subscribers",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/worker/hash_ring:hash_ring_allocator",
+        "//src/datasystem/master:meta_addr_info",
+    ],
+)
+
+# success
+ds_cc_library(
+    name = "hash_ring_pb_utils",
+    srcs = [
+        "hash_ring_pb_utils.cpp",
+    ],
+    hdrs = [
+        "hash_ring_pb_utils.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        # "@com_google_protobuf//:protobuf",
+    ],
+)

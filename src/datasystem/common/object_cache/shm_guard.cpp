@@ -50,6 +50,7 @@ Status ShmGuard::TryRLatch(bool retry)
     return Status::OK();
 }
 
+#ifndef DISABLE_RPC
 Status ShmGuard::TransferTo(std::vector<RpcMessage> &messages, const uint64_t offset, const uint64_t size)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(impl_);
@@ -73,6 +74,7 @@ Status ShmGuard::TransferTo(std::vector<RpcMessage> &messages, const uint64_t of
     impl_ = nullptr;
     return Status::OK();
 }
+#endif
 
 void ShmGuard::Free(void *data, void *hint)
 {

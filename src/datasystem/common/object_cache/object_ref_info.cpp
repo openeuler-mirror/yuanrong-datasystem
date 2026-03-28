@@ -143,7 +143,9 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
         return Status::OK();
     }
     auto shmUnit = shmAccessor->second.first;
+#ifdef WITH_TESTS
     INJECT_POINT("RemoveShmUnit");
+#endif
     RemoveShmUnitDetail(clientId, false, shmAccessor, clientAccessor);
     VLOG(1) << "RemoveShmUnit for shmid: " << shmId << " client id: " << clientId;
     return Status::OK();

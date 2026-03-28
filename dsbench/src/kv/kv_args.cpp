@@ -18,29 +18,14 @@
 
 #include <getopt.h>
 #include <iostream>
-#include <re2/re2.h>
+#include "re2/re2.h"
 #include <sstream>
 
+#include "datasystem/common/util/version.h"
 #include "datasystem/utils/status.h"
 #include "utils.h"
 
 namespace datasystem {
-
-std::string GetGitHash()
-{
-    std::string gitHash = GIT_HASH;
-    static re2::RE2 re("(\\[[a-zA-Z0-9]+\\]) (\\[[0-9\\-\\s\\:\\+]+\\])");
-
-    std::string hash;
-    std::string time;
-
-    if (RE2::FullMatch(gitHash, re, &hash, &time)) {
-        // Do not return the name for privacy and security purpose.
-        return hash + time;
-    }
-    return "[UNKNOWN VERSION]";
-}
-
 namespace bench {
 KVArgs::KVArgs(const std::string &command)
     : ArgsBase(command), keyPrefix("Bench"), keyNum(1), keySize("1KB"), batchNum(1), workerNum(0)

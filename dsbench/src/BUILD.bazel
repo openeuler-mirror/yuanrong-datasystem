@@ -1,0 +1,99 @@
+load("//:version.bzl", "DATASYSTEM_VERSION")
+
+package(default_visibility = ["//dsbench:__subpackages__"])
+
+cc_library(
+    name = "args_base",
+    srcs = [
+        "args_base.cpp",
+        "kv/kv_args.cpp",
+    ],
+    hdrs = [
+        "args_base.h",
+        "kv/kv_args.h",
+    ],
+    defines = [
+        "DATASYSTEM_VERSION=\\\"{}\\\"".format(DATASYSTEM_VERSION),
+    ],
+    includes = [
+        ".",
+    ],
+    deps = [
+        "//dsbench/src:utils",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:version",
+        "@re2",
+    ],
+)
+
+cc_library(
+    name = "bench_base",
+    srcs = [
+        "bench_base.cpp",
+        "kv/kv_args.cpp",
+        "kv/kv_bench.cpp",
+    ],
+    hdrs = [
+        "bench_base.h",
+        "kv/kv_args.h",
+        "kv/kv_bench.h",
+    ],
+    includes = [
+        ".",
+    ],
+    deps = [
+        ":args_base",
+        ":bench_perf",
+        "//dsbench/src:utils",
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:version",
+        "//src/datasystem/common/util:wait_post",
+        "@re2",
+    ],
+)
+
+cc_library(
+    name = "bench_perf",
+    srcs = ["bench_perf.cpp"],
+    hdrs = ["bench_perf.h"],
+    deps = [
+        ":args_base",
+        "//src/datasystem/client/perf_client",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uri",
+    ],
+)
+
+cc_library(
+    name = "utils",
+    srcs = ["utils.cpp"],
+    hdrs = ["utils.h"],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+cc_binary(
+    name = "dsbench",
+    srcs = [
+        "main.cpp",
+    ],
+    includes = [
+        ".",
+    ],
+    linkopts = [
+        "-Wl,--disable-new-dtags",
+        "-Wl,-rpath,$$ORIGIN/lib",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":args_base",
+        ":bench_base",
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

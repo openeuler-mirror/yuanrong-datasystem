@@ -16,6 +16,7 @@
 
 #include "datasystem/common/device/device_resource_manager.h"
 #include "datasystem/common/device/device_manager_factory.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/memory.h"
 namespace datasystem {
 

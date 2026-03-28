@@ -26,7 +26,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 
 /*
  * Nested manager example :
@@ -60,11 +59,11 @@ namespace datasystem {
 namespace master {
 class OCNestedManager {
 public:
-    OCNestedManager(std::shared_ptr<ObjectMetaStore> objectRockStore, EtcdClusterManager *cm)
+    OCNestedManager(std::shared_ptr<ObjectMetaStore> objectRockStore, bool isCentralized)
         : objectStore_(std::move(objectRockStore)),
           nestedRef_(std::make_unique<object_cache::ObjectRefInfo<std::string>>(false))
     {
-        etcdCM_ = cm;
+        isCentralized_ = isCentralized;
     }
 
     ~OCNestedManager() = default;
@@ -180,7 +179,7 @@ private:
     std::shared_ptr<ObjectMetaStore> objectStore_;
     std::unique_ptr<object_cache::ObjectRefInfo<std::string>> nestedRef_;  // std::string -> ObjectKey
     std::shared_timed_mutex mutex_;
-    EtcdClusterManager *etcdCM_ = nullptr;
+    bool isCentralized_ = false;
 };
 }  // namespace master
 }  // namespace datasystem

@@ -25,7 +25,6 @@
 #include "datasystem/common/stream_cache/util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 

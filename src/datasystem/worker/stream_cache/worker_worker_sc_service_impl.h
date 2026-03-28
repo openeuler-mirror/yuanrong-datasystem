@@ -23,7 +23,6 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/protos/stream_posix.service.rpc.pb.h"
-#include "datasystem/stream/stream_config.h"
 #include "datasystem/worker/stream_cache/buffer_pool.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/usage_monitor.h"

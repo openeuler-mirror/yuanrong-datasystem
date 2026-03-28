@@ -30,6 +30,7 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/util/request_table.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
@@ -40,50 +41,6 @@ namespace object_cache {
 
 using SafeObjType = SafeObject<ObjectInterface>;
 using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
-
-class ObjectKV {
-public:
-    /**
-     * @brief Construct ObjectKV.
-     */
-    ObjectKV(const std::string &objectKey, SafeObjType &entry) : objectKey_(objectKey), entry_(entry)
-    {
-    }
-
-    ObjectKV(const std::string &objectKey, std::nullptr_t) = delete;
-    // Disable all copy and move constructors.
-    ObjectKV(const ObjectKV &) = delete;
-    ObjectKV(ObjectKV &&other) noexcept = delete;
-    ObjectKV &operator=(const ObjectKV &) = delete;
-    ObjectKV &operator=(ObjectKV &&other) noexcept = delete;
-
-    /**
-     * @brief Get the SafeObjType entry.
-     * @return The entry.
-     */
-    SafeObjType &GetObjEntry() const
-    {
-        return entry_;
-    }
-
-    /**
-     * @brief Get the object key of the SafeObjType entry in the object table.
-     * @return The object key.
-     */
-    const std::string &GetObjKey() const
-    {
-        return objectKey_;
-    }
-
-    /**
-     * @brief Deconstruct ObjectKV.
-     */
-    ~ObjectKV() = default;
-
-private:
-    const std::string &objectKey_;
-    SafeObjType &entry_;
-};
 
 struct ReadKey : public OffsetInfo {
     explicit ReadKey(const std::string &objectKey, uint64_t offset = 0, uint64_t size = 0)

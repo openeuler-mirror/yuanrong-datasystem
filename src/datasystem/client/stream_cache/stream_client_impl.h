@@ -23,7 +23,7 @@
 #include <memory>
 #include <mutex>
 
-#include <re2/re2.h>
+#include "re2/re2.h"
 
 #include "datasystem/client/client_state_manager.h"
 #include "datasystem/client/listen_worker.h"

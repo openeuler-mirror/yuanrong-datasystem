@@ -25,7 +25,7 @@
 #include <vector>
 #include <thread>
 
-#include <re2/re2.h>
+#include "re2/re2.h"
 
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"

@@ -1,0 +1,144 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "etcd_constants",
+    hdrs = ["etcd_constants.h"],
+)
+
+ds_cc_library(
+    name = "etcd_elector",
+    hdrs = ["etcd_elector.h"],
+    srcs = [
+        "etcd_elector.cpp",
+    ],
+    deps = [
+        ":etcd_constants",
+        ":etcd_keep_alive",
+        ":grpc_session",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:thread",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "//third_party/protos/etcd:v3election_cc_grpc",
+
+    ],
+)
+
+ds_cc_library(
+    name = "etcd_health",
+    hdrs = ["etcd_health.h"],
+    srcs = [
+        "etcd_health.cpp",
+    ],
+    deps = [
+        ":grpc_session",
+        ":etcd_elector",
+        "//src/datasystem/common/util:status_helper",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "//third_party/protos/etcd:v3election_cc_grpc",
+
+    ],
+)
+
+ds_cc_library(
+    name = "etcd_keep_alive",
+    hdrs = ["etcd_keep_alive.h"],
+    srcs = [
+        "etcd_keep_alive.cpp",
+    ],
+    deps = [
+        ":etcd_constants",
+        ":grpc_session",
+        "//src/datasystem/common/util:event_subscribers",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:format",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+    ],
+)
+
+ds_cc_library(
+    name = "etcd_store",
+    hdrs = ["etcd_store.h"],
+    srcs = [
+        "etcd_store.cpp",
+    ],
+    deps = [
+        ":etcd_constants",
+        ":grpc_session",
+        ":etcd_keep_alive",
+        ":etcd_watch",
+        "//src/datasystem/common/util:event_subscribers",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/flags:ds_flags",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//src/datasystem/common/kvstore:kv_store",
+    ],
+)
+
+ds_cc_library(
+    name = "etcd_watch",
+    hdrs = ["etcd_watch.h"],
+    srcs = [
+        "etcd_watch.cpp",
+    ],
+    deps = [
+        ":etcd_constants",
+        ":grpc_session",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/queue:queue",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:thread_pool",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+
+    ],
+)
+
+ds_cc_library(
+    name = "grpc_session",
+    hdrs = ["grpc_session.h"],
+    srcs = [
+        "grpc_session.cpp",
+    ],
+    deps = [
+        "@tbb",
+        "@com_github_grpc_grpc//:grpc++",
+        ":etcd_constants",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:ssl_authorization",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/signal:signal",
+        "//src/datasystem/common/util:template_util",
+        "//src/datasystem/common/metrics/metrics_vector:metrics_vector",
+    ],
+)

@@ -1,0 +1,15 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "stream_headers",
+    hdrs = [
+        "stream_config.h",
+        "element.h",
+        "consumer.h",
+        "producer.h",
+    ],
+    strip_include_prefix = "/include",
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)

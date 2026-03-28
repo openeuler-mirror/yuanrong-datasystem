@@ -1,0 +1,126 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "client_worker_api",
+    srcs = [
+        "client_worker_api.cpp",
+    ],
+    hdrs = [
+        "client_worker_api.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":receive_element",
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc/plugin_generator",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "consumer",
+    srcs = [
+        "consumer.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":stream_cache_impl",
+        "//include/datasystem:headers",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "producer_consumer_worker_api",
+    srcs = [
+        "producer_consumer_worker_api.cpp",
+    ],
+    hdrs = [
+        "producer_consumer_worker_api.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":client_worker_api",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "producer",
+    srcs = [
+        "producer.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":stream_cache_impl",
+        "//include/datasystem:headers",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "receive_element",
+    hdrs = [
+        "receive_element.h",
+    ],
+)
+
+ds_cc_library(
+    name = "stream_cache_impl",
+    srcs = [
+        "client_base_impl.cpp",
+        "consumer_impl.cpp",
+        "producer_impl.cpp",
+        "stream_client_impl.cpp",
+    ],
+    hdrs = [
+        "client_base_impl.h",
+        "consumer_impl.h",
+        "producer_impl.h",
+        "stream_client_impl.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":client_worker_api",
+        ":producer_consumer_worker_api",
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/client:client_flags_monitor",
+        "//src/datasystem/client:client_state_manager",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "stream_client",
+    srcs = [
+        "stream_client.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":consumer",
+        ":producer",
+        "//include/datasystem:headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)

@@ -23,6 +23,15 @@
 
 #include <string>
 
+// Fixme: fix GIT_HASH and FIT_BRANCH define
+#ifndef GIT_HASH
+#define GIT_HASH "NO GIT_HASH FIXME"
+#endif
+
+#ifndef GIT_BRANCH
+#define GIT_BRANCH "NO GIT_BRANCH FIXME"
+#endif
+
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {

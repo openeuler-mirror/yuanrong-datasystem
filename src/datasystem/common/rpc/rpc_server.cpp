@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/rpc/rpc_server.h"
 
+#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
 #include "datasystem/common/util/thread_pool.h"
 

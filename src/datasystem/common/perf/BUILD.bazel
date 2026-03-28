@@ -1,0 +1,20 @@
+# BUILD file for src/datasystem/common/parallel
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "common_perf",
+    srcs = [
+        "perf_manager.cpp",
+    ],
+    hdrs = [
+        "perf_manager.h",
+        "perf_point.def",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "@nlohmann_json//:json",
+        "@tbb//:tbb",
+    ],
+)

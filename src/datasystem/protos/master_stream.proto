@@ -20,9 +20,9 @@
 syntax = "proto3";
 package datasystem.master;
 
-import "worker_stream.proto";
-import "utils.proto";
-import "rpc_option.proto";
+import "datasystem/protos/worker_stream.proto";
+import "datasystem/protos/utils.proto";
+import "datasystem/protos/rpc_option.proto";
 
 option cc_enable_arenas = true;
 

@@ -1,0 +1,27 @@
+# include/datasystem/BUILD
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "headers_srcs",
+    srcs = glob([
+        "**/*.h",
+        "**/*.hpp",
+    ]),
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob([
+        "**/*.h",
+        "**/*.hpp",
+    ]),
+    includes = ["."],
+    strip_include_prefix = "/include",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "datasystem_client",
+    deps = [
+    ],
+)

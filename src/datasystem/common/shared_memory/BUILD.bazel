@@ -1,0 +1,80 @@
+# BUILD file for src/datasystem/common/shared_memory
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "jemalloc_static_config",
+    flag_values = {
+        "//:jemalloc_dynamic_internal": "False",
+    },
+)
+
+config_setting(
+    name = "jemalloc_dynamic_config",
+    flag_values = {
+        "//:jemalloc_dynamic_internal": "True",
+    },
+)
+
+ds_cc_library(
+    name = "common_shm_unit_info",
+    srcs = ["shm_unit_info.cpp"],
+    hdrs = ["shm_unit_info.h"],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_library(
+    name = "common_shared_memory",
+    srcs = [
+        "allocator.cpp",
+        "arena.cpp",
+        "jemalloc.cpp",
+        "mmap/base_mmap.cpp",
+        "mmap/disk_mmap.cpp",
+        "mmap/flexible_mmap.cpp",
+        "mmap/mem_mmap.cpp",
+        "resource_pool.cpp",
+        "shared_disk_detecter.cpp",
+        "shm_unit.cpp",
+    ],
+    hdrs = [
+        "allocator.h",
+        "arena.h",
+        "arena_group_key.h",
+        "jemalloc.h",
+        "memstat.h",
+        "mmap/allocation.h",
+        "mmap/base_mmap.h",
+        "mmap/disk_mmap.h",
+        "mmap/flexible_mmap.h",
+        "mmap/immap.h",
+        "mmap/mem_mmap.h",
+        "resource_pool.h",
+        "shared_disk_detecter.h",
+        "shm_unit.h",
+    ],
+    linkopts = ["-ldl"],
+    deps = [
+        ":common_shm_unit_info",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:common_util_base",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:validator",
+        "@re2",
+    ] + select({
+        "//conditions:default": ["@jemalloc"],  # Default use static library
+        ":jemalloc_dynamic_config": ["@jemalloc//:jemalloc_shared"],
+    }),
+)

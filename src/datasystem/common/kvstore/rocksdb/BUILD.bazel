@@ -1,0 +1,63 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "replica",
+    hdrs = [
+        "replica.h",
+        "replica_task.h",
+    ],
+    srcs = [
+        "replica.cpp",
+        "replica_task.cpp",
+    ],
+    deps = [
+        "@rocksdb//:rocksdb",
+        ":rocks_store",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/queue:queue",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/kvstore:kv_store",
+        "//include/datasystem/utils:utils_headers",
+        "//include/datasystem/object:object_headers",
+        "//third_party/protos/etcd:rpc_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "rocks_store",
+    hdrs = ["rocks_store.h"],
+    srcs = [
+        "rocks_store.cpp",
+    ],
+    deps = [
+        "@rocksdb//:rocksdb",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/kvstore:kv_store",
+        "//include/datasystem/utils:utils_headers",
+        "//include/datasystem/object:object_headers",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//src/datasystem/master/stream_cache/store:stream_transform",
+
+    ],
+)

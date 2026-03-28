@@ -1,0 +1,54 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "iam",
+    hdrs = [
+        "iam.h",
+    ],
+    linkstatic = True,
+    deps = [
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "common_iam",
+    srcs = [
+        "tenant_auth_manager.cpp",
+        "yuanrong_iam.cpp",
+    ],
+    hdrs = [
+        "tenant_auth_manager.h",
+        "yuanrong_iam.h",
+    ],
+    linkstatic = True,
+    deps = [
+        ":iam",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/httpclient:curl_http_client",
+        "//src/datasystem/common/httpclient:http_message",
+        "//src/datasystem/common/httpclient:http_request",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:sensitive_value",
+        "//src/datasystem/common/util:ssl_authorization",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:validator",
+        "@curl",
+        "@nlohmann_json//:json",
+        "@tbb",
+    ],
+)

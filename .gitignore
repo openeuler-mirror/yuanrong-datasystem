@@ -86,3 +86,8 @@ false
 # ai context
 AGENTS.md
 docs/agent
+
+# bazel
+bazel-*
+.clwb/
+MODULE.bazel.lock

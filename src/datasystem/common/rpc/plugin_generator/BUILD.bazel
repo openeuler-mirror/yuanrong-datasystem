@@ -1,0 +1,46 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "rpc_plugin",
+    srcs = [
+        "rpc_plugin.cpp",
+    ],
+    deps = [
+        ":plugin_generator",
+        "@com_google_protobuf//:protoc_lib",
+    ],
+)
+
+cc_binary(
+    name = "zmq_plugin",
+    srcs = [
+        "zmq_plugin.cpp",
+    ],
+    deps = [
+        ":plugin_generator",
+        "@com_google_protobuf//:protoc_lib",
+    ],
+)
+
+ds_cc_library(
+    name = "plugin_generator",
+    srcs = [
+        "service_cpp_generator.cpp",
+        "service_header_generator.cpp",
+        "stub_cpp_generator.cpp",
+        "stub_header_generator.cpp",
+        "zmq_rpc_generator.cpp",
+    ],
+    hdrs = [
+        "zmq_rpc_generator.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:meta_zmq_cc_proto",
+        "//src/datasystem/protos:rpc_option_cc_proto",
+        "//src/datasystem/protos:utils_cc_proto",
+        "@com_google_protobuf//:protoc_lib",
+    ],
+)

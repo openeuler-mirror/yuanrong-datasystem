@@ -46,7 +46,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/master/object_cache/oc_metadata_manager.h"
+#include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/utils/status.h"
 
@@ -376,7 +376,6 @@ Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::s
 {
     RETURN_OK_IF_TRUE(!EtcdEnable());
     auto res = Split(objectKey, ";");
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
     bool specKey = false;
     const size_t num = 2;
     if ((res.size() > num && Validator::IsUuid(res[res.size() - num]))
@@ -762,7 +761,6 @@ Status ObjectMetaStore::GetFromEtcd(const std::string &tablePrefix, const std::s
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     RETURN_OK_IF_TRUE(!EtcdEnable());
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
     bool isGetAll = workerUuids.empty() && extraRanges.empty();
     auto getFunc = [this, &tablePrefix, &rocksTable](const std::string &suffix,
                                                      const std::pair<uint32_t, uint32_t> &range,
@@ -772,13 +770,16 @@ Status ObjectMetaStore::GetFromEtcd(const std::string &tablePrefix, const std::s
 
     std::vector<std::pair<std::string, std::string>> metas;
     if (isGetAll) {
-        auto hashRange = etcdCM_->GetHashRangeNonBlock();
+        worker::HashRange hashRange;
+        GetHashRangeNonBlockEvent::GetInstance().NotifyAll(hashRange);
         for (const auto &range : hashRange) {
             RETURN_IF_NOT_OK(getFunc(ETCD_HASH_SUFFIX, range, metas));
             (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
             metas.clear();
         }
-        uint32_t workerHash = MurmurHash3_32(etcdCM_->GetLocalWorkerUuid());
+        std::string workerId;
+        GetLocalWorkerUuidEvent::GetInstance().NotifyAll(workerId);
+        uint32_t workerHash = MurmurHash3_32(workerId);
         RETURN_IF_NOT_OK(getFunc(ETCD_WORKER_SUFFIX, { workerHash, workerHash }, metas));
     } else {
         for (const auto &uuid : workerUuids) {

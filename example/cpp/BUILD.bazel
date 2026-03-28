@@ -1,0 +1,55 @@
+load("//:version.bzl", "DATASYSTEM_VERSION")
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+cc_binary(
+    name = "datasystem_example",
+    srcs = [
+        "datasystem_example.cpp",
+    ],
+    deps = [
+        "//src/datasystem/client:datasystem",
+    ],
+)
+
+# # need deal <acl/acl.h>
+# cc_binary(
+#     name = "hetero_client_example",
+#     srcs = [
+#         "hetero_client_example.cpp",
+#     ],
+#     deps = [
+#         "//src/datasystem/client:datasystem",
+#     ],
+# )
+
+cc_binary(
+    name = "kv_client_example",
+    srcs = [
+        "kv_client_example.cpp",
+    ],
+    deps = [
+        "//src/datasystem/client:datasystem",
+    ],
+)
+
+cc_binary(
+    name = "object_client_example",
+    srcs = [
+        "object_client_example.cpp",
+    ],
+    deps = [
+        "//src/datasystem/client:datasystem",
+    ],
+)
+
+cc_binary(
+    name = "stream_client_example",
+    srcs = [
+        "stream_client_example.cpp",
+    ],
+    deps = [
+        "//src/datasystem/client:datasystem",
+    ],
+)

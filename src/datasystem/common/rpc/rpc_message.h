@@ -26,7 +26,7 @@
 
 #include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/common/rpc/mem_view.h"
-#include "datasystem/utils/status.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 enum class RpcSendFlags : int { NONE = 0, DONTWAIT = ZMQ_DONTWAIT, SNDMORE = ZMQ_SNDMORE };

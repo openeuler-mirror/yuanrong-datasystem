@@ -41,7 +41,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/hetero/device_common.h"
 #include "datasystem/object/buffer.h"
-#include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"

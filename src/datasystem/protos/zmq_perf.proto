@@ -19,9 +19,9 @@
  */
 syntax = "proto3";
 package datasystem.st;
-import "rpc_option.proto";
-import "utils.proto";
-import "meta_zmq.proto";
+import "datasystem/protos/rpc_option.proto";
+import "datasystem/protos/utils.proto";
+import "datasystem/protos/meta_zmq.proto";
 
 option cc_enable_arenas = true;
 

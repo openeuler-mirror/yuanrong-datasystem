@@ -1,0 +1,443 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "usage_monitor_header",
+    hdrs = [
+        "usage_monitor.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:thread_pool",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "usage_monitor",
+    srcs = [
+        "usage_monitor.cpp",
+    ],
+    hdrs = [
+        "usage_monitor.h",
+    ],
+    deps = [
+        ":usage_monitor_header",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_header",
+        "@tbb",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "stream_manager_header",
+    hdrs = [
+        "stream_manager.h",
+        "worker_worker_sc_service_impl.h",
+    ],
+    deps = [
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/metrics/metrics_vector",
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/stream_cache:consumer_meta",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/master/stream_cache:master_sc_service_impl",
+        "//src/datasystem/master/stream_cache:master_worker_sc_api_header",
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/worker:authenticate",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_header",
+        "//src/datasystem/worker/stream_cache:producer",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager_header",
+        "//src/datasystem/worker/stream_cache:subscription",
+        "//src/datasystem/worker/stream_cache:usage_monitor",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_handler_header",
+    ],
+)
+
+ds_cc_library(
+    name = "stream_manager",
+    srcs = [
+        "stream_manager.cpp",
+        "worker_worker_sc_service_impl.cpp",
+    ],
+    hdrs = [
+        "stream_manager.h",
+        "worker_worker_sc_service_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/stream_cache:consumer_meta",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/worker:authenticate",
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_header",
+        "//src/datasystem/worker/stream_cache:consumer",
+        "//src/datasystem/worker/stream_cache:producer",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager_header",
+        "//src/datasystem/worker/stream_cache:stream_data_pool_header",
+        "//src/datasystem/worker/stream_cache:subscription",
+        "//src/datasystem/worker/stream_cache:usage_monitor_header",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
+        "//src/datasystem/worker/stream_cache/page_queue:page_queue_handler_header",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "subscription",
+    srcs = [
+        "subscription.cpp",
+    ],
+    hdrs = [
+        "subscription.h",
+    ],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/stream_cache:cursor",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/worker/stream_cache:consumer",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_master_sc_api",
+    srcs = [
+        "worker_master_sc_api.cpp",
+    ],
+    hdrs = [
+        "worker_master_sc_api.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/master/stream_cache:master_sc_service_impl",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//src/datasystem/worker/stream_cache:stream_producer",
+    ],
+)
+
+ds_cc_library(
+    name = "remote_worker_manager_header",
+    hdrs = [
+        "remote_worker_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/metrics/metrics_vector",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//src/datasystem/worker/stream_cache:stream_data_pool_header",
+        "//src/datasystem/worker/stream_cache:subscription",
+        "//src/datasystem/worker/stream_cache/page_queue:exclusive_page_queue_header",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group_header",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_header",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "remote_worker_manager",
+    srcs = [
+        "remote_worker_manager.cpp",
+    ],
+    hdrs = [
+        "remote_worker_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/metrics/metrics_vector",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//src/datasystem/worker/stream_cache:stream_data_pool_header",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache:subscription",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
+        "//src/datasystem/worker/stream_cache/page_queue:exclusive_page_queue_header",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group_header",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_header",
+        "@tbb",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "stream_data_pool_header",
+    hdrs = [
+        "stream_data_pool.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_header",
+        "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "stream_data_pool",
+    srcs = [
+        "stream_data_pool.cpp",
+    ],
+    hdrs = [
+        "stream_data_pool.h",
+    ],
+    deps = [
+        ":stream_data_pool_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:bitmask_enum",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:request_counter",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:consumer",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue",
+        "@tbb",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "master_worker_sc_service_impl",
+    srcs = [
+        "master_worker_sc_service_impl.cpp",
+    ],
+    hdrs = [
+        "master_worker_sc_service_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/stream_cache:consumer_meta",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+    ],
+)
+
+ds_cc_library(
+    name = "buffer_pool",
+    srcs = [
+        "buffer_pool.cpp",
+    ],
+    hdrs = [
+        "buffer_pool.h",
+    ],
+    deps = [
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:request_counter",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_library(
+    name = "stream_producer",
+    srcs = [],
+    hdrs = [
+        "stream_producer.h",
+    ],
+    deps = [
+    ],
+)
+
+ds_cc_library(
+    name = "client_worker_sc_service_header",
+    hdrs = [
+        "client_worker_sc_service_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        # "//src/datasystem/common/iam:tenant_auth_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/master/stream_cache:master_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager_header",
+        "//src/datasystem/worker/stream_cache:worker_master_sc_api",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker:authenticate",
+    ],
+)
+
+ds_cc_library(
+    name = "client_worker_sc_service_impl",
+    srcs = [
+        "client_worker_sc_service_impl.cpp",
+    ],
+    hdrs = [
+        "client_worker_sc_service_impl.h",
+    ],
+    deps = [
+        "client_worker_sc_service_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/stream_cache:util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/master/stream_cache:master_sc_service_impl",
+        "//src/datasystem/worker:cluster_event_type",
+        "//src/datasystem/worker/cluster_manager:worker_health_check",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//src/datasystem/worker/stream_cache:remote_worker_manager",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache:stream_producer",
+        "//src/datasystem/worker/stream_cache:worker_master_sc_api",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "producer",
+    srcs = [
+        "producer.cpp",
+    ],
+    hdrs = [
+        "producer.h",
+    ],
+    deps = [
+        # "//src/datasystem/common/iam:tenant_auth_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/stream_cache:cursor",
+        "//src/datasystem/common:common_constants",
+    ],
+)
+
+ds_cc_library(
+    name = "consumer",
+    srcs = [
+        "consumer.cpp",
+    ],
+    hdrs = [
+        "consumer.h",
+    ],
+    deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        # "//src/datasystem/common/iam:tenant_auth_manager",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/stream_cache:cursor",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_worker_sc_service_impl_backup",
+    srcs = [
+        "worker_worker_sc_service_impl.cpp",
+    ],
+    hdrs = [
+        "worker_worker_sc_service_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache:usage_monitor_header",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_sc_allocate_memory",
+    srcs = [
+        "worker_sc_allocate_memory.cpp",
+    ],
+    hdrs = [
+        "worker_sc_allocate_memory.h",
+    ],
+    deps = [
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+    ],
+    alwayslink = True,
+)

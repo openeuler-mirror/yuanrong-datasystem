@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <vector>
 #include <optional>
+#include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"

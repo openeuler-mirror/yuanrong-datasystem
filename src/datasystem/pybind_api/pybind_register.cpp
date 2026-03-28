@@ -25,13 +25,15 @@
 #include <pybind11/pybind11.h>
 #include <securec.h>
 
-namespace datasystem {
-PybindDefinedFunctionRegister &PybindDefinedFunctionRegister::GetSingleton()
-{
-    static PybindDefinedFunctionRegister instance;
-    return instance;
-}
+extern "C" PYBIND_EXPORT PyObject* PyInit_libds_client_py();
 
+namespace datasystem {
+
+ PybindDefinedFunctionRegister &PybindDefinedFunctionRegister::GetSingleton() {
+     static PybindDefinedFunctionRegister instance;
+     return instance;
+ }
+}  // namespace datasystem
 // This is where we externalize the C logic as python modules.
 // Import all functions with priority = 0 as *client_lib.
 PYBIND11_MODULE(libds_client_py, m)
@@ -40,8 +42,8 @@ PYBIND11_MODULE(libds_client_py, m)
 
     auto all_fns = datasystem::PybindDefinedFunctionRegister::AllFunctions();
 
-    py::register_exception<FutureTimeoutException>(m, "FutureTimeoutException");
-    py::register_local_exception<FutureTimeoutException>(m, "FutureTimeoutException");
+    py::register_exception<datasystem::FutureTimeoutException>(m, "FutureTimeoutException");
+    py::register_local_exception<datasystem::FutureTimeoutException>(m, "FutureTimeoutException");
 
     for (auto &item : all_fns) {
         if (item.first == 0) {
@@ -51,4 +53,3 @@ PYBIND11_MODULE(libds_client_py, m)
         }
     }
 }
-}  // namespace datasystem

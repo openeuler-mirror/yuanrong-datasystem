@@ -29,7 +29,6 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/master/stream_cache/stream_metadata.h"
 #include "datasystem/protos/master_stream.pb.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/stream/stream_config.h"

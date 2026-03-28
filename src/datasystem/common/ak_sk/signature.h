@@ -29,12 +29,15 @@
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
 
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/utils/sensitive_value.h"
 
 namespace datasystem {
@@ -91,10 +94,12 @@ public:
             req.clear_access_key();
         }
         req.set_timestamp(GetSystemClockTimeStampUs());
+#ifdef WITH_TESTS
         INJECT_POINT("AkSk.SetTimestamp", [&req](uint64_t timestamp) {
             req.set_timestamp(timestamp);
             return Status::OK();
         });
+#endif
         std::string canonicalRequest = req.SerializeAsString();
         std::string signature;
         RETURN_IF_NOT_OK(GetSignature(clientKey_, canonicalRequest.c_str(), canonicalRequest.size(), signature));

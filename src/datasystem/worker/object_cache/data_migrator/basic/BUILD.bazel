@@ -1,0 +1,33 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+package(default_visibility = ["//visibility:public"])
+
+# success
+ds_cc_library(
+    name = "base_data_unit",
+    srcs = [],
+    hdrs = [
+        "base_data_unit.h",
+    ],
+    deps = [
+        "//src/datasystem/common/object_cache:shm_guard",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+    ]
+)
+
+# success
+ds_cc_library(
+    name = "migrate_progress",
+    srcs = [
+        "migrate_progress.cpp",
+    ],
+    hdrs = [
+        "migrate_progress.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:timer",
+    ]
+)

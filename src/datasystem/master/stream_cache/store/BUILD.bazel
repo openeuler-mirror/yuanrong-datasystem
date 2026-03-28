@@ -1,0 +1,34 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "stream_transform",
+    hdrs = [
+        "stream_transform.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+    ],
+)
+
+ds_cc_library(
+    name = "rocks_stream_meta_store",
+    hdrs = [
+        "rocks_stream_meta_store.h",
+    ],
+    srcs = [
+        "rocks_stream_meta_store.cpp",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/protos:master_stream_zmq_cc_proto",
+        "//src/datasystem/protos:master_stream_cc_proto",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/rocksdb:replica",
+    ],
+)

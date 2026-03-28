@@ -18,6 +18,7 @@
  * Description: Module responsible for managing the redirect metadata logic on the master.
  */
 #include "datasystem/master/metadata_redirect_helper.h"
+#include "datasystem/worker/hash_ring/hash_ring_event.h"
 
 namespace datasystem {
 namespace master {
@@ -34,7 +35,7 @@ void MetadataRedirectHelper::CheckNeedToRedirectOrNot(const std::string &id, boo
                                                       std::string &newMetaAddr)
 {
     HostPort masterAddr;
-    needRedirect = etcdCM_->NeedRedirect(id, masterAddr);
+    HashRingEvent::CheckNeedRedirect::GetInstance().NotifyAll(id, masterAddr, needRedirect);
 
     if (MetaIsFound(id)) {
         if (ItemIsMigrating(id)) {

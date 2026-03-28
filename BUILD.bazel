@@ -1,0 +1,222 @@
+load("@aspect_bazel_lib//lib:jq.bzl", "jq")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "bool_setting")
+load("@bazel_skylib//rules:copy_directory.bzl", "copy_directory")
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+load("@rules_cc//cc:defs.bzl", "cc_shared_library")
+
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "enable_urma",
+    define_values = {"enable_urma": "true"},
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "jemalloc_dynamic",
+    build_setting_default = False,
+)
+
+bool_setting(
+    name = "jemalloc_dynamic_internal",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+cc_shared_library(
+    name = "datasystem",
+    additional_linker_inputs = ["export_datasystem_symbols.lds"],
+    exports_filter = [
+        "//src/datasystem/client:client_flags_monitor",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client:embedded_client_worker_api",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/context",
+        "//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/client/object_cache:client_memory_ref_table",
+        "//src/datasystem/client/object_cache:object_client",
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_base_api",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_local_api",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
+        "//src/datasystem/client/object_cache/device:client_device_object_manager",
+        "//src/datasystem/client/object_cache/device:comm_factory_and_hccl_comm",
+        "//src/datasystem/client/object_cache/device:device_memory_unit",
+        "//src/datasystem/client/object_cache/device:future",
+        "//src/datasystem/client/object_cache/device:p2p_subscribe",
+        "//src/datasystem/client/object_cache/device:page_attn_utils",
+        "//src/datasystem/client/stream_cache:client_worker_api",
+        "//src/datasystem/client/stream_cache:consumer",
+        "//src/datasystem/client/stream_cache:producer",
+        "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
+        "//src/datasystem/client/stream_cache:stream_cache_impl",
+        "//src/datasystem/client/stream_cache:stream_client",
+    ],
+    user_link_flags = [
+        "-Wl,--exclude-libs,ALL",
+        "-Wl,--version-script,$(location export_datasystem_symbols.lds)",
+        "-Wl,-Bsymbolic",
+        "-Wl,-rpath,$$ORIGIN",
+        "-Wl,-rpath,$$ORIGIN/lib",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/client:client_flags_monitor",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client:embedded_client_worker_api",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/context",
+        "//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/client/object_cache:client_memory_ref_table",
+        "//src/datasystem/client/object_cache:object_client",
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_base_api",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_local_api",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
+        "//src/datasystem/client/object_cache/device:client_device_object_manager",
+        "//src/datasystem/client/object_cache/device:comm_factory_and_hccl_comm",
+        "//src/datasystem/client/object_cache/device:device_memory_unit",
+        "//src/datasystem/client/object_cache/device:future",
+        "//src/datasystem/client/object_cache/device:p2p_subscribe",
+        "//src/datasystem/client/object_cache/device:page_attn_utils",
+        "//src/datasystem/client/stream_cache:client_worker_api",
+        "//src/datasystem/client/stream_cache:consumer",
+        "//src/datasystem/client/stream_cache:producer",
+        "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
+        "//src/datasystem/client/stream_cache:stream_cache_impl",
+        "//src/datasystem/client/stream_cache:stream_client",
+        "//src/datasystem/common/object_cache:buffer",
+        "@com_google_protobuf//upb:wire",
+    ],
+)
+
+copy_file(
+    name = "datasystem_worker_file",
+    src = "//src/datasystem/worker:datasystem_worker",
+    out = "yr/datasystem/datasystem_worker",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
+copy_file(
+    name = "libjemalloc_shared_file",
+    src = "@jemalloc//:libjemalloc.so.2",
+    out = "yr/datasystem/lib/libjemalloc.so.2",
+    visibility = [
+        "//bazel:__pkg__",
+        "//python:__subpackages__",
+    ],
+)
+
+copy_file(
+    name = "libds_client_py_file",
+    src = "//src/datasystem/pybind_api:libds_client_py",
+    out = "yr/datasystem/lib/libds_client_py.so",
+    visibility = [
+        "//bazel:__pkg__",
+        "//python:__subpackages__",
+    ],
+)
+
+copy_file(
+    name = "dsbench_file",
+    src = "//dsbench/src:dsbench",
+    out = "yr/datasystem/dsbench",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
+copy_file(
+    name = "libdatasystem_file",
+    src = "//:datasystem",
+    out = "yr/datasystem/lib/libdatasystem.so",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
+copy_directory(
+    name = "cli_files",
+    src = "cli",
+    out = "yr/datasystem/cli",
+)
+
+copy_directory(
+    name = "cpp_template_files",
+    src = "cli/cpp_template",
+    out = "yr/datasystem/cpp_template",
+)
+
+copy_directory(
+    name = "dockerentry_files",
+    src = "k8s/docker/entrypoint",
+    out = "yr/datasystem/docker_entryfile",
+)
+
+copy_directory(
+    name = "helm_chart_files",
+    src = "k8s/helm_chart",
+    out = "yr/datasystem/helm_chart",
+)
+
+copy_directory(
+    name = "datasystem_header_files",
+    src = "include/datasystem",
+    out = "yr/datasystem/include/datasystem",
+)
+
+copy_file(
+    name = "readme_file",
+    src = "README.md",
+    out = "yr/datasystem/README.md",
+)
+
+copy_file(
+    name = "version_file",
+    src = "VERSION",
+    out = "yr/datasystem/VERSION",
+)
+
+copy_file(
+    name = "cluster_config_file",
+    src = "cli/deploy/conf/cluster_config.json",
+    out = "yr/datasystem/cluster_config.json",
+)
+
+jq(
+    name = "worker_config_file",
+    srcs = ["cli/deploy/conf/worker_config.json"],
+    out = "yr/datasystem/worker_config.json",
+    filter = "del(.obs_https_enabled, .enable_cloud_service_token_rotation)",
+)

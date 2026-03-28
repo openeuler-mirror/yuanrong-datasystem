@@ -350,7 +350,7 @@ protected:
         eviction_ = std::make_shared<object_cache::WorkerOcEvictionManager>(nullptr, workerId, workerId);
         worker_ = std::make_unique<WorkerOCServiceImpl>(workerId, workerId, nullptr, nullptr, eviction_, nullptr,
                                                         etcdStore_.get());
-        cm_ = std::make_unique<EtcdClusterManager>(workerId, workerId, etcdStore_.get(), nullptr);
+        cm_ = std::make_unique<EtcdClusterManager>(workerId, workerId, etcdStore_.get(), false);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
         DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));

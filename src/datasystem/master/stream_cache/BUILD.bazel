@@ -1,0 +1,135 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+#pass
+ds_cc_library(
+    name = "sc_metadata_manager",
+    srcs = [
+        "sc_metadata_manager.cpp",
+        "sc_notify_worker_manager.cpp",
+        "stream_metadata.cpp",
+    ],
+    hdrs = [
+        "sc_metadata_manager.h",
+        "sc_notify_worker_manager.h",
+        "stream_metadata.h",
+    ],
+    deps = [
+        ":master_worker_sc_api_header",
+        ":rpc_session_manager",
+        ":topology_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/stream_cache:consumer_meta",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:lock_helper",
+        "//src/datasystem/master:metadata_redirect_helper",
+        "//src/datasystem/master/stream_cache/store:rocks_stream_meta_store",
+        "//src/datasystem/protos:worker_stream_cc_proto",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+        "//src/datasystem/worker:cluster_event_type",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_header",
+    ],
+)
+
+ds_cc_library(
+    name = "master_sc_service_impl",
+    srcs = [
+        "master_sc_service_impl.cpp",
+    ],
+    hdrs = [
+        "master_sc_service_impl.h",
+    ],
+    deps = [
+        ":master_worker_sc_api_header",
+        ":rpc_session_manager",
+        ":sc_metadata_manager",
+        ":sc_migrate_metadata_manager",
+        "//src/datasystem/common/stream_cache:util",
+        "//src/datasystem/protos:master_stream_cc_proto",
+        "//src/datasystem/protos:master_stream_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_worker_sc_api_header",
+    hdrs = [
+        "master_worker_sc_api.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr_header",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/protos:stream_posix_cc_proto",
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/protos:worker_stream_cc_proto",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "master_worker_sc_api",
+    srcs = [
+        "master_worker_sc_api.cpp",
+    ],
+    hdrs = [
+        "master_worker_sc_api.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr_header",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/protos:stream_posix_cc_proto",
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/protos:worker_stream_cc_proto",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+        "//src/datasystem/worker/stream_cache:master_worker_sc_service_impl",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
+    name = "rpc_session_manager",
+    srcs = [
+        "rpc_session_manager.cpp",
+    ],
+    hdrs = [
+        "rpc_session_manager.h",
+    ],
+    deps = [
+        ":master_worker_sc_api_header",
+    ],
+)
+
+ds_cc_library(
+    name = "topology_manager",
+    srcs = [
+        "topology_manager.cpp",
+    ],
+    hdrs = [
+        "topology_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:stream_posix_zmq_cc_proto",
+        "//src/datasystem/protos:worker_stream_cc_proto",
+        "//src/datasystem/protos:worker_stream_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "sc_migrate_metadata_manager",
+    srcs = [
+        "sc_migrate_metadata_manager.cpp",
+    ],
+    hdrs = [
+        "sc_migrate_metadata_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/master:replica_manager",
+        "@tbb",
+    ],
+)

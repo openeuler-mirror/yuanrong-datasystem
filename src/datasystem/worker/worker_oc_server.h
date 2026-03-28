@@ -37,7 +37,6 @@
 #include "datasystem/master/replication_service_impl.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"

@@ -64,5 +64,23 @@ using ReplicaEvent = EventSubscribers<REPLICA, std::function<Status(mvccpb::Even
 using RecoverMasterAppRefEvent =
     EventSubscribers<RECOVER_MASTER_APP_REF,
                      std::function<Status(std::function<bool(const std::string &)>, const std::string &)>>;
+
+class ReplicaMagagerEvent : public EventNotifier {
+    enum ReplicaMagagerEventType {
+        GET_PRIMARY_REPLICA_INFO_IN_WORKER,
+        GET_PRIMARY_REPLICA_LOCATION,
+        GET_PRIMARY_REPLICA_DBNAMES
+    };
+
+public:
+    using GetPrimaryReplicaInfoInWorker =
+        EventSubscribers<GET_PRIMARY_REPLICA_INFO_IN_WORKER,
+                         std::function<void(const std::string &, std::map<std::string, std::string> &)>>;
+    using GetPrimaryReplicaLocation =
+        EventSubscribers<GET_PRIMARY_REPLICA_LOCATION, std::function<Status(const std::string &, std::string &)>>;
+    using GetPrimaryReplicaDbNames =
+        EventSubscribers<GET_PRIMARY_REPLICA_DBNAMES,
+                         std::function<Status(const std::string &, std::vector<std::string> &)>>;
+};
 }  // namespace datasystem
 #endif

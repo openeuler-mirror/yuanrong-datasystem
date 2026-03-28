@@ -24,7 +24,7 @@
 
 #include <set>
 
-#include <re2/re2.h>
+#include "re2/re2.h"
 
 namespace datasystem {
 std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern)

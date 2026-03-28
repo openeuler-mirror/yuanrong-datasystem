@@ -23,8 +23,8 @@
 #include <chrono>
 #include <cstring>
 
-#include "datasystem/common/log/spdlog/log_message.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/spdlog/log_message.h"
 #include "datasystem/common/log/spdlog/log_param.h"
 
 DS_DECLARE_int32(v);

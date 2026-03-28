@@ -1,0 +1,493 @@
+load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("//third_party/bazel:tools/zmq_proto.bzl", "zmq_cc_proto_library")
+
+package(default_visibility = ["//visibility:public"])
+
+PROTO_ROOT = "/src"
+
+ZMQ_PROTO_ROOT = "src"
+
+# ---------- zero layer ----------
+proto_library(
+    name = "utils_proto",
+    srcs = ["utils.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "utils_cc_proto",
+    deps = [":utils_proto"],
+)
+
+proto_library(
+    name = "rpc_option_proto",
+    srcs = ["rpc_option.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "@com_google_protobuf//:descriptor_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "rpc_option_cc_proto",
+    deps = [":rpc_option_proto"],
+)
+
+proto_library(
+    name = "meta_zmq_proto",
+    srcs = ["meta_zmq.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [":utils_proto"],
+)
+
+cc_proto_library(
+    name = "meta_zmq_cc_proto",
+    deps = [
+        ":meta_zmq_proto",
+    ],
+)
+
+proto_library(
+    name = "p2p_subscribe_proto",
+    srcs = ["p2p_subscribe.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [":utils_proto"],
+)
+
+cc_proto_library(
+    name = "p2p_subscribe_cc_proto",
+    deps = [":p2p_subscribe_proto"],
+)
+
+# zmq generation
+# load("//third_party/bazel:zmq_proto.bzl", "zmq_cc_proto_library")
+proto_library(
+    name = "share_memory_proto",
+    srcs = ["share_memory.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":meta_transport_proto",
+        "@com_google_protobuf//:any_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "share_memory_cc_proto",
+    deps = [
+        ":share_memory_proto",
+    ],
+)
+
+proto_library(
+    name = "master_heartbeat_proto",
+    srcs = ["master_heartbeat.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "@com_google_protobuf//:any_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "master_heartbeat_cc_proto",
+    deps = [
+        ":master_heartbeat_proto",
+    ],
+)
+
+# ---- posix layer（object_posix / stream_posix）----
+
+proto_library(
+    name = "object_posix_proto",
+    srcs = ["object_posix.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":meta_transport_proto",
+        ":p2p_subscribe_proto",
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "object_posix_cc_proto",
+    deps = [
+        ":object_posix_proto",
+    ],
+)
+
+# rpc
+proto_library(
+    name = "generic_service_proto",
+    srcs = ["generic_service.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "generic_service_cc_proto",
+    deps = [":generic_service_proto"],
+)
+
+# cc_grpc_library(
+#     name = "generic_service_cc_grpc",
+#     srcs = [":generic_service_proto"],
+#     grpc_only = True,
+#     deps = [":generic_service_cc_proto"],
+# )
+
+proto_library(
+    name = "master_object_proto",
+    srcs = ["master_object.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "object_posix_proto",
+        "p2p_subscribe_proto",
+        "rpc_option_proto",
+        "utils_proto",
+        "worker_object_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "master_object_cc_proto",
+    deps = [":master_object_proto"],
+)
+
+zmq_cc_proto_library(
+    name = "master_object_zmq_cc_proto",
+    extra_protos = [
+        ":object_posix_proto",
+        ":p2p_subscribe_proto",
+        ":rpc_option_proto",
+        ":utils_proto",
+        ":worker_object_proto",
+    ],
+    proto = "master_object.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":master_object_cc_proto",
+        ":object_posix_cc_proto",
+        ":rpc_option_cc_proto",
+        ":utils_cc_proto",
+        ":worker_object_cc_proto",
+    ],
+)
+
+proto_library(
+    name = "hash_ring_proto",
+    srcs = [
+        "hash_ring.proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "hash_ring_cc_proto",
+    deps = [":hash_ring_proto"],
+)
+
+proto_library(
+    name = "worker_stream_proto",
+    srcs = [
+        "worker_stream.proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":stream_posix_proto",
+        ":utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "worker_stream_cc_proto",
+    deps = [":worker_stream_proto"],
+)
+
+# cc_grpc_library(
+#     name = "worker_stream_cc_grpc",
+#     srcs = [":worker_stream_proto"],
+#     grpc_only = True,
+#     deps = [":worker_stream_cc_proto"],
+# )
+
+proto_library(
+    name = "meta_transport_proto",
+    srcs = [
+        "meta_transport.proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "meta_transport_cc_proto",
+    deps = [":meta_transport_proto"],
+)
+
+proto_library(
+    name = "worker_object_proto",
+    srcs = [
+        "worker_object.proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":hash_ring_proto",
+        ":meta_transport_proto",
+        ":object_posix_proto",
+        ":p2p_subscribe_proto",
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "worker_object_cc_proto",
+    deps = [":worker_object_proto"],
+)
+
+# cc_grpc_library(
+#     name = "worker_object_cc_grpc",
+#     srcs = [":worker_object_proto"],
+#     grpc_only = True,
+#     deps = [":worker_object_cc_proto"],
+# )
+
+proto_library(
+    name = "master_stream_proto",
+    srcs = ["master_stream.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        "rpc_option_proto",
+        "utils_proto",
+        "worker_stream_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "master_stream_cc_proto",
+    deps = [":master_stream_proto"],
+)
+
+# cc_grpc_library(
+#     name = "master_stream_cc_grpc",
+#     srcs = [":master_stream_proto"],
+#     grpc_only = True,
+#     deps = [":master_stream_cc_proto"],
+# )
+
+proto_library(
+    name = "perf_posix_proto",
+    srcs = ["perf_posix.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "perf_posix_cc_proto",
+    deps = [":perf_posix_proto"],
+)
+
+# cc_grpc_library(
+#     name = "perf_posix_cc_grpc",
+#     srcs = [":perf_posix_proto"],
+#     grpc_only = True,
+#     deps = [":perf_posix_cc_proto"],
+# )
+
+proto_library(
+    name = "stream_posix_proto",
+    srcs = ["stream_posix.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "stream_posix_cc_proto",
+    deps = [":stream_posix_proto"],
+)
+
+proto_library(
+    name = "ut_object_proto",
+    srcs = ["ut_object.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "ut_object_cc_proto",
+    deps = [":ut_object_proto"],
+)
+
+# cc_grpc_library(
+#     name = "ut_object_cc_grpc",
+#     srcs = [":ut_object_proto"],
+#     grpc_only = True,
+#     deps = [":ut_object_cc_proto"],
+# )
+
+proto_library(
+    name = "zmq_perf_proto",
+    srcs = ["zmq_perf.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":meta_zmq_proto",
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "zmq_perf_cc_proto",
+    deps = [":zmq_perf_proto"],
+)
+
+# cc_grpc_library(
+#     name = "zmq_perf_cc_grpc",
+#     srcs = [":zmq_perf_proto"],
+#     grpc_only = True,
+#     deps = [":zmq_perf_cc_proto"],
+# )
+
+zmq_cc_proto_library(
+    name = "share_memory_zmq_cc_proto",
+    extra_protos = [
+        "@com_google_protobuf//:any_proto",
+        ":meta_transport_proto",
+    ],
+    proto = "share_memory.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":meta_transport_cc_proto",
+        ":share_memory_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "p2p_subscribe_zmq_cc_proto",
+    extra_protos = [
+        "@com_google_protobuf//:any_proto",
+        ":utils_proto",
+    ],
+    proto = "p2p_subscribe.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":p2p_subscribe_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "worker_object_zmq_cc_proto",
+    extra_protos = [
+        ":hash_ring_proto",
+        ":object_posix_proto",
+        ":p2p_subscribe_proto",
+        ":rpc_option_proto",
+        ":utils_proto",
+        ":meta_transport_proto",
+    ],
+    proto = "worker_object.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":hash_ring_cc_proto",
+        ":meta_transport_cc_proto",
+        ":object_posix_cc_proto",
+        ":rpc_option_cc_proto",
+        ":utils_cc_proto",
+        ":worker_object_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "object_posix_zmq_cc_proto",
+    extra_protos = [
+        ":p2p_subscribe_proto",
+        ":utils_proto",
+        ":rpc_option_proto",
+        ":meta_transport_proto",
+    ],
+    proto = "object_posix.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":meta_transport_cc_proto",
+        ":object_posix_cc_proto",
+        ":p2p_subscribe_cc_proto",
+        ":rpc_option_cc_proto",
+        ":utils_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "perf_posix_zmq_cc_proto",
+    extra_protos = ["@com_google_protobuf//:any_proto"],
+    proto = "perf_posix.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":perf_posix_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "worker_stream_zmq_cc_proto",
+    extra_protos = [
+        "@com_google_protobuf//:any_proto",
+        ":stream_posix_proto",
+        ":utils_proto",
+    ],
+    proto = "worker_stream.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":meta_transport_cc_proto",
+        ":stream_posix_cc_proto",
+        ":utils_cc_proto",
+        ":worker_stream_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "master_heartbeat_zmq_cc_proto",
+    extra_protos = [
+        "@com_google_protobuf//:any_proto",
+    ],
+    proto = "master_heartbeat.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":master_heartbeat_cc_proto",
+        # ":meta_transport_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "master_stream_zmq_cc_proto",
+    extra_protos = [
+        ":worker_stream_proto",
+        ":utils_proto",
+        ":rpc_option_proto",
+    ],
+    proto = "master_stream.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":master_stream_cc_proto",
+        ":rpc_option_cc_proto",
+        ":utils_cc_proto",
+        ":worker_stream_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "stream_posix_zmq_cc_proto",
+    extra_protos = [
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+    proto = "stream_posix.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":rpc_option_cc_proto",
+        ":stream_posix_cc_proto",
+        ":utils_cc_proto",
+    ],
+)

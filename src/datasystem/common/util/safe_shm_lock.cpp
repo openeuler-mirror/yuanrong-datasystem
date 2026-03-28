@@ -21,7 +21,9 @@
 #include <unistd.h>
 
 #include "datasystem/common/log/log.h"
+#ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
+#endif
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -126,7 +128,9 @@ Status SafeShmLock::FutexWait(uint32_t *lockWord, uint64_t timeoutMs)
     if ((beforeAdd & WRITE_FLAG) && (beforeAdd & (LOCK_ID_TAG << LOCK_ID_SHIFT))) {
         ret = syscall(SYS_futex, lockWord, FUTEX_WAIT, beforeAdd + WAIT_NUM, &t, nullptr, 0);
     }
+#ifdef WITH_TESTS
     INJECT_POINT("FutexWait.wake");
+#endif
     __atomic_fetch_sub(lockWord, WAIT_NUM, __ATOMIC_SEQ_CST);
     if (ret == 0 || errno == EAGAIN || errno == EINTR || errno == ETIMEDOUT) {
         return Status::OK();

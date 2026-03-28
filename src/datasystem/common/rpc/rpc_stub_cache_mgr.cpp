@@ -15,16 +15,18 @@
  */
 
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+
 #include <mutex>
+
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/protos/worker_object.stub.rpc.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
-#include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
+#include "datasystem/protos/stream_posix.stub.rpc.pb.h"
+#include "datasystem/protos/worker_object.stub.rpc.pb.h"
 #include "datasystem/protos/worker_stream.stub.rpc.pb.h"
 
 DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");

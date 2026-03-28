@@ -23,8 +23,11 @@
 #include <sys/file.h>
 #include <arpa/inet.h>
 
+#include <tbb/concurrent_hash_map.h>
+
 #include "common.h"
 #include "../common/binmock/binmock.h"
+#include "datasystem/common/constants.h"
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/status_helper.h"
@@ -33,6 +36,7 @@
 #include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

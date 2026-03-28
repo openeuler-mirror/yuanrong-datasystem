@@ -1,0 +1,19 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+package(default_visibility = ["//visibility:public"])
+
+# success
+ds_cc_library(
+    name = "data_migrator",
+    srcs = [
+        "data_migrator.cpp",
+    ],
+    hdrs = [
+        "data_migrator.h",
+    ],
+    deps = [
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/object_cache/data_migrator/handler:migrate_data_handler",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:scale_down_node_selector",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:spill_node_selector",
+    ]
+)

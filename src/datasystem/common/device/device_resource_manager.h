@@ -26,7 +26,6 @@
 #include "datasystem/hetero/device_common.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/shared_memory/allocator.h"
-#include "datasystem/common/device/device_manager_factory.h"
 namespace datasystem {
 
 struct BufferMetaInfo {

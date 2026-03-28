@@ -17,16 +17,19 @@
 #ifndef DATASYSTEM_COMMON_DEVICE_COMM_WRAPPER_BASE_H
 #define DATASYSTEM_COMMON_DEVICE_COMM_WRAPPER_BASE_H
 
+#include "datasystem/common/device/acl_pipeline_p2p_task.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/device/hccl_comm_magr.h"
-#include "datasystem/common/device/ascend/acl_pipeline_p2p_task.h"
 #include "datasystem/common/device/ascend/acl_pipeline_task.h"
-#include "datasystem/common/device/device_pointer_wrapper.h"
+#include "datasystem/common/device/ascend/acl_resource_manager.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
+#include "datasystem/common/device/comm_wrapper_base.h"
 #include "datasystem/common/device/device_manager_base.h"
+#include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/hetero/device_common.h"
 
 namespace datasystem {
 // This constant is used to configure the waiting time for destroying Steam when the RunP2PSendLoop and RunP2PRecvLoop

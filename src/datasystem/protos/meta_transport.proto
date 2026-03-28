@@ -20,7 +20,7 @@
  */
 syntax = "proto3";
 package datasystem;
-import "utils.proto";
+import "datasystem/protos/utils.proto";
 
 message UrmaSegPb {
     bytes eid = 1;

@@ -926,8 +926,8 @@ endfunction()
 function(GENERATE_PROTO_CPP SRCS HDRS TARGET_DIR)
   set(options)
   set(one_value_args SOURCE_ROOT PROTO_DEPEND)
-  set(multi_value_args PROTO_FILES)
-  cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+  set(multiValueArgs PROTO_FILES)
+  cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multiValueArgs}" ${ARGN})
 
   if (NOT ARG_PROTO_FILES)
     message(SEND_ERROR "GENERATE_PROTO_CPP() called without any proto files")
@@ -939,39 +939,49 @@ function(GENERATE_PROTO_CPP SRCS HDRS TARGET_DIR)
 
   set(${SRCS})
   set(${HDRS})
-  set(_PROTO_IMPORT_ARGS -I "${ARG_SOURCE_ROOT}")
 
-  # Add protobuf import dir to avoid import report by protoc compiler.
+  # Import paths will be set per proto file in the loop below
+
   foreach (_PROTO_FILE ${ARG_PROTO_FILES})
     get_filename_component(_ABS_FILE ${_PROTO_FILE} ABSOLUTE)
-    get_filename_component(_ABS_PATH ${_ABS_FILE} PATH)
-    list(FIND _PROTO_IMPORT_ARGS ${_ABS_PATH} _IMPORT_EXIST)
-    if (${_IMPORT_EXIST} EQUAL -1)
-      list(APPEND _PROTO_IMPORT_ARGS -I ${_ABS_PATH})
-    endif()
-  endforeach()
-
-  foreach (_PROTO_FILE ${ARG_PROTO_FILES})
-    get_filename_component(_ABS_FILE   ${_PROTO_FILE} ABSOLUTE)
-    get_filename_component(_ABS_DIR    ${_PROTO_FILE} DIRECTORY)
+    get_filename_component(_ABS_DIR ${_ABS_FILE} DIRECTORY)
     get_filename_component(_PROTO_NAME ${_PROTO_FILE} NAME_WE)
-    get_filename_component(_PROTO_DIR  ${_PROTO_FILE} PATH)
-    file(RELATIVE_PATH _REL_DIR ${ARG_SOURCE_ROOT} ${_ABS_DIR})
-    file(MAKE_DIRECTORY ${TARGET_DIR}/${_REL_DIR})
-    list(APPEND ${SRCS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.cc)
-    list(APPEND ${HDRS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.h)
+
+    # 1. 计算相对路径（逻辑保持，但确保它是相对于 src 的）
+    string(FIND "${_ABS_DIR}" "${CMAKE_SOURCE_DIR}/src" _SRC_POS)
+    if(_SRC_POS EQUAL 0)
+      file(RELATIVE_PATH _REL_DIR "${CMAKE_SOURCE_DIR}/src" "${_ABS_DIR}")
+    else()
+      file(RELATIVE_PATH _REL_DIR "${ARG_SOURCE_ROOT}" "${_ABS_DIR}")
+    endif()
+
+    # 2. 这里的 _OUTPUT_DIR 是 CMake 预期文件出现的实际物理位置
+    if(_REL_DIR)
+      set(_OUTPUT_DIR "${TARGET_DIR}/${_REL_DIR}")
+    else()
+      set(_OUTPUT_DIR "${TARGET_DIR}")
+    endif()
+
+    file(MAKE_DIRECTORY "${_OUTPUT_DIR}")
+
+    list(APPEND ${SRCS} "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.cc")
+    list(APPEND ${HDRS} "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.h")
+
+    # 3. --cpp_out 指向 TARGET_DIR (即 build/src)
+    set(_PROTO_IMPORT_ARGS -I "${CMAKE_SOURCE_DIR}/src" -I "${ARG_SOURCE_ROOT}")
+
     add_custom_command(
-            OUTPUT "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.cc" "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.h"
+            OUTPUT "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.cc" "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.h"
             COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
             $<TARGET_FILE:protobuf::protoc>
-            ARGS ${_PROTO_IMPORT_ARGS} --cpp_out=${TARGET_DIR} ${_ABS_FILE}
+            ARGS ${_PROTO_IMPORT_ARGS} --cpp_out=${TARGET_DIR} ${_ABS_FILE} # 注意这里用 TARGET_DIR
             DEPENDS ${_ABS_FILE}
             COMMENT "Running c++ protocol buffer compiler on ${_PROTO_FILE}" VERBATIM)
 
     if (ARG_PROTO_DEPEND)
       add_custom_target(PROTO_LIB_DEPEND_${_PROTO_NAME} DEPENDS
-              "${TARGET_DIR}/${_PROTO_NAME}.pb.cc"
-              "${TARGET_DIR}/${_PROTO_NAME}.pb.h")
+              "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.cc"
+              "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.h")
       add_dependencies(${ARG_PROTO_DEPEND} PROTO_LIB_DEPEND_${_PROTO_NAME})
     endif()
   endforeach ()

@@ -1,0 +1,76 @@
+# BUILD file for src/datasystem/common/log
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "common_log_header",
+    hdrs = [
+        "log.h",
+        "log_helper.h",
+        "time_cost.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log/spdlog:ds_spdlog_header",
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_library(
+    name = "log_base",
+    hdrs = [
+        "log_time.h",
+        "trace.h",
+    ],
+)
+
+ds_cc_library(
+    name = "common_log",
+    srcs = [
+        "log_manager.cpp",
+        "logging.cpp",
+        "access_recorder.cpp",
+        "trace.cpp",
+        #"failure_handler.cpp",
+    ],
+    hdrs = [
+        "log_manager.h",
+        "logging.h",
+        "access_recorder.h",
+        #"failure_handler.h",
+        "access_point.def",
+        "log_time.h",
+    ],
+    linkopts = ["-pthread"],
+    deps = [
+        ":common_log_header",
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//src/datasystem/common/metrics/hard_disk_exporter",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:uuid_generator",
+        "@re2",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "failure_handler",
+    srcs = [
+        "failure_handler.cpp",
+    ],
+    hdrs = [
+        "failure_handler.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "@abseil-cpp//absl/debugging:failure_signal_handler",
+        "@abseil-cpp//absl/debugging:symbolize",
+    ],
+)

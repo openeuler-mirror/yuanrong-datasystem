@@ -1,0 +1,23 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "sfs_client",
+    srcs = [
+        "sfs_client.cpp",
+    ],
+    hdrs = [
+        "sfs_client.h",
+    ],
+    deps = [
+        "//src/datasystem/common/l2cache:get_object_info_list_resp",
+        "//src/datasystem/common/l2cache:l2cache_client",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:validator",
+    ],
+)

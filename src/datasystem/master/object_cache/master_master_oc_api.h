@@ -31,7 +31,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
-#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
 namespace datasystem {
 namespace master {

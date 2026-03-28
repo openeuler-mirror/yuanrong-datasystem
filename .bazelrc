@@ -1,0 +1,84 @@
+build --cxxopt=-std=c++17
+build --cxxopt=-Wextra
+#build --cxxopt=-Wfloat-equal
+build --cxxopt=-fsigned-char
+build --cxxopt=-fno-common
+build --cxxopt=-rdynamic
+build --cxxopt=-fPIC
+build --cxxopt=-g3
+build --cxxopt=-DDISABLE_RDMA
+build --cxxopt=-DDISABLE_OBS
+#build --cxxopt=-DDISABLE_RPC
+build --cxxopt=-Wno-redundant-move
+#build --cxxopt=-DDISABLE_PROTOBUF
+
+build --copt=-Wno-float-equal
+build --copt=-Wno-unused-variable
+build --copt=-Wno-unused-parameter
+build --copt=-Wno-unused-function
+build --copt=-Wno-missing-field-initializers
+build --copt=-Wno-implicit-fallthrough
+
+build:debug --cxxopt=-ggdb
+build:debug --cxxopt=-O0
+build:debug --cxxopt=-ftrapv
+build:debug --cxxopt=-fstack-check
+build:debug --cxxopt=-DDEBUG
+
+build:release --cxxopt=-O2
+build:release --cxxopt=-fstack-protector-strong
+build:release --linkopt=-Wl,-z,relro
+build:release --linkopt=-Wl,-z,now
+build:release --linkopt=-Wl,-z,noexecstack
+build:release --cxxopt=-D_FORTIFY_SOURCE=2
+build:release --cxxopt=-fPIE
+build:release --linkopt=-pie
+build:release --cxxopt=-DNDEBUG
+build:release --linkopt=-Wl,--build-id=none
+build:urma --define=enable_urma=true
+build:urma --copt=-DUSE_URMA
+build:urma --copt=-DURMA_OVER_UB
+
+build:asan --cxxopt=-fsanitize=address
+build:asan --cxxopt=-fno-omit-frame-pointer
+build:asan --cxxopt=-g3
+build:asan --linkopt=-fsanitize=address
+
+build:tsan --cxxopt=-fsanitize=thread
+build:tsan --cxxopt=-g3
+build:tsan --linkopt=-fsanitize=thread
+
+build:ubsan --cxxopt=-fsanitize=undefined
+build:ubsan --cxxopt=-fno-sanitize=alignment
+build:ubsan --cxxopt=-fsanitize=float-cast-overflow
+build:ubsan --cxxopt=-fno-sanitize-recover=all
+build:ubsan --cxxopt=-O0
+build:ubsan --linkopt=-fsanitize=undefined
+
+build:coverage --cxxopt=-fprofile-arcs --cxxopt=-ftest-coverage
+build:coverage --linkopt=-fprofile-arcs --linkopt=-ftest-coverage --linkopt=-lgcov
+build:coverage --cxxopt=-DBUILD_COVERAGE
+
+build --cxxopt=-UENABLE_PERF
+build:hetero --cxxopt=-DBUILD_HETERO
+build --cxxopt=-UWITH_TESTS
+
+build --copt="-Wno-error"
+build --copt="-Wno-missing-field-initializers"
+build --host_copt="-Wno-missing-field-initializers"
+build --copt="-w"
+
+build --action_env=CC=gcc
+build --action_env=CXX=g++
+common --enable_bzlmod=true
+build --define=grpc_no_xds=true
+build --define=grpc_no_binder=true
+build --define=grpc_no_ares=true
+build --cxxopt=-std=c++17
+build --per_file_copt=external/.*@-Wno-error
+
+build:py39 --@rules_python//python/config_settings:python_version=3.9
+build:py310 --@rules_python//python/config_settings:python_version=3.10
+build:py311 --@rules_python//python/config_settings:python_version=3.11
+build:py312 --@rules_python//python/config_settings:python_version=3.12
+build:py313 --@rules_python//python/config_settings:python_version=3.13

@@ -27,8 +27,7 @@
 
 #include <fcntl.h>
 
-#include <re2/re2.h>
-
+#include "re2/re2.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_manager.h"

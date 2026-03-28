@@ -1,0 +1,95 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "fast_transport_manager_wrapper",
+    srcs = [
+        "fast_transport_manager_wrapper.cpp",
+    ] + select({
+        "//:enable_urma": [
+            "urma_info.cpp",
+            "urma_manager.cpp",
+            "urma_resource.cpp",
+        ],
+        "//conditions:default": [],
+    }),
+    hdrs = [
+        "fast_transport_manager_wrapper.h",
+    ] + select({
+        "//:enable_urma": [
+            "urma_info.h",
+            "urma_manager.h",
+            "urma_resource.h",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device/ascend:acl_device_manager_header",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rdma:rdma_util",
+        "//src/datasystem/common/rdma/npu:remote_h2d_manager_header",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/util/gflag:common_util_gflag_header",
+        "//src/datasystem/protos:meta_transport_cc_proto",
+        "//src/datasystem/protos:utils_cc_proto",
+    ] + select({
+        "//:enable_urma": [":urma_dlopen_util"],
+        "//conditions:default": [],
+    }),
+)
+
+ds_cc_library(
+    name = "rdma_util",
+    srcs = [
+        "rdma_util.cpp",
+    ],
+    hdrs = [
+        "rdma_util.h",
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    ],
+)
+
+ds_cc_library(
+    name = "urma_dlopen_util",
+    srcs = [
+        "urma_dlopen_util.cpp",
+    ],
+    hdrs = [
+        "urma_dlopen_util.h",
+    ],
+    copts = ["-DUSE_URMA"],
+    includes = [
+        "/usr/include",
+        "/usr/local/include",
+    ],
+    linkopts = [
+        "-lurma",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+    ],
+)

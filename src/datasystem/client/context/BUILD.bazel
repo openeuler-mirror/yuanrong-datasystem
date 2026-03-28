@@ -1,0 +1,17 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//src/datasystem:__subpackages__"])
+
+ds_cc_library(
+    name = "context",
+    srcs = [
+        "context.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+    ],
+    alwayslink = True,
+)

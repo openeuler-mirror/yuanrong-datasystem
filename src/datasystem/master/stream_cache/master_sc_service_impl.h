@@ -26,7 +26,6 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/master/replica_manager.h"
 #include "datasystem/master/stream_cache/master_worker_sc_api.h"
 #include "datasystem/master/stream_cache/rpc_session_manager.h"
 #include "datasystem/master/stream_cache/stream_metadata.h"
@@ -35,6 +34,8 @@
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 
 namespace datasystem {
+class ReplicaManager;
+
 namespace master {
 class MasterSCServiceImpl : public MasterSCService {
 public:

@@ -1,8 +1,168 @@
-cc_library(
-    name = "datasystem",
-    hdrs = glob(["include/**/*.h"]),
-    srcs = ["lib/libdatasystem.so"],
-    data = glob(["lib/*.so*"]),
-    includes = ["include"],
-    visibility = ["//visibility:public"],
+load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
+load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
+load("@local_glibc_info//:version.bzl", 
+    "AUTO_GLIBC_PLATFORM",
+    "GLIBC_2_34_PLATFORM",
+    "GLIBC_2_35_PLATFORM",
+    "GLIBC_2_36_PLATFORM",
+    "GLIBC_2_37_PLATFORM",
+    "GLIBC_2_38_PLATFORM",
+)
+
+licenses(["notice"])
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+py_package(
+    name = "datasystem_client",
+    packages = ["include", "python", "yr"],
+    deps = [
+        "//:cli_files",
+        "//:datasystem_header_files",
+        "//:libdatasystem_file",
+        "//python/yr/datasystem:datasystem_client",
+    ],
+)
+
+pkg_zip(
+    name = "datasystem_sdk",
+    srcs = [":datasystem_client"],
+    out = "datasystem_sdk.zip",
+)
+
+config_setting(
+    name = "is_python_39",
+    flag_values = {"@rules_python//python/config_settings:python_version": "3.9"},
+)
+
+config_setting(
+    name = "is_python_310",
+    flag_values = {"@rules_python//python/config_settings:python_version": "3.10"},
+)
+
+config_setting(
+    name = "is_python_311",
+    flag_values = {"@rules_python//python/config_settings:python_version": "3.11"},
+)
+
+config_setting(
+    name = "is_python_312",
+    flag_values = {"@rules_python//python/config_settings:python_version": "3.12"},
+)
+
+config_setting(
+    name = "is_python_313",
+    flag_values = {"@rules_python//python/config_settings:python_version": "3.13"},
+)
+
+config_setting(
+    name = "glibc_2_34",
+    define_values = {"glibc_version": "2.34"},
+)
+
+config_setting(
+    name = "glibc_2_35",
+    define_values = {"glibc_version": "2.35"},
+)
+
+config_setting(
+    name = "glibc_2_36",
+    define_values = {"glibc_version": "2.36"},
+)
+
+config_setting(
+    name = "glibc_2_37",
+    define_values = {"glibc_version": "2.37"},
+)
+
+config_setting(
+    name = "glibc_2_38",
+    define_values = {"glibc_version": "2.38"},
+)
+
+py_wheel(
+    name = "datasystem_wheel",
+    abi = select({
+        ":is_python_39": "cp39",
+        ":is_python_310": "cp310",
+        ":is_python_311": "cp311",
+        ":is_python_312": "cp312",
+        ":is_python_313": "cp313",
+        "//conditions:default": "cp311",
+    }),
+    author = "openYuanrong Term.",
+    classifiers = [
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Science/Research",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: Apache Software License",
+        "Programming Language :: Python :: 3 :: Only",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: C++",
+        "Topic :: Scientific/Engineering",
+        "Topic :: Software Development",
+        "Topic :: Software Development :: Libraries",
+    ],
+    description_file = "//:readme_file",
+    distribution = "openyuanrong_datasystem",
+    entry_points = {
+        "console_scripts": [
+            "dscli=yr.datasystem.cli.command:main",
+            "dsbench=yr.datasystem.cli.benchmark.main:main",
+        ],
+    },
+    extra_distinfo_files = {"//:LICENSE": "LICENSE"},
+    homepage = "https://gitcode.com/openeuler/yuanrong-datasystem",
+    license = "Apache 2.0",
+    
+    platform = select({
+        ":glibc_2_34": GLIBC_2_34_PLATFORM,
+        ":glibc_2_35": GLIBC_2_35_PLATFORM,
+        ":glibc_2_36": GLIBC_2_36_PLATFORM,
+        ":glibc_2_37": GLIBC_2_37_PLATFORM,
+        ":glibc_2_38": GLIBC_2_38_PLATFORM,
+        "//conditions:default": AUTO_GLIBC_PLATFORM,
+    }),
+    
+    python_requires = ">=3.9",
+    python_tag = select({
+        ":is_python_39": "cp39",
+        ":is_python_310": "cp310",
+        ":is_python_311": "cp311",
+        ":is_python_312": "cp312",
+        ":is_python_313": "cp313",
+        "//conditions:default": "cp311",
+    }),
+    strip_path_prefixes = ["python"],
+    version = "0.7.0",
+    deps = [
+        ":datasystem_client",
+        "//:cluster_config_file",
+        "//:cpp_template_files",
+        "//:datasystem_worker_file",
+        "//:dockerentry_files",
+        "//:dsbench_file",
+        "//:helm_chart_files",
+        "//:libjemalloc_shared_file",
+        "//:readme_file",
+        "//:version_file",
+        "//:worker_config_file",
+    ],
 )

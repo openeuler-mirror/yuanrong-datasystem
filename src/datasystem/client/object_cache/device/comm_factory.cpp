@@ -18,10 +18,15 @@
 #include <memory>
 #include <mutex>
 
+#include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/device/ascend/cann_types.h"
+#include "datasystem/common/device/ascend/p2phccl_comm_wrapper.h"
+#include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/comm_wrapper.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
