@@ -40,6 +40,7 @@
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/wait_post.h"
 
 namespace datasystem {
@@ -158,6 +159,12 @@ public:
     void SetReleaseFdCallBack(std::function<void(const std::vector<int64_t> &)> callback);
 
     /**
+     * @brief Set the rediscover local worker handle for IP change scenarios.
+     * @param[in] callback Returns true if local worker was successfully rediscovered and reconnected.
+     */
+    void SetRediscoverHandle(std::function<bool()> callback);
+
+    /**
      * @brief Set standby worker is switched, it would happen when local worker is recover.
      */
     void SetSwitched()
@@ -193,6 +200,13 @@ private:
     void CleanInvalidCallback();
 
     /**
+     * @brief Check pool availability and atomically acquire isInAsyncSwitchWorkerPool_.
+     * @param[out] raii RAII guard that resets the flag on destruction. Capture in pool lambda.
+     * @return True if acquired, false if pool unavailable or already acquired.
+     */
+    bool TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii);
+
+    /**
      * @brief Call switchWorkerHandle_ to switch worker.
      */
     void SwitchToRemoteWorker();
@@ -201,6 +215,11 @@ private:
      * @brief Try switch back to local worker.
      */
     void TrySwitchBackToLocalWorker();
+
+    /**
+     * @brief Try rediscover local worker via ServiceDiscovery when heartbeat fails and already switched.
+     */
+    void TryRediscoverLocalWorker();
 
     /**
      * @brief Check if client is switchable or not.
@@ -280,6 +299,7 @@ private:
 
     std::atomic<bool> isWorkerVoluntaryScaleDown_{ false };
     FdReleaseHelper fdReleaseHelper_;
+    std::function<bool()> rediscoverHandle_;
     ThreadPool *asyncSwitchWorkerPool_;
     const uint32_t index_;
 };

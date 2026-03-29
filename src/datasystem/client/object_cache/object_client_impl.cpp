@@ -366,6 +366,9 @@ Status ObjectClientImpl::InitListenWorker()
     if (enableCrossNodeConnection_) {
         listenWorker_[LOCAL_WORKER]->SetSwitchWorkerHandle(
             [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
+        if (serviceDiscovery_ != nullptr) {
+            listenWorker_[LOCAL_WORKER]->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
+        }
     }
     listenWorker_[LOCAL_WORKER]->SetIsLocalWorker(true);
     RETURN_IF_NOT_OK(listenWorker_[LOCAL_WORKER]->StartListenWorker());
@@ -639,6 +642,89 @@ bool ObjectClientImpl::TrySwitchBackToLocalWorker()
             s.ToString(), scaleDown, healthy);
         return false;
     }
+}
+
+bool ObjectClientImpl::RediscoverLocalWorker()
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (currentNode_ == LOCAL_WORKER) {
+        return false;
+    }
+
+    std::string workerIp;
+    int workerPort;
+    bool isSameNode = false;
+    Status rc = serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode);
+    if (rc.IsError()) {
+        constexpr int times = 10;
+        LOG_EVERY_T(WARNING, times) << "[Switch] SelectWorker failed: " << rc.ToString();
+        return false;
+    }
+    if (!isSameNode) {
+        return false;
+    }
+
+    HostPort newAddress(workerIp, workerPort);
+    if (newAddress == ipAddress_) {
+        return false;
+    }
+
+    LOG(INFO) << "[Switch] Local worker IP changed: " << ipAddress_.ToString() << " -> " << newAddress.ToString();
+    return ReconnectLocalWorkerAt(newAddress);
+}
+
+bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)
+{
+    auto &workerApi = workerApi_[LOCAL_WORKER];
+    (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
+    mmapManager_->CleanInvalidMmapTable();
+    memoryRefCount_.Clear();
+
+    HostPort oldAddress = ipAddress_;
+    ipAddress_ = newAddress;
+    workerApi->hostPort_ = newAddress;
+
+    std::vector<std::string> gRefIds;
+    {
+        std::lock_guard<std::shared_timed_mutex> l(globalRefMutex_);
+        gRefIds.reserve(globalRefCount_.size());
+        for (const auto &entry : globalRefCount_) {
+            gRefIds.emplace_back(entry.first);
+        }
+    }
+
+    Status rc = workerApi->ReconnectWorker(gRefIds);
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Switch] Reconnect to new local worker " << newAddress.ToString()
+                   << " failed: " << rc.ToString();
+        ipAddress_ = oldAddress;
+        workerApi->hostPort_ = oldAddress;
+        return false;
+    }
+
+    // Recreate the OC service stub for the new address.
+    // ReconnectWorker only updates rpc channel, not the OC stub.
+    auto remoteApi = std::dynamic_pointer_cast<ClientWorkerRemoteApi>(workerApi);
+    if (remoteApi != nullptr) {
+        remoteApi->RecreateOCStub();
+    }
+
+    memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
+    rc = workerApi->PrepairForDecreaseShmRef(std::bind(
+        &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(),
+        std::placeholders::_1, std::placeholders::_2));
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Switch] PrepairForDecreaseShmRef failed: " << rc.ToString();
+    }
+
+    listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
+    if (listenWorker_[currentNode_] != nullptr) {
+        listenWorker_[currentNode_]->SetSwitched();
+    }
+    currentNode_ = LOCAL_WORKER;
+
+    LOG(INFO) << "[Switch] Rediscovered and reconnected to local worker at " << newAddress.ToString();
+    return true;
 }
 
 bool ObjectClientImpl::ReadyToExit(WorkerNode node)
