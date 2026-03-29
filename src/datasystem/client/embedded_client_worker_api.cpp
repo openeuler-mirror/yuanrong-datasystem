@@ -50,6 +50,7 @@ Status EmbeddedClientWorkerApi::LoadPlugin()
     DLSYM_FUNC_OBJ(WorkerOCGet, handle);
     DLSYM_FUNC_OBJ(WorkerOCMultiPublish, handle);
     DLSYM_FUNC_OBJ(WorkerOCDecreaseReference, handle);
+    DLSYM_FUNC_OBJ(WorkerOCReconcileShmRef, handle);
     DLSYM_FUNC_OBJ(WorkerOCInvalidateBuffer, handle);
     DLSYM_FUNC_OBJ(WorkerOCGIncreaseRef, handle);
     DLSYM_FUNC_OBJ(WorkerOCReleaseGRefs, handle);
@@ -161,6 +162,13 @@ Status EmbeddedClientWorkerApi::WorkerOCDecreaseReference(void *obj, const Decre
 {
     RETURN_RUNTIME_ERROR_IF_NULL(WorkerOCDecreaseReferenceFunc_);
     return WorkerOCDecreaseReferenceFunc_(obj, req, resp);
+}
+
+Status EmbeddedClientWorkerApi::WorkerOCReconcileShmRef(void *obj, const ReconcileShmRefReqPb &req,
+                                                        ReconcileShmRefRspPb &resp)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(WorkerOCReconcileShmRefFunc_);
+    return WorkerOCReconcileShmRefFunc_(obj, req, resp);
 }
 
 Status EmbeddedClientWorkerApi::WorkerOCInvalidateBuffer(void *obj, const InvalidateBufferReqPb &req,

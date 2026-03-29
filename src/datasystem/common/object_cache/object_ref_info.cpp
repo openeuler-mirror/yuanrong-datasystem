@@ -20,20 +20,71 @@
 #include "datasystem/common/object_cache/object_ref_info.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+constexpr uint64_t SHM_REF_RECONCILE_MIN_EXPIRE_MS = 1000UL;
+constexpr uint64_t SHM_REF_RECONCILE_MAX_EXPIRE_MS = RPC_TIMEOUT;
+constexpr uint64_t SHM_REF_FLUSH_INTERVAL_MS = 1000UL;
+constexpr size_t MAX_MAYBE_EXPIRED_SHM_IDS_PER_RECONCILE = 1024;
+uint64_t GetCurrentTimeMs()
+{
+    INJECT_POINT("shm_ref.GetCurrentTimeMs", [](uint64_t value) { return value; });
+    return static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+}
+uint64_t GetMaybeExpiredDeadlineMs(int64_t requestTimeoutMs)
+{
+    auto expireMs = std::min<uint64_t>(std::max<int64_t>(requestTimeoutMs, SHM_REF_RECONCILE_MIN_EXPIRE_MS),
+                                       SHM_REF_RECONCILE_MAX_EXPIRE_MS);
+    return GetCurrentTimeMs() + expireMs;
+}
+}  // namespace
+
+SharedMemoryRefTable::SharedMemoryRefTable()
+{
+    if (maybeExpiredFlushThread_ != nullptr) {
+        return;
+    }
+    maybeExpiredFlushExit_ = false;
+    maybeExpiredFlushPost_.Clear();
+    maybeExpiredFlushThread_ = std::make_unique<Thread>([this]() {
+        while (!maybeExpiredFlushExit_) {
+            (void)maybeExpiredFlushPost_.WaitFor(SHM_REF_FLUSH_INTERVAL_MS);
+            if (maybeExpiredFlushExit_) {
+                break;
+            }
+            FlushMaybeExpiredQueue(GetCurrentTimeMs());
+        }
+    });
+}
+
+SharedMemoryRefTable::~SharedMemoryRefTable()
+{
+    if (maybeExpiredFlushThread_ == nullptr) {
+        return;
+    }
+    maybeExpiredFlushExit_ = true;
+    maybeExpiredFlushPost_.Set();
+    maybeExpiredFlushThread_->join();
+}
+
 Status SharedMemoryRefTable::GetShmUnit(const ShmKey &shmId, std::shared_ptr<ShmUnit> &shmUnit)
 {
     TbbMemoryObjectRefTable::const_accessor shmAccessor;
@@ -73,7 +124,8 @@ void SharedMemoryRefTable::InitShmRefForClient(const ClientKey &clientId, bool s
     }
 }
 
-void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit)
+void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit,
+                                      int64_t requestTimeoutMs)
 {
     const auto &shmId = shmUnit->GetId();
     TbbMemoryClientRefTable::const_accessor clientAccessor;
@@ -93,12 +145,12 @@ void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr
         datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(-1);
         datasystem::memory::Allocator::Instance()->ChangeRefPageCount(1);
     }
-
+    RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs);
     VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
 }
 
 void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
-                                       std::vector<std::shared_ptr<ShmUnit>> &shmUnits)
+                                       std::vector<std::shared_ptr<ShmUnit>> &shmUnits, int64_t requestTimeoutMs)
 {
     TbbMemoryObjectRefTable::accessor objectAccessor;
     const ClientKey &clientId = clientAccessor->first;
@@ -122,6 +174,7 @@ void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &
             datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(-1);
             datasystem::memory::Allocator::Instance()->ChangeRefPageCount(1);
         }
+        RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs);
         VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
     }
 }
@@ -147,6 +200,7 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
     INJECT_POINT("RemoveShmUnit");
 #endif
     RemoveShmUnitDetail(clientId, false, shmAccessor, clientAccessor);
+    ClearMaybeExpiredShmIds(clientId, { shmId });
     VLOG(1) << "RemoveShmUnit for shmid: " << shmId << " client id: " << clientId;
     return Status::OK();
 }
@@ -207,6 +261,67 @@ void SharedMemoryRefTable::GetClientRefIds(const ClientKey &clientId, std::vecto
     }
 }
 
+void SharedMemoryRefTable::RecordMaybeExpiredShm(const ClientKey &clientId, const ShmKey &shmId,
+                                                 int64_t requestTimeoutMs)
+{
+    auto expireTimeMs = GetMaybeExpiredDeadlineMs(requestTimeoutMs);
+    std::lock_guard<std::shared_mutex> lock(maybeExpiredShmQueueMutex_);
+    maybeExpiredShmQueue_.push({ requestTimeoutMs, expireTimeMs, clientId, shmId });
+    VLOG(INFO) << "RecordMaybeExpiredShm: clientId=" << clientId << " shmId=" << shmId
+               << " requestTimeoutMs=" << requestTimeoutMs << " expireTimeMs=" << expireTimeMs;
+}
+
+void SharedMemoryRefTable::GetMaybeExpiredShmIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds)
+{
+    shmIds.clear();
+    std::shared_lock<std::shared_mutex> lock(maybeExpiredShmTableMutex_);
+    auto iter = maybeExpiredShmTable_.find(clientId);
+    if (iter == maybeExpiredShmTable_.end()) {
+        return;
+    }
+    auto count = std::min(iter->second.size(), MAX_MAYBE_EXPIRED_SHM_IDS_PER_RECONCILE);
+    shmIds.reserve(count);
+    auto shmIter = iter->second.begin();
+    for (size_t i = 0; i < count; ++i, ++shmIter) {
+        shmIds.emplace_back(*shmIter);
+    }
+}
+
+void SharedMemoryRefTable::ClearMaybeExpiredShmIds(const ClientKey &clientId, const std::vector<ShmKey> &shmIds)
+{
+    if (shmIds.empty()) {
+        return;
+    }
+    std::lock_guard<std::shared_mutex> lock(maybeExpiredShmTableMutex_);
+    auto iter = maybeExpiredShmTable_.find(clientId);
+    if (iter == maybeExpiredShmTable_.end()) {
+        return;
+    }
+    for (const auto &shmId : shmIds) {
+        (void)iter->second.erase(shmId);
+    }
+    if (iter->second.empty()) {
+        maybeExpiredShmTable_.erase(iter);
+    }
+}
+
+void SharedMemoryRefTable::ReconcileClientShmRefs(const ClientKey &clientId,
+                                                  const std::vector<ShmKey> &confirmedExpiredShmIds,
+                                                  std::vector<ShmKey> &maybeExpiredShmIds)
+{
+    // clear confirmed expired shm ids.
+    for (const auto &shmId : confirmedExpiredShmIds) {
+        LOG(INFO) << "confirmed expired, try decreasing ref count for " << shmId << ", client: " << clientId;
+        Status rc = RemoveShmUnit(clientId, shmId);
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString("[ObjectKey %s] DoDecrease failed, error: %s", shmId, rc.ToString());
+        }
+    }
+
+    ClearMaybeExpiredShmIds(clientId, confirmedExpiredShmIds);
+    GetMaybeExpiredShmIds(clientId, maybeExpiredShmIds);
+}
+
 Status SharedMemoryRefTable::RemoveClient(const ClientKey &clientId)
 {
     TbbMemoryClientRefTable::accessor clientAccessor;
@@ -223,7 +338,54 @@ Status SharedMemoryRefTable::RemoveClient(const ClientKey &clientId)
         RemoveShmUnitDetail(clientId, true, shmAccessor, clientAccessor);
     }
     clientRefTable_.erase(clientAccessor);
+    std::lock_guard<std::shared_mutex> lock(maybeExpiredShmTableMutex_);
+    maybeExpiredShmTable_.erase(clientId);
     return Status::OK();
+}
+
+void SharedMemoryRefTable::FlushMaybeExpiredQueue(uint64_t nowMs)
+{
+    std::vector<MaybeExpiredShmItem> expiredItems;
+    size_t queueSize = 0;
+    {
+        std::lock_guard<std::shared_mutex> lockForQueue(maybeExpiredShmQueueMutex_);
+        queueSize = maybeExpiredShmQueue_.size();
+        while (!maybeExpiredShmQueue_.empty() && maybeExpiredShmQueue_.top().expireTimeMs <= nowMs) {
+            auto item = maybeExpiredShmQueue_.top();
+            expiredItems.push_back(item);
+            maybeExpiredShmQueue_.pop();
+        }
+    }
+
+    constexpr int logIntervalSec = 120;
+    LOG_EVERY_T(INFO, logIntervalSec) << "The size of maybeExpiredShmQueue_ is " << queueSize
+                                      << ", the size of shmRefTable_ is " << shmRefTable_.size();
+
+    std::vector<MaybeExpiredShmItem> failedItems;
+    for (const auto &item : expiredItems) {
+        if (!ClientContainsShm(item.clientId, item.shmId)) {
+            continue;
+        }
+        std::lock_guard<std::shared_mutex> lockForTable(maybeExpiredShmTableMutex_);
+        auto &shmIds = maybeExpiredShmTable_[item.clientId];
+        if (!shmIds.emplace(item.shmId).second) {
+            failedItems.emplace_back(item);
+        }
+    }
+
+    // delay if already expired, re-insert into queue
+    for (const auto &item : failedItems) {
+        RecordMaybeExpiredShm(item.clientId, item.shmId, item.requestTimeoutMs);
+    }
+}
+
+bool SharedMemoryRefTable::ClientContainsShm(const ClientKey &clientId, const ShmKey &shmId) const
+{
+    TbbMemoryClientRefTable::const_accessor accessor;
+    if (!clientRefTable_.find(accessor, clientId)) {
+        return false;
+    }
+    return accessor->second->Contains(shmId);
 }
 }  // namespace object_cache
 }  // namespace datasystem

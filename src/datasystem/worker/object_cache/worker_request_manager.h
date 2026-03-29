@@ -228,6 +228,7 @@ private:
     std::atomic<bool> isReturn_{ false };
 
     int64_t subTimeout_{ 0 };
+    int64_t requestTimeoutMs_{ 0 };
     WorkerRequestManager *workerRequestManager_{ nullptr };
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
     bool noQueryL2Cache_ = false;

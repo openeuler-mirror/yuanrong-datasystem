@@ -140,6 +140,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     req.set_cache_type(static_cast<uint32_t>(cacheType));
+    req.set_request_timeout(requestTimeoutMs_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
 
     CreateRspPb rsp;
@@ -186,6 +187,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
     int sz = static_cast<int>(createParams.size());
     req.mutable_object_key()->Reserve(sz);
     req.mutable_data_size()->Reserve(sz);
+    req.set_request_timeout(requestTimeoutMs_);
     for (auto &param : createParams) {
         req.add_object_key(param.objectKey);
         req.add_data_size(param.dataSize);
@@ -263,8 +265,8 @@ uint64_t ClientWorkerRemoteApi::ResolveUBGetSize(const GetParam &getParam, const
         return 0;
     }
     if (objMetas.size() != getParam.objectKeys.size()) {
-        LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << getParam.objectKeys.size()
-                     << " but got " << objMetas.size();
+        LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << getParam.objectKeys.size() << " but got "
+                     << objMetas.size();
         return 0;
     }
     for (const auto &meta : objMetas) {
@@ -558,6 +560,28 @@ Status ClientWorkerRemoteApi::DecreaseWorkerRef(const std::vector<ShmKey> &objec
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(stub_->DecreaseReference(opts, req, resp));
     RETURN_STATUS(static_cast<StatusCode>(resp.error().error_code()), resp.error().error_msg());
+}
+
+Status ClientWorkerRemoteApi::ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
+                                              std::vector<ShmKey> &maybeExpiredShmIds)
+{
+    ReconcileShmRefReqPb req;
+    req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK(SetToken(req));
+    for (const auto &shmId : confirmedExpiredShmIds) {
+        req.add_confirmed_expired_shm_ids(shmId);
+    }
+    RpcOptions opts;
+    // using rpc timeout 60s for reconcile shm ref
+    opts.SetTimeout(RPC_TIMEOUT);
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
+    ReconcileShmRefRspPb resp;
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    RETURN_IF_NOT_OK(stub_->ReconcileShmRef(opts, req, resp));
+    maybeExpiredShmIds.reserve(resp.maybe_expired_shm_ids_size());
+    std::transform(resp.maybe_expired_shm_ids().begin(), resp.maybe_expired_shm_ids().end(),
+                   std::back_inserter(maybeExpiredShmIds), [](const auto &shmId) { return ShmKey::Intern(shmId); });
+    return Status::OK();
 }
 
 Status ClientWorkerRemoteApi::GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds,

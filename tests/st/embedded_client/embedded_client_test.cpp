@@ -87,6 +87,7 @@ TEST_F(EmbeddedClientTest, BasicKVTest)
 {
     auto pid0 = fork();
     if (pid0 == 0) {
+        DS_ASSERT_OK(inject::Set("client.shm_ref_reconcile", "call(1)"));
         std::pair<HostPort, HostPort> etcdAddr;
         DS_ASSERT_OK(cluster_->GetEtcdAddrs(0, etcdAddr));
         std::string workerAddr = "127.0.0.1:" + std::to_string(GetFreePort());
@@ -490,7 +491,7 @@ public:
     }
 };
 
-TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest) 
+TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
 {
     auto pid0 = fork();
     if (pid0 == 0) {

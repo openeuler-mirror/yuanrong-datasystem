@@ -204,17 +204,20 @@ Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const ClientKey &clie
 {
     INJECT_POINT("AttachShmUnitToObject.error");
     std::shared_ptr<ShmUnit> shmUnit;
-    bool gotShm = false;
     if (!shmUnitId.Empty()) {
         auto status = memoryRefTable_->GetShmUnit(shmUnitId, shmUnit);
-        if (ClientShmEnabled(clientId) && ShmEnable()) {
-            RETURN_IF_NOT_OK(status);
-            gotShm = true;
-        } else {
-            gotShm = status.IsOk();
+        if (status.IsError()) {
+            if (ClientShmEnabled(clientId) && ShmEnable()) {
+                return status;
+            }
+            auto shm = entry->GetShmUnit();
+            if (shm != nullptr && shm->GetId() == shmUnitId) {
+                shmUnit = shm;
+            } else {
+                return status;
+            }
         }
-    }
-    if (!gotShm) {
+    } else {
         uint64_t metaDataSz = GetMetadataSize();
         RETURN_IF_NOT_OK(AllocateNewShmUnit(objectKey, dataSize, metaDataSz, false, evictionManager_, shmUnit,
                                             entry->modeInfo.GetCacheType()));

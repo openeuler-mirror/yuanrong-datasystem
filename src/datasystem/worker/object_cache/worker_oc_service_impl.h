@@ -259,6 +259,14 @@ public:
     Status DecreaseReference(const DecreaseReferenceRequest &req, DecreaseReferenceResponse &resp) override;
 
     /**
+     * @brief Reconcile maybe expired shm references with client.
+     * @param[in] req The rpc request protobuf.
+     * @param[out] resp The rpc response protobuf.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status ReconcileShmRef(const ReconcileShmRefReqPb &req, ReconcileShmRefRspPb &resp) override;
+
+    /**
      * @brief Send request to master to decrease all objects of remote client id.
      * @param[in] request The rpc request protobuf.
      * @param[out] response The rpc response protobuf.

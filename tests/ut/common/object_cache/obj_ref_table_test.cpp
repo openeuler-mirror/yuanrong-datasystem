@@ -18,18 +18,25 @@
  */
 
 #include <tbb/concurrent_hash_map.h>
+#include <chrono>
+#include <thread>
 
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "../common/binmock/binmock.h"
 
 namespace datasystem {
 namespace ut {
+using namespace ::testing;
+
 template <typename F>
 void ParallelFor(size_t numOfOps, F f, size_t numOfThreads)
 {
@@ -460,7 +467,7 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntMultiIdMultiThread)
     std::vector<std::future<void>> futures;
     for (int i = 0; i < threadNum; i++) {
         futures.emplace_back(threadPool.Submit([&clientInfo]() {
-            for(int loop = 0; loop < 10000; loop++) {
+            for (int loop = 0; loop < 10000; loop++) {
                 RandomData randomData_;
                 auto objectKey = randomData_.GetRandomString(32);
                 size_t limit = 10;
@@ -497,7 +504,7 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntOneIdMultiThread)
     auto objectKey = randomData_.GetRandomString(32);
     for (int i = 0; i < threadNum; i++) {
         futures.emplace_back(threadPool.Submit([&clientInfo, objectKey]() {
-            for(int loop = 0; loop < 10000; loop++) {
+            for (int loop = 0; loop < 10000; loop++) {
                 RandomData randomData_;
                 size_t limit = 10;
                 size_t num = randomData_.GetRandomUint32() % limit + 1;
@@ -534,7 +541,7 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntMultiIdMultiThread2)
     std::vector<std::future<void>> futures;
     for (int i = 0; i < threadNum; i++) {
         futures.emplace_back(threadPool.Submit([&clientInfo]() {
-            for(int loop = 0; loop < 10000; loop++) {
+            for (int loop = 0; loop < 10000; loop++) {
                 RandomData randomData_;
                 auto objectKey = randomData_.GetRandomString(32);
                 ASSERT_EQ(clientInfo->AddRef(objectKey), true);
@@ -570,7 +577,7 @@ TEST_F(ObjRefTableTest, ObjRefInfoRefCntOneIdMultiThread2)
     auto objectKey = randomData_.GetRandomString(32);
     for (int i = 0; i < threadNum; i++) {
         futures.emplace_back(threadPool.Submit([&clientInfo, objectKey]() {
-            for(int loop = 0; loop < 10000; loop++) {
+            for (int loop = 0; loop < 10000; loop++) {
                 clientInfo->AddRef(objectKey);
                 clientInfo->Contains(objectKey);
                 clientInfo->CheckIsRefIdsEmpty();
@@ -644,7 +651,7 @@ TEST_F(ObjRefTableTest, RemoveClientAndDecreaseShmUnit)
 {
     std::vector<ShmKey> shmIds;
     auto clientId = ClientKey::Intern(GetStringUuid());
-    for (int i = 0; i < 3000; i++) { // id num is 3000
+    for (int i = 0; i < 3000; i++) {  // id num is 3000
         std::shared_ptr<SafeObjType> entry;
         bool isInsert;
         auto objId = GetStringUuid();
@@ -676,6 +683,57 @@ TEST_F(ObjRefTableTest, RemoveClientAndDecreaseShmUnit)
 
     t1.join();
     t2.join();
+}
+
+TEST_F(ObjRefTableTest, ReconcileClientShmRefsGetMaybeExpiredShmIds)
+{
+    const uint64_t fakeTickStep = 1000UL;
+    uint64_t currentTimeMs = 0;
+    ASSERT_TRUE(inject::Set("shm_ref.GetCurrentTimeMs", FormatString("1*return(1000)->1*return(3000)->abort()")));
+
+    auto clientId = ClientKey::Intern(GetStringUuid());
+    auto shmId1 = ShmKey::Intern(GetStringUuid());
+    auto shmId2 = ShmKey::Intern(GetStringUuid());
+    auto shmUnit1 = std::make_shared<ShmUnit>();  // expired at 2000
+    auto shmUnit2 = std::make_shared<ShmUnit>();  // expired at 4000
+    shmUnit1->id = shmId1;
+    shmUnit2->id = shmId2;
+
+    memRefTable_.AddShmUnit(clientId, shmUnit1);
+    memRefTable_.AddShmUnit(clientId, shmUnit2);
+
+    std::vector<ShmKey> maybeExpiredShmIds;
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);  // flush at 3000
+    memRefTable_.ReconcileClientShmRefs(clientId, {}, maybeExpiredShmIds);
+
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId1));
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId2));
+    std::unordered_set<ShmKey> maybeSet(maybeExpiredShmIds.begin(), maybeExpiredShmIds.end());
+    ASSERT_EQ(maybeSet.count(shmId1), 1);
+    ASSERT_EQ(maybeSet.count(shmId2), 0);
+
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);  // flush at 5000
+    memRefTable_.ReconcileClientShmRefs(clientId, maybeExpiredShmIds, maybeExpiredShmIds);
+    ASSERT_FALSE(memRefTable_.Contains(clientId, shmId1));
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId2));
+
+    std::unordered_set<ShmKey> maybeSet2(maybeExpiredShmIds.begin(), maybeExpiredShmIds.end());
+    ASSERT_EQ(maybeSet2.count(shmId1), 0);
+    ASSERT_EQ(maybeSet2.count(shmId2), 1);
+
+    currentTimeMs += fakeTickStep;
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);  // flush at 6000
+    memRefTable_.ReconcileClientShmRefs(clientId, maybeExpiredShmIds, maybeExpiredShmIds);
+    ASSERT_FALSE(memRefTable_.Contains(clientId, shmId1));
+    ASSERT_FALSE(memRefTable_.Contains(clientId, shmId2));
+
+    std::unordered_set<ShmKey> maybeSet3(maybeExpiredShmIds.begin(), maybeExpiredShmIds.end());
+    ASSERT_EQ(maybeSet3.count(shmId1), 0);
+    ASSERT_EQ(maybeSet3.count(shmId2), 0);
 }
 }  // namespace ut
 }  // namespace datasystem

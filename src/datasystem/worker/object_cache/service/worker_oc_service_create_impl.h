@@ -59,7 +59,8 @@ private:
      *         K_DUPLICATED: the object already exists, no need to create.
      */
     Status CreateImpl(const std::string &tenantId, const ClientKey &clientId, const std::string &rawObjectKey,
-                      size_t dataSize, CreateRspPb &resp, CacheType cacheType = CacheType::MEMORY);
+                      size_t dataSize, int64_t requestTimeoutMs, CreateRspPb &resp,
+                      CacheType cacheType = CacheType::MEMORY);
 
     /**
      * @brief Helper function to allocate aggregated memory for objects creation.

@@ -20,6 +20,10 @@
 #ifndef DATASYSTEM_COMMON_OBJECT_CACHE_OBJECTREFINFO_H
 #define DATASYSTEM_COMMON_OBJECT_CACHE_OBJECTREFINFO_H
 
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <queue>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -32,6 +36,8 @@
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/thread.h"
+#include "datasystem/common/util/wait_post.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -430,16 +436,23 @@ using TbbMemoryObjectRefTable =
     tbb::concurrent_hash_map<ShmKey, std::pair<std::shared_ptr<ShmUnit>, std::unordered_set<ClientKey>>>;
 class SharedMemoryRefTable {
 public:
-    SharedMemoryRefTable() = default;
+    struct MaybeExpiredShmItem {
+        int64_t requestTimeoutMs;
+        uint64_t expireTimeMs;
+        ClientKey clientId;
+        ShmKey shmId;
+    };
 
-    ~SharedMemoryRefTable() = default;
+    SharedMemoryRefTable();
+
+    ~SharedMemoryRefTable();
 
     /**
      * @brief Add shared memory unit reference to the client table.
      * @param[in] clientId uuid of client.
      * @param[in] shmUnit The safe object.
      */
-    void AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit);
+    void AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit, int64_t requestTimeoutMs = 0);
 
     /**
      * @brief Add shared memory units reference to the client table.
@@ -447,7 +460,7 @@ public:
      * @param[in] shmUnits The safe objects.
      */
     void AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
-                     std::vector<std::shared_ptr<ShmUnit>> &shmUnits);
+                     std::vector<std::shared_ptr<ShmUnit>> &shmUnits, int64_t requestTimeoutMs = 0);
 
     /**
      * @brief Check one shared memory unit whether be referred by client.
@@ -493,6 +506,42 @@ public:
      */
     void GetClientRefIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds) const;
 
+    /**
+     * @brief Record the shared memory id that may need reconciliation after timeout.
+     * @param[in] clientId uuid of client.
+     * @param[in] shmId The shared memory id.
+     */
+    void RecordMaybeExpiredShm(const ClientKey &clientId, const ShmKey &shmId, int64_t requestTimeoutMs);
+
+    /**
+     * @brief Get the current maybe expired shm ids of the client.
+     * @param[in] clientId uuid of client.
+     * @param[out] shmIds Maybe expired shm ids, at most 1024 per call.
+     */
+    void GetMaybeExpiredShmIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds);
+
+    /**
+     * @brief Remove shm ids from the maybe expired table after client reconciliation.
+     * @param[in] clientId uuid of client.
+     * @param[in] shmIds Confirmed expired shm ids.
+     */
+    void ClearMaybeExpiredShmIds(const ClientKey &clientId, const std::vector<ShmKey> &shmIds);
+
+    /**
+     * @brief Reconcile client shm refs and return current maybe expired shm ids.
+     * @param[in] clientId uuid of client.
+     * @param[in] confirmedExpiredShmIds Confirmed expired shm ids from client.
+     * @param[out] maybeExpiredShmIds Maybe expired shm ids after reconciliation.
+     */
+    void ReconcileClientShmRefs(const ClientKey &clientId, const std::vector<ShmKey> &confirmedExpiredShmIds,
+                                std::vector<ShmKey> &maybeExpiredShmIds);
+
+    /**
+     * @brief Flush expired items from queue into per-client maybe-expired table.
+     * @param[in] nowMs Current monotonic time in milliseconds.
+     */
+    void FlushMaybeExpiredQueue(uint64_t nowMs);
+
 private:
     /**
      * @brief Remove shared memory unit reference from the client table and shm table.
@@ -505,10 +554,33 @@ private:
                              TbbMemoryObjectRefTable::accessor &shmAccessor,
                              TbbMemoryClientRefTable::accessor &clientAccessor);
 
+    /**
+     * @brief Check whether client still holds shm reference in ref table.
+     * @param[in] clientId uuid of client.
+     * @param[in] shmId The shared memory id.
+     * @return true if client still contains shmId; false otherwise.
+     */
+    bool ClientContainsShm(const ClientKey &clientId, const ShmKey &shmId) const;
+
     // The map is client id and the shared memory ids referenced by this client.
     TbbMemoryClientRefTable clientRefTable_;
     // The map is shared memory id and the client ids referenced by this object.
     TbbMemoryObjectRefTable shmRefTable_;
+    struct MaybeExpiredShmItemCmp {
+        bool operator()(const MaybeExpiredShmItem &lhs, const MaybeExpiredShmItem &rhs) const
+        {
+            return lhs.expireTimeMs > rhs.expireTimeMs;
+        }
+    };
+
+    mutable std::shared_mutex maybeExpiredShmQueueMutex_;
+    std::priority_queue<MaybeExpiredShmItem, std::vector<MaybeExpiredShmItem>, MaybeExpiredShmItemCmp>
+        maybeExpiredShmQueue_;
+    mutable std::shared_mutex maybeExpiredShmTableMutex_;
+    std::unordered_map<ClientKey, std::unordered_set<ShmKey>> maybeExpiredShmTable_;
+    std::atomic<bool> maybeExpiredFlushExit_{ false };
+    WaitPost maybeExpiredFlushPost_;
+    std::unique_ptr<Thread> maybeExpiredFlushThread_{ nullptr };
 
     mutable std::shared_timed_mutex mutex_;
 };

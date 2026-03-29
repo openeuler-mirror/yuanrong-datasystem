@@ -19,11 +19,13 @@
  */
 #include "datasystem/client/object_cache/client_worker_api/client_worker_local_api.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <shared_mutex>
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
@@ -63,6 +65,7 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     req.set_cache_type(static_cast<uint32_t>(cacheType));
+    req.set_request_timeout(requestTimeoutMs_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
     CreateRspPb rsp;
@@ -151,7 +154,6 @@ Status ClientWorkerLocalApi::DecreaseWorkerRef(const std::vector<ShmKey> &object
 Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
                                  std::vector<RpcMessage> &payloads)
 {
-    reqTimeoutDuration.Init(connectTimeoutMs_);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
@@ -457,6 +459,7 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
     int sz = static_cast<int>(createParams.size());
     req.mutable_object_key()->Reserve(sz);
     req.mutable_data_size()->Reserve(sz);
+    req.set_request_timeout(requestTimeoutMs_);
     for (auto &param : createParams) {
         req.add_object_key(param.objectKey);
         req.add_data_size(param.dataSize);
@@ -479,6 +482,25 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
     }
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
     PostMultiCreate(skipCheckExistence, rsp, createParams, useShmTransfer, point, version, exists);
+    return Status::OK();
+}
+
+Status ClientWorkerLocalApi::ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
+                                             std::vector<ShmKey> &maybeExpiredShmIds)
+{
+    reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
+    ReconcileShmRefReqPb req;
+    req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetToken(*req.mutable_token()), "Fail to set token when ReconcileShmRef");
+    for (const auto &shmId : confirmedExpiredShmIds) {
+        req.add_confirmed_expired_shm_ids(shmId);
+    }
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    ReconcileShmRefRspPb rsp;
+    RETURN_IF_NOT_OK(api_->WorkerOCReconcileShmRef(workerOCService_, req, rsp));
+    maybeExpiredShmIds.reserve(rsp.maybe_expired_shm_ids_size());
+    std::transform(rsp.maybe_expired_shm_ids().begin(), rsp.maybe_expired_shm_ids().end(),
+                   std::back_inserter(maybeExpiredShmIds), [](const auto &shmId) { return ShmKey::Intern(shmId); });
     return Status::OK();
 }
 

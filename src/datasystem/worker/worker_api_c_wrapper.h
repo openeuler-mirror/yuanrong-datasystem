@@ -112,6 +112,14 @@ Status WorkerOCMultiPublish(void *obj, const MultiPublishReqPb &req, MultiPublis
 Status WorkerOCDecreaseReference(void *obj, const DecreaseReferenceRequest &req, DecreaseReferenceResponse &resp);
 
 /**
+ * @brief WorkerOCReconcileShmRef.
+ * @param[in] obj WorkerOCServiceImpl.
+ * @param[in] req ReconcileShmRefReqPb.
+ * @param[in] resp ReconcileShmRefRspPb.
+ */
+Status WorkerOCReconcileShmRef(void *obj, const ReconcileShmRefReqPb &req, ReconcileShmRefRspPb &resp);
+
+/**
  * @brief WorkerOCInvalidateBuffer.
  * @param[in] obj WorkerOCServiceImpl.
  * @param[in] req InvalidateBufferReqPb.

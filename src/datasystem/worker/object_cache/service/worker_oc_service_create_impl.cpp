@@ -68,21 +68,22 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(), resp,
-                           static_cast<CacheType>(req.cache_type()));
+    Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(),
+                           req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
     RequestParam reqParam;
     reqParam.objectKey = req.object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
     point.Record();
     workerOperationTimeCost.Append("Total Create", timer.ElapsedMilliSecond());
+    INJECT_POINT("worker.Create.end");
     LOG(INFO) << FormatString("[Client %s] [ObjectKey %s] The operations of worker Create %s", req.client_id(),
                               req.object_key(), workerOperationTimeCost.GetInfo());
     return rc;
 }
 
 Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const ClientKey &clientId,
-                                             const std::string &rawObjectKey, size_t dataSize, CreateRspPb &resp,
-                                             CacheType cacheType)
+                                             const std::string &rawObjectKey, size_t dataSize,
+                                             int64_t requestTimeoutMs, CreateRspPb &resp, CacheType cacheType)
 {
     auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, rawObjectKey);
     // Check whether the object is sealed.
@@ -100,8 +101,8 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
 
     std::string shmUnitId;
     IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
-    shmUnit->id = ShmKey::Intern(std::move(shmUnitId));
-    memoryRefTable_->AddShmUnit(clientId, shmUnit);
+    shmUnit->id = ShmKey::Intern(shmUnitId);
+    memoryRefTable_->AddShmUnit(clientId, shmUnit, requestTimeoutMs);
 
     // Construct CreateRespPb.
     resp.set_store_fd(shmUnit->GetFd());
@@ -204,7 +205,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
         }
         PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ADD_SHM_UNITS);
 
-        memoryRefTable_->AddShmUnits(clientAccessor, shmUnits);
+        memoryRefTable_->AddShmUnits(clientAccessor, shmUnits, req.request_timeout());
         return Status::OK();
     };
 

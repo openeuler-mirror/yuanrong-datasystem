@@ -21,6 +21,7 @@
 #include "datasystem/client/object_cache/object_client_impl.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -89,6 +90,7 @@ const std::string CLIENT_PARALLEL_THREAD_MAX_NUM_ENV = "CLIENT_PARALLEL_THREAD_M
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM";
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
+static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
 
 namespace datasystem {
 inline void ReadFromEnv(std::string &param, std::string env)
@@ -136,8 +138,7 @@ inline void ReadOptFromEnv(ConnectOptions &connectOptions)
     ReadParamFromEnv(connectOptions);
 }
 
-void AccessRecord(AccessRecorder &accessPoint, const Status &rc,
-                  const std::vector<DeviceBlobList> &BlobLists,
+void AccessRecord(AccessRecorder &accessPoint, const Status &rc, const std::vector<DeviceBlobList> &BlobLists,
                   const std::vector<std::string> &keys)
 {
     uint64_t totalSize = 0;
@@ -221,6 +222,7 @@ ObjectClientImpl::~ObjectClientImpl()
 Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 {
     ShutdownPerfThread();
+    ShutdownShmRefReconcileThread();
     INJECT_POINT("ObjClient.ShutDown");
     // Step0: Check client's status to determine whether it meets the conditions for executing shutdown.
     Status rc = clientStateManager_->ProcessShutdown(needRollbackState, isDestruct);
@@ -349,6 +351,7 @@ Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool init
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
+    StartShmRefReconcileThread();
     StartPerfThread();
     InitParallelFor();
     return Status::OK();
@@ -453,7 +456,6 @@ void ObjectClientImpl::ProcessWorkerLost()
         // unrecoverable, so clear their reference count directly.
         memoryRefCount_.Clear();
     }
-
     LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_.ToString();
     std::vector<std::string> ids;
     {
@@ -869,14 +871,14 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector
 
     asyncGetCopyPool_->Execute(
         [this, traceID, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        auto rc = asyncState->rpcFuture.get();
-        if (rc.IsOk()) {
-            rc = HostDataCopy2Device(asyncState->devBlobList, asyncState->existBufferList);
-        }
-        AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
-        asyncState->promise.set_value({ rc, asyncState->failedKeys });
-    });
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            auto rc = asyncState->rpcFuture.get();
+            if (rc.IsOk()) {
+                rc = HostDataCopy2Device(asyncState->devBlobList, asyncState->existBufferList);
+            }
+            AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
+            asyncState->promise.set_value({ rc, asyncState->failedKeys });
+        });
     return future;
 }
 
@@ -928,8 +930,8 @@ Status ObjectClientImpl::CheckMGetH2DInput(const std::vector<std::string> &objec
     }
     for (const auto &blockList : devBlobList) {
         if (blockList.srcOffset < 0) {
-            RETURN_STATUS(K_INVALID, FormatString("Invalid srcOffset: %d, which must be non-negative.",
-                                                  blockList.srcOffset));
+            RETURN_STATUS(K_INVALID,
+                          FormatString("Invalid srcOffset: %d, which must be non-negative.", blockList.srcOffset));
         }
     }
     return Status::OK();
@@ -1149,11 +1151,11 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMSetD2H(const std::vector
     auto traceID = Trace::Instance().GetTraceID();
     return asyncSetRPCPool_->Submit(
         [this, traceID, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        auto rc = MSetD2HImpl(asyncState->objectKeys, asyncState->devBlobList, asyncState->setParam);
-        AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
-        return AsyncResult{ rc, {} };
-    });
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            auto rc = MSetD2HImpl(asyncState->objectKeys, asyncState->devBlobList, asyncState->setParam);
+            AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
+            return AsyncResult{ rc, {} };
+        });
 }
 
 Status ObjectClientImpl::MSetD2HImpl(const std::vector<std::string> &objectKeys,
@@ -1292,7 +1294,7 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         }
         // Store URMA info for later use in SendBufferViaUb.
         bufferInfo->ubUrmaDataInfo = urmaDataInfo;
-        RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
+        memoryRefCount_.IncreaseRef(shmBuf->id);
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
     } else {
         auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
@@ -1347,8 +1349,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     // This variable is the output from MultiCreate, indicates whether shared memory was actually used
     auto useShmTransfer = false;
     // Pre-condition check for whether we should attempt shared memory or UB
-    bool canUseShm =
-        workerApi_[LOCAL_WORKER]->IsShmEnable() && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_;
+    bool canUseShm = workerApi_[LOCAL_WORKER]->IsShmEnable() && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_;
     if (canUseShm || IsUrmaEnabled() || !skipCheckExistence) {
         // Call MultiCreate if: 1) using shared memory, OR 2) UB enabled (need urma_info), OR 3) need to check existence
         // When shared memory is unavailable but UB is enabled or we need to check existence, MultiCreate will use RPC
@@ -1386,7 +1387,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
             if (buffer == nullptr) {
                 continue;
             }
-            memoryRefCount_.DeleteRef(buffer->bufferInfo_->shmId);
+            (void)memoryRefCount_.DecreaseRef(buffer->bufferInfo_->shmId);
         }
         bufferList.clear();
     });
@@ -1401,7 +1402,7 @@ void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffer
     std::vector<std::pair<ShmKey, std::uint32_t>> shmInfos;
 
     for (auto &buffer : buffers) {
-        if (!buffer || !buffer->isShm_) {
+        if (!buffer || buffer->bufferInfo_->shmId.Empty()) {
             continue;
         }
         shmInfos.emplace_back(buffer->bufferInfo_->shmId, buffer->bufferInfo_->version);
@@ -1413,33 +1414,22 @@ void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffer
 void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos)
 {
     auto decreaseRefCnt = [this](const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos) {
-        std::vector<std::unique_ptr<TbbMemoryRefTable::accessor>> batchLock;
-        std::vector<ShmKey> descreaseShms;
+        std::vector<ShmKey> decreaseShms;
         for (auto &info : shmInfos) {
             if (!IsBufferAlive(info.second)) {
                 continue;
             }
             const auto &shmId = info.first;
-            auto accessorPtr = std::make_unique<TbbMemoryRefTable::accessor>();
-            auto &accessor = *accessorPtr;
-            RETURN_IF_NOT_OK(memoryRefCount_.Find(shmId, accessor));
-            bool needDecreaseWorkerRef = false;
-            RETURN_IF_NOT_OK(memoryRefCount_.DecreaseRef(accessor, needDecreaseWorkerRef));
-            if (!needDecreaseWorkerRef) {
+            if (!memoryRefCount_.DecreaseRef(shmId)) {
                 continue;
             }
-            descreaseShms.emplace_back(shmId);
-            batchLock.emplace_back(std::move(accessorPtr));
+            decreaseShms.emplace_back(shmId);
         }
 
         PerfPoint descPoint(PerfKey::CLIENT_BATCH_DECREASE_MEM_REF);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseWorkerRef(descreaseShms),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseWorkerRef(decreaseShms),
                                          "DecreaseReferenceCnt failed.");
-        Status eraseStatus = Status::OK();
-        for (auto &accessorPtr : batchLock) {
-            memoryRefCount_.DeleteRef(*accessorPtr);
-        }
-        return eraseStatus;
+        return Status::OK();
     };
 
     Status rc = decreaseRefCnt(shmInfos);
@@ -1457,46 +1447,23 @@ void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uin
     bool async = true;
     INJECT_POINT("client.DecreaseReferenceCnt", [&async](bool value) { async = value; });
     if (async) {
-        asyncReleasePool_->Execute([this, shmId, isShm, version] { DecreaseReferenceCntImpl(shmId, isShm, version); });
+        asyncReleasePool_->Execute([this, shmId, isShm, version] {
+            LOG_IF_ERROR(DecreaseReferenceCntImpl(shmId, isShm, version), "DecreaseReferenceCntImpl failed");
+        });
     } else {
-        DecreaseReferenceCntImpl(shmId, isShm, version);
+        LOG_IF_ERROR(DecreaseReferenceCntImpl(shmId, isShm, version), "DecreaseReferenceCntImpl failed");
     }
 }
 
-void ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version)
+Status ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version)
 {
-    auto decreaseRefCnt = [this](const ShmKey &shmId, bool isShm) {
-        TbbMemoryRefTable::accessor accessor;
-        RETURN_IF_NOT_OK(memoryRefCount_.Find(shmId, accessor));
-        RETURN_IF_NOT_OK(DecreaseRefCntByAccessor(shmId, accessor, isShm));
-        return Status::OK();
-    };
-
-    if (!isShm) {
-        Status rc = decreaseRefCnt(shmId, isShm);
-        if (rc.IsError()) {
-            LOG(WARNING) << "Decrease reference failed: " << rc.ToString();
-        }
-        return;
-    }
-    // Shm buffer handle.
-    if (IsBufferAlive(version)) {
-        Status rc = decreaseRefCnt(shmId, isShm);
-        if (rc.IsError()) {
-            LOG(WARNING) << "Decrease reference failed: " << rc.ToString();
-        }
-    }
-}
-
-Status ObjectClientImpl::DecreaseRefCntByAccessor(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor,
-                                                  bool isShm)
-{
-    (void)isShm;
-    bool needDecreaseWorkerRef = false;
-    RETURN_IF_NOT_OK(memoryRefCount_.DecreaseRef(accessor, needDecreaseWorkerRef));
+    bool needDecreaseWorkerRef = memoryRefCount_.DecreaseRef(shmId);
     VLOG(1) << FormatString("Try decrease ref count for shmId %s on clientId %s, needDecreaseWorkerRef %d", shmId,
                             workerApi_[LOCAL_WORKER]->clientId_, needDecreaseWorkerRef);
     if (!needDecreaseWorkerRef) {
+        return Status::OK();
+    }
+    if (isShm && !IsBufferAlive(version)) {
         return Status::OK();
     }
     RETURN_IF_NOT_OK(CheckConnection());
@@ -1504,7 +1471,6 @@ Status ObjectClientImpl::DecreaseRefCntByAccessor(const ShmKey &shmId, TbbMemory
     auto checkFunc = std::bind(&ObjectClientImpl::CheckConnectionWhileShmModify, this);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseShmRef(shmId, checkFunc, shutdownMux_),
                                      "DecreaseShmRef failed.");
-    memoryRefCount_.DeleteRef(accessor);
     return Status::OK();
 }
 
@@ -1609,10 +1575,8 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     // Store URMA info for later use in SendBufferViaUb
     objInfo->ubUrmaDataInfo = urmaDataInfo;
     std::shared_ptr<Buffer> buffer;
-    // Acquire accessor to protect later publish.
-    TbbMemoryRefTable::accessor accessor;
-    RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id, accessor));
 
+    memoryRefCount_.IncreaseRef(shmBuf->id);
     RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffer));
 
     // Copy user data into the shared memory buffer.
@@ -1628,7 +1592,6 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     if (!urmaDataInfo) {
         buffer->SetVisibility(true);
     }
-    accessor.release();  // avoid deadlock in buffer destroy.
     // Destruct buffer with async
     buffer.reset();
     return Status::OK();
@@ -1878,8 +1841,8 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         if (metaRc.IsError()) {
             LOG(WARNING) << "GetObjMetaInfo failed: " << metaRc.ToString();
         } else if (objMetas.size() != objectsNeedToGet.size()) {
-            LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size()
-                         << " but got " << objMetas.size();
+            LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size() << " but got "
+                         << objMetas.size();
         } else {
             uint64_t ubMaxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
             uint64_t totalSize = 0;
@@ -1941,8 +1904,7 @@ static std::vector<UBGetBatch> BuildUBGetBatches(const std::vector<ObjMetaInfo> 
             continue;
         }
 
-        if (!currentBatch.indices.empty() &&
-            currentBatch.totalSize + objSize > ubMaxGetSize) {
+        if (!currentBatch.indices.empty() && currentBatch.totalSize + objSize > ubMaxGetSize) {
             batches.push_back(std::move(currentBatch));
             currentBatch = UBGetBatch{};
         }
@@ -2614,7 +2576,6 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidation(const std::vector<std
 
 Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, StringView> &kv, const WriteMode &writeMode,
                                                const std::shared_ptr<IClientWorkerApi> &workerApi,
-                                               std::vector<TbbMemoryRefTable::accessor> &accessor,
                                                std::vector<std::shared_ptr<Buffer>> &buffers,
                                                std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                                const CacheType &cacheType)
@@ -2657,7 +2618,7 @@ Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, Strin
         // Store URMA info for later use in SendBufferViaUb
         objInfo->ubUrmaDataInfo = urmaDataInfo;
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffers[i]));
-        RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id, accessor[i]));
+        memoryRefCount_.IncreaseRef(shmBuf->id);
         RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(keyValue.second.data(), keyValue.second.size()));
         bufferInfo[i] = std::move(objInfo);
         i++;
@@ -2719,7 +2680,7 @@ Status ObjectClientImpl::CreateBufferForMultiCreateParamAtIndex(size_t index, bo
                                           shmBuf->id, nullptr, std::move(mmapEntry));
     }
     PerfPoint refPoint(PerfKey::CLIENT_MEMORY_REF_ADD);
-    RETURN_IF_NOT_OK(memoryRefCount_.CreateRef(shmBuf->id));
+    memoryRefCount_.IncreaseRef(shmBuf->id);
     refPoint.Record();
     INJECT_POINT("ObjectClientImpl.MultiCreate.mmapFailed", [&bufferList, &injectRC](int failedIndex) {
         if (bufferList[failedIndex] != nullptr) {
@@ -2856,16 +2817,14 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
     std::vector<std::shared_ptr<Buffer>> buffers(keys.size(), nullptr);
     std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfo(keys.size(), nullptr);
-    std::vector<TbbMemoryRefTable::accessor> accessor(keys.size());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        AllocateMemoryForMSet(kv, setParam.writeMode, workerApi, accessor, buffers, bufferInfo, setParam.cacheType),
+        AllocateMemoryForMSet(kv, setParam.writeMode, workerApi, buffers, bufferInfo, setParam.cacheType),
         "AllocateMemoryForMSet failed");
     PublishParam publishParam{
         .isTx = true, .isReplica = false, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
     };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfo, publishParam, rsp));
-    accessor.clear();
     auto status = HandleShmRefCountAfterMultiPublish(buffers, rsp);
     LOG(INFO) << "Finish to multiset.";
     return status;
@@ -3038,11 +2997,11 @@ Status ObjectClientImpl::HandleShmRefCountAfterMultiPublish(const std::vector<st
     Status lastRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     auto failedSet = std::set<std::string>{ rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
     for (auto &buffer : bufferList) {
-        if (buffer != nullptr && buffer->isShm_) {
+        if (buffer != nullptr && !buffer->bufferInfo_->shmId.Empty()) {
             // If the objectKey is not in the failed set, it means the worker has successfully decreased the reference
             // count. The buffer should not notify the worker again when it is being destructed.
             if (failedSet.find(buffer->bufferInfo_->objectKey) == failedSet.end()) {
-                memoryRefCount_.DeleteRef(buffer->bufferInfo_->shmId);
+                (void)memoryRefCount_.DecreaseRef(buffer->bufferInfo_->shmId);
                 buffer->isReleased_ = true;
                 buffer->SetVisibility(true);
             }
@@ -3281,7 +3240,7 @@ void ObjectClientImpl::StartPerfThread()
         return;
     }
     LOG(INFO) << "StartPerfThread.";
-    perfThread_ = std::make_unique<std::thread>([this] {
+    perfThread_ = std::make_unique<Thread>([this] {
         const int tickInterval = 1000;
         while (!perfExitFlag_) {
             std::unique_lock<std::mutex> locker(perfMutex_);
@@ -3291,6 +3250,69 @@ void ObjectClientImpl::StartPerfThread()
         PerfManager::Instance()->PrintPerfLog();
     });
 #endif
+}
+
+void ObjectClientImpl::StartShmRefReconcileThread()
+{
+    if (shmRefReconcileThread_ != nullptr) {
+        return;
+    }
+    shmRefReconcileExitFlag_ = false;
+    shmRefReconcileExitPost_.Clear();
+    shmRefReconcileThread_ = std::make_unique<Thread>([this] { ShmRefReconcileThreadFunc(); });
+}
+
+void ObjectClientImpl::ShutdownShmRefReconcileThread()
+{
+    if (shmRefReconcileThread_ == nullptr) {
+        return;
+    }
+    shmRefReconcileExitFlag_ = true;
+    shmRefReconcileExitPost_.Set();
+    shmRefReconcileThread_->join();
+    shmRefReconcileThread_.reset();
+}
+
+void ObjectClientImpl::ShmRefReconcileThreadFunc()
+{
+    constexpr int logIntervalSec = 120;
+    std::unordered_set<ShmKey> confirmedExpiredShmIds;
+    constexpr size_t reconcileIntervalMs = 5 * 1000UL;
+    constexpr size_t minReconcileIntervalMs = 10;
+    bool lastRpcFailed = false;
+    while (!shmRefReconcileExitFlag_) {
+        if (!confirmedExpiredShmIds.empty() || memoryRefCount_.Size() > 0) {
+            LOG_EVERY_T(INFO, logIntervalSec)
+                << "ShmRefReconcileThreadFunc: size of confirmedExpiredShmIds: " << confirmedExpiredShmIds.size()
+                << ",size of memoryRefCount: " << memoryRefCount_.Size();
+        }
+        auto intervalMs =
+            confirmedExpiredShmIds.empty() || lastRpcFailed ? reconcileIntervalMs : minReconcileIntervalMs;
+        INJECT_POINT_NO_RETURN("client.shm_ref_reconcile", [&intervalMs](size_t val) { intervalMs = val; });
+        (void)shmRefReconcileExitPost_.WaitFor(intervalMs);
+        if (shmRefReconcileExitFlag_) {
+            break;
+        }
+
+        if (workerApi_.empty() || workerApi_[LOCAL_WORKER] == nullptr) {
+            continue;
+        }
+        std::vector<ShmKey> maybeExpiredShmIds;
+        auto rc = workerApi_[LOCAL_WORKER]->ReconcileShmRef(confirmedExpiredShmIds, maybeExpiredShmIds);
+        lastRpcFailed = rc.IsError();
+        if (lastRpcFailed) {
+            LOG(WARNING) << "Reconcile shm ref failed: " << rc.ToString();
+            continue;
+        }
+        confirmedExpiredShmIds.clear();
+        for (const auto &shmId : maybeExpiredShmIds) {
+            if (memoryRefCount_.RefCount(shmId) <= 0) {
+                VLOG(1) << "ShmRefReconcileThreadFunc: shmId " << shmId << " has no ref in client " << GetClientId()
+                        << ", confirmed expired";
+                (void)confirmedExpiredShmIds.emplace(shmId);
+            }
+        }
+    }
 }
 
 void ObjectClientImpl::ShutdownPerfThread()

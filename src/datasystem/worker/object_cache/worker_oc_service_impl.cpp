@@ -554,8 +554,7 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
     std::vector<std::string> removeFailedIds;
     std::vector<std::string> needMigrateDataIds;
     std::vector<std::string> needWaitIds;
-    GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds,
-                      needWaitIds);
+    GroupAndRemoveMeta(clearIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds, needWaitIds);
 
     // if all worker exist, this voluntary sacle down node not exit, remove meta cant success, so we try 10 times for
     // removemeta here
@@ -1329,6 +1328,34 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     workerOperationTimeCost.Append("DecreaseReference", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("[Ref] DecreaseReference finish. The operations of worker DecreaseReference %s",
                               workerOperationTimeCost.GetInfo());
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, ReconcileShmRefRspPb &resp)
+{
+    workerOperationTimeCost.Clear();
+    Timer timer;
+    std::string tenantId;
+    bool exist;
+    auto clientId = ClientKey::Intern(req.client_id());
+    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(exist, K_INVALID, FormatString("Client %s not found", req.client_id()));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
+                                     "Authenticate failed");
+    ReadLock noRecon;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
+                                     "validate worker state failed");
+
+    std::vector<ShmKey> confirmedExpiredShmIds;
+    confirmedExpiredShmIds.reserve(req.confirmed_expired_shm_ids_size());
+    std::transform(req.confirmed_expired_shm_ids().begin(), req.confirmed_expired_shm_ids().end(),
+                   std::back_inserter(confirmedExpiredShmIds), [](const auto &shmId) { return ShmKey::Intern(shmId); });
+    std::vector<ShmKey> maybeExpiredShmIds;
+    memoryRefTable_->ReconcileClientShmRefs(clientId, confirmedExpiredShmIds, maybeExpiredShmIds);
+    for (const auto &shmId : maybeExpiredShmIds) {
+        resp.add_maybe_expired_shm_ids(shmId);
+    }
+    workerOperationTimeCost.Append("ReconcileShmRef", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 

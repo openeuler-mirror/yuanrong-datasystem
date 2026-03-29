@@ -112,8 +112,8 @@ ClientWorkerLocalCommonApi::ClientWorkerLocalCommonApi(
 
 Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
 {
-    (void)requestTimeoutMs;
     (void)fastTransportSize;
+    requestTimeoutMs_ = requestTimeoutMs;
     connectTimeoutMs_ = connectTimeoutMs;
     workerService_ = api_->GetWorkerService(worker_);
     RegisterClientReqPb req;

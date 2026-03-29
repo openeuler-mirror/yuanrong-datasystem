@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/client/listen_worker.h"
@@ -416,6 +417,15 @@ public:
      */
     virtual Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
                                   std::shared_timed_mutex &shutdownMtx) = 0;
+
+    /**
+     * @brief Reconcile shm references with worker.
+     * @param[in] confirmedExpiredShmIds Shm ids confirmed not held by client.
+     * @param[out] maybeExpiredShmIds Shm ids worker suspects may be expired.
+     * @return K_OK on success; the error code otherwise.
+     */
+    virtual Status ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
+                                   std::vector<ShmKey> &maybeExpiredShmIds) = 0;
 
     bool EnableDecreaseShmRefByShmQueue()
     {

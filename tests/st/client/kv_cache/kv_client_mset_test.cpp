@@ -1693,7 +1693,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.numOBS = 1;
         opts.numWorkers = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=10";
     }
@@ -1731,6 +1730,32 @@ TEST_F(KVClientMSetOOMTest, MSetOOM)
     keys.pop_back();
     values.pop_back();
     DS_ASSERT_OK(client->MSetTx(keys, values, param));
+}
+
+TEST_F(KVClientMSetOOMTest, CreateRpcFaildButWorkerSuccess)
+{
+    FLAGS_v = 1;
+    DS_ASSERT_OK(inject::Set("client.shm_ref_reconcile", "call(1)"));
+    std::shared_ptr<KVClient> client;
+    const int timeoutMs = 1'000;
+    InitTestKVClient(0, client, timeoutMs);
+    const int testSize = 7 * 1024 * 1024;
+    std::string key = NewObjectKey();
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+    std::shared_ptr<Buffer> buffer;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.end", "1*return(K_RUNTIME_ERROR)"));
+    DS_ASSERT_NOT_OK(client->Create(key, testSize, param, buffer));
+    Timer timer;
+    const int maxWaitTimeMs = 10'000;
+    while (timer.ElapsedMilliSecond() < maxWaitTimeMs) {
+        auto rc = client->Create(key, testSize, param, buffer);
+        if (rc.GetCode() == K_OUT_OF_MEMORY) {
+            continue;
+        }
+        DS_ASSERT_OK(rc);
+        break;
+    }
 }
 }  // namespace st
 }  // namespace datasystem
