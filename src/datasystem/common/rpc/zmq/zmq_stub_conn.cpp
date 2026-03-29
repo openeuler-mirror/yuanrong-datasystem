@@ -812,8 +812,7 @@ Status ZmqBaseStubConn::WaitForConnect(const std::shared_ptr<StubInfo> &info, in
         remaining = timeout - static_cast<int64_t>(t.ElapsedMilliSecond());
         INJECT_POINT("ZmqBaseStubConn.WaitForConnect");
     } while (rc.IsError() && remaining > 0);
-    workerOperationTimeCost.Append(FormatString("stub[%s] wait for connected", info->svcName_).c_str(),
-                                   static_cast<uint64_t>(t.ElapsedMilliSecond()));
+    workerOperationTimeCost.Append("wait for connected", static_cast<uint64_t>(t.ElapsedMilliSecond()));
     return rc;
 }
 

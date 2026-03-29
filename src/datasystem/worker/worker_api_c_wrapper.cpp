@@ -72,6 +72,11 @@ Status WorkerOCDecreaseReference(void *obj, const DecreaseReferenceRequest &req,
     return static_cast<datasystem::object_cache::WorkerOCServiceImpl *>(obj)->DecreaseReference(req, resp);
 }
 
+Status WorkerOCReconcileShmRef(void *obj, const ReconcileShmRefReqPb &req, ReconcileShmRefRspPb &resp)
+{
+    return static_cast<datasystem::object_cache::WorkerOCServiceImpl *>(obj)->ReconcileShmRef(req, resp);
+}
+
 Status WorkerOCInvalidateBuffer(void *obj, const InvalidateBufferReqPb &req, InvalidateBufferRspPb &resp)
 {
     return static_cast<datasystem::object_cache::WorkerOCServiceImpl *>(obj)->InvalidateBuffer(req, resp);

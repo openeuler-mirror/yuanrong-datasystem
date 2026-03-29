@@ -24,77 +24,45 @@
 namespace datasystem {
 namespace object_cache {
 
-Status ClientMemoryRefTable::CreateRef(const ShmKey &shmId)
-{
-    RETURN_OK_IF_TRUE(workerSupportMultiShmRefCount_);
-    std::shared_lock<std::shared_mutex> rlocker(mutex_);
-    CHECK_FAIL_RETURN_STATUS(table_.emplace(shmId, 1), StatusCode::K_RUNTIME_ERROR,
-                             FormatString("shmId %s already exists", shmId));
-    return Status::OK();
-}
-
-Status ClientMemoryRefTable::CreateRef(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor)
-{
-    RETURN_OK_IF_TRUE(workerSupportMultiShmRefCount_);
-    std::shared_lock<std::shared_mutex> rlocker(mutex_);
-    CHECK_FAIL_RETURN_STATUS(table_.emplace(accessor, shmId, 1), StatusCode::K_RUNTIME_ERROR,
-                             FormatString("shmId %s already exists", shmId));
-    return Status::OK();
-}
-
-void ClientMemoryRefTable::DeleteRef(const ShmKey &shmId)
-{
-    if (workerSupportMultiShmRefCount_) {
-        return;
-    }
-    std::shared_lock<std::shared_mutex> rlocker(mutex_);
-    table_.erase(shmId);
-}
-
-void ClientMemoryRefTable::DeleteRef(TbbMemoryRefTable::accessor &accessor)
-{
-    if (workerSupportMultiShmRefCount_) {
-        return;
-    }
-    std::shared_lock<std::shared_mutex> rlocker(mutex_);
-    table_.erase(accessor);
-}
-
-Status ClientMemoryRefTable::Find(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor)
-{
-    RETURN_OK_IF_TRUE(workerSupportMultiShmRefCount_);
-    std::shared_lock<std::shared_mutex> rlocker(mutex_);
-    auto found = table_.find(accessor, shmId);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(found, K_NOT_FOUND,
-                                         FormatString("[shmId %s] Cannot find shm in memoryRef table.", shmId));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        accessor->second > 0, K_UNKNOWN_ERROR,
-        FormatString("[shmId %s] Ref count must be positive integer, cur is : %d", shmId, accessor->second));
-    return Status::OK();
-}
-
 void ClientMemoryRefTable::IncreaseRef(const ShmKey &shmId)
 {
-    if (workerSupportMultiShmRefCount_) {
-        return;
-    }
     std::shared_lock<std::shared_mutex> rlocker(mutex_);
     TbbMemoryRefTable::accessor accessor;
-    auto found = table_.insert(accessor, shmId);
-    accessor->second = (found ? 1 : accessor->second + 1);
+    auto isNew = table_.insert(accessor, shmId);
+    accessor->second = (isNew ? 1 : accessor->second + 1);
+    VLOG(1) << "IncreaseRef: " << shmId << " after increase ref count=" << accessor->second;
 }
 
-Status ClientMemoryRefTable::DecreaseRef(TbbMemoryRefTable::accessor &accessor, bool &needDecreaseWorkerRef)
+bool ClientMemoryRefTable::DecreaseRef(const ShmKey &shmId)
 {
-    if (workerSupportMultiShmRefCount_) {
-        needDecreaseWorkerRef = true;
-        return Status::OK();
+    std::shared_lock<std::shared_mutex> rlocker(mutex_);
+    TbbMemoryRefTable::accessor accessor;
+    auto found = table_.find(accessor, shmId);
+    VLOG(1) << "DecreaseRef: " << shmId << " before decrease ref count=" << (found ? accessor->second : 0);
+    if (found) {
+        accessor->second--;
+        if (accessor->second <= 0) {
+            table_.erase(accessor);
+            return true;
+        }
     }
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!accessor.empty(), K_UNKNOWN_ERROR,
-                                         FormatString("ShmId %s not exists in memoryRef table.", accessor->first));
-    accessor->second--;
-    needDecreaseWorkerRef = accessor->second == 0;
-    return Status::OK();
+    // Worker supports multiple shared memory references.
+    // The client must call DecreaseShmRef even if the reference count is greater than 0.
+    return workerSupportMultiShmRefCount_;
+}
+
+int ClientMemoryRefTable::RefCount(const ShmKey &shmId)
+{
+    std::shared_lock<std::shared_mutex> rlocker(mutex_);
+    TbbMemoryRefTable::accessor accessor;
+    auto found = table_.find(accessor, shmId);
+    return found ? accessor->second : 0;
+}
+
+size_t ClientMemoryRefTable::Size() const
+{
+    std::shared_lock<std::shared_mutex> rlocker(mutex_);
+    return table_.size();
 }
 
 void ClientMemoryRefTable::SetSupportMultiShmRefCount(bool value)
@@ -104,12 +72,8 @@ void ClientMemoryRefTable::SetSupportMultiShmRefCount(bool value)
 
 void ClientMemoryRefTable::Clear()
 {
-    if (workerSupportMultiShmRefCount_) {
-        return;
-    }
     std::lock_guard<std::shared_mutex> wlocker(mutex_);
     table_.clear();
 }
-
 }  // namespace object_cache
 }  // namespace datasystem

@@ -49,6 +49,7 @@ message CreateReqPb {
   string token = 4;
   string tenant_id = 5;
   uint32 cache_type = 6;
+  int64 request_timeout = 7;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -73,6 +74,7 @@ message MultiCreateReqPb {
   string token = 4;
   string tenant_id = 5;
   bool   skip_check_existence = 6;
+  int64 request_timeout = 7;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -169,6 +171,7 @@ message GetReqPb {
   string comm_id = 10;
   UrmaRemoteAddrPb urma_info = 11;
   uint64 ub_buffer_size = 12;
+  int64 request_timeout = 13;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -226,6 +229,21 @@ message DecreaseReferenceRequest {
 message DecreaseReferenceResponse {
   ErrorInfoPb error = 1;
   repeated int32 reference_count = 2;
+};
+
+message ReconcileShmRefReqPb {
+  bytes client_id = 1;
+  string token = 2;
+  repeated string confirmed_expired_shm_ids = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+};
+
+message ReconcileShmRefRspPb {
+  repeated string maybe_expired_shm_ids = 1;
 };
 
 message GIncreaseReqPb  {
@@ -557,6 +575,7 @@ service WorkerOCService {
     option (datasystem.recv_payload_option) = true;
   }
   rpc DecreaseReference(DecreaseReferenceRequest) returns (DecreaseReferenceResponse) {}
+  rpc ReconcileShmRef(ReconcileShmRefReqPb) returns (ReconcileShmRefRspPb) {}
   rpc GIncreaseRef(GIncreaseReqPb) returns (GIncreaseRspPb) {}
   rpc GDecreaseRef(GDecreaseReqPb) returns (GDecreaseRspPb) {}
   rpc DeleteAllCopy(DeleteAllCopyReqPb) returns (DeleteAllCopyRspPb) {}

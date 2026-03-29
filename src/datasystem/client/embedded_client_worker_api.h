@@ -54,6 +54,7 @@ public:
     Status WorkerOCMultiPublish(void *obj, const MultiPublishReqPb &req, MultiPublishRspPb &resp,
                                 std::vector<RpcMessage> payloads);
     Status WorkerOCDecreaseReference(void *obj, const DecreaseReferenceRequest &req, DecreaseReferenceResponse &resp);
+    Status WorkerOCReconcileShmRef(void *obj, const ReconcileShmRefReqPb &req, ReconcileShmRefRspPb &resp);
     Status WorkerOCInvalidateBuffer(void *obj, const InvalidateBufferReqPb &req, InvalidateBufferRspPb &resp);
     Status WorkerOCGIncreaseRef(void *obj, const GIncreaseReqPb &req, GIncreaseRspPb &resp);
     Status WorkerOCReleaseGRefs(void *obj, const ReleaseGRefsReqPb &req, ReleaseGRefsRspPb &resp);
@@ -94,6 +95,7 @@ private:
                std::vector<RpcMessage>);
     REG_METHOD(WorkerOCDecreaseReference, Status, void *, const DecreaseReferenceRequest &,
                DecreaseReferenceResponse &);
+    REG_METHOD(WorkerOCReconcileShmRef, Status, void *, const ReconcileShmRefReqPb &, ReconcileShmRefRspPb &);
     REG_METHOD(WorkerOCInvalidateBuffer, Status, void *, const InvalidateBufferReqPb &, InvalidateBufferRspPb &);
     REG_METHOD(WorkerOCGIncreaseRef, Status, void *, const GIncreaseReqPb &, GIncreaseRspPb &);
     REG_METHOD(WorkerOCReleaseGRefs, Status, void *, const ReleaseGRefsReqPb &, ReleaseGRefsRspPb &);

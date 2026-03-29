@@ -73,6 +73,7 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
 
     clientId_ = clientId;
     subTimeout_ = req.sub_timeout();
+    requestTimeoutMs_ = req.request_timeout();
     shmRefTable_ = std::move(shmRefTable);
     serverApi_ = std::move(api);
     noQueryL2Cache_ = req.no_query_l2cache();
@@ -375,7 +376,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
                  && !params->remoteH2DHostInfo->empty())) {
             // If object is shm, we increase the refCnt for client.
             // The client will be using this object and be responsible for releasing this object.
-            shmRefTable_->AddShmUnit(clientId_, params->shmUnit);
+            shmRefTable_->AddShmUnit(clientId_, params->shmUnit, requestTimeoutMs_);
         }
 
         bool needDeleted = params->objectState.IsNeedToDelete();

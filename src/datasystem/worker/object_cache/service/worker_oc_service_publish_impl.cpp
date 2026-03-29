@@ -390,6 +390,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
         INJECT_POINT("worker.publish_failure");
     }
     LOG(INFO) << "Put success";
+    INJECT_POINT("worker.after_publish");
     return Status::OK();
 }
 

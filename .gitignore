@@ -86,6 +86,7 @@ false
 # ai context
 AGENTS.md
 docs/agent
+plan.md
 
 # bazel
 bazel-*

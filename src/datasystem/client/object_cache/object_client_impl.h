@@ -913,14 +913,6 @@ private:
                                      uint64_t offset, uint64_t size, std::shared_ptr<Buffer> &buffer);
 
     /**
-     * @brief Decrease memory reference count by accessor, to avoid dead lock.(this function does not care).
-     * @param[in] shmId The shared unit id.
-     * @param[in] accessorTable The map of object key and relate accessor.
-     * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
-     */
-    Status DecreaseRefCntByAccessor(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor, bool isShm);
-
-    /**
      * @brief Fill in object buffer info.
      * @param[in] objectKey The id of the object.
      * @param[in] pointer The starting pointer of the buffer.
@@ -1179,14 +1171,12 @@ private:
      * @param[in] vals The values for the keys.
      * @param[in] writeMode Indicate write through or back mode.
      * @param[in] workerApi Available worker api.
-     * @param[out] accessor The iterator of the share memory count manager.
      * @param[out] bufferInfo The buffers information for creating buffers.
      * @param[out] buffer The object buffer.
      * @return K_OK on success; the error code otherwise.
      */
     Status AllocateMemoryForMSet(const std::map<std::string, StringView> &kv, const WriteMode &writeMode,
                                  const std::shared_ptr<IClientWorkerApi> &workerApi,
-                                 std::vector<TbbMemoryRefTable::accessor> &accessor,
                                  std::vector<std::shared_ptr<Buffer>> &buffers,
                                  std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
                                  const CacheType &cacheType);
@@ -1205,9 +1195,9 @@ private:
                               std::vector<std::shared_ptr<Buffer>> &bufferList);
 
     Status CreateBufferForMultiCreateParamAtIndex(size_t index, bool skipCheckExistence, const FullParam &param,
-                                                   uint32_t version, const std::vector<bool> &exists,
-                                                   std::vector<MultiCreateParam> &multiCreateParamList,
-                                                   std::vector<std::shared_ptr<Buffer>> &bufferList);
+                                                  uint32_t version, const std::vector<bool> &exists,
+                                                  std::vector<MultiCreateParam> &multiCreateParamList,
+                                                  std::vector<std::shared_ptr<Buffer>> &bufferList);
 
     /**
      * @brief Get clientId.
@@ -1277,12 +1267,28 @@ private:
                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
 
     /**
+     * @brief Start periodic reconcile thread for client-worker shm refs.
+     */
+    void StartShmRefReconcileThread();
+
+    /**
+     * @brief Stop periodic reconcile thread for client-worker shm refs.
+     */
+    void ShutdownShmRefReconcileThread();
+
+    /**
+     * @brief Periodically reconcile maybe-expired shm ids with worker.
+     */
+    void ShmRefReconcileThreadFunc();
+
+    /**
      * @brief Decrease the object reference count by one and if no one holds its ref, release it.
      * @param[in] shmId The ID of the object to decrease ref
      * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
      * @param[in] version Worker version.
+     * @return K_OK on success; the error code otherwise.
      */
-    void DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version);
+    Status DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version);
 
     /**
      * @brief Handle the shared memory reference count after multi-publish.
@@ -1346,7 +1352,10 @@ private:
     std::mutex perfMutex_;
     std::condition_variable perfCv_;
     std::atomic<bool> perfExitFlag_{ false };
-    std::unique_ptr<std::thread> perfThread_{ nullptr };
+    std::unique_ptr<Thread> perfThread_{ nullptr };
+    std::atomic<bool> shmRefReconcileExitFlag_{ false };
+    WaitPost shmRefReconcileExitPost_;
+    std::unique_ptr<Thread> shmRefReconcileThread_{ nullptr };
     WaitPost switchPost_;
 
     bool clientEnableP2Ptransfer_ = false;

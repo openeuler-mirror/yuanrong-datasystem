@@ -154,6 +154,7 @@ struct ClientWorkerCommonApiAttribute {
     int64_t heartBeatIntervalMs_{ MIN_HEARTBEAT_INTERVAL_MS };
     uint64_t clientDeadTimeoutMs_{ 0 };
     int32_t connectTimeoutMs_{ 0 };
+    int32_t requestTimeoutMs_{ 0 };
     bool enableHugeTlb_ = { false };
     std::atomic_bool removable_{ false };
     std::atomic_bool healthy_{ false };
@@ -442,7 +443,6 @@ protected:
     Thread recvPageThread_;
     std::string tenantId_;
     std::unique_ptr<ClientAccessToken> clientAccessToken_;
-    int32_t requestTimeoutMs_{ 0 };
     int32_t rpcTimeoutMs_{ 0 };
     uint64_t fastTransportMemSize_ { 0 };
     bool enableExclusiveConnection_{ false };

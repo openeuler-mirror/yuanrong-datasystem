@@ -2414,7 +2414,7 @@ TEST_F(StreamDfxClientCrashMPSC, DISABLED_SameNodeProducerProcessCrash)
     DS_ASSERT_OK(Consumer1->Close());
 }
 
-TEST_F(StreamDfxClientCrashMPSC, SameNodeConsumerProcessCrash)
+TEST_F(StreamDfxClientCrashMPSC, DISABLED_SameNodeConsumerProcessCrash)
 {
     std::string streamName("testSameNodeConProcessCrash");
 

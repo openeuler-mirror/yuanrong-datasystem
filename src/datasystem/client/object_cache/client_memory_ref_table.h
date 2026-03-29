@@ -38,53 +38,30 @@ public:
     ~ClientMemoryRefTable() = default;
 
     /**
-     * @brief Create a reference entry for the given shared unid id.
-     * @param[in] shmId The shared unit id.
-     * @return K_OK on success; an error code otherwise.
-     */
-    Status CreateRef(const ShmKey &shmId);
-
-    /**
-     * @brief Create a reference entry for the given shared unid id with accessor.
-     * @param[in] shmId The shared unit id.
-     * @param[out] accessor The accessor to the hash map entry.
-     * @return K_OK on success; an error code otherwise.
-     */
-    Status CreateRef(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor);
-
-    /**
-     * @brief Delete the reference entry for the given shared unid id.
-     * @param[in] shmId The shared unit id.
-     */
-    void DeleteRef(const ShmKey &shmId);
-
-    /**
-     * @brief Delete the reference entry using the provided accessor.
-     * @param[in] accessor The accessor to the hash map entry.
-     */
-    void DeleteRef(TbbMemoryRefTable::accessor &accessor);
-
-    /**
-     * @brief Find the reference entry for the given shared unid id.
-     * @param[in] shmId The shared unit id.
-     * @param[out] accessor The accessor to the hash map entry.
-     * @return K_OK on success; an error code otherwise.
-     */
-    Status Find(const ShmKey &shmId, TbbMemoryRefTable::accessor &accessor);
-
-    /**
      * @brief Increase the reference count for the given shared unid id.
      * @param[in] shmId The shared unit id.
      */
     void IncreaseRef(const ShmKey &shmId);
 
     /**
-     * @brief Decrease the reference count using the provided accessor.
-     * @param[in] accessor The accessor to the hash map entry.
-     * @param[out] needDecreaseWorkerRef Flag indicating if worker reference should be decreased.
-     * @return K_OK on success; an error code otherwise.
+     * @brief Decrease local reference count for a shared memory id.
+     * @param[in] shmId The shared unit id.
+     * @return true if worker ref should be decreased; false otherwise.
      */
-    Status DecreaseRef(TbbMemoryRefTable::accessor &accessor, bool &needDecreaseWorkerRef);
+    bool DecreaseRef(const ShmKey &shmId);
+
+    /**
+     * @brief Query current local reference count for a shared memory id.
+     * @param[in] shmId The shared unit id.
+     * @return Current local ref count, 0 if not found.
+     */
+    int RefCount(const ShmKey &shmId);
+
+    /**
+     * @brief Get number of tracked shared memory ids in local table.
+     * @return Count of tracked shm ids.
+     */
+    size_t Size() const;
 
     /**
      * @brief Set the flag indicating support for multi-SHM reference counting.

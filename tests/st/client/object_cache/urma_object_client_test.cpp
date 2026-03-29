@@ -1083,6 +1083,46 @@ TEST_F(UrmaClientWorkerDisableUDS, CreateBufferAndPublish)
     }
 }
 
+TEST_F(UrmaClientWorkerDisableUDS, CreateBufferAndMutableData)
+{
+    FLAGS_v = 1;
+    const int ttlSecond = 120;
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    const int numPuts = 1000;
+    const int testSize = 8 * 1024 * 1024;
+    for (int i = 0; i < numPuts; i++) {
+        std::string key = NewObjectKey();
+        SetParam param;
+        param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+        param.ttlSecond = ttlSecond;
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(key, testSize, param, buffer));
+        (void)buffer->MutableData();
+        (void)buffer->GetSize();
+    }
+}
+
+TEST_F(UrmaClientWorkerDisableUDS, PublishRpcFaildAndTryAgain)
+{
+    FLAGS_v = 1;
+    std::shared_ptr<KVClient> client;
+    const int timeoutMs = 1'000;
+    InitTestKVClient(0, client, timeoutMs);
+    const int testSize = 1024 * 1024;
+    std::string key = NewObjectKey();
+    std::string value(testSize, 'a');
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+    std::shared_ptr<Buffer> buffer;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ShmUnit.FreeMemory", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.after_publish", "1*return(K_TRY_AGAIN)"));
+    DS_ASSERT_OK(client->Set(key, value));
+    std::string getValue;
+    DS_ASSERT_OK(client->Get(key, getValue));
+    ASSERT_EQ(getValue, value);
+}
+
 class UrmaObjectClientTestMismatch : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

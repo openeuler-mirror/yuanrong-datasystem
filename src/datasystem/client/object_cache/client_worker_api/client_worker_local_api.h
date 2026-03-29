@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "datasystem/client/embedded_client_worker_api.h"
 #include "datasystem/client/client_worker_common_api.h"
@@ -123,6 +124,8 @@ public:
     Status CleanUpForDecreaseShmRefAfterWorkerLost() override;
     Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
                           std::shared_timed_mutex &mtx) override;
+    Status ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
+                           std::vector<ShmKey> &maybeExpiredShmIds) override;
 
 private:
     Status MemView2RpcMessage(const std::vector<MemView> &mvs, std::vector<RpcMessage> &rms);

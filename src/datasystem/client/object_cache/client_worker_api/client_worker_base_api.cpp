@@ -273,6 +273,7 @@ Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutM
     req.set_sub_timeout(ClientGetRequestTimeout(subTimeoutMs));
     req.set_client_id(clientId_);
     req.set_return_object_index(true);
+    req.set_request_timeout(std::max<int64_t>(subTimeoutMs, requestTimeoutMs_));
     // Add and fill the request with client communicator root info, if RH2D is both supported and enabled.
     if (getParam.isRH2DSupported) {
         RETURN_IF_NOT_OK(GetClientCommUuid(*req.mutable_comm_id()));
