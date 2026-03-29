@@ -150,8 +150,8 @@ copy_file(
 
 copy_file(
     name = "dsbench_file",
-    src = "//dsbench/src:dsbench",
-    out = "yr/datasystem/dsbench",
+    src = "//dsbench/src:dsbench_cpp",
+    out = "yr/datasystem/dsbench_cpp",
     visibility = [
         "//bazel:__pkg__",
     ],

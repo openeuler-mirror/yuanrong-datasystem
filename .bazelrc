@@ -31,8 +31,6 @@ build:release --linkopt=-Wl,-z,relro
 build:release --linkopt=-Wl,-z,now
 build:release --linkopt=-Wl,-z,noexecstack
 build:release --cxxopt=-D_FORTIFY_SOURCE=2
-build:release --cxxopt=-fPIE
-build:release --linkopt=-pie
 build:release --cxxopt=-DNDEBUG
 build:release --linkopt=-Wl,--build-id=none
 build:urma --define=enable_urma=true
