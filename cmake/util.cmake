@@ -655,7 +655,7 @@ endfunction()
 function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   set(options)
   set(one_value_args CMAKE_INSTALL_PATH)
-  set(multi_value_args DEPEND_TARGETS THIRDPATRY_LIBS_PATTERN)
+  set(multi_value_args DEPEND_TARGETS THIRDPATRY_LIBS_PATTERN WHEEL_LIB_TARGETS WHEEL_TOPLEVEL_TARGETS)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}"  "${multi_value_args}" ${ARGN})
 
   # Store all temporary package files, will be deleted after package finish.
@@ -692,6 +692,20 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
     list(APPEND NEED_STRIP_LIBS ${PYTHON_LIBPATH}/$<TARGET_FILE_NAME:${_TARGET}>)
   endforeach()
 
+  foreach(_TARGET ${ARG_WHEEL_LIB_TARGETS})
+    install(TARGETS ${_TARGET}
+            ARCHIVE DESTINATION ${PYTHON_LIBPATH}
+            LIBRARY DESTINATION ${PYTHON_LIBPATH}
+            RUNTIME DESTINATION ${PYTHON_LIBPATH})
+    list(APPEND NEED_STRIP_LIBS ${PYTHON_LIBPATH}/$<TARGET_FILE_NAME:${_TARGET}>)
+  endforeach()
+
+  foreach(_TARGET ${ARG_WHEEL_TOPLEVEL_TARGETS})
+    install(TARGETS ${_TARGET}
+            LIBRARY DESTINATION ${DATASYSTEM_WHEEL_PATH}
+            RUNTIME DESTINATION ${DATASYSTEM_WHEEL_PATH})
+  endforeach()
+
   # Strip libraries in PYTON_LIBPATH
   list(TRANSFORM ARG_NEED_STRIP_LIBS PREPEND "${PYTHON_LIBPATH}/")
   strip_libs_in_install_stage(NEED_STRIP_LIBS PYTHON_LIBPATH)
@@ -703,6 +717,10 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   # Copy cpp include files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/include
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/)
+  if (BUILD_TRANSFER_ENGINE AND EXISTS ${CMAKE_SOURCE_DIR}/transfer_engine/include/datasystem/transfer_engine)
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/transfer_engine/include/datasystem/transfer_engine
+            DESTINATION ${DATASYSTEM_WHEEL_PATH}/include/datasystem)
+  endif()
 
   # Copy service lib to package lib path
   install(DIRECTORY ${SERVER_LIB}/

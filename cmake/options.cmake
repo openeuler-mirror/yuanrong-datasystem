@@ -7,6 +7,7 @@ option(BUILD_GO_API "Build go api" OFF)
 option(BUILD_JAVA_API "Build java api" OFF)
 option(ENABLE_STRIP "Discard symbols from object files" OFF)
 option(BUILD_WITH_URMA "Build with urma" OFF)
+option(BUILD_TRANSFER_ENGINE "Build transfer_engine as an integrated subproject" ON)
 
 # Hetero device options (requires BUILD_HETERO=ON)
 option(BUILD_HETERO_NPU "Build NPU (Ascend) heterogeneous support" ON)

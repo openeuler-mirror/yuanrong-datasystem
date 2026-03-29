@@ -145,6 +145,11 @@ include(cmake/dependency.cmake)
 
 include_directories(include)
 include_directories(src)
+if (BUILD_TRANSFER_ENGINE AND BUILD_HETERO AND BUILD_HETERO_NPU)
+    set(TRANSFER_ENGINE_BUILD_PYTHON ${BUILD_PYTHON_API} CACHE BOOL "" FORCE)
+    set(TRANSFER_ENGINE_BUILD_TESTS ${WITH_TESTS} CACHE BOOL "" FORCE)
+    add_subdirectory(transfer_engine)
+endif()
 
 # include proto pb files
 include_directories(${CMAKE_BINARY_DIR}/src)

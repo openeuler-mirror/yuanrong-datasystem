@@ -1,0 +1,82 @@
+include("${CMAKE_CURRENT_LIST_DIR}/absl.cmake")
+
+set(protobuf_VERSION 3.25.5)
+if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
+    set(protobuf_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/v3.25.5.tar.gz")
+else()
+    set(protobuf_URL "https://gitee.com/mirrors/protobuf_source/repository/archive/v3.25.5.tar.gz")
+endif()
+set(protobuf_SHA256 "2ed51794f7a1f9da3e4d8ede931ff55206e33b5e49b876966c7b2af523913e54")
+set(protobuf_PATCHES
+    "${CMAKE_CURRENT_LIST_DIR}/../../third_party/patches/protobuf/3.25.5/protobuf_support_gcc_7_3.patch")
+
+set(_TRANSFER_ENGINE_ABSL_DIR "${absl_ROOT}/lib/cmake/absl")
+if (EXISTS "${absl_ROOT}/lib64/cmake/absl")
+    set(_TRANSFER_ENGINE_ABSL_DIR "${absl_ROOT}/lib64/cmake/absl")
+endif()
+
+set(protobuf_CMAKE_OPTIONS
+    -DCMAKE_BUILD_TYPE=Release
+    -Dprotobuf_BUILD_TESTS=OFF
+    -Dprotobuf_BUILD_SHARED_LIBS=OFF
+    -Dprotobuf_ABSL_PROVIDER=package
+    -Dprotobuf_JSONCPP_PROVIDER=module
+    -Dprotobuf_WITH_ZLIB=OFF
+    -Dutf8_range_ENABLE_INSTALL=ON
+    -Dabsl_DIR=${_TRANSFER_ENGINE_ABSL_DIR}
+    -DCMAKE_CXX_STANDARD=17
+    -DCMAKE_SKIP_RPATH=TRUE)
+
+TE_ADD_THIRDPARTY_LIB(Protobuf
+    URL ${protobuf_URL}
+    SHA256 ${protobuf_SHA256}
+    VERSION ${protobuf_VERSION}
+    CONF_OPTIONS ${protobuf_CMAKE_OPTIONS}
+    CXX_FLAGS ${TRANSFER_ENGINE_THIRDPARTY_SAFE_FLAGS}
+    PATCHES ${protobuf_PATCHES}
+    EXTRA_MSGS ${TRANSFER_ENGINE_ABSL_ROOT})
+
+set(TRANSFER_ENGINE_PROTOBUF_ROOT "${Protobuf_ROOT}" CACHE INTERNAL "")
+set(TRANSFER_ENGINE_PROTOBUF_LIB_PATH "${Protobuf_LIB_PATH}" CACHE INTERNAL "")
+set(TRANSFER_ENGINE_PROTOBUF_INCLUDE_DIR "${Protobuf_ROOT}/include" CACHE INTERNAL "")
+
+find_program(_TRANSFER_ENGINE_PROTOC_EXECUTABLE
+    NAMES protoc protoc-25.5.0
+    PATHS "${Protobuf_ROOT}/bin"
+    NO_DEFAULT_PATH)
+if (NOT _TRANSFER_ENGINE_PROTOC_EXECUTABLE)
+    message(FATAL_ERROR "transfer_engine protobuf compiler not found under ${Protobuf_ROOT}/bin")
+endif()
+set(TRANSFER_ENGINE_PROTOC_EXECUTABLE "${_TRANSFER_ENGINE_PROTOC_EXECUTABLE}" CACHE INTERNAL "")
+
+set(_TRANSFER_ENGINE_OLD_FIND_LIBRARY_SUFFIXES "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+find_library(_TRANSFER_ENGINE_PROTOBUF_LIBRARY
+    NAMES protobuf libprotobuf
+    PATHS "${Protobuf_LIB_PATH}"
+    NO_DEFAULT_PATH)
+find_library(_TRANSFER_ENGINE_UTF8_RANGE_LIBRARY
+    NAMES utf8_range libutf8_range
+    PATHS "${Protobuf_LIB_PATH}"
+    NO_DEFAULT_PATH)
+find_library(_TRANSFER_ENGINE_UTF8_VALIDITY_LIBRARY
+    NAMES utf8_validity libutf8_validity
+    PATHS "${Protobuf_LIB_PATH}"
+    NO_DEFAULT_PATH)
+set(CMAKE_FIND_LIBRARY_SUFFIXES "${_TRANSFER_ENGINE_OLD_FIND_LIBRARY_SUFFIXES}")
+if (NOT _TRANSFER_ENGINE_PROTOBUF_LIBRARY)
+    message(FATAL_ERROR "transfer_engine protobuf library not found under ${Protobuf_LIB_PATH}")
+endif()
+set(TRANSFER_ENGINE_PROTOBUF_LIBRARY "${_TRANSFER_ENGINE_PROTOBUF_LIBRARY}" CACHE INTERNAL "")
+set(TRANSFER_ENGINE_PROTOBUF_EXTRA_LIBRARIES "" CACHE INTERNAL "")
+if (_TRANSFER_ENGINE_UTF8_RANGE_LIBRARY)
+    list(APPEND TRANSFER_ENGINE_PROTOBUF_EXTRA_LIBRARIES "${_TRANSFER_ENGINE_UTF8_RANGE_LIBRARY}")
+endif()
+if (_TRANSFER_ENGINE_UTF8_VALIDITY_LIBRARY)
+    list(APPEND TRANSFER_ENGINE_PROTOBUF_EXTRA_LIBRARIES "${_TRANSFER_ENGINE_UTF8_VALIDITY_LIBRARY}")
+endif()
+
+if (NOT TARGET protobuf::libprotobuf)
+    set(Protobuf_DIR "${Protobuf_ROOT}")
+    find_package(Protobuf REQUIRED PATHS "${Protobuf_ROOT}" CONFIG NO_DEFAULT_PATH)
+endif()
