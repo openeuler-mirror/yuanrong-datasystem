@@ -68,6 +68,7 @@
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
+#include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -580,7 +581,7 @@ public:
      * @param[out] objKeys All object keys match.
      */
     void GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
-                         std::vector<std::string> &nooL2CacheobjKeys);
+                         std::vector<std::string> &nooL2CacheobjKeys, bool includeL2CacheIds);
 
     /**
      * @brief ClearObject for scale down worker.
@@ -1014,6 +1015,7 @@ private:
 
     // this class manages list of all masters for our objects
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
+    std::unique_ptr<MetaDataRecoveryManager> metadataRecoveryManager_{ nullptr };
 
     WorkerRequestManager workerRequestManager_;
 
