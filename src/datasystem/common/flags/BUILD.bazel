@@ -1,22 +1,26 @@
 # BUILD file for src/datasystem/common/flags
 load("//bazel:build_defs.bzl", "ds_cc_library")
+
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
     name = "ds_flags",
     srcs = [
+        "embedded_config.cpp",
         "flag_manager.cpp",
         "flags.cpp",
-        "embedded_config.cpp"
     ],
     hdrs = [
         "flag_manager.h",
         "flags.h",
         "string_to_long.h",
     ],
+    cxxopts = [
+        "-std=c++17",
+    ],
+    linkstatic = True,
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:format",
     ],
-    linkstatic = True,
 )

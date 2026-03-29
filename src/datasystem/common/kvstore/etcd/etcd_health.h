@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_HEALTH_H
 #define DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_HEALTH_H
 
+#include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

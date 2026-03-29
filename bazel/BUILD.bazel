@@ -1,7 +1,5 @@
-load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
-load("@rules_python//python:defs.bzl", "py_library")
-load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
-load("@local_glibc_info//:version.bzl",
+load(
+    "@local_glibc_info//:version.bzl",
     "AUTO_GLIBC_PLATFORM",
     "GLIBC_2_34_PLATFORM",
     "GLIBC_2_35_PLATFORM",
@@ -10,6 +8,10 @@ load("@local_glibc_info//:version.bzl",
     "GLIBC_2_38_PLATFORM",
 )
 load("@local_python_info//:version.bzl", "PYTHON_MINOR")
+load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
+load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
+load("//:version.bzl", "DATASYSTEM_VERSION")
 
 licenses(["notice"])
 
@@ -31,7 +33,11 @@ config_setting(
 
 py_package(
     name = "datasystem_client",
-    packages = ["include", "python", "yr"],
+    packages = [
+        "include",
+        "python",
+        "yr",
+    ],
     deps = [
         "//:cli_files",
         "//:datasystem_header_files",
@@ -104,7 +110,7 @@ py_wheel(
         ":is_python_311": "cp311",
         ":is_python_312": "cp312",
         ":is_python_313": "cp313",
-        "//conditions:default": "cp{}".format(PYTHON_MINOR),
+        "//conditions:default": "cp3{}".format(PYTHON_MINOR),
     }),
     author = "openYuanrong Term.",
     classifiers = [
@@ -132,7 +138,6 @@ py_wheel(
     extra_distinfo_files = {"//:LICENSE": "LICENSE"},
     homepage = "https://gitcode.com/openeuler/yuanrong-datasystem",
     license = "Apache 2.0",
-    
     platform = select({
         ":glibc_2_34": GLIBC_2_34_PLATFORM,
         ":glibc_2_35": GLIBC_2_35_PLATFORM,
@@ -141,7 +146,6 @@ py_wheel(
         ":glibc_2_38": GLIBC_2_38_PLATFORM,
         "//conditions:default": AUTO_GLIBC_PLATFORM,
     }),
-    
     python_requires = ">=3.9",
     python_tag = select({
         ":is_python_39": "cp39",
@@ -149,10 +153,10 @@ py_wheel(
         ":is_python_311": "cp311",
         ":is_python_312": "cp312",
         ":is_python_313": "cp313",
-        "//conditions:default": "cp{}".format(PYTHON_MINOR),
+        "//conditions:default": "cp3{}".format(PYTHON_MINOR),
     }),
     strip_path_prefixes = ["python"],
-    version = "0.7.0",
+    version = DATASYSTEM_VERSION,
     deps = [
         ":datasystem_client",
         "//:cluster_config_file",

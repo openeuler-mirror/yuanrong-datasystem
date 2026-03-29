@@ -1,0 +1,8 @@
+diff --git a/.bazelrc b/.bazelrc
+index a244d62..dbf5c8a 100644
+--- a/.bazelrc
++++ b/.bazelrc
+@@ -1,2 +1,2 @@
+ # Required by abseil-cpp.
+-common --cxxopt=-std=c++14
++common --cxxopt=-std=c++17

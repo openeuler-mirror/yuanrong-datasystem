@@ -1,0 +1,24 @@
+diff --git a/proto/private/rules/proto_toolchain_rule.bzl b/proto/private/rules/proto_toolchain_rule.bzl
+index 70d55fc..a87e80c 100644
+--- a/proto/private/rules/proto_toolchain_rule.bzl
++++ b/proto/private/rules/proto_toolchain_rule.bzl
+@@ -14,7 +14,7 @@
+ 
+ """A Starlark implementation of the proto_toolchain rule."""
+ 
+-load("@bazel_features//:features.bzl", "bazel_features")
++#load("@bazel_features//:features.bzl", "bazel_features")
+ load("//proto:proto_common.bzl", "ProtoLangToolchainInfo", "proto_common")
+ 
+ def _impl(ctx):
+@@ -28,8 +28,8 @@ def _impl(ctx):
+     # just use module_extension_has_os_arch_dependent which checks if Bazel version >= 6.4.0
+     # See: https://github.com/protocolbuffers/protobuf/pull/14590#discussion_r1398778415
+     # See: https://github.com/bazel-contrib/bazel_features/blob/443861571a389ddc16d17690ab8e46ee87b4ea57/features.bzl#L25C5-L25C43
+-    if bazel_features.external_deps.module_extension_has_os_arch_dependent:
+-        kwargs["allowlist_different_package"] = None
++    # if bazel_features.external_deps.module_extension_has_os_arch_dependent:
++    #     kwargs["allowlist_different_package"] = None
+ 
+     return [
+         DefaultInfo(

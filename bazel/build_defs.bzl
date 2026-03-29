@@ -23,7 +23,9 @@ jemalloc_dynamic_transition = transition(
 )
 
 def _jemalloc_pybind_extension_impl(ctx):
-    actual = ctx.attr.actual_binary[0]
+    actual = ctx.attr.actual_binary
+    if type(actual) == "list":
+        actual = actual[0]
 
     files = depset(transitive = [actual.files])
     runfiles = actual.default_runfiles
@@ -79,6 +81,7 @@ def pybind_extension_jemalloc(
     _jemalloc_pybind_extension(
         name = name,
         jemalloc_dynamic = jemalloc_dynamic,
-        actual_binary = actual_name,
+        #actual_binary = actual_name,
+        actual_binary = ":" + actual_name + ".so",
         visibility = kwargs.get("visibility", ["//visibility:public"]),
     )

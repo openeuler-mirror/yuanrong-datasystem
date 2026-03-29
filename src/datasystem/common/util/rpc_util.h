@@ -28,10 +28,10 @@
 
 #include <unistd.h>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/utils/sensitive_value.h"
 
 const static int32_t MAX_RPC_TIMEOUT_MS = 600'000;  // 10min

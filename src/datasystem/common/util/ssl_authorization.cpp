@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/util/ssl_authorization.h"
 
+#include <climits>
 #include <memory>
 #include <string>
 
