@@ -361,7 +361,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         Status rc;
         auto iter = objects_.find(objectKeyUri);
         if (iter == objects_.cend() || iter->second.params == nullptr) {
-            LOG(ERROR) << FormatString("Can't find object %s, clientId %s", objectKeyUri, clientId_);
+            LOG(INFO) << FormatString("Can't find object %s, clientId %s", objectKeyUri, clientId_);
             CacheHitInfo::Instance().IncMissHit(1);
             SetDefaultObjectInfoPb(objectKeyUri, objectIndex, *resp.add_objects());
             continue;
