@@ -1,7 +1,7 @@
 load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
 load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
-load("@local_glibc_info//:version.bzl", 
+load("@local_glibc_info//:version.bzl",
     "AUTO_GLIBC_PLATFORM",
     "GLIBC_2_34_PLATFORM",
     "GLIBC_2_35_PLATFORM",
@@ -9,6 +9,7 @@ load("@local_glibc_info//:version.bzl",
     "GLIBC_2_37_PLATFORM",
     "GLIBC_2_38_PLATFORM",
 )
+load("@local_python_info//:version.bzl", "PYTHON_MINOR")
 
 licenses(["notice"])
 
@@ -103,7 +104,7 @@ py_wheel(
         ":is_python_311": "cp311",
         ":is_python_312": "cp312",
         ":is_python_313": "cp313",
-        "//conditions:default": "cp311",
+        "//conditions:default": "cp{}".format(PYTHON_MINOR),
     }),
     author = "openYuanrong Term.",
     classifiers = [
@@ -148,7 +149,7 @@ py_wheel(
         ":is_python_311": "cp311",
         ":is_python_312": "cp312",
         ":is_python_313": "cp313",
-        "//conditions:default": "cp311",
+        "//conditions:default": "cp{}".format(PYTHON_MINOR),
     }),
     strip_path_prefixes = ["python"],
     version = "0.7.0",
