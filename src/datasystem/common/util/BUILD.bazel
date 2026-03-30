@@ -55,6 +55,7 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "@securec",
+        "@zlib",
     ],
 )
 

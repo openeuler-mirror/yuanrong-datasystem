@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_Watch_H
 #define DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_Watch_H
 
+#include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 #include <condition_variable>
 #include <grpcpp/grpcpp.h>
 #include <memory>
@@ -33,7 +34,6 @@
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/status_helper.h"
-#include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 
 namespace datasystem {
 struct EtcdWatchResponseHeader {

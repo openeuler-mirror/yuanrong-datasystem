@@ -20,7 +20,6 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_health.h"
 
-#include <etcd/api/etcdserverpb/rpc.grpc.pb.h>
 #include <grpcpp/grpcpp.h>
 
 #include "datasystem/common/kvstore/etcd/grpc_session.h"

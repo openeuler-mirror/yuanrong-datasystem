@@ -70,7 +70,7 @@ ds_cc_library(
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
-        "@abseil-cpp//absl/debugging:failure_signal_handler",
-        "@abseil-cpp//absl/debugging:symbolize",
+        "@com_google_absl//absl/debugging:failure_signal_handler",
+        "@com_google_absl//absl/debugging:symbolize",
     ],
 )

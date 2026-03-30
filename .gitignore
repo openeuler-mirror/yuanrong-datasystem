@@ -92,3 +92,4 @@ plan.md
 bazel-*
 .clwb/
 MODULE.bazel.lock
+.claude

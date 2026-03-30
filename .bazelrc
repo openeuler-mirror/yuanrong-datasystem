@@ -68,11 +68,10 @@ build --copt="-w"
 
 build --action_env=CC=gcc
 build --action_env=CXX=g++
-common --enable_bzlmod=true
+common --enable_bzlmod=false
 build --define=grpc_no_xds=true
 build --define=grpc_no_binder=true
 build --define=grpc_no_ares=true
-build --cxxopt=-std=c++17
 build --per_file_copt=external/.*@-Wno-error
 
 build:py39 --@rules_python//python/config_settings:python_version=3.9

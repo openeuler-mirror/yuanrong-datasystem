@@ -1,21 +1,3 @@
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
-
-def setup_tbb():
-    """Setup tbb library for Bazel builds."""
-    maybe(
-        http_archive,
-        name = "tbb",
-        sha256 = "ebc4f6aa47972daed1f7bf71d100ae5bf6931c2e3144cf299c8cc7d041dca2f3",
-        strip_prefix = "oneTBB-2020.3",
-        urls = [
-            "https://github.com/uxlfoundation/oneTBB/archive/v2020.3.tar.gz",
-        ],
-        patches = [
-            "//third_party/patches/tbb:2020.3/soft-link.patch",
-        ],
-        patch_args = ["-p1"],
-        build_file_content = """
 # BUILD file for tbb with sources
 package(default_visibility = ["//visibility:public"])
 
@@ -105,5 +87,3 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
 )
-""",
-    )

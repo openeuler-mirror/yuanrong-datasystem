@@ -30,12 +30,7 @@
 #include <string>
 #include <vector>
 
-#include <google/protobuf/util/json_util.h>
 #include <securec.h>
-
-#ifndef DISABLE_PROTOBUF
-#include <google/protobuf/util/json_util.h>
-#endif
 
 #include "datasystem/common/util/format.h"
 #include "datasystem/utils/sensitive_value.h"
