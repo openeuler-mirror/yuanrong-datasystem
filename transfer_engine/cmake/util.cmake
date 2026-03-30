@@ -44,7 +44,6 @@ function(te_download_lib_pkg LIB_NAME URL SHA256)
         ${LIB_NAME}
         URL ${URL}
         URL_HASH SHA256=${SHA256}
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_GetProperties(${LIB_NAME})
     if (NOT ${LIB_NAME}_POPULATED)
