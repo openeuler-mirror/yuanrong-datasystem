@@ -1653,7 +1653,7 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
             std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
             TbbMetaTable::accessor accessor;
             if (!metaTable_.find(accessor, objectKey)) {
-                LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey);
+                LOG(INFO) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey);
                 response.add_success_ids(objectKey);
                 continue;
             }
@@ -2089,7 +2089,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
 
         TbbMetaTable::const_accessor accessor;
         if (!metaTable_.find(accessor, objectKey)) {
-            LOG(ERROR) << "Meta not exist, objectKey:" << objectKey;
+            LOG(INFO) << "Meta not exist, objectKey:" << objectKey;
             // metadata is not present in master. If metadata is not stored in etcd,
             // try to delete all versions of the object from L2 Cache using async delete.
             if (!FLAGS_oc_io_from_l2cache_need_metadata) {

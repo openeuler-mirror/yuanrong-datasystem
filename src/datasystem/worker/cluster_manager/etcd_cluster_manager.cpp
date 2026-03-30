@@ -631,7 +631,7 @@ void EtcdClusterManager::EnqueEvent(mvccpb::Event &&event)
 {
     INJECT_POINT("EtcdClusterManager.EnqueEvent", [] { return; });
     if (thread_ == nullptr) {
-        LOG(ERROR) << "The dequeue handle is nil, no need to enqueue event.";
+        LOG(INFO) << "The dequeue handle is nil, no need to enqueue event.";
         return;
     }
     // The watch thread got an event. Wrap it in CmEvent with type of prefix and send it to a priority queue.
@@ -871,8 +871,9 @@ Status EtcdClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowI
         if (allowNotFound) {
             return Status::OK();
         }
-        RETURN_STATUS_LOG_ERROR(K_NOT_FOUND,
-                                "The node " + nodeAddr.ToString() + " could not be found in cluster node table.");
+        std::string errMsg = "The node " + nodeAddr.ToString() + " could not be found in cluster node table.";
+        LOG(INFO) << errMsg;
+        RETURN_STATUS(K_NOT_FOUND, errMsg);
     }
 
     if (accessor->second->IsFailed() || accessor->second->IsTimedOut()) {

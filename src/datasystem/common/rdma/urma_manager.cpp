@@ -651,7 +651,9 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 
     VLOG(1) << "[UrmaEventHandler] Started waiting for the request id: " << requestId;
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
+    Timer timer;
     RETURN_IF_NOT_OK(event->WaitFor(std::chrono::milliseconds(timeoutMs)));
+    workerOperationTimeCost.Append("Urma wait time.", timer.ElapsedMilliSecond());
     waitPoint.Record();
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     VLOG(1) << "[UrmaEventHandler] Done waiting for the request id: " << requestId;
@@ -799,7 +801,8 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
             return CheckCompletionRecordStatus(completeRecords, cnt, successCompletedReqs, failedCompletedReqs);
         }
         if (serverStop_.load()) {
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Worker exiting"));
+            LOG(INFO) << "Worker exiting.";
+            return Status::OK();
         }
     }
     RETURN_STATUS(K_TRY_AGAIN, FormatString("No Event present in JFC"));
@@ -958,6 +961,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = readSize;
+    Timer timer;
     while (remainSize > 0) {
         const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
         const uint64_t key = requestId_.fetch_add(1);
@@ -976,6 +980,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, waiter));
         keys.emplace_back(key);
     }
+    workerOperationTimeCost.Append("Urma total write.", timer.ElapsedMilliSecond());
     point.Record();
     // If it is blocking wait, we will wait for the write to finish here.
     if (blocking) {
@@ -1119,7 +1124,9 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         }
     }
     urma_jfs_wr_t *bad_wr = NULL;
+    Timer timer;
     auto ret = ds_urma_post_jfs_wr(jfs->Raw(), &wrList[0], &bad_wr);
+    workerOperationTimeCost.Append("Urma gather write.", timer.ElapsedMilliSecond());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(ret == URMA_SUCCESS, K_RUNTIME_ERROR,
                                          FormatString("Failed to urma write object, ret = %d", ret));
     if (blocking) {
