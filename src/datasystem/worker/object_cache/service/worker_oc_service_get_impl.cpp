@@ -2407,7 +2407,7 @@ void WorkerOcServiceGetImpl::BatchUnlockForGet(const std::unordered_set<std::str
             continue;
         }
         if (failedObjectKeys.find(objectKey) != failedObjectKeys.end() && entry.second.insert) {
-            (void)objectTable_->Erase(objectKey);
+            (void)objectTable_->Erase(objectKey, *safeObj);
         }
         safeObj->WUnlock();
     }
@@ -2427,7 +2427,7 @@ void WorkerOcServiceGetImpl::BatchUnlockForGet(const std::map<std::string, uint6
             continue;
         }
         if (iter->second.insert) {
-            (void)objectTable_->Erase(kv.first);
+            (void)objectTable_->Erase(kv.first, *safeObj);
         }
         safeObj->WUnlock();
         (void)lockedEntries.erase(iter);
