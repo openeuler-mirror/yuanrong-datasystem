@@ -70,6 +70,18 @@ Status UcpWorkerPool::Write(const std::string &remoteRkey, const uintptr_t remot
     return worker->Write(remoteRkey, remoteSegAddr, remoteWorkerAddr, ipAddr, localSegAddr, localSegSize, requestID);
 }
 
+Status UcpWorkerPool::WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr,
+                             const std::string &remoteWorkerAddr, const std::string &ipAddr,
+                             const std::vector<IovSegment> &segments, uint64_t requestID)
+{
+    UcpWorker *worker = GetOrSelSendWorker(ipAddr);
+    if (worker == nullptr) {
+        VLOG(ERROR) << FormatString("Communication with IP %s Failed", ipAddr);
+        RETURN_STATUS(K_RDMA_ERROR, std::string("[UcpWorkerPool] Failed to obtain worker for communication."));
+    }
+    return worker->WriteN(remoteRkey, remoteBaseAddr, remoteWorkerAddr, ipAddr, segments, requestID);
+}
+
 std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
 {
     PerfPoint point(PerfKey::RDMA_UCP_WORKER_POOL_GET_RECV_WORKER_ADDR);

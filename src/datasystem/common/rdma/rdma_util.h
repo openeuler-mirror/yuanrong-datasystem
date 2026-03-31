@@ -150,6 +150,7 @@ struct RemoteSegInfo {
     std::string host;    // the host of remote urma endpoint
     int32_t port;        // the host of remote urma endpoint
 };
+
 /**
  * @brief Get the Ethernet device name from the destination ip.
  * @param[in] ipAddr The destination ip address.

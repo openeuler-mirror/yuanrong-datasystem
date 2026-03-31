@@ -31,6 +31,7 @@
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
 #include "datasystem/common/rdma/ucp_worker.h"
@@ -70,6 +71,19 @@ public:
     virtual Status Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
                          const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t localSegAddr,
                          size_t localSegSize, uint64_t requestID);
+
+    /**
+     * @brief Asynchronously write multiple memory segments to a contiguous remote memory region using IOV mode.
+     * @param remoteRkey The rkey passed from a remote server.
+     * @param remoteBaseAddr Base address of the remote contiguous memory region.
+     * @param remoteWorkerAddr The worker address of a remote worker used for communication.
+     * @param ipAddr The IP address of the remote server.
+     * @param segments Vector of local memory segments to transfer.
+     * @param requestID Request ID passed in by UcpManager to track progress.
+     * @return Status::OK() if successfully executed write, otherwise error message.
+     */
+    virtual Status WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr, const std::string &remoteWorkerAddr,
+                          const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID);
 
     /**
      * @brief Obtain the worker that previously talked with this IP, or assign a new one

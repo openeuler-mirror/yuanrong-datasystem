@@ -134,6 +134,74 @@ Status UcpWorker::Write(const std::string &remoteRkey, const uintptr_t remoteSeg
     return Status::OK();
 }
 
+std::vector<ucp_dt_iov_t> *UcpWorker::PrepareIovBuffer(const std::vector<IovSegment> &segments)
+{
+    std::vector<ucp_dt_iov_t> *iov = new std::vector<ucp_dt_iov_t>(segments.size());
+    for (size_t i = 0; i < segments.size(); ++i) {
+        (*iov)[i].buffer = reinterpret_cast<void *>(segments[i].localAddr);
+        (*iov)[i].length = segments[i].size;
+    }
+    return iov;
+}
+
+Status UcpWorker::WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr, const std::string &remoteWorkerAddr,
+                         const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID)
+{
+    if (segments.empty()) {
+        return Status::OK();
+    }
+
+    PerfPoint point(PerfKey::RDMA_UCP_WORKER_WRITE);
+    const auto &ucpEp = GetOrCreateEndpoint(ipAddr, remoteWorkerAddr);
+    if (ucpEp == nullptr) {
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to create Endpoint.");
+    }
+    const ucp_ep_h &ep = ucpEp->GetEp();
+    if (ep == nullptr) {
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " UcpEndpoint contained an empty endpoint?");
+    }
+
+    ucp_rkey_h rkey = ucpEp->GetOrUnpackRkey(remoteRkey);
+    if (rkey == nullptr) {
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + ipAddr + " Failed to get an unpack rkey.");
+    }
+
+    std::vector<ucp_dt_iov_t> *iov = PrepareIovBuffer(segments);
+    ucp_request_param_t putParam{};
+    putParam.op_attr_mask = UCP_OP_ATTR_FIELD_DATATYPE;
+    putParam.datatype = ucp_dt_make_iov();
+
+    void *putRequest = ds_ucp_put_nbx(ep, iov->data(), segments.size(), remoteBaseAddr, rkey, &putParam);
+    if (UCS_PTR_IS_ERR(putRequest)) {
+        ucs_status_t status = UCS_PTR_STATUS(putRequest);
+        LOG(ERROR) << errorMsgHead_
+                   << " Failed to execute ucp_put_nbx with IOV. Status: " << ds_ucs_status_string(status);
+        delete iov;
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to send data immediately with IOV.");
+    }
+
+    ucp_request_param_t flushParam{};
+    flushParam.op_attr_mask = UCP_OP_ATTR_FIELD_CALLBACK | UCP_OP_ATTR_FIELD_USER_DATA;
+    flushParam.cb.send = CallBack;
+    flushParam.user_data = new CallbackContext{ this, requestID, putRequest, iov };
+
+    void *flushRequest = ds_ucp_ep_flush_nbx(ep, &flushParam);
+    if (UCS_PTR_IS_ERR(flushRequest)) {
+        ucs_status_t status = UCS_PTR_STATUS(flushRequest);
+        LOG(ERROR) << errorMsgHead_ << " Failed to execute ucp_ep_flush_nbx. Status: " << ds_ucs_status_string(status);
+        if (putRequest != nullptr) {
+            ds_ucp_request_free(putRequest);
+        }
+        delete iov;
+        delete static_cast<CallbackContext *>(flushParam.user_data);
+        RETURN_STATUS(K_RDMA_ERROR, errorMsgHead_ + " Failed to flush ep immediately.");
+    } else if (flushRequest == nullptr) {
+        CallBack(flushRequest, UCS_OK, flushParam.user_data);
+    }
+
+    return Status::OK();
+}
+
 Status UcpWorker::RemoveEndpointByIp(const std::string &ipAddr)
 {
     std::unique_lock writeLock(mapLock_);
@@ -258,6 +326,12 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
 
     if (request == nullptr) {
         ctx->worker->manager_->InsertSuccessfulEvent(ctx->request_id);
+        if (ctx->put_request) {
+            ds_ucp_request_free(ctx->put_request);
+        }
+        if (ctx->iov) {
+            delete ctx->iov;
+        }
         delete ctx;
         return;
     }
@@ -271,6 +345,9 @@ void UcpWorker::CallBack(void *request, ucs_status_t status, void *userData)
 
     if (ctx->put_request) {
         ds_ucp_request_free(ctx->put_request);
+    }
+    if (ctx->iov) {
+        delete ctx->iov;
     }
 
     delete ctx;
