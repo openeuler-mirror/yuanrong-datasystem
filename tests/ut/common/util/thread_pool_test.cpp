@@ -296,5 +296,29 @@ TEST_F(ThreadPoolTest, TestMaxThreadsNoWait)
     LOG(INFO) << "Extra thread did work: " << workDone;
     ASSERT_EQ(workDone, false);
 }
+
+TEST_F(ThreadPoolTest, TestTaskDelay)
+{
+    std::atomic<int> threadsIn = 0;
+    const int maxThreads = 128;
+    const int taskCount = 10;
+    const int taskDelayMs = 3000;
+
+    ThreadPool threadPool(1, maxThreads);
+    for (int i = 0; i < taskCount; ++i) {
+        Timer timer;
+        auto threadCreated = threadPool.ExecuteNoWait([&threadsIn, timer, taskDelayMs] {
+            ++threadsIn;
+            LOG(INFO) << "Thread delay " << timer.ElapsedMilliSecond() << "ms";
+            std::this_thread::sleep_for(std::chrono::milliseconds(taskDelayMs));
+        });
+        ASSERT_TRUE(threadCreated);
+    }
+
+    const int waitMs = 1000;
+    std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
+
+    ASSERT_EQ(threadsIn, taskCount);
+}
 }  // namespace ut
 }  // namespace datasystem
