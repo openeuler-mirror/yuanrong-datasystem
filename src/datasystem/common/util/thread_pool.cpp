@@ -72,16 +72,17 @@ void ThreadPool::DoThreadWork()
                 return;
             }
 
+            if (runningThreadsNum_ == 0) {
+                taskLastFinishTime_ = GetSteadyClockTimeStampUs();
+            }
+            runningThreadsNum_++;
+
             // 2nd: Dequeue Task.
             task = std::move(this->taskQ_.front());
             this->taskQ_.pop();
         }
         {
             // 3rd: Execute Task.
-            if (runningThreadsNum_ == 0) {
-                taskLastFinishTime_ = GetSteadyClockTimeStampUs();
-            }
-            runningThreadsNum_++;
             task();
             taskLastFinishTime_ = GetSteadyClockTimeStampUs();
             runningThreadsNum_--;

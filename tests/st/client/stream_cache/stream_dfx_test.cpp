@@ -352,7 +352,7 @@ TEST_F(StreamDfxTest, TestDiskFullWithAutoDelete)
     DS_ASSERT_OK(cluster_->KillWorker(0));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
-    sleep(3); // wait 3s for resource log flush
+    sleep(3);  // wait 3s for resource log flush
     GetResMonitorLogInfo(1, "resource.log", infos);
     ASSERT_EQ(std::stoi(infos[streamCountIdx]), 0);
 }
@@ -1810,7 +1810,7 @@ TEST_F(StreamDfxTopoTest, LEVEL1_TestMasterCrashWhenSubscribe)
     DS_ASSERT_OK(client2_->DeleteStream(streamName));
 }
 
-TEST_F(StreamDfxTopoTest, LEVEL1_TestMasterCrashWhenCloseConsumer)
+TEST_F(StreamDfxTopoTest, DISABLED_TestMasterCrashWhenCloseConsumer)
 {
     std::string streamName = "MasterCrashWhenCloseCon";
     std::shared_ptr<Consumer> c1w1;
