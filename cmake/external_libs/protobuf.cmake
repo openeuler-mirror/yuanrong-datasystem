@@ -24,17 +24,13 @@ else ()
     set(protobuf_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} -fPIE -pie -fPIC")
 endif ()
 
-set(protobuf_PATCHES
-        ${CMAKE_SOURCE_DIR}/third_party/patches/protobuf/3.25.5/protobuf_support_gcc_7_3.patch)
-
 add_thirdparty_lib(Protobuf
   URL ${protobuf_URL}
   SHA256 ${protobuf_SHA256}
   FAKE_SHA256 ${protobuf_FAKE_SHA256}
   VERSION ${protobuf_VERSION}
   CONF_OPTIONS ${protobuf_CMAKE_OPTIONS}
-  CXX_FLAGS ${protobuf_CXX_FLAGS}
-  PATCHES ${protobuf_PATCHES})
+  CXX_FLAGS ${protobuf_CXX_FLAGS})
 
 set(Protobuf_DIR ${Protobuf_ROOT})
 find_package(Protobuf 25.5.0 REQUIRED PATHS ${Protobuf_ROOT} CONFIG)

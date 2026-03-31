@@ -6,9 +6,9 @@ set(glog_VERSION 0.7.0)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
     set(glog_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/v0.7.0.zip")
 else()
-    set(glog_URL "https://github.com/google/glog/archive/refs/tags/v0.7.0.zip")
+    set(glog_URL "https://gitee.com/mirrors/glog/repository/archive/v0.7.0.zip")
 endif()
-set(glog_SHA256 "6e1216d7bc5bb785b9c596ac59b975423c0882488f46c45760d0c2a9ef77295b")
+set(glog_SHA256 "713188ed17bd2f50a0967bee3b418a1750664d424f81643cfa153fc09c1e323d")
 
 set(glog_CMAKE_OPTIONS
     -DCMAKE_BUILD_TYPE=Release

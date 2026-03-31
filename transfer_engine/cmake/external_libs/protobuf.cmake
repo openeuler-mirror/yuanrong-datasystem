@@ -7,8 +7,6 @@ else()
     set(protobuf_URL "https://gitee.com/mirrors/protobuf_source/repository/archive/v3.25.5.tar.gz")
 endif()
 set(protobuf_SHA256 "2ed51794f7a1f9da3e4d8ede931ff55206e33b5e49b876966c7b2af523913e54")
-set(protobuf_PATCHES
-    "${CMAKE_CURRENT_LIST_DIR}/../../third_party/patches/protobuf/3.25.5/protobuf_support_gcc_7_3.patch")
 
 set(_TRANSFER_ENGINE_ABSL_DIR "${absl_ROOT}/lib/cmake/absl")
 if (EXISTS "${absl_ROOT}/lib64/cmake/absl")
@@ -33,7 +31,6 @@ TE_ADD_THIRDPARTY_LIB(Protobuf
     VERSION ${protobuf_VERSION}
     CONF_OPTIONS ${protobuf_CMAKE_OPTIONS}
     CXX_FLAGS ${TRANSFER_ENGINE_THIRDPARTY_SAFE_FLAGS}
-    PATCHES ${protobuf_PATCHES}
     EXTRA_MSGS ${TRANSFER_ENGINE_ABSL_ROOT})
 
 set(TRANSFER_ENGINE_PROTOBUF_ROOT "${Protobuf_ROOT}" CACHE INTERNAL "")
