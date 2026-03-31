@@ -268,6 +268,10 @@ install_datasystem_target(rpc_option_protos)
 set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_NEW_LIBPATH})
 install_datasystem_target(rpc_option_protos)
 
+# Install common_metastore_service shared library
+set(common_metastore_service_INSTALL_LIBPATH ${DATASYSTEM_SERVICE_LIBPATH})
+install_datasystem_target(common_metastore_service)
+
 set(SERVICE_LIB_PATTERNS
      ${SDK_SPDLOG_LIB}
      ${SDK_PROTOBUF_LIB}

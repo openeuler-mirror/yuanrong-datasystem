@@ -17,7 +17,7 @@ genrule(
         "cp -rL external/jemalloc/* jemalloc_output",
         "cd jemalloc_output",
         "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./autogen.sh &>/dev/null",
-        "./configure --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
+        "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./configure --with-pic --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
         + " --disable-cache-oblivious"
         + " --disable-zone-allocator"
         + " --without-export"
@@ -31,7 +31,7 @@ genrule(
         "make -j16 &>/dev/null",
         "cp -H lib/libjemalloc.a ../$(location libjemalloc.a)",
         "cp -H include/jemalloc/jemalloc.h ../$(location jemalloc/jemalloc.h)",
-        "./configure --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
+        "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./configure --with-pic --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
         + " --enable-shared"
         + " --disable-cache-oblivious"
         + " --disable-zone-allocator"

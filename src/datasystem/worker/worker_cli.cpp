@@ -31,6 +31,7 @@ DS_DEFINE_string(get_hash_ring, "", "Get hashring from etcd and save to file wit
 DS_DEFINE_string(set_hash_ring, "", "Read hashring from file with json fromat and update to etcd.");
 
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(metastore_address);
 DS_DECLARE_int32(minloglevel);
 
 namespace datasystem {
@@ -38,16 +39,21 @@ namespace cli {
 namespace {
 Status GetEtcdStore(std::unique_ptr<EtcdStore> &etcdStore)
 {
-    if (FLAGS_etcd_address.empty()) {
+    // Use metastore_address if specified, otherwise use etcd_address
+    std::string backendAddress;
+    if (!FLAGS_metastore_address.empty()) {
+        backendAddress = FLAGS_metastore_address;
+    } else if (FLAGS_etcd_address.empty()) {
         RETURN_STATUS(K_RUNTIME_ERROR, "argument etcd_address is empty.");
+    } else {
+        backendAddress = FLAGS_etcd_address;
     }
     if (FLAGS_enable_etcd_auth) {
         CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_ca.empty(), K_INVALID, "etcd_ca is required when enable etcd auth");
-        CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_cert.empty(), K_INVALID,
-                                    "etcd_cert is required when enable etcd auth");
+        CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_cert.empty(), K_INVALID, "etcd_cert is required when enable etcd auth");
         CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_key.empty(), K_INVALID, "etcd_key is required when enable etcd auth");
     }
-    etcdStore = std::make_unique<EtcdStore>(FLAGS_etcd_address);
+    etcdStore = std::make_unique<EtcdStore>(backendAddress);
     RETURN_IF_NOT_OK(etcdStore->Init());
     return etcdStore->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
 }

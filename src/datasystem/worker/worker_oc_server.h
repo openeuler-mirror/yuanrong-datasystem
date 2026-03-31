@@ -47,6 +47,7 @@
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/worker/worker_service_impl.h"
+#include "datasystem/common/kvstore/metastore/metastore_server.h"
 #ifdef WITH_TESTS
 #include "datasystem/../../tests/st/st_oc_service_impl.h"
 #endif
@@ -399,6 +400,18 @@ private:
     Status ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterInfo);
 
     /**
+     * @brief Start metastore service on master worker.
+     * @return Status of this call.
+     */
+    Status StartMetaStoreService();
+
+    /**
+     * @brief Stop metastore service on master worker.
+     * @return Status of this call.
+     */
+    Status StopMetaStoreService();
+
+    /**
      * @brief Reconcile cluster information with other nodes in the cluster.
      * @param[in] localHashRingPb The information required for reconciliation.
      * @param[in] api2Tag The way to contact other nodes in the cluster.
@@ -496,6 +509,7 @@ private:
 
     std::unique_ptr<WorkerLivenessCheck> livenessCheck_;
     std::shared_ptr<RocksStore> clusterStore_;
+    std::unique_ptr<MetaStoreServer> metaStoreServer_;
 #ifdef WITH_TESTS
     std::unique_ptr<st::StOCServiceImpl> utSvc_{ nullptr };
 #endif

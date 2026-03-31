@@ -53,6 +53,7 @@
 #include "datasystem/worker/hash_ring/hash_ring_tools.h"
 
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(metastore_address);
 DS_DECLARE_string(master_address);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(add_node_wait_time_s);
@@ -145,7 +146,8 @@ Status HashRing::InitWithEtcd(bool isMultiReplicaEnable)
     // If initWorkerNum <= 0, do not return. Nodes rely on hashring to tell isRestart.
     LOG(INFO) << "HashRing start to init for worker:" << workerAddr_;
     isMultiReplicaEnable_ = isMultiReplicaEnable;
-    if (FLAGS_etcd_address.empty()) {
+    // Check if both etcd_address and metastore_address are empty
+    if (FLAGS_etcd_address.empty() && FLAGS_metastore_address.empty()) {
         return Status::OK();
     }
     RETURN_IF_NOT_OK(InitMasterAddress());
@@ -171,7 +173,9 @@ Status HashRing::InitWithEtcd(bool isMultiReplicaEnable)
     taskExecutor_ = std::make_unique<HashRingTaskExecutor>(workerAddr_, workerUuid_, etcdStore_, isMultiReplicaEnable_);
     timer_ = std::make_unique<Timer>();
 
-    (void)etcdStore_->Delete(ETCD_RING_PREFIX, FLAGS_etcd_address);
+    // Use metastore_address if specified, otherwise use etcd_address
+    const std::string &backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
+    (void)etcdStore_->Delete(ETCD_RING_PREFIX, backendAddress);
     // reset the state for centralized master scenario
     // In the centralized master scenario, we don't use the hash ring, but we still need to set uuid to etcd to
     // distinguish the startup state like what we do in HashRing::InitRing above. This state will be used in etcd
@@ -207,8 +211,10 @@ Status HashRing::UpdateWhenNodeRestart(const std::string &oldValue, const HashRi
 
 void HashRing::TryGetOldRing(std::string &oldVersionRingVal)
 {
+    // Use metastore_address if specified, otherwise use etcd_address
+    const std::string &backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
     while (!exitFlag_) {
-        auto status = etcdStore_->Get(ETCD_RING_PREFIX, FLAGS_etcd_address, oldVersionRingVal);
+        auto status = etcdStore_->Get(ETCD_RING_PREFIX, backendAddress, oldVersionRingVal);
         if (status.GetCode() == K_NOT_FOUND || status.IsOk()) {
             break;
         } else {
@@ -342,8 +348,8 @@ void HashRing::TryFirstInit()
             }
             // In order to reduce the CAS confliction, only the top MAX_CANDIDATE_WORKER_NUM workers are responsible for
             // GenerateAllHashTokens
-            std::set<std::string> candidateWorkers(sortedWorkers.begin(),
-                                                  
+            std::set<std::string> candidateWorkers(
+                sortedWorkers.begin(),
                 std::next(sortedWorkers.begin(),
                           std::min(sortedWorkers.size(), static_cast<size_t>(MAX_CANDIDATE_WORKER_NUM))));
             if (!ContainsKey(candidateWorkers, workerAddr_)) {
@@ -1436,8 +1442,8 @@ void HashRing::RemoveWorkers(const std::unordered_set<std::string> &workers)
     // check if should remove failed worker
     for (auto &i : workers) {
         rc = RemoveWorker(i, workers);
-        WARN_IF_ERROR(rc, FormatString("Remove failed worker %s failed. All failed workers: %s",
-                                                             i, VectorToString(workers)));
+        WARN_IF_ERROR(
+            rc, FormatString("Remove failed worker %s failed. All failed workers: %s", i, VectorToString(workers)));
         if (rc.GetCode() == StatusCode::K_INVALID) {
             LOG(WARNING) << "Remove worker " << i << " failed, detail: " << rc.ToString();
             return;

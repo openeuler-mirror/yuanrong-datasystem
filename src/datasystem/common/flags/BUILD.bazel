@@ -15,7 +15,7 @@ ds_cc_library(
         "flags.h",
         "string_to_long.h",
     ],
-    cxxopts = [
+    copts = [
         "-std=c++17",
     ],
     linkstatic = True,

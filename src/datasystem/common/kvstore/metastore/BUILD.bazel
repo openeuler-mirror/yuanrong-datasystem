@@ -1,0 +1,63 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "metastore_manager",
+    srcs = [
+        "manager/kv_manager.cpp",
+        "manager/lease_manager.cpp",
+        "manager/watch_manager.cpp",
+    ],
+    hdrs = [
+        "manager/kv_manager.h",
+        "manager/lease_manager.h",
+        "manager/watch_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//third_party/protos/etcd:rpc_cc_proto",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "//third_party/protos/etcd:kv_cc_proto",
+        "@com_github_grpc_grpc//:grpc++",
+    ],
+)
+
+ds_cc_library(
+    name = "metastore_service",
+    srcs = [
+        "service/kv_service_impl.cpp",
+        "service/lease_service_impl.cpp",
+        "service/watch_service_impl.cpp",
+        "service/maintenance_service_impl.cpp",
+    ],
+    hdrs = [
+        "service/kv_service_impl.h",
+        "service/lease_service_impl.h",
+        "service/watch_service_impl.h",
+        "service/maintenance_service_impl.h",
+    ],
+    deps = [
+        ":metastore_manager",
+        "//src/datasystem/common/log:common_log_header",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "@com_github_grpc_grpc//:grpc++",
+    ],
+)
+
+ds_cc_library(
+    name = "metastore_server",
+    srcs = [
+        "metastore_server.cpp",
+    ],
+    hdrs = [
+        "metastore_server.h",
+    ],
+    deps = [
+        ":metastore_manager",
+        ":metastore_service",
+        "//src/datasystem/common/log:common_log_header",
+        "//third_party/protos/etcd:rpc_cc_grpc",
+        "@com_github_grpc_grpc//:grpc++",
+    ],
+)

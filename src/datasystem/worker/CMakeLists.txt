@@ -24,6 +24,7 @@ set(WORKER_DEPEND_LIBS
         common_etcd
         common_event_loop
         common_iam
+        common_metastore_service
         common_perf
         common_rocksdb
         common_rpc_zmq

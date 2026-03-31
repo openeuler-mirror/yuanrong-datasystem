@@ -128,6 +128,10 @@ DS_DECLARE_int32(sc_regular_socket_num);
 DS_DECLARE_int32(sc_stream_socket_num);
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(metastore_address);
+DS_DEFINE_bool(start_metastore_service, false,
+               "Start metastore service on master worker to replace external etcd server for cluster worker "
+               "metadata storage, default is false.");
 DS_DEFINE_bool(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
 DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
@@ -193,6 +197,15 @@ bool EnableSCService()
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
 }
 }  // namespace
+
+static bool ValidateEtcdOrMetastoreAddress()
+{
+    if (FLAGS_metastore_address.empty() && FLAGS_etcd_address.empty()) {
+        LOG(ERROR) << "At least one of etcd_address or metastore_address must be specified";
+        return false;
+    }
+    return true;
+}
 
 WorkerOCServer::~WorkerOCServer()
 {
@@ -762,7 +775,9 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
 
 Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
 {
-    auto etcdRc = CheckEtcdHealth(FLAGS_etcd_address);
+    // Use metastore_address if specified, otherwise use etcd_address
+    std::string backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
+    auto etcdRc = CheckEtcdHealth(backendAddress);
     if (etcdRc.IsError()) {
         LOG(INFO) << "ETCD fails and the worker tries to run downgraded: " << etcdRc.ToString();
         RETURN_IF_NOT_OK_APPEND_MSG(
@@ -772,6 +787,35 @@ Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
                          etcdRc.GetMsg()));
     } else {
         RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+    }
+    return Status::OK();
+}
+
+Status WorkerOCServer::StartMetaStoreService()
+{
+    // Use FLAGS_metastore_address if FLAGS_start_metastore_service is enabled
+    // to replace external etcd server for cluster worker metadata storage
+    if (FLAGS_metastore_address.empty()) {
+        LOG(ERROR) << "metastore_address is empty, cannot start metastore service";
+        return Status(StatusCode::K_INVALID, "metastore_address is empty");
+    }
+
+    LOG(INFO) << "Starting metastore service on master worker at " << FLAGS_metastore_address;
+
+    metaStoreServer_ = std::make_unique<MetaStoreServer>();
+    RETURN_IF_NOT_OK(metaStoreServer_->Start(FLAGS_metastore_address));
+
+    LOG(INFO) << "Metastore service started successfully to replace external etcd server";
+    return Status::OK();
+}
+
+Status WorkerOCServer::StopMetaStoreService()
+{
+    if (metaStoreServer_) {
+        LOG(INFO) << "Stopping metastore service on master worker";
+        RETURN_IF_NOT_OK(metaStoreServer_->Stop());
+        metaStoreServer_.reset();
+        LOG(INFO) << "Metastore service stopped successfully";
     }
     return Status::OK();
 }
@@ -811,11 +855,26 @@ Status WorkerOCServer::Init()
     resourceManager_ = std::make_unique<master::ResourceManager>();
 
     // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
-    CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_address.empty(), K_RUNTIME_ERROR,
-                             "ETCD server address is not given. Fault recovery is not possible");
-    FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
-    LOG(INFO) << "etcd connect address: " << FLAGS_etcd_address;
-    etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
+    CHECK_FAIL_RETURN_STATUS(ValidateEtcdOrMetastoreAddress(), K_RUNTIME_ERROR,
+                             "Neither etcd_address nor metastore_address is specified");
+
+    // Determine which backend to use for metadata storage
+    std::string backendAddress;
+    if (!FLAGS_metastore_address.empty()) {
+        // Use metastore as the backend
+        backendAddress = FLAGS_metastore_address;
+        LOG(INFO) << "Using metastore as etcd replacement: " << backendAddress;
+        if (FLAGS_start_metastore_service) {
+            // Start metastore service on this node (head worker)
+            RETURN_IF_NOT_OK(StartMetaStoreService());
+        }
+    } else {
+        // Use external etcd as the backend
+        FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
+        backendAddress = FLAGS_etcd_address;
+        LOG(INFO) << "Using external etcd: " << backendAddress;
+    }
+    etcdStore_ = std::make_unique<EtcdStore>(backendAddress);
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
@@ -1266,6 +1325,8 @@ Status WorkerOCServer::Shutdown()
             LOG(WARNING) << "Shuts down EtcdStore but an error was given. Ignore and continue: " << rc.ToString();
         }
     }
+    // Stop metastore service if it was started
+    RETURN_IF_NOT_OK(StopMetaStoreService());
     // CommonServer::Shutdown() only return status ok.
     (void)CommonServer::Shutdown();
     // Notify the pre-stop script to stop.
