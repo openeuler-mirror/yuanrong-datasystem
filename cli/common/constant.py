@@ -22,3 +22,4 @@ class ClusterConfig(Enum):
     WORKER_CONFIG_PATH = "worker_config_path"
     WORKER_NODES = "worker_nodes"
     WORKER_PORT = "worker_port"
+    METASTORE_HEAD_NODE = "metastore_head_node"

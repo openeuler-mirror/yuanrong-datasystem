@@ -7,5 +7,6 @@
     "worker_nodes": [
         "127.0.0.1"
     ],
-    "worker_port": 31501
+    "worker_port": 31501,
+    "metastore_head_node": ""
 }
