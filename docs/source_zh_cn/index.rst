@@ -72,6 +72,7 @@ openYuanrong datasystem 的部署视图如上图所示：
   installation/installation_linux.md
   deployment/index.md
   best_practices/index.md
+  user_guide/index.md
   development-guide/index.md
   contributor_guide/contribution.md
   appendix/index.md

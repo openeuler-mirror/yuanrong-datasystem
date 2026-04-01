@@ -616,6 +616,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败 |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
+|--metastore_head_node <NODE_IP> | 无 | 指定<NODE_IP>节点的worker启动Metastore取代ETCD |
 
 
 > **绑核配置项注意事项**：
@@ -741,6 +742,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | etcd_meta_pool_size | int | `8` | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
 | etcd_target_name_override | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
 | host_id_env_name | string | `""` | 用于读取当前节点 `host_id` 的环境变量名。配置后，worker 在注册到 ETCD 时会同时上报 `host_id`，供客户端按同节点策略优先选择 worker |
+| start_metastore_service | bool | `false` | 是否启用 Metastore 代替ETCD，若需要启用，仅需主节点worker设为`true`，从节点worker设为`false` |
+| metastore_address | string | `""` | 主节点worker的Metastore Service访问地址，与`start_metastore_service`搭配一起使用，主从节点均需填写，格式为：ip:port, 例如：127.0.0.1:23456 |
 
 #### Spill相关配置
 
