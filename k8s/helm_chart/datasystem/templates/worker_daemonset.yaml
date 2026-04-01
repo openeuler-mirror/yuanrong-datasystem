@@ -231,6 +231,7 @@ spec:
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
         - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}
         - -urma_mode={{ $.Values.global.performance.urmaMode }}
+        - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
         - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
         - -shared_disk_directory={{ $.Values.global.performance.sharedDiskDirectory }}
         - -shared_disk_size_mb={{ $.Values.global.performance.sharedDiskSize }}

@@ -104,12 +104,12 @@ public:
      * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of
      * object)
      * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish
-     * @param[out] keys The new request id to wait for if not blocking
+     * @param[out] eventKeys The new request id to wait for if not blocking
      * @return Status of the call
      */
     Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
                          const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
-                         std::vector<uint64_t> &keys);
+                         std::vector<uint64_t> &eventKeys);
 
     /**
      * @brief Trigger UcpManager logic to import segment and write payload, without memcopy.

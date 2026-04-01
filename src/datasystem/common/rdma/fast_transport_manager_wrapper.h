@@ -154,13 +154,13 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
  * @param[in] readSize Size of the object.
  * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of object).
  * @param[in] blocking Whether to blocking wait for the urma_write to finish.
- * @param[out] keys The new request id to wait for if not blocking.
+ * @param[out] eventKeys The new request id to wait for if not blocking.
  * @param[in] waiter The optional event waiter.
  * @return Status of the call.
  */
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
-                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &keys,
+                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &eventKeys,
                         std::shared_ptr<EventWaiter> waiter = nullptr);
 
 /**
@@ -208,12 +208,12 @@ Status FillUcpInfo(uint64_t segAddress, uint64_t dataOffset, const std::string &
  * @param[in] readSize Size of the object.
  * @param[in] metaDataSize Size of metadata (SHM metadata stored as part of object).
  * @param[in] blocking Whether to blocking wait for the ucp_put_nbx to finish.
- * @param[out] keys The new request id to wait for if not blocking.
+ * @param[out] eventKeys The new request id to wait for if not blocking.
  * @return Status of the call.
  */
 Status UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t &localObjectAddress, const uint64_t &readOffset,
                      const uint64_t &readSize, const uint64_t &metaDataSize, bool blocking,
-                     std::vector<uint64_t> &keys);
+                     std::vector<uint64_t> &eventKeys);
 
 /**
  * @brief Trigger UcpManager logic to import segment and write payload, without memcopy.

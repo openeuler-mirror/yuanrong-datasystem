@@ -466,7 +466,7 @@ TEST_F(UrmaObjectClientTest, TestBatchRemoteGetErrorCode2)
     ASSERT_EQ(client1->Set(key2, value2), Status::OK());
     ASSERT_EQ(client1->Set(key3, value3), Status::OK());
     ASSERT_EQ(client1->Set(key4, value4), Status::OK());
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.batch_get_failure_for_keys", "return"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.batch_get_failure_for_keys", "call()"));
 
     // TestCase0: single-key scenario, key fails with OOM
     ASSERT_EQ(client0->Get({ key0 }, valsGet).GetCode(), StatusCode::K_OUT_OF_MEMORY);
@@ -1385,6 +1385,148 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetBaseCase)
     ASSERT_EQ(value, getValue);
     DS_ASSERT_OK(client->Get("key2", getValue));
     ASSERT_EQ(value, getValue);
+}
+
+class UrmaFallbackTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+    }
+};
+
+TEST_F(UrmaFallbackTest, ClientAndWorkerErrorFallback)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteError", "return()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteError", "return()"));
+
+    std::string key = "UrmaKey";
+    std::string value = "UrmaValue";
+    DS_ASSERT_OK(client->Set(key, value));
+
+    std::vector<std::string> getValues;
+    DS_ASSERT_OK(client->Get({ key }, getValues));
+    ASSERT_EQ(getValues.size(), 1);
+    ASSERT_EQ(value, getValues[0]);
+}
+
+TEST_F(UrmaFallbackTest, WorkerWorkerSignleWriteFallback)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteError", "1*return()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWaitError", "1*return()"));
+
+    std::string key1 = "UrmaKeyWrite";
+    std::string key2 = "UrmaKeyWait";
+    std::string value1 = "UrmaValue1";
+    std::string value2= "UrmaValue2";
+    DS_ASSERT_OK(client1->Set(key1, value1));
+    DS_ASSERT_OK(client1->Set(key2, value2));
+
+    std::vector<std::string> getValues;
+    DS_ASSERT_OK(client2->Get({ key1 }, getValues));
+    ASSERT_EQ(getValues.size(), 1);
+    ASSERT_EQ(value1, getValues[0]);
+
+    getValues.clear();
+    DS_ASSERT_OK(client2->Get({ key2 }, getValues));
+    ASSERT_EQ(getValues.size(), 1);
+    ASSERT_EQ(value2, getValues[0]);
+}
+
+TEST_F(UrmaFallbackTest, WorkerWorkerBatchWriteFallback)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.GatherWriteError", "return()"));
+
+    const int batchNum = 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    for (size_t i =0; i < batchNum; ++i) {
+        std::string key = "KeyWrite_" + std::to_string(i);
+        std::string value = "WriteValue" + std::to_string(i);
+        DS_ASSERT_OK(client1->Set(key, value));
+        keys.emplace_back(key);
+        values.emplace_back(value);
+    }
+
+    std::vector<std::string> valuesGet;
+    DS_ASSERT_OK(client2->Get(keys, valuesGet));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
+    }
+}
+
+TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitFallback)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWaitError", "return()"));
+
+    const int batchNum = 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    for (size_t i =0; i < batchNum; ++i) {
+        std::string key = "KeyWait_" + std::to_string(i);
+        std::string value = "WaitValue" + std::to_string(i);
+        DS_ASSERT_OK(client1->Set(key, value));
+        keys.emplace_back(key);
+        values.emplace_back(value);
+    }
+
+    std::vector<std::string> valuesGet;
+    DS_ASSERT_OK(client2->Get(keys, valuesGet));
+    ASSERT_TRUE(NotExistsNone(valuesGet));
+    ASSERT_EQ(keys.size(), valuesGet.size());
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
+    }
+}
+
+class UrmaDisableFallbackTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_transport_fallback=false ";
+    }
+};
+
+TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetFailed)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteError", "return()"));
+
+    std::string key1 = "UrmaKeyWrite";
+    std::string key2 = "UrmaKeyWait";
+    std::string value1 = "UrmaValue1";
+    std::string value2= "UrmaValue2";
+    DS_ASSERT_OK(client1->Set(key1, value1));
+    DS_ASSERT_OK(client1->Set(key2, value2));
+
+    std::vector<std::string> getValues;
+    DS_ASSERT_NOT_OK(client2->Get({ key1, key2 }, getValues));
 }
 
 #endif
