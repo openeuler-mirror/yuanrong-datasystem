@@ -1263,7 +1263,8 @@ Status WorkerOCServer::PreShutDown()
                 waitFlag = checkAsyncTasksDone_;
             }
             auto traceId = Trace::Instance().GetTraceID();
-            if (scaleIn && !checkAsyncTasksDone_ && !objCacheClientWorkerSvc_->AsyncTaskHealth()) {
+            if (objCacheClientWorkerSvc_ != nullptr && scaleIn && !checkAsyncTasksDone_ &&
+                !objCacheClientWorkerSvc_->AsyncTaskHealth()) {
                 auto traceGuard = Trace::Instance().SetTraceNewID(GetStringUuid() + "-migrate-data");
                 LOG(INFO) << "[Graceful exit] Async L2 queue need to migrate data to another node";
                 auto objKeys = objCacheClientWorkerSvc_->StopAndGetAllUnfinishedObjects();
@@ -1277,7 +1278,9 @@ Status WorkerOCServer::PreShutDown()
             }
         }
     }
-    LOG_IF_ERROR(objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation(), "RemoveWriteBackIdsLocation failed");
+    if (objCacheClientWorkerSvc_ != nullptr) {
+        LOG_IF_ERROR(objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation(), "RemoveWriteBackIdsLocation failed");
+    }
     return Status::OK();
 }
 
