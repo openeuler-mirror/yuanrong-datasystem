@@ -140,7 +140,7 @@ public:
      */
     void SetAddress(const std::string &newAddress) override;
 
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
     /**
      * @brief Record the remote host info for the client.
      * @param[in] clientCommId The client communicator identifier uuid.

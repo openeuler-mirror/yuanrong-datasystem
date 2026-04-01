@@ -5,8 +5,11 @@ add_library(common_rdma_util STATIC ${RDMA_UTIL_SRCS})
 
 set(URMA_SRCS "")
 set(RDMA_SRCS "")
-set(FAST_TRANSPORT_SRCS
-    fast_transport_manager_wrapper.cpp)
+set(FAST_TRANSPORT_SRCS "")
+list(APPEND FAST_TRANSPORT_SRCS
+    fast_transport_base.cpp
+    fast_transport_manager_wrapper.cpp
+)
 set(URMA_DEPEND_LIBS
     common_rdma_util)
 set(RDMA_DEPEND_LIBS

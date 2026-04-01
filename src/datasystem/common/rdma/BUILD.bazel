@@ -3,28 +3,75 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
 ds_cc_library(
+    name = "fast_transport_base_header",
+    hdrs = [
+        "fast_transport_base.h",
+    ],
+)
+
+ds_cc_library(
+    name = "fast_transport_base",
+    srcs = [
+        "fast_transport_base.cpp",
+    ],
+    deps = [
+        ":fast_transport_base_header",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/util/gflag:common_util_gflag_header",
+    ] + select({
+        "//:enable_urma": [
+            ":urma_manager",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+ds_cc_library(
+    name = "urma_manager",
+    srcs = [
+        "urma_info.cpp",
+        "urma_manager.cpp",
+        "urma_resource.cpp",
+    ],
+    hdrs = [
+        "urma_info.h",
+        "urma_manager.h",
+        "urma_resource.h",
+    ],
+    deps = [
+        ":fast_transport_base_header",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rdma:rdma_util",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util/queue",
+        "//src/datasystem/protos:meta_transport_cc_proto",
+        "//src/datasystem/protos:utils_cc_proto",
+    ] + select({
+        "//:enable_urma": [":urma_dlopen_util"],
+        "//conditions:default": [],
+    }),
+)
+
+ds_cc_library(
     name = "fast_transport_manager_wrapper",
     srcs = [
         "fast_transport_manager_wrapper.cpp",
-    ] + select({
-        "//:enable_urma": [
-            "urma_info.cpp",
-            "urma_manager.cpp",
-            "urma_resource.cpp",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
     hdrs = [
         "fast_transport_manager_wrapper.h",
-    ] + select({
-        "//:enable_urma": [
-            "urma_info.h",
-            "urma_manager.h",
-            "urma_resource.h",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
     deps = [
+        ":fast_transport_base",
         "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",
@@ -49,7 +96,7 @@ ds_cc_library(
         "//src/datasystem/protos:meta_transport_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
     ] + select({
-        "//:enable_urma": [":urma_dlopen_util"],
+        "//:enable_urma": [":urma_manager"],
         "//conditions:default": [],
     }),
 )

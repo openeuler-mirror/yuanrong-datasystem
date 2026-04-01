@@ -28,6 +28,7 @@
 #ifdef USE_RDMA
 #include "datasystem/common/rdma/ucp_manager.h"
 #endif
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -50,43 +51,11 @@ Status GetClientCommUuid(std::string &commId);
 void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId);
 
 /**
- * @brief Whether remote H2D is enabled according to FLAGS_enable_remote_h2d.
- * @return true if remote H2D is enabled.
- */
-bool IsRemoteH2DEnabled();
-
-/**
- * @brief Register host side memory (shared memory) to NPU device as segment.
- * @param[in] data The memory address.
- * @param[in] dataSize The size of the memory segment.
- * @return Status of the call.
- */
-Status RegisterHostMemory(void *segAddress, const uint64_t &segSize);
-
-/**
- * @brief Check if fast transport is enabled.
- * @return True if fast transport logic is compiled and the flag is set, else false.
- */
-bool IsFastTransportEnabled();
-
-/**
- * @brief Check if URMA is enabled.
- * @return True if URMA logic is compiled and the flag is set, else false.
- */
-bool IsUrmaEnabled();
-
-/**
  * @brief Set the fast transport mode for the client.
  * @param[in] fastTransportMode The fast transport mode, e.g. UB.
  * @param[in] transportSize The size of the client transport.
  */
 void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize);
-
-/**
- * @brief Check if Ucp is enabled.
- * @return True if Ucp logic is compiled and the flag is set, else false.
- */
-bool IsUcpEnabled();
 
 /**
  * @brief Initialize Fast Transport Manager.
@@ -108,30 +77,6 @@ Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress);
  * @return Status of the call.
  */
 Status RemoveRemoteFastTransportClient(const ClientKey &clientId);
-
-/**
- * @brief Check if the whole arena needs to be registered.
- * @return True if the whole arena needs to be registered, else false.
- */
-bool NeedRegisterWholeArena();
-
-/**
- * @brief Register fast transport memory (as segment).
- * @param[in] segAddress Starting address of the segment.
- * @param[in] segSize Size of the segment.
- * @return Status of the call.
- */
-Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize);
-
-/**
- * @brief Wait for the event of urma_write/ucp_put_nbx finish.
- * @param[in] keys The request ids to wait for events.
- * @param[in] remainingTime The callback to calculate remaining time.
- * @param[in] errorHandler The error handling callback.
- * @return Status of the call.
- */
-Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
-                              std::function<Status(Status &)> errorHandler);
 
 /**
  * @brief Calculate the segment info (address and size) from shared memory unit.

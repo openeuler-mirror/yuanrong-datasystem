@@ -20,7 +20,7 @@
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"

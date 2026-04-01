@@ -66,6 +66,7 @@ ds_cc_library(
         ":common_shm_unit_info",
         "//src/datasystem/common:common_constants",
         "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rdma:fast_transport_base_header",
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:common_util_base",
         "//src/datasystem/common/util:file_util",
