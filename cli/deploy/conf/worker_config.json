@@ -15,6 +15,14 @@
         "value": "",
         "description": "Password for ETCD authentication. Leave empty to disable ETCD auth."
     },
+    "metastore_address": {
+        "value": "",
+        "description": "Address of metastore server (e.g., \"127.0.0.1:2379\"). When specified, it replaces etcd for cluster coordination."
+    },
+    "start_metastore_service": {
+        "value": "false",
+        "description": "Start metastore service on this worker node. Only the head node should set this to true."
+    },
     "shared_memory_size_mb": {
         "value": "1024",
         "description": "Upper limit of the shared memory, the unit is mb, must be greater than 0."
