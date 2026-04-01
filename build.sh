@@ -124,6 +124,7 @@ function init_default_opts() {
   export INSTALL_DIR="${DATASYSTEM_DIR}/output"
   export BUILD_DIR="${DATASYSTEM_DIR}/build"
   export BUILD_THREAD_NUM=8
+  export TRANSFER_ENGINE_BUILD_THREAD_NUM=8
   export ADDITIONAL_CMAKE_OPTIONS=()
   export BUILD_INCREMENT="off"
   export BUILD_WITH_NINJA="off"
@@ -494,6 +495,7 @@ function build_datasystem()
     "-DENABLE_PERF:BOOL=${ENABLE_PERF}"
     "-DBUILD_PYTHON_API:BOOL=${PACKAGE_PYTHON}"
     "-DBUILD_THREAD_NUM:STRING=${BUILD_THREAD_NUM}"
+    "-DTRANSFER_ENGINE_BUILD_THREAD_NUM:STRING=${TRANSFER_ENGINE_BUILD_THREAD_NUM}"
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
     "-DBUILD_GO_API:BOOL=${PACKAGE_GO}"
@@ -632,9 +634,11 @@ function main() {
     j)
       check_number "${OPTARG}" j
       BUILD_THREAD_NUM="${OPTARG}"
+      TRANSFER_ENGINE_BUILD_THREAD_NUM="${OPTARG}"
       if [ ${OPTARG} -gt $logical_cpu_cout ]; then
-        echo -e "-- [Warning] The -j $BUILD_THREAD_NUM is over the max logical cpu count($logical_cpu_cout), set BUILD_THREAD_NUM to ($logical_cpu_cout)."
+        echo -e "-- [Warning] The -j $BUILD_THREAD_NUM is over the max logical cpu count($logical_cpu_cout), set BUILD_THREAD_NUM & TRANSFER_ENGINE_BUILD_THREAD_NUM to ($logical_cpu_cout)."
         BUILD_THREAD_NUM="$logical_cpu_cout"
+        TRANSFER_ENGINE_BUILD_THREAD_NUM="$logical_cpu_cout"
       fi
       ;;
     u)
