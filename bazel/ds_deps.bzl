@@ -203,21 +203,21 @@ def setup_pybind11():
     maybe(
         http_archive,
         name = "pybind11_bazel",
-        strip_prefix = "pybind11_bazel-2.11.1",
+        strip_prefix = "pybind11_bazel-2.13.6",
         urls = [
-            "https://github.com/pybind/pybind11_bazel/releases/download/v2.11.1/pybind11_bazel-2.11.1.zip",
+            "https://github.com/pybind/pybind11_bazel/archive/refs/tags/v2.13.6.tar.gz",
         ],
-        sha256 = "2c466c9b3cca7852b47e0785003128984fcf0d5d61a1a2e4c5aceefd935ac220",
+        sha256 = "cae680670bfa6e82703c03f2a3c995408cdcbf43616d7bdd198ef45d3c327731",
     )
     maybe(
         http_archive,
         name = "pybind11",
-        strip_prefix = "pybind11-2.11.1",
+        strip_prefix = "pybind11-2.13.6",
         urls = [
-            "https://github.com/pybind/pybind11/archive/refs/tags/v2.11.1.zip",
+            "https://github.com/pybind/pybind11/archive/refs/tags/v2.13.6.tar.gz",
         ],
-        build_file = "@pybind11_bazel//:pybind11.BUILD",
-        sha256 = "b011a730c8845bfc265f0f81ee4e5e9e1d354df390836d2a25880e123d021f89",
+        build_file = "@pybind11_bazel//:pybind11-BUILD.bazel",
+        sha256 = "e08cb87f4773da97fa7b5f035de8763abc656d87d5773e62f6da0587d1f0ec20",
     )
 
 def setup_gtest():
@@ -306,13 +306,12 @@ def setup_rocksdb():
 
 def setup_curl():
     maybe(
-        # 8.8.0
         http_archive,
         name = "curl",
-        sha256 = "77c0e1cd35ab5b45b659645a93b46d660224d0024f1185e8a95cdb27ae3d787d",
-        strip_prefix = "curl-8.8.0",
+        sha256 = "264537d90e58d2b09dddc50944baf3c38e7089151c8986715e2aaeaaf2b8118f",
+        strip_prefix = "curl-8.11.0",
         urls = [
-            "https://github.com/curl/curl/releases/download/curl-8_8_0/curl-8.8.0.tar.gz",
+            "https://github.com/curl/curl/releases/download/curl-8_11_0/curl-8.11.0.tar.gz",
         ],
         build_file = "@yuanrong-datasystem//third_party:curl.BUILD",
     )

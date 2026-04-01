@@ -32,3 +32,36 @@ python_configure(name = "local_config_python")
 load("@rules_python//python:repositories.bzl", "py_repositories")
 
 py_repositories()
+
+load("@rules_python//python:repositories.bzl", "python_register_toolchains")
+
+python_register_toolchains(
+    name = "python_3_9",
+    python_version = "3.9",
+)
+
+python_register_toolchains(
+    name = "python_3_10",
+    python_version = "3.10",
+)
+
+python_register_toolchains(
+    name = "python_3_11",
+    python_version = "3.11",
+)
+
+python_register_toolchains(
+    name = "python_3_12",
+    python_version = "3.12",
+)
+
+python_register_toolchains(
+    name = "python_3_13",
+    python_version = "3.13",
+)
+
+load("@python_3_9//:defs.bzl", "interpreter")
+load("@python_3_10//:defs.bzl", "interpreter")
+load("@python_3_11//:defs.bzl", "interpreter")
+load("@python_3_12//:defs.bzl", "interpreter")
+load("@python_3_13//:defs.bzl", "interpreter")
