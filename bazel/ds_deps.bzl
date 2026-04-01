@@ -122,6 +122,7 @@ def setup_tbb():
         ],
         patches = [
             "@yuanrong-datasystem//third_party/patches/tbb:2020.3/soft-link.patch",
+            "@yuanrong-datasystem//third_party/patches/tbb:2020.3/adapt-task.h-to-gcc-14.patch",
         ],
         patch_args = ["-p1"],
         build_file = "@yuanrong-datasystem//third_party:tbb.BUILD",
@@ -296,6 +297,10 @@ def setup_rocksdb():
         urls = [
             "https://github.com/facebook/rocksdb/archive/refs/tags/v7.10.2.tar.gz",
         ],
+        patches = [
+            "@yuanrong-datasystem//third_party/patches/rocksdb:include-algorithm-for-gcc-14.patch",
+        ],
+        patch_args = ["-p1"],
         build_file = "@yuanrong-datasystem//third_party:rocksdb.BUILD",
     )
 
