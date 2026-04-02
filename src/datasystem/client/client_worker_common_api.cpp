@@ -304,8 +304,7 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
 
     if (isConnectSuccess) {
         LOG(INFO) << "Client and worker support transfer data through shared memory and the fd send over "
-                  << ShmEnableTypeName(shmEnableType)
-                  << ", socketFd: " << socketFd << ", serverFd: " << serverFd;
+                  << ShmEnableTypeName(shmEnableType) << ", socketFd: " << socketFd << ", serverFd: " << serverFd;
     }
 
     CloseSocketFd();
@@ -356,7 +355,7 @@ Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, const st
     INJECT_POINT("ClientWorkerCommonApi.CreateHandShakeFunc");
 #endif
     CHECK_FAIL_RETURN_STATUS(tmpServerFd <= INT32_MAX, K_RUNTIME_ERROR, "Server fd exceed range of int32_t");
-
+    serverFd = static_cast<int32_t>(tmpServerFd);  // The FD sent by the worker is of the int type.
     if (shmWorkerPort_ > 0) {
         // check the client and worker in the same node.
         std::vector<int> clientFds;
@@ -367,7 +366,6 @@ Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, const st
             RETRY_ON_EINTR(close(fd));
         }
     }
-    serverFd = static_cast<int32_t>(tmpServerFd);  // The FD sent by the worker is of the int type.
     LOG(INFO) << FormatString("Connects to local server %s successfully. Client fd %d. Server fd %d.", endpoint,
                               fd.GetFd(), serverFd);
     // Change the timeout back to the default.
@@ -675,7 +673,7 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
     }
 #ifdef WITH_TESTS
     PerfPoint point(PerfKey::RPC_WORKER_GET_CLIENT_FDS);
- #endif
+#endif
     GetClientFdReqPb req;
     GetClientFdRspPb rsp;
     req.set_client_id(clientId_);

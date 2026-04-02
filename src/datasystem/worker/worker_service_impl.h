@@ -75,11 +75,11 @@ public:
 
     /**
      * @brief Register a client
-     * @param [in] pb The rpc request protobuf
-     * @param [out] rspPb The rpc response protobuf
+     * @param [in] req The rpc request protobuf
+     * @param [out] rsp The rpc response protobuf
      * @return Status of the call
      */
-    Status RegisterClient(const RegisterClientReqPb &pb, RegisterClientRspPb &rspPb) override;
+    Status RegisterClient(const RegisterClientReqPb &req, RegisterClientRspPb &rsp) override;
 
     /**
      * @brief Close the Fd for the client to be shutting down.
@@ -143,7 +143,7 @@ private:
      * @brief Set available worker in response.
      * @param[in/out] rsp Heartbeat response.
      */
-    template<typename Protobuf>
+    template <typename Protobuf>
     void SetAvailableWorkers(Protobuf &rsp)
     {
         if (etcdCM_ == nullptr) {
