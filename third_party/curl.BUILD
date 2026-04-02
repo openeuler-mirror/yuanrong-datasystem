@@ -220,17 +220,31 @@ _BASE_CURL_COPTS = [
     "-DCURL_HIDDEN_SYMBOLS",
 ]
 
+genrule(
+    name = "generate_curl_config",
+    outs = ["curl_config.h"],
+    cmd = "\n".join([
+        "echo '#ifndef CURL_CONFIG_H' > $@",
+        "echo '#define CURL_CONFIG_H' >> $@",
+        "echo '/* All macros are defined via copts in BUILD.bazel */' >> $@",
+        "echo '#endif' >> $@",
+    ]),
+)
+
 cc_library(
     name = "curl",
     srcs = glob([
         "lib/**/*.c",
         "lib/**/*.h",
-    ]),
-    hdrs = glob(["include/curl/*.h"]),
+    ]) + [":generate_curl_config"],
+    hdrs = glob(["include/curl/*.h"]) + [":generate_curl_config"],
     copts = _BASE_CURL_COPTS + [
-          "-DHAVE_LINUX_TCP_H=1",
-          "-DHAVE_MSG_NOSIGNAL=1",
-          "-DOS=\"os\"",
+        "-DHAVE_LINUX_TCP_H=1",
+        "-DHAVE_MSG_NOSIGNAL=1",
+        "-DOS=os",
+        "-DCURL_OS=\"Linux\"",
+        "-DHAVE_CONFIG_H",
+        "-I$(GENDIR)/external/curl",
     ],
     defines = ["CURL_STATICLIB"],
     includes = [
