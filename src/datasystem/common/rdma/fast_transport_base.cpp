@@ -23,7 +23,9 @@
 #ifdef USE_RDMA
 #include "datasystem/common/rdma/ucp_manager.h"
 #endif
-
+#ifdef BUILD_HETERO
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 
 namespace datasystem {
 

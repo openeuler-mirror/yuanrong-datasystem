@@ -27,6 +27,7 @@
 #include <optional>
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/flags/flags.h"
@@ -38,6 +39,8 @@
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/util/thread_pool.h"
+
+DS_DECLARE_string(remote_h2d_device_ids);
 
 namespace datasystem {
 
