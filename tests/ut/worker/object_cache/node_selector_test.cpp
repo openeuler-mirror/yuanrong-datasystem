@@ -24,9 +24,9 @@
 #include <gtest/gtest.h>
 
 #include "../../../common/binmock/binmock.h"
-#include "common.h"
-#include "datasystem/common/shared_memory/allocator.h"
+#include "ut/common.h"
 #include "datasystem/common/constants.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/master/resource_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"

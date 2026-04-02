@@ -1,0 +1,333 @@
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Library exposing oc_client_common.h with includes=["."] so tests in this
+# package and dependents can use #include "oc_client_common.h" directly.
+ds_cc_test_library(
+    name = "oc_client_common",
+    hdrs = ["oc_client_common.h"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//tests/st:st_common",
+    ],
+)
+
+# Common deps for most OC client tests
+OC_CLIENT_COMMON_DEPS = [
+    ":oc_client_common",
+    "//src/datasystem/client:datasystem",
+    "//src/datasystem/common/inject:common_inject",
+    "//src/datasystem/common/log:common_log",
+    "//src/datasystem/common/util:status_helper",
+    "//tests/st:st_common",
+]
+
+ds_cc_test(
+    name = "cache_session_test",
+    srcs = ["cache_session_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "client_common_worker_api_test",
+    srcs = ["client_common_worker_api_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+    ],
+)
+
+ds_cc_test(
+    name = "client_dfx_test",
+    srcs = ["client_dfx_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:random_data",
+    ],
+)
+
+ds_cc_test(
+    name = "client_get_test",
+    srcs = ["client_get_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_test(
+    name = "client_skip_auth_test",
+    srcs = ["client_skip_auth_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_test(
+    name = "client_update_test",
+    srcs = ["client_update_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "hetero_client_mock_test",
+    srcs = ["hetero_client_mock_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/hetero_cache:hetero_client",
+        "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:p2p_subscribe_cc_proto",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_big_buffer_test",
+    srcs = ["object_client_big_buffer_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_replica_test",
+    srcs = ["object_client_replica_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_scale_test",
+    srcs = ["object_client_scale_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:net_util",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_tenant_test",
+    srcs = ["object_client_tenant_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/context",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_test",
+    srcs = ["object_client_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_with_tcp_test",
+    srcs = ["object_client_with_tcp_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+    ],
+)
+
+ds_cc_test(
+    name = "object_client_with_token_test",
+    srcs = ["object_client_with_token_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_auth_compatibility_test",
+    srcs = ["oc_auth_compatibility_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/protos:ut_object_cc_proto",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_client_allocate_disk_test",
+    srcs = ["oc_client_allocate_disk_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "oc_client_dist_master_test",
+    srcs = ["oc_client_dist_master_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "oc_client_get_mem_alloc_optimize_test",
+    srcs = ["oc_client_get_mem_alloc_optimize_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/common/util:wait_post",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_client_liveness_check_test",
+    srcs = ["oc_client_liveness_check_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_client_plaintext_zmq_curve_test",
+    srcs = ["oc_client_plaintext_zmq_curve_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_client_publish_test",
+    srcs = ["oc_client_publish_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_client_ref_test",
+    srcs = ["oc_client_ref_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_client_worker_heartbeat_test",
+    srcs = ["oc_client_worker_heartbeat_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_service_disable_test",
+    srcs = ["oc_service_disable_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+    ],
+)
+
+ds_cc_test(
+    name = "rdma_object_client_test",
+    srcs = ["rdma_object_client_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "shm_threshold_test",
+    srcs = ["shm_threshold_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_object_client_test",
+    srcs = ["urma_object_client_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache:object_client_impl",
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/util:uuid_generator",
+        "@securec",
+    ],
+)

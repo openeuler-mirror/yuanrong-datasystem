@@ -20,7 +20,7 @@
 #include <vector>
 #include <thread>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/log/log.h"
 

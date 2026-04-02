@@ -58,7 +58,6 @@ build:coverage --cxxopt=-DBUILD_COVERAGE
 
 build --cxxopt=-UENABLE_PERF
 build:hetero --cxxopt=-DBUILD_HETERO
-build --cxxopt=-UWITH_TESTS
 
 build --copt="-Wno-error"
 build --copt="-Wno-missing-field-initializers"
@@ -78,3 +77,8 @@ build:py310 --@rules_python//python/config_settings:python_version=3.10
 build:py311 --@rules_python//python/config_settings:python_version=3.11
 build:py312 --@rules_python//python/config_settings:python_version=3.12
 build:py313 --@rules_python//python/config_settings:python_version=3.13
+
+build:test --define=with_tests=true
+build:test --cxxopt=-DWITH_TESTS
+test --define=with_tests=true
+test --cxxopt=-DWITH_TESTS

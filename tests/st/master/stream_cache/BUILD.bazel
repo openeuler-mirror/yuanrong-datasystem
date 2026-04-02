@@ -1,0 +1,35 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "pub_sub_topo_concurrent_test",
+    srcs = ["pub_sub_topo_concurrent_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/stream_cache:consumer",
+        "//src/datasystem/client/stream_cache:producer",
+        "//src/datasystem/client/stream_cache:stream_client",
+        "//src/datasystem/worker/stream_cache:worker_master_sc_api",
+        "//tests/st:st_common",
+        "//tests/st/common/stream_cache:stream_common",
+    ],
+)
+
+ds_cc_test(
+    name = "pub_sub_topo_test",
+    srcs = ["pub_sub_topo_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/stream_cache:consumer",
+        "//src/datasystem/client/stream_cache:producer",
+        "//src/datasystem/client/stream_cache:stream_client",
+        "//src/datasystem/worker/stream_cache:worker_master_sc_api",
+        "//tests/st:st_common",
+        "//tests/st/common/stream_cache:stream_common",
+    ],
+)

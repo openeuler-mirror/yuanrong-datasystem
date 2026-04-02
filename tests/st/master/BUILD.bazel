@@ -1,0 +1,18 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "replica_manager_test",
+    srcs = ["replica_manager_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/master:replica_manager",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "//tests/st:st_common",
+    ],
+)

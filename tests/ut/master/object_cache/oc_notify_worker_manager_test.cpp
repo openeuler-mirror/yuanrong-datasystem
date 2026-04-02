@@ -22,9 +22,8 @@
 #include <string>
 #include <vector>
 
-#include "common.h"
+#include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
-#include "datasystem/worker/worker.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 
@@ -119,7 +118,8 @@ TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
     std::thread t([] {
         const int timeoutMs = 100;
         std::this_thread::sleep_for(std::chrono::milliseconds(timeoutMs));
-        SignalHandler(SIGTERM);
+        datasystem::g_exitFlag = 1;
+        datasystem::g_termSignalCv.notify_all();
     });
     std::unordered_map<std::string, std::unordered_set<std::string>> input;
     input["127.0.0.1:901"].insert("key1");

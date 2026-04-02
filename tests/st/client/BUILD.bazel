@@ -1,0 +1,45 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "ds_client_test",
+    srcs = ["ds_client_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
+    name = "listen_worker_test",
+    srcs = ["listen_worker_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "router_client_test",
+    srcs = ["router_client_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)

@@ -18,7 +18,7 @@
  * Description: Test of skip list
  */
 #include <thread>
-#include "common.h"
+#include "ut/common.h"
 
 #include "datasystem/common/util/skip_list.h"
 #include "datasystem/common/util/thread_pool.h"

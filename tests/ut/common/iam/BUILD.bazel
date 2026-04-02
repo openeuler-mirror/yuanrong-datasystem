@@ -1,0 +1,26 @@
+# tests/ut/common/iam/BUILD.bazel
+"""IAM 组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# 租户认证管理器测试
+ds_cc_test(
+    name = "tenant_auth_manager_test",
+    srcs = ["tenant_auth_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/common/iam:common_iam",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 元戎 IAM 测试
+ds_cc_test(
+    name = "yuanrong_iam_test",
+    srcs = ["yuanrong_iam_test.cpp"],
+    deps = [
+        "//src/datasystem/common/iam:common_iam",
+        "//tests/ut:ut_common",
+    ],
+)

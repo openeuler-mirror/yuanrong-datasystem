@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"

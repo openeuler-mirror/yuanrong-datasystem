@@ -331,6 +331,12 @@ Status Replica::HandleFetchFile(const std::string &backupNodeId, const std::stri
     }
     uint64_t fileSize = 0;
     env_->GetFileSize(absPath, &fileSize);
+    // Handle empty files - return immediately with isFinish=true
+    if (fileSize == 0) {
+        isFinish = true;
+        data.clear();
+        return Status::OK();
+    }
     int fd;
     RETURN_IF_NOT_OK(OpenFile(absPath, O_RDONLY, &fd));
     Raii raii([&fd] { RETRY_ON_EINTR(close(fd)); });

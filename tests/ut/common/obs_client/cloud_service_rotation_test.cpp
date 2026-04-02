@@ -18,7 +18,7 @@
  * Description: Cloud service rotation test.
  */
 
-#include "common.h"
+#include "ut/common.h"
 
 #include <memory>
 

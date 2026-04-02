@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "datasystem/common/object_cache/lock.h"
-#include "common.h"
+#include "ut/common.h"
 
 static constexpr char READ = 'r';
 static constexpr char WRITE = 'w';

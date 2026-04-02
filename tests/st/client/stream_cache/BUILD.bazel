@@ -1,0 +1,313 @@
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "sc_client_common",
+    hdrs = [
+        "pub_sub_utils.h",
+        "sc_client_common.h",
+    ],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/stream_cache:consumer",
+        "//src/datasystem/client/stream_cache:producer",
+        "//src/datasystem/client/stream_cache:stream_client",
+        "//tests/st:st_common",
+        "//tests/st/common/stream_cache:stream_common",
+    ],
+)
+
+SC_COMMON_DEPS = [
+    ":sc_client_common",
+    "//src/datasystem/client:datasystem",
+    "//src/datasystem/client/stream_cache:consumer",
+    "//src/datasystem/client/stream_cache:producer",
+    "//src/datasystem/client/stream_cache:stream_client",
+    "//src/datasystem/common/inject:common_inject",
+    "//src/datasystem/common/log:common_log",
+    "//src/datasystem/common/util:status_helper",
+    "//tests/st:st_common",
+    "//tests/st/common/stream_cache:stream_common",
+]
+
+ds_cc_test(
+    name = "client_crash_test",
+    srcs = ["client_crash_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
+    name = "client_worker_heartbeat_test",
+    srcs = ["client_worker_heartbeat_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/stream_cache:stream_cache_impl",
+    ],
+)
+
+ds_cc_test(
+    name = "consumer_large_page_test",
+    srcs = ["consumer_large_page_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "consumer_test",
+    srcs = ["consumer_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/encrypt:common_encrypt",
+    ],
+)
+
+ds_cc_test(
+    name = "delete_stream_concurrent_test",
+    srcs = ["delete_stream_concurrent_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/stream_cache:stream_cache_impl",
+    ],
+)
+
+ds_cc_test(
+    name = "delete_stream_test",
+    srcs = ["delete_stream_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:random_data",
+    ],
+)
+
+ds_cc_test(
+    name = "mem_ctrl_boundary_case_test",
+    srcs = ["mem_ctrl_boundary_case_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "mem_ctrl_test",
+    srcs = ["mem_ctrl_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/stream_cache:stream_cache_impl",
+    ],
+)
+
+ds_cc_test(
+    name = "multi_producer_multi_consumer_test",
+    srcs = ["multi_producer_multi_consumer_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/stream_cache:stream_cache_impl",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_test(
+    name = "producer_test",
+    srcs = ["producer_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client:mmap_manager",
+    ],
+)
+
+ds_cc_test(
+    name = "pub_sub_complex_test",
+    srcs = ["pub_sub_complex_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:thread_local",
+    ],
+)
+
+ds_cc_test(
+    name = "pub_sub_multinode_test",
+    srcs = ["pub_sub_multinode_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "pub_sub_test",
+    srcs = ["pub_sub_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "query_stream_topo_test",
+    srcs = ["query_stream_topo_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)
+
+ds_cc_test(
+    name = "remote_push_test",
+    srcs = ["remote_push_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "remote_send_recv_test",
+    srcs = ["remote_send_recv_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "reset_stream_test",
+    srcs = ["reset_stream_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:random_data",
+    ],
+)
+
+ds_cc_test(
+    name = "retain_data_test",
+    srcs = ["retain_data_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/encrypt:common_encrypt",
+    ],
+)
+
+ds_cc_test(
+    name = "sc_client_aksk_auth_test",
+    srcs = ["sc_client_aksk_auth_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/context",
+    ],
+)
+
+ds_cc_test(
+    name = "sc_client_evict_object_test",
+    srcs = ["sc_client_evict_object_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
+    name = "sc_client_token_auth_test",
+    srcs = ["sc_client_token_auth_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/client/context",
+    ],
+)
+
+ds_cc_test(
+    name = "sc_metrics_test",
+    srcs = ["sc_metrics_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "shared_page_send_recv_test",
+    srcs = ["shared_page_send_recv_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:random_data",
+    ],
+)
+
+ds_cc_test(
+    name = "single_consumer_topo_test",
+    srcs = ["single_consuemr_topo_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "stream_client_replica_test",
+    srcs = ["stream_client_replica_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
+    name = "stream_client_scale_test",
+    srcs = ["stream_client_scale_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "stream_data_encryption_test",
+    srcs = ["stream_data_encryption_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/encrypt:common_encrypt",
+    ],
+)
+
+ds_cc_test(
+    name = "stream_dfx_send_recv_test",
+    srcs = ["stream_dfx_send_recv_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "stream_dfx_test",
+    srcs = ["stream_dfx_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "stream_meta_shm_test",
+    srcs = ["stream_meta_shm_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+ds_cc_test(
+    name = "stream_multi_tenant_test",
+    srcs = ["stream_multi_tenant.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "stream_observability_test",
+    srcs = ["stream_observability_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "stream_size_test",
+    srcs = ["stream_size_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS,
+)

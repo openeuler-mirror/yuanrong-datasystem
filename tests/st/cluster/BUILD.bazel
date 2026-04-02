@@ -1,0 +1,40 @@
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["common.cpp"])
+
+# st_cluster 需要将 tests/st/ 加入 include 路径，以支持 "cluster/xxx.h" 风格的 include
+cc_library(
+    name = "st_cluster",
+    srcs = [
+        "external_cluster.cpp",
+        "subprocess.cpp",
+    ],
+    hdrs = [
+        "base_cluster.h",
+        "external_cluster.h",
+        "subprocess.h",
+    ],
+    copts = [
+        '-DMASTER_BIN_PATH=\\"/usr/local/bin/master\\"',
+        '-DWORKER_BIN_PATH=\\"/usr/local/bin/datasystem_worker\\"',
+        '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
+    ],
+    includes = [".."],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/protos:generic_service_zmq_cc_proto",
+        "@com_google_googletest//:gtest",
+        "@securec",
+    ],
+)

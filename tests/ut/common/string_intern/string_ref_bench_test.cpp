@@ -23,7 +23,7 @@
 #include <random>
 #include <unordered_map>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/timer.h"

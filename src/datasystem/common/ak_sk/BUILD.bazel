@@ -1,4 +1,3 @@
-# BUILD file for src/datasystem/common/agc
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -11,6 +10,10 @@ ds_cc_library(
     hdrs = [
         "ak_sk_manager.h",
     ],
+    defines = select({
+        "//:with_tests": ["WITH_TESTS=1"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":hasher",
         ":signature",
@@ -35,7 +38,10 @@ ds_cc_library(
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_local",
         "@boringssl//:ssl",
-    ],
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
 )
 
 ds_cc_library(

@@ -1,0 +1,101 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "expired_object_manager_test",
+    srcs = ["expired_object_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "master_dev_dead_lock_manager_test",
+    srcs = ["master_dev_dead_lock_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/master/object_cache/device:master_dev_dead_lock_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "master_dev_oc_directory_test",
+    srcs = ["master_dev_oc_directory_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/master/object_cache/device:master_dev_oc_directory",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "master_dev_oc_manager_test",
+    srcs = ["master_dev_oc_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/master/object_cache/device:master_dev_oc_manager",
+        "//src/datasystem/protos:p2p_subscribe_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "meta_async_queue_test",
+    srcs = ["meta_async_queue_test.cpp"],
+    deps = [
+        "//src/datasystem/master/object_cache/store:meta_async_queue",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "object_meta_store_test",
+    srcs = ["object_meta_store_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/master/object_cache/store:object_meta_store",
+        "//src/datasystem/worker/hash_ring",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_notify_worker_manager_test",
+    srcs = ["oc_notify_worker_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/signal:signal",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//tests/common/binmock:binmock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+test_suite(
+    name = "all_master_oc_tests",
+    tests = [
+        "expired_object_manager_test",
+        "master_dev_dead_lock_manager_test",
+        "master_dev_oc_directory_test",
+        "master_dev_oc_manager_test",
+        "meta_async_queue_test",
+        "object_meta_store_test",
+        "oc_notify_worker_manager_test",
+    ],
+)

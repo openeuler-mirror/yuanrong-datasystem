@@ -20,7 +20,7 @@
 
 #include <unistd.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "eviction_manager_common.h"

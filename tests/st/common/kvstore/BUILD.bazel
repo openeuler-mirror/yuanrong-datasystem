@@ -1,0 +1,44 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "etcd_store_test",
+    srcs = ["etcd_store_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/kvstore/etcd:etcd_watch",
+        "//src/datasystem/common/kvstore/etcd:grpc_session",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:ssl_authorization",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/client/object_cache:object_client",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "grpc_session_test",
+    srcs = ["grpc_session_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:grpc_session",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "rocks_store_test",
+    srcs = ["rocks_store_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//tests/st:st_common",
+    ],
+)

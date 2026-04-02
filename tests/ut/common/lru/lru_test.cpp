@@ -20,7 +20,7 @@
 #include <memory>
 #include <string>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/lru/lru_cache.h"
 #include "datasystem/common/util/bitmask_enum.h"
 #include "datasystem/common/util/status_helper.h"

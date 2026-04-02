@@ -1,0 +1,21 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "embedded_client_test",
+    srcs = ["embedded_client_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/client/object_cache:object_client",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)

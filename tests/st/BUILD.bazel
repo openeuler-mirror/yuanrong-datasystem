@@ -1,0 +1,49 @@
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# ST 公共基础库：common.h、kill_timer.h、st_oc_service_impl 等
+# includes = ["."] 将 tests/st/ 加入 include 路径，使得 "common.h"、
+# "cluster/xxx.h"、"client/xxx.h" 等相对于 tests/st/ 的 include 均可工作
+ds_cc_test_library(
+    name = "st_common",
+    visibility = ["//visibility:public"],
+    srcs = [
+        "st_oc_service_impl.cpp",
+        "//tests/st/cluster:common.cpp",
+    ],
+    hdrs = [
+        "common.h",
+        "common_distributed_ext.h",
+        "kill_timer.h",
+        "st_oc_service_impl.h",
+        "zmq_curve_test_common.h",
+    ],
+    copts = [
+        '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/master:replica_manager",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/protos:ut_object_zmq_cc_proto",
+        "//src/datasystem/worker:authenticate",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+# hashring_parser 工具二进制
+cc_binary(
+    name = "hashring_parser",
+    srcs = ["hashring_parser.cpp"],
+    deps = [
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "@com_google_protobuf//:protobuf",
+    ],
+)

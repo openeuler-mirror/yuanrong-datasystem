@@ -22,7 +22,7 @@
 #include <gtest/gtest.h>
 #include <string>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/constants.h"

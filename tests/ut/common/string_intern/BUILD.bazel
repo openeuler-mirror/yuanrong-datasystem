@@ -1,0 +1,26 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "string_ref_test",
+    srcs = ["string_ref_test.cpp"],
+    deps = [
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/ut:ut_common",
+        "@tbb",
+    ],
+)
+
+ds_cc_test(
+    name = "string_ref_bench_test",
+    srcs = ["string_ref_bench_test.cpp"],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:wait_post",
+        "//tests/ut:ut_common",
+    ],
+)

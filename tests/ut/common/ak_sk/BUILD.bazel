@@ -1,0 +1,19 @@
+# tests/ut/common/ak_sk/BUILD.bazel
+"""AK/SK 组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "ak_sk_test",
+    srcs = ["ak_sk_test.cpp"],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)

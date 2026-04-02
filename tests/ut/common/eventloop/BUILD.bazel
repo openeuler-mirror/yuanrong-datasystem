@@ -1,0 +1,26 @@
+# tests/ut/common/eventloop/BUILD.bazel
+"""事件循环组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# 事件循环测试
+ds_cc_test(
+    name = "eventloop_test",
+    srcs = ["eventloop_test.cpp"],
+    deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 定时器测试
+ds_cc_test(
+    name = "timer_test",
+    srcs = ["timer_test.cpp"],
+    deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//tests/ut:ut_common",
+    ],
+)

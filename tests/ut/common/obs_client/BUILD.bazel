@@ -1,0 +1,26 @@
+# tests/ut/common/obs_client/BUILD.bazel
+"""OBS 客户端组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+## TODO : uncomment when obs supported
+#ds_cc_test(
+#    name = "cloud_service_rotation_test",
+#    srcs = ["cloud_service_rotation_test.cpp"],
+#    deps = [
+#        "//src/datasystem/common/l2cache/obs_client",
+#        "//tests/ut:ut_common",
+#    ],
+#)
+
+## TODO : uncomment when obs supported
+#ds_cc_test(
+#    name = "obs_client_test",
+#    srcs = ["obs_client_test.cpp"],
+#    deps = [
+#        "//src/datasystem/common/l2cache/obs_client",
+#        "//tests/ut:ut_common",
+#    ],
+#)

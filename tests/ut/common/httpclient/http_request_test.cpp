@@ -17,7 +17,7 @@
 /**
  * Description: http request test.
  */
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/httpclient/http_message.h"
 #include "datasystem/common/httpclient/http_request.h"
 #include "datasystem/common/log/log.h"

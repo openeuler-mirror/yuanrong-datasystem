@@ -20,7 +20,7 @@
 
 #include <map>
 
-#include "common.h"
+#include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/stream/stream_config.h"

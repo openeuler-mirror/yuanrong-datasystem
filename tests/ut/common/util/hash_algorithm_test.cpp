@@ -17,7 +17,7 @@
 /**
  * Description: Hash algorithm test.
  */
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/hash_algorithm.h"
 
@@ -41,7 +41,8 @@ TEST_F(HashAlgorithmTest, RedirectInject)
     const uint32_t node0_redirect = 116852666;
     const uint32_t node1_redirect = 457913941;
     const uint32_t node2_redirect = 715827882;
-    datasystem::inject::Set("add.node.redirect", "3*return()");
+    DS_EXPECT_OK(datasystem::inject::Set("add.node.redirect", "3*return()"));
+    LOG(INFO) << "Injection point set, current count: " << datasystem::inject::GetExecuteCount("add.node.redirect");
 
     std::string data = "redirect_test_0";
     EXPECT_EQ(MurmurHash3_32(data), node0_redirect);

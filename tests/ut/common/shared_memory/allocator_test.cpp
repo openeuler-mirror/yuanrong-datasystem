@@ -31,7 +31,7 @@
 #include <jemalloc/jemalloc.h>
 #undef JEMALLOC_NO_DEMANGLE
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"

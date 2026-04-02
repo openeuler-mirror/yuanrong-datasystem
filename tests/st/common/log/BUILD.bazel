@@ -1,0 +1,28 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "kv_cache_log_performance_test",
+    srcs = ["kv_cache_log_performance_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
+    name = "logging_free_test",
+    srcs = ["logging_free_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/common/util:wait_post",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)

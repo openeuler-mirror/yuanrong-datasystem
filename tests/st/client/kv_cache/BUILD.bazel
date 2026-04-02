@@ -1,0 +1,378 @@
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "kv_client_common",
+    hdrs = [
+        "kv_client_common.h",
+        "kv_client_scale_common.h",
+    ],
+    deps = [
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+KV_COMMON_DEPS = [
+    ":kv_client_common",
+    "//src/datasystem/client:datasystem",
+    "//src/datasystem/client/kv_cache:kv_client",
+    "//src/datasystem/common/inject:common_inject",
+    "//src/datasystem/common/log:common_log",
+    "//src/datasystem/common/util:status_helper",
+    "//tests/st:st_common",
+    "//tests/st/client/object_cache:oc_client_common",
+]
+
+ds_cc_test(
+    name = "kv_cache_client_evict_test",
+    srcs = ["kv_cache_client_evict_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_client_exist_test",
+    srcs = ["kv_cache_client_exist_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/flags:ds_flags",
+        "@com_google_googletest//:gmock",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_client_expire_test",
+    srcs = ["kv_cache_client_expire_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/flags:ds_flags",
+        "@com_google_googletest//:gmock",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_client_mem_ref_test",
+    srcs = ["kv_cache_client_mem_ref_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_client_shm_over_tcp_test",
+    srcs = ["kv_cache_client_shm_over_tcp_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_client_storage_test",
+    srcs = ["kv_cache_client_storage_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_client_test",
+    srcs = ["kv_cache_client_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_exclusive_client_test",
+    srcs = ["kv_cache_exclusive_client_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "kv_cache_existence_opt_test",
+    srcs = ["kv_cache_existence_opt_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_cache_ttl_test",
+    srcs = ["kv_cache_ttl_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_centralized_scaleup_test",
+    srcs = ["kv_client_centralized_scaleup_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_cross_az_del_test",
+    srcs = ["kv_client_cross_az_del_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_cross_az_test",
+    srcs = ["kv_client_cross_az_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_dist_master_test",
+    srcs = ["kv_client_dist_master_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_etcd_dfx_test",
+    srcs = ["kv_client_etcd_dfx_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:timer",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_hashring_healing_test",
+    srcs = ["kv_client_hashring_healing_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/worker/hash_ring",
+        "//src/datasystem/worker/hash_ring:hash_ring_tools",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_hit_test",
+    srcs = ["kv_client_hit_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_log_monitor_test",
+    srcs = ["kv_client_log_monitor_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_mset_scale_test",
+    srcs = ["kv_client_mset_scale_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "kv_client_mset_test",
+    srcs = ["kv_client_mset_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:random_data",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_offset_read_one_host_test",
+    srcs = ["kv_client_offset_read_one_host_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_replica_scale_test",
+    srcs = ["kv_client_replica_scale_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_replica_test",
+    srcs = ["kv_client_replica_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_scale_test",
+    srcs = ["kv_client_scale_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_spill_remote_tcp_test",
+    srcs = ["kv_client_spill_remote_tcp_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_tenant_akskauth_test",
+    srcs = ["kv_client_tenant_akskauth_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/context",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_tenant_auth_test",
+    srcs = ["kv_client_tenant_auth_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/context",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_voluntary_scale_down_test",
+    srcs = ["kv_client_voluntary_scale_down_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_with_no_heartbeat_test",
+    srcs = ["kv_client_with_no_heartbeat_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "kv_client_worker_timeout_storage_test",
+    srcs = ["kv_client_worker_timeout_storage.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/worker/hash_ring",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_write_back_l2_cache_evict_test",
+    srcs = ["kv_client_write_back_l2_cache_evict_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS,
+)
+
+ds_cc_test(
+    name = "kv_network_error_test",
+    srcs = ["kv_network_error_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+    ],
+)

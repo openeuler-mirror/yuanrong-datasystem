@@ -26,7 +26,7 @@
 #include <gtest/gtest.h>
 #include <google/protobuf/repeated_field.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/httpclient/http_client.h"
 #include "datasystem/common/iam/iam.h"
 #include "datasystem/common/iam/yuanrong_iam.h"
@@ -139,15 +139,6 @@ public:
     }
 };
 
-class TenantAuthManagerTest : public CommonTest {
-public:
-    void SetUp() override
-    {
-        FLAGS_v = 1;
-        ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
-    }
-};
-
 class MockTenantAuthManager : public TenantAuthManager {
 public:
     static MockTenantAuthManager *Instance()
@@ -161,6 +152,25 @@ public:
     void ResetIAM(std::shared_ptr<MockYuanRongIAM> iam)
     {
         iamAuth_ = iam;
+    }
+
+    void ClearCache()
+    {
+        // Clear all token and AK caches to prevent test pollution
+        clientTokenTable_.clear();
+        clientAkTable_.clear();
+        clientTokenTimer_.clear();
+    }
+};
+
+class TenantAuthManagerTest : public CommonTest {
+public:
+    void SetUp() override
+    {
+        FLAGS_v = 1;
+        ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
+        // Clear cache to prevent test pollution from previous tests
+        MockTenantAuthManager::Instance()->ClearCache();
     }
 };
 

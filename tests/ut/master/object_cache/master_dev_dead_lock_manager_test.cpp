@@ -21,7 +21,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/master/object_cache/device/master_dev_dead_lock_manager.h"
 #include "gtest/gtest.h"
 

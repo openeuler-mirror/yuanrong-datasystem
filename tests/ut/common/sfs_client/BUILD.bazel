@@ -1,0 +1,16 @@
+# tests/ut/common/sfs_client/BUILD.bazel
+"""SFS 客户端组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# SFS 客户端测试
+ds_cc_test(
+    name = "sfs_client_test",
+    srcs = ["sfs_client_test.cpp"],
+    deps = [
+        "//src/datasystem/common/l2cache/sfs_client",
+        "//tests/ut:ut_common",
+    ],
+)

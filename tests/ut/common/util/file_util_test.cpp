@@ -23,7 +23,7 @@
 #include <fstream>
 #include <glob.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/random_data.h"
 
 DS_DECLARE_string(log_dir);

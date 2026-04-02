@@ -24,7 +24,7 @@
 #include <string>
 #include <utility>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/utils/status.h"

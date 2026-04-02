@@ -19,7 +19,7 @@
  */
 #include "datasystem/common/stream_cache/cursor.h"
 
-#include "common.h"
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {

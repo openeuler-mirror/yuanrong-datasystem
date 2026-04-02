@@ -19,9 +19,13 @@
  */
 
 #include <memory>
+#include <string>
 #include <dirent.h>
+#include <pwd.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "common.h"
+#include "ut/common.h"
 
 #include "datasystem/common/l2cache/get_object_info_list_resp.h"
 #include "datasystem/common/l2cache/sfs_client/sfs_client.h"
@@ -44,7 +48,9 @@ protected:
 void SfsClientTest::SetUp()
 {
     FLAGS_v = 1;
-    FLAGS_sfs_path = std::string(std::getenv("HOME")) + "/sfs_test";
+
+    // Use /tmp for test directory to avoid permission issues
+    FLAGS_sfs_path = "/tmp/sfs_test_" + std::to_string(getpid());
     RecursiveDelete(FLAGS_sfs_path);
     LOG(INFO) << "Creating mock SFS. Path: " << FLAGS_sfs_path;
     ASSERT_EQ(mkdir(FLAGS_sfs_path.c_str(), S_IRWXU | S_IRWXG | S_IROTH), 0);

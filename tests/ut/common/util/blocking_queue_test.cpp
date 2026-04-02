@@ -19,7 +19,7 @@
  */
 #include <vector>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/queue/blocking_queue.h"
 #include "datasystem/common/util/thread_pool.h"

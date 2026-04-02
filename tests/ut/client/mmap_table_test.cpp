@@ -28,7 +28,7 @@
 #include "datasystem/client/mmap/shm_mmap_table.h"
 #include "datasystem/client/mmap/shm_mmap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
-#include "common.h"
+#include "ut/common.h"
 
 using namespace datasystem::client;
 

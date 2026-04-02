@@ -1,0 +1,314 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "blocking_queue_test",
+    srcs = ["blocking_queue_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util/queue:queue",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "event_subscribers_test",
+    srcs = ["event_subscribers_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:event_subscribers",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "fd_manager_test",
+    srcs = ["fd_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:fd_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "fd_pass_over_scmtcp_test",
+    srcs = ["fd_pass_over_scmtcp_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:fd_pass",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "fd_pass_test",
+    srcs = [
+        "fd_pass_test.cpp",
+        "fd_pass_test.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:fd_pass",
+        "//src/datasystem/common/util:strings_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "file_util_test",
+    srcs = ["file_util_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "format_test",
+    srcs = ["format_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:version",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "hash_algorithm_test",
+    srcs = ["hash_algorithm_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "immutable_string_test",
+    srcs = ["immutable_string_test.cpp"],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/ut:ut_common",
+        "@tbb",
+    ],
+)
+
+ds_cc_test(
+    name = "memory_test",
+    srcs = ["memory_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:random_data",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "net_util_test",
+    srcs = ["net_util_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:net_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "priority_queue_test",
+    srcs = ["priority_queue_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/queue:queue",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "protobuf_util_test",
+    srcs = ["protobuf_util_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:protobuf_util",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "queue_test",
+    srcs = ["queue_test.cpp"],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/queue:common_util_queue",
+        "//src/datasystem/common/util/queue:queue",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "random_data_test",
+    srcs = ["random_data_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "rpc_util_test",
+    srcs = ["rpc_util_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:rpc_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "safe_object_test",
+    srcs = ["safe_object_test.cpp"],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "shm_lock_test",
+    srcs = ["shm_lock_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/stream_cache:cursor",
+        "//src/datasystem/common/util:safe_shm_lock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "skip_list_test",
+    srcs = ["skip_list_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:skip_list",
+        "//src/datasystem/common/util:thread_pool",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "status_test",
+    srcs = ["status_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "strings_util_test",
+    srcs = ["strings_util_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:strings_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "thread_pool_test",
+    srcs = ["thread_pool_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:wait_post",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "uri_test",
+    srcs = ["uri_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uri",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "uuid_test",
+    srcs = ["uuid_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:wait_post",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "validator_test",
+    srcs = ["validator_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:validator",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "flags_test",
+    srcs = ["flags_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util/gflag:common_util_gflag_header",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_update_flag_check",
+        "//tests/ut:ut_common",
+    ],
+)
+
+test_suite(
+    name = "all_util_tests",
+    tests = [
+        "blocking_queue_test",
+        "event_subscribers_test",
+        "fd_manager_test",
+        "fd_pass_over_scmtcp_test",
+        "fd_pass_test",
+        "file_util_test",
+        "flags_test",
+        "format_test",
+        "hash_algorithm_test",
+        "immutable_string_test",
+        "memory_test",
+        "net_util_test",
+        "priority_queue_test",
+        "protobuf_util_test",
+        "queue_test",
+        "random_data_test",
+        "rpc_util_test",
+        "safe_object_test",
+        "shm_lock_test",
+        "skip_list_test",
+        "status_test",
+        "strings_util_test",
+        "thread_pool_test",
+        "uri_test",
+        "uuid_test",
+        "validator_test",
+    ],
+)

@@ -1,0 +1,16 @@
+# tests/ut/common/inject/BUILD.bazel
+"""注入点组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# 注入点测试
+ds_cc_test(
+    name = "inject_point_test",
+    srcs = ["inject_point_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//tests/ut:ut_common",
+    ],
+)

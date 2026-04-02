@@ -21,7 +21,7 @@
 #include <cstdint>
 #include "datasystem/common/util/uuid_generator.h"
 
-#include "common.h"
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {

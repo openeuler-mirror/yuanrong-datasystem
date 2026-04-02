@@ -20,7 +20,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 
-#include "common.h"
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {

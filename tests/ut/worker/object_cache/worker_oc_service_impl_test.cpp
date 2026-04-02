@@ -20,7 +20,7 @@
 
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/protos/worker_object.pb.h"
 

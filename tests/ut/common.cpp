@@ -28,6 +28,8 @@ DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_string(log_dir);
 
+#define TO_STR(param) #param
+
 namespace datasystem {
 namespace ut {
 void GetCurTestName(std::string &caseName, std::string &name)
@@ -46,7 +48,7 @@ bool GetTestResult()
 
 std::string GetTestCaseDataDir()
 {
-    std::string rootDir = std::string(LLT_BIN_PATH) + "/ds";
+    std::string rootDir = std::string(TO_STR(LLT_BIN_PATH)) + "/ds";
     std::string caseName;
     std::string name;
     GetCurTestName(caseName, name);
@@ -76,7 +78,7 @@ CommonTest::CommonTest()
     std::string caseName;
     std::string name;
     GetCurTestName(caseName, name);
-    std::string testCasePath = std::string(LLT_BIN_PATH) + "/ds/" + caseName + "." + name;
+    std::string testCasePath = std::string(TO_STR(LLT_BIN_PATH)) + "/ds/" + caseName + "." + name;
     FLAGS_log_dir = testCasePath + "/client";
     ClearTestCaseDir(testCasePath);
     CreateDir(FLAGS_log_dir, true);

@@ -20,7 +20,7 @@
 
 #include <fstream>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/get_object_info_list_resp.h"

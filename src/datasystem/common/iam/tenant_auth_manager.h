@@ -147,10 +147,10 @@ public:
 protected:
     std::shared_ptr<IAM> iamAuth_ = nullptr;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-
-private:
     TbbClientTokenTable clientTokenTable_;
     TbbClientAkTable clientAkTable_;
+
+private:
     bool authEnable_{ false };
 };
 }  // namespace datasystem

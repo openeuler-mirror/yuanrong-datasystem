@@ -1,0 +1,26 @@
+# tests/ut/common/log/spdlog/BUILD.bazel
+"""Spdlog 组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# 日志消息测试
+ds_cc_test(
+    name = "log_message_test",
+    srcs = ["log_message_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 日志提供者测试
+ds_cc_test(
+    name = "logger_provider_test",
+    srcs = ["logger_provider_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//tests/ut:ut_common",
+    ],
+)

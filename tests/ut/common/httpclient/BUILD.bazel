@@ -1,0 +1,26 @@
+# tests/ut/common/httpclient/BUILD.bazel
+"""HTTP 客户端组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Curl HTTP 客户端测试
+ds_cc_test(
+    name = "curl_http_client_test",
+    srcs = ["curl_http_client_test.cpp"],
+    deps = [
+        "//src/datasystem/common/httpclient:curl_http_client",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# HTTP 请求测试
+ds_cc_test(
+    name = "http_request_test",
+    srcs = ["http_request_test.cpp"],
+    deps = [
+        "//src/datasystem/common/httpclient:http_request",
+        "//tests/ut:ut_common",
+    ],
+)

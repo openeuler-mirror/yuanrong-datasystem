@@ -22,7 +22,6 @@
 #include <cstdlib>
 #include <random>
 #include <thread>
-#include "datasystem/common/util/net_util.h"
 
 namespace datasystem {
 namespace inject {
@@ -187,6 +186,26 @@ bool Task::IsExecutable()
     }
     return true;
 }
+
+std::vector<std::string> Split(const std::string &input, const std::string &pattern)
+{
+    std::string str = input;
+    std::string::size_type pos;
+    std::vector<std::string> result;
+    str += pattern;
+    size_t len = str.size();
+
+    for (size_t i = 0; i < len; i++) {
+        pos = str.find(pattern, i);
+        if (pos < len) {
+            std::string ss = str.substr(i, pos - i);
+            result.push_back(ss);
+            i = pos + pattern.size() - 1;
+        }
+    }
+    return result;
+}
+
 
 Status InjectPoint::ParseFromStr(std::string actionStr, std::shared_ptr<InjectPoint> &injectPoint)
 {

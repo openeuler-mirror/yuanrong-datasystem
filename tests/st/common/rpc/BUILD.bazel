@@ -1,0 +1,15 @@
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# curvekey_generator 工具二进制
+cc_binary(
+    name = "curvekey_generator",
+    srcs = ["curvekey_generator.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc/zmq:zmq_common",
+        "//src/datasystem/common/util:file_util",
+    ],
+)
