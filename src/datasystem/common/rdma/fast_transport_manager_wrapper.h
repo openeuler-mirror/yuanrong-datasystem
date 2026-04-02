@@ -212,5 +212,6 @@ Status GetLocalTransportInstanceId(std::string &instanceId);
 Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
                             const std::string &clientEntityId = "");
 
+uint64_t GenerateReqId();
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H

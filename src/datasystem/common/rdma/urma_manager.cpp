@@ -42,6 +42,8 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/utils/status.h"
 
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
+
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
@@ -108,6 +110,7 @@ UrmaManager::UrmaManager()
 UrmaManager::~UrmaManager()
 {
     Stop();
+    OsXprtPipln::UnInitOsPiplnH2DEnv();
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager()";
     urmaConnectionMap_.clear();
     localSegmentMap_.reset();
@@ -486,6 +489,21 @@ std::vector<uint32_t> UrmaManager::GetJfrIds()
     return results;
 }
 
+Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
+                                 urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr)
+{
+    UrmaLocalSegmentMap::const_accessor accessor;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetOrRegisterSegment(segAddress, segSize, accessor));
+    *targetSeg = accessor->second->Raw();
+
+    HostPort remoteSenderAddr;
+    remoteSenderAddr.ParseString(address);
+    LOG(ERROR) << "remoteSenderAddr.ToString() " << remoteSenderAddr.ToString();
+    int idx = GetJfrIndex(remoteSenderAddr.ToString());
+    *targetJfr = urmaResource_->GetJfr(idx)->Raw();
+    return Status::OK();
+}
+
 Status UrmaManager::RegisterSegment(const uint64_t &segAddress, const uint64_t &segSize)
 {
     UrmaLocalSegmentMap::const_accessor constAccessor;
@@ -723,6 +741,11 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
         return Status::OK();
     });
     for (int i = 0; i < count; i++) {
+#ifdef BUILD_PIPLN_H2D
+        // redirect pipeline h2d events
+        if (OsXprtPipln::PiplnH2DRecvEventHook(&completeRecords[i]))
+            continue;
+#endif
         auto crStatus = completeRecords[i].status;
         auto userCtx = completeRecords[i].user_ctx;
         auto jfsId = completeRecords[i].local_id;
@@ -916,6 +939,11 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeRspPb &rsp)
     return Status::OK();
 }
 
+uint64_t UrmaManager::GenerateReqId()
+{
+    return requestId_.fetch_add(1);
+}
+
 Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                                      const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
@@ -960,6 +988,24 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     RETURN_IF_NOT_OK(GetJfsFromConnection(connection, jfs));
     auto *tjfr = connection->GetTargetJfr();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(tjfr != nullptr, K_RUNTIME_ERROR, "Write got empty remote jfr.");
+
+    if (OsXprtPipln::IsPiplnH2DRequest(urmaInfo)) {
+        OsXprtPipln::PiplnSndArgs args;
+        args.jfs = jfs->Raw();
+        args.tjetty = tjfr;
+        args.localAddr = localObjectAddress + readOffset + metaDataSize;
+        args.localSeg = localSegAccessor->second->Raw();
+        args.remoteAddr = segVa + urmaInfo.seg_data_offset() + readOffset;
+        args.remoteSeg = remoteSegAccessor->second->Raw();
+        args.len = readSize;
+        args.serverKey = GenerateReqId();
+        args.clientKey = urmaInfo.client_req_id();
+    
+        eventKeys.emplace_back(args.serverKey);
+        return OsXprtPipln::StartPipelineSender(args);
+    }
+
+    PerfPoint point4(PerfKey::URMA_TOTAL_WRITE);
 
     uint64_t writtenSize = 0;
     uint64_t remainSize = readSize;
@@ -1252,6 +1298,9 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 UrmaManager::ubTransportMemSize_);
         }
         FLAGS_urma_connection_size = 1;
+#ifdef BUILD_PIPLN_H2D
+        FLAGS_enable_pipeline_h2d = true;
+#endif
     }
 }
 

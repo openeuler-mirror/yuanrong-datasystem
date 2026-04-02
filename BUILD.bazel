@@ -32,6 +32,15 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+config_setting(
+    name = "enable_pipeline_h2d",
+    define_values = {
+        "enable_pipeline_h2d": "true",
+        "enable_urma": "true",
+    },
+    visibility = ["//visibility:public"],
+)
+
 bool_flag(
     name = "jemalloc_dynamic",
     build_setting_default = False,

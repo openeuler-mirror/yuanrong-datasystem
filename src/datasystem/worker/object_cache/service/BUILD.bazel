@@ -120,6 +120,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_request_manager",
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
     ],
     alwayslink = True,
 )

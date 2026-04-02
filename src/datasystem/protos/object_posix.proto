@@ -173,6 +173,14 @@ message GetReqPb {
   uint64 ub_buffer_size = 12;
   int64 request_timeout = 13;
 
+  // for server H2D op
+  message H2DReqInfo {
+    uint32 dev_id = 1;
+    uint64 target_size = 2;
+    bytes target_device_handle = 3;
+  }
+  repeated H2DReqInfo h2d_infos = 14;
+
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
   string signature = 101;

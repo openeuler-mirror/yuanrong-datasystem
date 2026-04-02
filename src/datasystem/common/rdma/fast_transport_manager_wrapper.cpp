@@ -40,6 +40,16 @@ void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId)
 #endif
 }
 
+uint64_t GenerateReqId()
+{
+#ifdef USE_URMA
+    return UrmaManager::Instance().GenerateReqId();
+#else
+    static std::atomic<uint64_t> startReqId = 0;
+    return startReqId.fetch_add(1);
+#endif
+}
+
 void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize)
 {
     (void)fastTransportMode;

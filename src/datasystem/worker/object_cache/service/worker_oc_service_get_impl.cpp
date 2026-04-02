@@ -63,6 +63,8 @@
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
+
 DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_bool(cross_cluster_get_data_from_worker);
@@ -331,8 +333,8 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     asyncRollbackManager_->UpdateIsRollback(uniqueObjectMap);
     point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
     std::vector<std::string> needEvictKeys;
-    auto func = [this](const std::string &objectKey, GetObjInfo &objectInfo, std::set<ReadKey> &remoteObjectKeys,
-                       std::vector<std::string> &needEvictKeys) {
+    auto func = [this, &request](const std::string &objectKey, GetObjInfo &objectInfo,
+                                 std::set<ReadKey> &remoteObjectKeys, std::vector<std::string> &needEvictKeys) {
         Status status;
         if (objectInfo.isRollBack) {
             objectInfo.rc = Status(K_NOT_FOUND, FormatString("ObjectKey %s in rollback", objectKey));
@@ -345,6 +347,12 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
             }
             if (objectInfo.params != nullptr) {
                 needEvictKeys.emplace_back(objectKey);
+            }
+            // submit local h2d io
+            if (remoteObjectKeys.find(readKey) == remoteObjectKeys.end()) {
+                RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(
+                    request->GetH2DChunkManager(), objectKey, objectInfo.params->shmUnit->GetPointer(),
+                    objectInfo.params->metaSize, objectInfo.params->dataSize));
             }
         }
         return status;
@@ -1010,6 +1018,11 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
             continue;
         }
 
+        // start pipeline receiver and prepare pipeline h2d tag in request
+        OsXprtPipln::TriggerRemotePipelineRH2D(request->GetH2DChunkManager(), objectKV.GetObjKey(),
+            objectKV.GetReadOffset() + objectKV.GetObjEntry()->GetMetadataSize(),
+            objectKV.GetReadSize(), objectKV.GetObjEntry()->GetShmUnit(), address, subReq);
+
         reqPb.mutable_requests()->Add(std::move(subReq));
         if (objectKV.IsOffsetRead()) {
             objectKV.GetObjEntry()->stateInfo.SetIncompleted(true);
@@ -1199,6 +1212,11 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetR
             RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
             RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
             entry->WUnlock();
+            RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(request->GetH2DChunkManager(),
+                readKey.objectKey,
+                reinterpret_cast<char*>(entry->Get()->GetShmUnit()->GetPointer()),
+                entry->Get()->GetMetadataSize(),
+                entry->Get()->GetDataSize()));
             return Status::OK();
         }
         return Status(K_NOT_FOUND, "");

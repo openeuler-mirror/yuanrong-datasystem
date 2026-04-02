@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <vector>
+#include <future>
 
 #include "datasystem/context/context.h"
 #include "datasystem/object/buffer.h"
@@ -64,6 +65,11 @@ struct ReadParam {
     std::string key;
     uint64_t offset = 0;
     uint64_t size = 0;
+};
+
+struct AsyncResult {
+    Status status;
+    std::vector<std::string> failedList;
 };
 
 class __attribute((visibility("default"))) KVClient {
@@ -187,6 +193,35 @@ public:
     /// \return K_OK on any key success; the error code otherwise.
     Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                 std::vector<std::string> &outFailedKeys, const MSetParam &param = {});
+
+    /// \brief copy values of keys to device share memory by server
+    ///
+    /// \param[in] keys The keys.
+    /// \param[in] devShmChunk share memory ptr and size pair.
+    /// \param[in] devIds cuda memory device id.
+    /// \param[out] outFailedKeys failed H2D keys.
+    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
+    ///  number required. 0 means no waiting time allowed.
+    ///
+    /// \return K_OK on success; the error code otherwise.
+    ///         K_INVALID: the key is empty.
+    ///         K_NOT_FOUND: the key not found.
+    ///         K_RUNTIME_ERROR: Cannot get value from worker.
+    Status MGetH2D(const std::vector<std::string> &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
+                   const std::vector<uint32_t> &devIds, std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs);
+
+    /// \brief copy values of keys to device share memory by server
+    ///
+    /// \param[in] keys The keys.
+    /// \param[in] devShmChunk share memory ptr and size pair.
+    /// \param[in] devIds cuda memory device id.
+    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
+    ///  number required. 0 means no waiting time allowed.
+    ///
+    /// \return async future
+    std::shared_future<AsyncResult> AsyncMGetH2D(const std::vector<std::string> &keys,
+                                                 const std::vector<std::pair<void *, size_t>> &devShmChunk,
+                                                 const std::vector<uint32_t> &devIds, int32_t subTimeoutMs);
 
     /// \brief Invoke worker client to get the value of a key.
     ///

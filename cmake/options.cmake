@@ -12,3 +12,7 @@ option(BUILD_TRANSFER_ENGINE "Build transfer_engine as an integrated subproject"
 # Hetero device options (requires BUILD_HETERO=ON)
 option(BUILD_HETERO_NPU "Build NPU (Ascend) heterogeneous support" ON)
 option(BUILD_HETERO_GPU "Build GPU (CUDA) heterogeneous support" OFF)
+
+# pipeline h2d
+option(BUILD_PIPLN_H2D "Build os pipeline h2d" OFF)
+

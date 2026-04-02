@@ -305,6 +305,19 @@ public:
                bool queryL2Cache = true, bool isRH2DSupported = false);
 
     /**
+     * @brief Invoke worker client to get an object.
+     * @param[in] objectKeys The vector of the object key.
+     * @param[in] devShmChunk share memory ptr and size pair.
+     * @param[in] devIds cuda memory device id.
+     * @param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer number
+     * required. 0 means no waiting time allowed.
+     * @return Status of the result.
+     */
+    std::shared_future<AsyncResult> GetWithOsTransportPipeline(const std::vector<std::string> &objectKeys,
+                const std::vector<std::pair<void*, size_t>> &devShmChunk,
+                const std::vector<uint32_t>& devIds, int64_t subTimeoutMs);
+
+    /**
      * @brief Some data in an object can be read based on the specified key and parameters.
      *        In some scenarios, read amplification can be avoided.
      * @param[in] readParams The vector of the keys and offset.

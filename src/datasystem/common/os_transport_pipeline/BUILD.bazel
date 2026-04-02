@@ -1,0 +1,76 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(
+    ["os_transport_pipeline_api.cpp"],
+    visibility = ["//src/datasystem/common/rdma:__pkg__"],
+)
+
+ds_cc_library(
+    name = "os_transport_pipeline",
+    srcs = select({
+        "//:enable_pipeline_h2d": [
+            "chunk_manager.cpp",
+            "cuda_ipc.cpp",
+            "mock_ipc.cpp",
+            "dlopen_util.cpp",
+            "os_transport_pipeline_api_impl.cpp",
+        ],
+        "//conditions:default": [],
+    }),
+    hdrs = select({
+        "//:enable_pipeline_h2d": [
+            "chunk_manager.h",
+            "cuda_ipc.h",
+            "mock_ipc.h",
+            "dlopen_util.h",
+            "os_transport_pipeline_types.h",
+            "os_transport_pipeline_common_api.h",
+            "os_transport_pipeline_worker_api.h",
+        ],
+        "//conditions:default": [],
+    }),
+    copts = select({
+        "//:enable_pipeline_h2d": ["-DBUILD_PIPLN_H2D"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:dlutils",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+    ] + select({
+        "//:enable_pipeline_h2d": [
+            "//src/datasystem/common/rdma:urma_dlopen_util",
+            "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+ds_cc_library(
+    name = "os_transport_pipeline_api",
+    hdrs = [
+        "chunk_manager.h",
+        "cuda_ipc.h",
+        "dlopen_util.h",
+        "os_transport_pipeline_types.h",
+        "os_transport_pipeline_common_api.h",
+        "os_transport_pipeline_worker_api.h",
+    ],
+    copts = select({
+        "//:enable_pipeline_h2d": ["-DBUILD_PIPLN_H2D"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ] + select({
+        "//:enable_pipeline_h2d": [
+            "//include/datasystem:headers",
+            "//src/datasystem/protos:object_posix_cc_proto",
+        ],
+        "//conditions:default": [],
+    }),
+)

@@ -132,6 +132,11 @@ if (BUILD_HETERO)
     endif()
 endif ()
 
+if (BUILD_PIPLN_H2D)
+    add_compile_definitions(BUILD_PIPLN_H2D)
+    message(STATUS "Enable pipeline h2d")
+endif ()
+
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/module")
 
 set(GIT_HASH "Unknown")

@@ -390,6 +390,23 @@ public:
 
     std::string GetRemoteDevicesByClientId(ClientKey clientEntityId);
 
+    /**
+     * @brief Retrieve local segment and jfr for receiving remote sender cqe.
+     * @param[in] segAddress segment start address.
+     * @param[in] segSize segment size.
+     * @param[in] address remote sender address.
+     * @param[out] targetSeg local segment.
+     * @param[out] targetJfr local jfr for remote sender.
+     * @return Status.
+     */
+    Status GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
+                        urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr);
+    
+    /**
+     * @return urma request id, start from 0.
+     */
+    uint64_t GenerateReqId();
+
 private:
     UrmaManager();
 

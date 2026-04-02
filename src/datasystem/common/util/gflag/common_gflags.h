@@ -52,4 +52,6 @@ DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(sc_worker_worker_direct_port);
+DS_DECLARE_bool(enable_pipeline_h2d);
+DS_DECLARE_int32(pipeline_h2d_thread_num);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

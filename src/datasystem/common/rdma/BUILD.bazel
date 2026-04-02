@@ -54,6 +54,7 @@ ds_cc_library(
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/common/util:uri",
         "//src/datasystem/common/util/queue",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/protos:meta_transport_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
     ] + select({
@@ -95,6 +96,7 @@ ds_cc_library(
         "//src/datasystem/common/util/gflag:common_util_gflag_header",
         "//src/datasystem/protos:meta_transport_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
     ] + select({
         "//:enable_urma": [":urma_manager"],
         "//conditions:default": [],

@@ -86,6 +86,11 @@ add_library(datasystem SHARED ${CLIENT_SRCS})
 target_compile_options(datasystem PRIVATE "-fvisibility=hidden")
 target_link_libraries(datasystem PRIVATE "${CLIENT_DEPEND_LIBS}")
 
+if (BUILD_PIPLN_H2D)
+    target_link_libraries(datasystem_static PRIVATE os_transport_pipeline)
+    target_link_libraries(datasystem PRIVATE os_transport_pipeline)
+endif()
+
 add_custom_target(clean_datasystem_rpath
     COMMAND ${CMAKE_COMMAND} -D "BIN_FILE=$<TARGET_FILE:datasystem>" -P "${CMAKE_SOURCE_DIR}/cmake/scripts/CleanBuildRpath.cmake"
     COMMENT "Cleaning RPATH for datasystem.so"

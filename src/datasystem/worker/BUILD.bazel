@@ -382,5 +382,10 @@ cc_binary(
     ],
     deps = [
         ":worker_main",
-    ],
+    ] + select({
+        "//:enable_pipeline_h2d": [
+            "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline",
+        ],
+        "//conditions:default": [],
+    })
 )
