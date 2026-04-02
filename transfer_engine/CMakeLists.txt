@@ -137,7 +137,7 @@ target_include_directories(transfer_engine
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(transfer_engine PUBLIC glog::glog PRIVATE dl)
+target_link_libraries(transfer_engine PUBLIC glog::glog Threads::Threads PRIVATE dl)
 if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
     if (TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
         add_dependencies(transfer_engine p2p_transfer copy_p2p_transfer_so)

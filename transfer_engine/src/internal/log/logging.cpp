@@ -44,7 +44,10 @@ void CustomPrefixFormatter(std::ostream &stream, const google::LogMessage &messa
            << std::setw(6) << t.usec() << ' ';
     stream.fill(' ');
 #if defined(__linux__)
-    const auto linuxTid = static_cast<long>(gettid());
+    #include <unistd.h>
+    #include <sys/syscall.h>
+
+    const auto linuxTid = static_cast<long>(syscall(SYS_gettid));
     stream << getpid() << ':' << linuxTid << ' ';
 #else
     stream << getpid() << ':' << message.thread_id() << ' ';
