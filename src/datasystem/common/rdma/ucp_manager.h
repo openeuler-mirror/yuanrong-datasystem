@@ -35,7 +35,7 @@
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 
-#include "datasystem/common/rdma/fast_ransport_base.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/ucp_segment.h"
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
 

@@ -1805,6 +1805,7 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     bool isSeal, uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
     std::shared_ptr<client::IMmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo)
 {
+    (void)remoteHostInfo;
     auto bufferInfo = std::make_shared<ObjectBufferInfo>();
     bufferInfo->objectKey = objectKey;
     bufferInfo->shmId = shmId;
