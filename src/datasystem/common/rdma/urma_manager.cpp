@@ -29,7 +29,6 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
-//#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -623,7 +622,7 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
                                 const std::shared_ptr<UrmaJfs> &jfs, std::shared_ptr<EventWaiter> waiter)
 {
     if (!jfs->IsValid()) {
-        RETURN_STATUS(K_URMA_TRY_AGAIN, "Urma jfs is invalid");
+        RETURN_STATUS(K_URMA_ERROR, "Urma jfs is invalid");
     }
     TbbEventMap::accessor mapAccessor;
     auto res = tbbEventMap_.insert(mapAccessor, requestId);
@@ -681,7 +680,7 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
                 LOG(INFO) << "the connection using new jfs id " << newJfs->GetJfsId();
                 connection->SetJfs(std::move(newJfs));
             }
-            RETURN_STATUS(K_URMA_TRY_AGAIN, errMsg);
+            RETURN_STATUS(K_URMA_ERROR, errMsg);
         } else {
             LOG(WARNING) << "Event connection expired, cannot recreate JFS for requestId: " << requestId;
         }

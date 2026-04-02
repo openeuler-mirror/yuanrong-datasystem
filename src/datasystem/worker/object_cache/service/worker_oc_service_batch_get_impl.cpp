@@ -89,18 +89,19 @@ Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDa
 void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey, uint64_t version,
                                                     std::shared_ptr<SafeObjType> &entry, bool isInsert)
 {
+    (void)isInsert;
     LOG(WARNING) << "Get object from remote failed, start to remove location from master";
     (void)RemoveLocation(objectKey, version);
-    if (entry->Get() != nullptr && entry->Get()->GetShmUnit() != nullptr) {
-        entry->Get()->GetShmUnit()->SetHardFreeMemory();
+    auto obj = entry->Get();
+    if (obj == nullptr) {
+        return;
     }
-    if (isInsert) {
-        (void)objectTable_->Erase(objectKey, *entry);
-    } else if (entry->Get() != nullptr) {
-        entry->Get()->FreeResources();
-        entry->Get()->SetLifeState(ObjectLifeState::OBJECT_INVALID);
-        entry->Get()->stateInfo.SetCacheInvalid(true);
+    if (obj->GetShmUnit() != nullptr) {
+        obj->GetShmUnit()->SetHardFreeMemory();
     }
+    obj->FreeResources();
+    obj->SetLifeState(ObjectLifeState::OBJECT_INVALID);
+    obj->stateInfo.SetCacheInvalid(true);
 }
 
 Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master::QueryMetaInfoPb> &queryMetas,
@@ -314,7 +315,9 @@ void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status
 {
     if (status.IsOk()) {
         successIds.emplace_back(readKey.objectKey);
-    } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+        return;
+    }
+    if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
         LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", readKey.objectKey);
         status = Status::OK();
         needRetryIds.emplace_back(readKey);
@@ -325,8 +328,8 @@ void WorkerOcServiceGetImpl::BatchGetObjectHandleIndividualStatus(Status &status
         LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", readKey.objectKey);
     } else {
         LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", readKey.objectKey, status.ToString());
-        failedIds.emplace(readKey.objectKey);
     }
+    failedIds.emplace(readKey.objectKey);
 }
 
 Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb &subResp,
@@ -582,12 +585,6 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(
     std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
-    // Unlock entries at exit.
-    Raii raii([&infos]() {
-        for (auto &info : infos) {
-            info.entry->safeObj->WUnlock();
-        }
-    });
     // Construct and send request for batch remote get.
     return BatchGetObjectFromRemoteWorker(address, infos, request, successIds, needRetryIds, failedIds, failedMetas);
 }

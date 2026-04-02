@@ -18,13 +18,16 @@
 #define DATASYSTEM_SAFE_OBJECT_H
 
 #include <atomic>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <unistd.h>
 
 #include <sys/syscall.h>
 
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/template_util.h"
@@ -148,16 +151,6 @@ public:
     Status TryRLock(bool nullable = false);
 
     /**
-     * @brief Transfers the write lock from the current thread to the calling thread.
-     *
-     * This function is used to transfer the write lock ownership from the current thread to the thread that calls this
-     * function. It ensures that the write lock is held by the calling thread after the transfer.
-     *
-     * @return Status of the call.
-     */
-    Status TransferWLockToCurrentThread();
-
-    /**
      * @brief Releases a read lock on the SafeObject.
      */
     void RUnlock();
@@ -242,7 +235,7 @@ public:
     SafeObject &operator=(SafeObject &&other) noexcept = delete;
 
 private:
-    WriterPrefRWLock objLock_;             // The lock for the object metadata and data.
+    std::shared_mutex mutex_;              // The lock for the object metadata and data.
     std::mutex gRefLock_;                  // The lock for the object global reference.
     std::unique_ptr<ObjType> realObject_;  // The actual object stored in a unique_ptr.
     std::atomic<bool> deleted_;            // Flag for checking the deleted state.
@@ -266,11 +259,11 @@ template <typename ObjType>
 Status SafeObject<ObjType>::WLock(bool nullable)
 {
     Timer timer;
-    objLock_.WriteLock();
+    mutex_.lock();
     workerOperationTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
     masterOperationTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        objLock_.WriteUnlock();
+        mutex_.unlock();
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -279,25 +272,14 @@ Status SafeObject<ObjType>::WLock(bool nullable)
 }
 
 template <typename ObjType>
-Status SafeObject<ObjType>::TransferWLockToCurrentThread()
-{
-    if (!wLocked_) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Write lock is not held by any thread.");
-    }
-    pid_t currentTid = syscall(__NR_gettid);
-    lastWriteThread_ = currentTid;
-    return Status::OK();
-}
-
-template <typename ObjType>
 Status SafeObject<ObjType>::TryWLock(bool nullable)
 {
-    bool locked = objLock_.TryWriteLock();
+    bool locked = mutex_.try_lock();
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        objLock_.WriteUnlock();
+        mutex_.unlock();
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -309,16 +291,22 @@ template <typename ObjType>
 void SafeObject<ObjType>::WUnlock()
 {
     if (wLocked_.exchange(false)) {
-        objLock_.WriteUnlock();
+#ifdef WITH_TESTS
+        auto currentThread = syscall(__NR_gettid);
+        if (currentThread != lastWriteThread_) {
+            std::abort();
+        }
+#endif
+        mutex_.unlock();
     }
 }
 
 template <typename ObjType>
 Status SafeObject<ObjType>::RLock(bool nullable)
 {
-    objLock_.ReadLock();
+    mutex_.lock_shared();
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        objLock_.ReadUnlock();
+        mutex_.unlock_shared();
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -327,12 +315,12 @@ Status SafeObject<ObjType>::RLock(bool nullable)
 template <typename ObjType>
 Status SafeObject<ObjType>::TryRLock(bool nullable)
 {
-    bool locked = objLock_.TryReadLock();
+    bool locked = mutex_.try_lock_shared();
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        objLock_.ReadUnlock();
+        mutex_.unlock_shared();
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -341,7 +329,7 @@ Status SafeObject<ObjType>::TryRLock(bool nullable)
 template <typename ObjType>
 void SafeObject<ObjType>::RUnlock()
 {
-    objLock_.ReadUnlock();
+    mutex_.unlock_shared();
 }
 
 template <typename ObjType>
@@ -396,7 +384,7 @@ ObjType &SafeObject<ObjType>::operator*()
 template <typename ObjType>
 bool SafeObject<ObjType>::IsWLockedByCurrentThread() const
 {
-    if (objLock_.IsWLocked() && wLocked_ && lastWriteThread_ == syscall(__NR_gettid)) {
+    if (wLocked_ && lastWriteThread_ == syscall(__NR_gettid)) {
         return true;
     }
     return false;
