@@ -361,7 +361,7 @@ Status WorkerOcServiceGetImpl::HandleBatchSubResponse(const GetObjectRemoteRspPb
             auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
             *hostInfo = std::move(subResp.host_info());
             *(hostInfo->mutable_root_info()) = batchRootInfo;
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
             objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
 #endif
         }

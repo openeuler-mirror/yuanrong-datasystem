@@ -31,7 +31,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rdma/rdma_util.h"
+//#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_resource.h"
 #include "datasystem/common/rpc/rpc_channel.h"

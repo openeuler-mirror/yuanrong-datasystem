@@ -40,36 +40,6 @@ void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId)
 #endif
 }
 
-bool IsRemoteH2DEnabled()
-{
-#ifdef BUILD_HETERO
-    return RemoteH2DManager::IsRemoteH2DEnabled();
-#else
-    return false;
-#endif
-}
-
-Status RegisterHostMemory(void *segAddress, const uint64_t &segSize)
-{
-    (void)segAddress;
-    (void)segSize;
-#ifdef BUILD_HETERO
-    if (IsRemoteH2DEnabled() && FLAGS_urma_register_whole_arena && segAddress != nullptr) {
-        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().RegisterHostMemory(segAddress, segSize));
-    }
-#endif
-    return Status::OK();
-}
-
-bool IsUrmaEnabled()
-{
-#ifdef USE_URMA
-    return UrmaManager::IsUrmaEnabled();
-#else
-    return false;
-#endif
-}
-
 void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize)
 {
     (void)fastTransportMode;
@@ -77,32 +47,6 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 #ifdef USE_URMA
     UrmaManager::SetClientUrmaConfig(fastTransportMode, transportSize);
 #endif
-}
-
-bool IsUcpEnabled()
-{
-#ifdef USE_RDMA
-    return UcpManager::IsUcpEnabled();
-#else
-    return false;
-#endif
-}
-
-bool IsFastTransportEnabled()
-{
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled()) {
-        return true;
-    }
-#endif
-
-#ifdef USE_RDMA
-    if (UcpManager::IsUcpEnabled()) {
-        return true;
-    }
-#endif
-
-    return false;
 }
 
 Status InitializeFastTransportManager(const HostPort &hostport)
@@ -147,70 +91,6 @@ Status RemoveRemoteFastTransportClient(const ClientKey &clientId)
         const std::string &urmaClientId = UrmaManager::Instance().GetRemoteDevicesByClientId(clientId);
         if (!urmaClientId.empty()) {
             RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(urmaClientId));
-        }
-    }
-#endif
-    return Status::OK();
-}
-
-bool NeedRegisterWholeArena()
-{
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled() && UrmaManager::IsRegisterWholeArenaEnabled()) {
-        return true;
-    }
-#endif
-
-#ifdef USE_RDMA
-    if (UcpManager::IsUcpEnabled() && UcpManager::IsRegisterWholeArenaEnabled()) {
-        return true;
-    }
-#endif
-    return false;
-}
-
-Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize)
-{
-    (void)segAddress;
-    (void)segSize;
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled() && UrmaManager::IsRegisterWholeArenaEnabled() && segAddress != nullptr) {
-        LOG(INFO) << "Doing URMA memory registration of size " << segSize;
-        RETURN_IF_NOT_OK(UrmaManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
-    }
-#endif
-
-#ifdef USE_RDMA
-    if (UcpManager::IsUcpEnabled() && UcpManager::IsRegisterWholeArenaEnabled() && segAddress != nullptr) {
-        LOG(INFO) << "Doing UCP memory registration of size " << segSize;
-        RETURN_IF_NOT_OK(UcpManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
-    }
-#endif
-    return Status::OK();
-}
-
-Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
-                              std::function<Status(Status &)> errorHandler)
-{
-    (void)keys;
-    (void)remainingTime;
-    (void)errorHandler;
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled()) {
-        for (auto key : keys) {
-            // Wait for the event until timeout
-            Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime());
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(errorHandler(rc), "Failed to wait for URMA event.");
-        }
-    }
-#endif
-
-#ifdef USE_RDMA
-    if (UcpManager::IsUcpEnabled()) {
-        for (auto key : keys) {
-            // Wait for the event until timeout
-            Status rc = UcpManager::Instance().WaitToFinish(key, remainingTime());
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(errorHandler(rc), "Failed to wait for RDMA event.");
         }
     }
 #endif

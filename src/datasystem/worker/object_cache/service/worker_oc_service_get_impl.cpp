@@ -1112,7 +1112,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         // Also the root info for communicator connection, and the offsets for get scattered.
         auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
         *hostInfo = std::move(rspPb.host_info());
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
         objectKV.GetObjEntry()->SetRemoteHostInfo(*objectKV.commId_, hostInfo);
 #endif
     }

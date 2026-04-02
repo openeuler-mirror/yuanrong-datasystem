@@ -45,7 +45,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_base.h"
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 #include "datasystem/common/rpc/rpc_credential.h"

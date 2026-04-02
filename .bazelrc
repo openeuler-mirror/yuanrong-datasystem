@@ -1,16 +1,12 @@
 build --cxxopt=-std=c++17
 build --cxxopt=-Wextra
-#build --cxxopt=-Wfloat-equal
 build --cxxopt=-fsigned-char
 build --cxxopt=-fno-common
 build --cxxopt=-rdynamic
 build --cxxopt=-fPIC
 build --cxxopt=-g3
-build --cxxopt=-DDISABLE_RDMA
 build --cxxopt=-DDISABLE_OBS
-#build --cxxopt=-DDISABLE_RPC
 build --cxxopt=-Wno-redundant-move
-#build --cxxopt=-DDISABLE_PROTOBUF
 
 build --copt=-Wno-float-equal
 build --copt=-Wno-unused-variable

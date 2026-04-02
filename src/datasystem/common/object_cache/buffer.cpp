@@ -36,7 +36,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
 
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 

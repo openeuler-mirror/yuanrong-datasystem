@@ -38,8 +38,8 @@
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 
-#ifndef DISABLE_RDMA
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
+#ifdef BUILD_HETERO
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 
@@ -84,14 +84,12 @@ Status MemMmap::Initialize(uint64_t size, bool populate, bool hugepage)
     }
     type_ = "memory";
     Status rc = SetupFileMapping(size, flags, true);
-#ifndef DISABLE_RDMA
     if (rc.IsOk()) {
         // If urma or rdma is enabled, register the memory.
         RETURN_IF_NOT_OK(RegisterFastTransportMemory(pointer_, mmapSize_));
         // If Remote H2D is enabled, pin and register the npu memory
         RETURN_IF_NOT_OK(RegisterHostMemory(pointer_, mmapSize_));
-    }
-#endif
+}
     return rc;
 }
 
@@ -137,13 +135,11 @@ bool MemMmap::Commit(void *addr, size_t offset, size_t length)
 
 bool MemMmap::Decommit(void *addr, size_t offset, size_t length)
 {
-#ifndef DISABLE_RDMA
     if (IsFastTransportEnabled() || IsRemoteH2DEnabled()) {
         // if urma/rdma/RH2D is enabled memory is pinned
         // Decommit is a noop
         return false;
     }
-#endif
     if (!FLAGS_enable_fallocate) {
         return false;
     }

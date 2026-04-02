@@ -45,9 +45,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
-#ifndef DISABLE_RDMA
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-#endif
+#include "datasystem/common/rdma/fast_transport_base.h"
 DS_DEFINE_uint32(
     arena_per_tenant, 16,
     "The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for "
@@ -310,7 +308,6 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
     arenas_.resize(ARENAS_INIT_SIZE);
     Jemalloc::Init(&ArenaManager::AllocHook, &ArenaManager::DestroyHook, &ArenaManager::CommitHook);
     handleExpiredTenantThread_ = std::make_unique<ThreadPool>(handleExpiredTenantThreadNum_, 0, "TenantExpired");
-#ifndef DISABLE_RDMA
     if (populate || FLAGS_enable_huge_tlb || NeedRegisterWholeArena()) {
         // Adding multiple arenas per tenant allows parallel physical memory binding operations across different arenas.
         // For scenarios requiring pre-allocation of physical memory, a single arena is sufficient.
@@ -319,7 +316,6 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
         // phase.
         FLAGS_enable_fallocate = false;
     }
-#endif
     auto arenaNum = FLAGS_arena_per_tenant;
     if (!FLAGS_shared_disk_directory.empty()) {
         arenaNum += FLAGS_shared_disk_arena_per_tenant;
@@ -365,7 +361,6 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         static_cast<uint64_t>(static_cast<long double>(std::numeric_limits<uint64_t>::max()) * rate) > maxSize,
         K_RUNTIME_ERROR, "mmapSize overflow.");
     auto fakeAllocateSize = maxSize;
-#ifndef DISABLE_RDMA
     if (populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled() || FLAGS_enable_huge_tlb) {
         // Here we ensure total allocated memory
         // does not exceed max requested by user
@@ -375,7 +370,6 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         // account for extra Jemalloc overhead
         fakeAllocateSize = static_cast<uint64_t>(overhead * maxSize);
     }
-#endif
     uint64_t mmapSize = maxSize / rate;
     if (FLAGS_enable_huge_tlb) {
         mmapSize = RoundUpToNextMultiple(mmapSize);

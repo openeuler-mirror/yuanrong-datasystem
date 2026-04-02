@@ -23,7 +23,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -124,7 +124,7 @@ void ObjCacheShmUnit::SetAddress(const std::string &newAddress)
     address_ = newAddress;
 }
 
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
 void ObjCacheShmUnit::SetRemoteHostInfo(const std::string &clientCommId,
                                         const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo)
 {

@@ -336,7 +336,6 @@ ds_cc_library(
     hdrs = [
         "worker_oc_service_crud_common_api.h",
     ],
-    copts = ["-DDISABLE_RDMA"],
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/l2cache:l2_storage",
@@ -360,7 +359,6 @@ ds_cc_library(
     hdrs = [
         "worker_oc_service_crud_common_api.h",
     ],
-    copts = ["-DDISABLE_RDMA"],
     deps = [
         ":worker_oc_service_crud_common_api_header",
         "//include/datasystem/utils:utils_headers",

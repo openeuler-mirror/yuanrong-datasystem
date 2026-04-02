@@ -39,7 +39,7 @@
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 
@@ -335,7 +335,7 @@ struct ObjectInterface {
         return GetShmUnit() != nullptr && !stateInfo.IsIncomplete();
     }
 
-    #ifndef DISABLE_RDMA
+    #ifdef BUILD_HETERO
     virtual void SetRemoteHostInfo(const std::string &clientCommId,
                                    const std::shared_ptr<RemoteH2DHostInfoPb> &remoteH2DHostInfo)
     {

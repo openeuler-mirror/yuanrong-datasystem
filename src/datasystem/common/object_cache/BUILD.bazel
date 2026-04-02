@@ -9,7 +9,6 @@ ds_cc_library(
         "object_base.h",
         "object_bitmap.h",
     ],
-    copts = ["-DDISABLE_RDMA"],
     deps = [
         "//include/datasystem:headers",
         "//include/datasystem/object:object_headers",

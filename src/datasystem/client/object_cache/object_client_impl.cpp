@@ -1819,7 +1819,7 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     bufferInfo->version = version;
     bufferInfo->payloadPointer = payloadPointer;
     bufferInfo->mmapEntry = std::move(mmapEntry);
-#ifndef DISABLE_RDMA
+#ifdef BUILD_HETERO
     bufferInfo->remoteHostInfo = std::move(remoteHostInfo);
 #endif
     return bufferInfo;
