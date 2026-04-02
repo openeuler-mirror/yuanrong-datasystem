@@ -248,6 +248,37 @@ namespace {
 constexpr int WAIT_TIMEOUT_MS = 3000;
 constexpr int WAIT_INTERVAL_MS = 10;
 
+RecoveryTaskPb MakeTask(const std::string &failedWorker, const std::string &ownerWorker,
+                        RecoveryTaskPb::TaskStatus status, std::initializer_list<uint32_t> slots)
+{
+    RecoveryTaskPb task;
+    task.set_failed_worker(failedWorker);
+    task.set_owner_worker(ownerWorker);
+    task.set_task_status(status);
+    for (auto slot : slots) {
+        task.add_slots(slot);
+    }
+    return task;
+}
+
+SlotRecoveryInfoPb BuildIncident(std::initializer_list<RecoveryTaskPb> tasks, uint32_t totalSlots = 0)
+{
+    SlotRecoveryInfoPb info;
+    for (const auto &task : tasks) {
+        *info.add_recovery_tasks() = task;
+    }
+    if (totalSlots != 0) {
+        info.set_total_slots(totalSlots);
+    }
+    SlotRecoveryIncidentState::RefreshCounters(info);
+    return info;
+}
+
+std::set<uint32_t> CollectSlots(const RecoveryTaskPb &task)
+{
+    return std::set<uint32_t>(task.slots().begin(), task.slots().end());
+}
+
 std::set<uint32_t> CollectAllSlots(const SlotRecoveryInfoPb &info)
 {
     std::set<uint32_t> slots;
@@ -416,23 +447,29 @@ private:
 
 class SlotRecoveryManagerTestHelper : public SlotRecoveryManager {
 public:
+    using RestartPlan = SlotRecoveryManager::LocalRestartPlan;
+
     SlotRecoveryManagerTestHelper(const HostPort &localAddress, const std::shared_ptr<SlotRecoveryStore> &store)
         : localAddress_(localAddress), store_(store)
     {
     }
 
+    using SlotRecoveryManager::BuildPlannedLocalRestartSlots;
     using SlotRecoveryManager::ClaimLocalTask;
     using SlotRecoveryManager::CollectInheritedTasks;
+    using SlotRecoveryManager::CollectLocalRestartPlan;
     using SlotRecoveryManager::CompleteLocalTask;
     using SlotRecoveryManager::ExecuteRecoveryTask;
     using SlotRecoveryManager::GetStableActiveWorkers;
     using SlotRecoveryManager::HandleFailedWorkers;
+    using SlotRecoveryManager::HandleLocalRestart;
     using SlotRecoveryManager::Init;
     using SlotRecoveryManager::MarkTasksFailedInOtherIncidents;
     using SlotRecoveryManager::PickProcessWorkers;
     using SlotRecoveryManager::PlanIncident;
     using SlotRecoveryManager::ScheduleLocalTasks;
     using SlotRecoveryManager::Shutdown;
+    using SlotRecoveryManager::TakeOverPendingFromSourceIncident;
 
     Status InitForTest()
     {
@@ -592,6 +629,153 @@ TEST_F(SlotRecoveryTest, CreateIdempotent)
     ASSERT_EQ(planned.total_slots(), 4);
     ASSERT_EQ(planned.recovery_tasks_size(), 2);
     EXPECT_EQ(CollectAllSlots(planned), (std::set<uint32_t>{ 0, 1, 2, 3 }));
+}
+
+TEST_F(SlotRecoveryTest, CreatesLocalIncidentOnRestart)
+{
+    LOG(INFO) << "Scenario: restart rebuilds a missing local incident.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7001), store);
+    manager.SetActiveWorkers({ "127.0.0.1:7001" });
+    DS_ASSERT_OK(manager.InitForTest());
+
+    // With no local incident persisted, restart should synthesize and complete the canonical one.
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    ASSERT_TRUE(WaitUntil([&store]() { return store->HasDeletedSnapshot("127.0.0.1:7001"); }));
+    auto deleted = store->GetDeletedSnapshot("127.0.0.1:7001");
+    ASSERT_EQ(deleted.total_slots(), 4);
+    ASSERT_EQ(deleted.failed_slots(), 0);
+    ASSERT_EQ(deleted.completed_slots(), 4);
+    ASSERT_EQ(deleted.recovery_tasks_size(), 1);
+    EXPECT_EQ(deleted.recovery_tasks(0).failed_worker(), "127.0.0.1:7001");
+    EXPECT_EQ(deleted.recovery_tasks(0).owner_worker(), "127.0.0.1:7001");
+    EXPECT_EQ(deleted.recovery_tasks(0).task_status(), RecoveryTaskPb::COMPLETED);
+    EXPECT_EQ(CollectSlots(deleted.recovery_tasks(0)), (std::set<uint32_t>{ 0, 1, 2, 3 }));
+}
+
+TEST_F(SlotRecoveryTest, ExcludesBlockedSlotsOnRestart)
+{
+    LOG(INFO) << "Scenario: restart excludes slots already blocked elsewhere.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7451), store);
+    manager.SetActiveWorkers({ "127.0.0.1:7451", "127.0.0.1:7452" });
+    DS_ASSERT_OK(manager.InitForTest());
+
+    // Seed another incident that already owns part of the restarting worker's slot space.
+    store->SeedIncident(
+        "127.0.0.1:7452",
+        BuildIncident({ MakeTask("127.0.0.1:7451", "127.0.0.1:7453", RecoveryTaskPb::PENDING, { 0 }),
+                        MakeTask("127.0.0.1:7451", "127.0.0.1:7454", RecoveryTaskPb::IN_PROGRESS, { 1 }),
+                        MakeTask("127.0.0.1:7451", "127.0.0.1:7455", RecoveryTaskPb::COMPLETED, { 2 }) },
+                      3));
+
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    // History lets us observe the transient canonical pending task before async execution finishes.
+    auto history = store->GetHistory("127.0.0.1:7451");
+    ASSERT_FALSE(history.empty());
+    bool sawCanonicalPending = false;
+    for (const auto &snapshot : history) {
+        for (const auto &task : snapshot.recovery_tasks()) {
+            if (task.failed_worker() == "127.0.0.1:7451" && task.owner_worker() == "127.0.0.1:7451"
+                && task.task_status() == RecoveryTaskPb::PENDING
+                && CollectSlots(task) == (std::set<uint32_t>{ 0, 3 })) {
+                sawCanonicalPending = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(sawCanonicalPending);
+
+    // The source incident should only fail the task that restart has taken over.
+    auto sourceIncident = store->GetCurrentIncident("127.0.0.1:7452");
+    ASSERT_EQ(sourceIncident.recovery_tasks_size(), 3);
+    EXPECT_EQ(sourceIncident.recovery_tasks(0).task_status(), RecoveryTaskPb::FAILED);
+    EXPECT_EQ(sourceIncident.recovery_tasks(1).task_status(), RecoveryTaskPb::IN_PROGRESS);
+    EXPECT_EQ(sourceIncident.recovery_tasks(2).task_status(), RecoveryTaskPb::COMPLETED);
+}
+
+TEST_F(SlotRecoveryTest, ExcludesNewlyBlockedSlotsOnRestart)
+{
+    LOG(INFO) << "Scenario: restart excludes slots claimed during takeover race.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7461), store);
+    manager.SetActiveWorkers({ "127.0.0.1:7461", "127.0.0.1:7462" });
+    DS_ASSERT_OK(manager.InitForTest());
+
+    store->SeedIncident(
+        "127.0.0.1:7462",
+        BuildIncident({ MakeTask("127.0.0.1:7461", "127.0.0.1:7463", RecoveryTaskPb::PENDING, { 1, 2 }) }, 2));
+
+    // Capture the restart plan before the source incident changes under us.
+    SlotRecoveryManagerTestHelper::RestartPlan restartPlan;
+    DS_ASSERT_OK(manager.CollectLocalRestartPlan("127.0.0.1:7461", restartPlan));
+    EXPECT_FALSE(restartPlan.localIncidentExists);
+    EXPECT_TRUE(restartPlan.localPendingSlots.empty());
+    EXPECT_TRUE(restartPlan.localResumeSlots.empty());
+    ASSERT_EQ(restartPlan.sourceIncidentKeys.size(), 1);
+    EXPECT_EQ(restartPlan.sourceIncidentKeys[0], "127.0.0.1:7462");
+
+    // The source owner wins the claim after restart scans ETCD but before restart tries the takeover CAS.
+    store->UpdateIncident(
+        "127.0.0.1:7462",
+        BuildIncident({ MakeTask("127.0.0.1:7461", "127.0.0.1:7463", RecoveryTaskPb::IN_PROGRESS, { 1, 2 }) }, 2));
+
+    std::vector<uint32_t> takenSlots;
+    std::vector<uint32_t> blockedSlots;
+    bool shouldDeleteSource = false;
+    DS_ASSERT_OK(manager.TakeOverPendingFromSourceIncident("127.0.0.1:7462", "127.0.0.1:7461", takenSlots, blockedSlots,
+                                                           shouldDeleteSource));
+
+    EXPECT_TRUE(takenSlots.empty());
+    EXPECT_FALSE(shouldDeleteSource);
+    EXPECT_EQ(std::set<uint32_t>(blockedSlots.begin(), blockedSlots.end()), (std::set<uint32_t>{ 1, 2 }));
+
+    // Rebuild the local plan with the newly blocked slots excluded.
+    std::set<uint32_t> plannedLocalSlots;
+    DS_ASSERT_OK(manager.BuildPlannedLocalRestartSlots(restartPlan, std::set<uint32_t>{},
+                                                       std::set<uint32_t>(blockedSlots.begin(), blockedSlots.end()),
+                                                       plannedLocalSlots));
+    EXPECT_EQ(plannedLocalSlots, (std::set<uint32_t>{ 0, 3 }));
+}
+
+TEST_F(SlotRecoveryTest, ExcludesSourceBlockedSlotsOnRestart)
+{
+    LOG(INFO) << "Scenario: restart excludes slots already blocked in the source incident.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7465), store);
+    manager.SetActiveWorkers({ "127.0.0.1:7465", "127.0.0.1:7466" });
+    DS_ASSERT_OK(manager.InitForTest());
+
+    store->SeedIncident(
+        "127.0.0.1:7466",
+        BuildIncident({ MakeTask("127.0.0.1:7465", "127.0.0.1:7467", RecoveryTaskPb::IN_PROGRESS, { 1, 2 }),
+                        MakeTask("127.0.0.1:7465", "127.0.0.1:7468", RecoveryTaskPb::COMPLETED, { 3 }) },
+                      3));
+
+    // The restart plan should discover the source incident but not claim its blocked slots.
+    SlotRecoveryManagerTestHelper::RestartPlan restartPlan;
+    DS_ASSERT_OK(manager.CollectLocalRestartPlan("127.0.0.1:7465", restartPlan));
+    EXPECT_FALSE(restartPlan.localIncidentExists);
+    ASSERT_EQ(restartPlan.sourceIncidentKeys.size(), 1);
+    EXPECT_EQ(restartPlan.sourceIncidentKeys[0], "127.0.0.1:7466");
+
+    std::vector<uint32_t> takenSlots;
+    std::vector<uint32_t> blockedSlots;
+    bool shouldDeleteSource = false;
+    DS_ASSERT_OK(manager.TakeOverPendingFromSourceIncident("127.0.0.1:7466", "127.0.0.1:7465", takenSlots, blockedSlots,
+                                                           shouldDeleteSource));
+
+    EXPECT_TRUE(takenSlots.empty());
+    EXPECT_FALSE(shouldDeleteSource);
+    EXPECT_EQ(std::set<uint32_t>(blockedSlots.begin(), blockedSlots.end()), (std::set<uint32_t>{ 1, 2, 3 }));
+
+    std::set<uint32_t> plannedLocalSlots;
+    DS_ASSERT_OK(manager.BuildPlannedLocalRestartSlots(restartPlan, std::set<uint32_t>{},
+                                                       std::set<uint32_t>(blockedSlots.begin(), blockedSlots.end()),
+                                                       plannedLocalSlots));
+    EXPECT_EQ(plannedLocalSlots, (std::set<uint32_t>{ 0 }));
 }
 
 }  // namespace ut
