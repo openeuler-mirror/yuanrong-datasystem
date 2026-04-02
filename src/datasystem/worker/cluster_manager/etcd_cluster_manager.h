@@ -311,7 +311,12 @@ public:
             }
         }
         std::optional<std::unordered_map<std::string, Status>> errInfos;
+        errInfos.emplace();
         ModifyObjKeysGrpByMasterByCheckConnection(objKeysGrpByMaster, errInfos);
+        if (errInfos && !errInfos->empty()) {
+            LOG(INFO) << "Check connection group by master failed, first errInfo: key is "
+                      << errInfos->begin()->first << ", err is "<< errInfos->begin()->second.ToString();
+        }
         MoveFailedObjKeysFromObjKeysGrpByMaster(objKeysGrpByMaster, objKeysUndecidedMaster);
     }
 
@@ -1119,6 +1124,7 @@ private:
             }
             return Status::OK();
         };
+        std::vector<std::string> failedMasters;
         auto emptyIt = objKeysGrpByMaster.end();  // Iterator for the key of the target node not found.
         for (auto it = objKeysGrpByMaster.begin(); it != objKeysGrpByMaster.end();) {
             const auto &metaAddrInfo = it->first;
@@ -1138,6 +1144,7 @@ private:
                     (void)errInfos->emplace(ExtractObjectId(objectKey), rc);
                 }
             }
+            failedMasters.emplace_back(metaAddrInfo.GetAddress().ToString());
             if (emptyIt == objKeysGrpByMaster.end()) {
                 emptyIt = objKeysGrpByMaster.try_emplace(MetaAddrInfo()).first;
             }
@@ -1145,6 +1152,9 @@ private:
             con.insert(con.end(), std::make_move_iterator(it->second.begin()),
                        std::make_move_iterator(it->second.end()));
             it = objKeysGrpByMaster.erase(it);
+        }
+        if (!failedMasters.empty()) {
+            LOG(INFO) << "Check connection failed: masters are " << VectorToString(failedMasters);
         }
     }
 
