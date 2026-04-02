@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 #include <etcd/api/mvccpb/kv.pb.h>
 
@@ -44,6 +45,7 @@ enum ClusterEventType : uint32_t {
     CHECK_AND_CLEAR_DEVICE_META,
     REPLICA,
     RECOVER_MASTER_APP_REF,
+    SLOT_RECOVERY_FAILED_WORKERS,
 };
 
 using AddLocalFailedNodeEvent = EventSubscribers<ADD_LOCAL_FAILED_NODE, std::function<Status(const HostPort &)>>;
@@ -64,6 +66,8 @@ using ReplicaEvent = EventSubscribers<REPLICA, std::function<Status(mvccpb::Even
 using RecoverMasterAppRefEvent =
     EventSubscribers<RECOVER_MASTER_APP_REF,
                      std::function<Status(std::function<bool(const std::string &)>, const std::string &)>>;
+using SlotRecoveryFailedWorkersEvent =
+    EventSubscribers<SLOT_RECOVERY_FAILED_WORKERS, std::function<Status(const std::vector<HostPort> &)>>;
 
 class ReplicaMagagerEvent : public EventNotifier {
     enum ReplicaMagagerEventType {

@@ -1,0 +1,45 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "slot_recovery_store",
+    srcs = [
+        "slot_recovery_store.cpp",
+    ],
+    hdrs = [
+        "slot_recovery_store.h",
+    ],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/protos:slot_recovery_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "slot_recovery_manager",
+    srcs = [
+        "slot_recovery_manager.cpp",
+    ],
+    hdrs = [
+        "slot_recovery_manager.h",
+    ],
+    deps = [
+        ":slot_recovery_store",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:slot_recovery_cc_proto",
+        "//src/datasystem/worker:cluster_event_type",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+    ],
+)

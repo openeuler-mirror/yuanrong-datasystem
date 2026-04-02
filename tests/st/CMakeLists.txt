@@ -99,7 +99,7 @@ add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS})
 
 target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS})
 target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS})
-target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS})
+target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock)
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS})
 target_link_libraries(ds_st_embedded_client  GTest::gtest GTest::gmock common_etcd  nlohmann_json::nlohmann_json generic_service_protos datasystem)
 target_compile_definitions(ds_st_embedded_client PRIVATE MASTER_BIN_PATH="${_MASTER_BIN_DIR}/master"

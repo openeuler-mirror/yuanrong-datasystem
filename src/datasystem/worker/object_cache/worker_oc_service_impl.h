@@ -78,6 +78,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
+#include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -1019,6 +1020,7 @@ private:
     std::shared_ptr<SharedMemoryRefTable> memoryRefTable_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<ObjectTable> objectTable_;
+    std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager

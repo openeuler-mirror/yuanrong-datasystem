@@ -1123,6 +1123,10 @@ void EtcdClusterManager::DemoteTimedOutNodes()
     for (const auto &addr : failedNode) {
         HandleFailedNode(addr);
     }
+    if (IsCurrentNodeMaster() && !failedNode.empty()) {
+        LOG_IF_ERROR(SlotRecoveryFailedWorkersEvent::GetInstance().NotifyAll(failedNode),
+                     "Failed to notify slot recovery for failed workers.");
+    }
     LOG_IF(INFO, !failedNode.empty()) << "After demote timeout nodes: " << NodesToString();
 }
 
