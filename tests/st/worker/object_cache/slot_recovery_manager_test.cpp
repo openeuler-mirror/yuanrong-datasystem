@@ -61,6 +61,11 @@ bool WaitUntil(const std::function<bool()> &predicate, int timeoutMs = WAIT_TIME
     return predicate();
 }
 
+std::set<uint32_t> CollectSlots(const RecoveryTaskPb &task)
+{
+    return std::set<uint32_t>(task.slots().begin(), task.slots().end());
+}
+
 RecoveryTaskPb *FindTaskByOwner(SlotRecoveryInfoPb &info, const std::string &ownerWorker)
 {
     for (auto &task : *info.mutable_recovery_tasks()) {
@@ -90,6 +95,7 @@ public:
 
     using SlotRecoveryManager::GetStableActiveWorkers;
     using SlotRecoveryManager::HandleFailedWorkers;
+    using SlotRecoveryManager::HandleLocalRestart;
     using SlotRecoveryManager::Init;
     using SlotRecoveryManager::Shutdown;
 
@@ -287,6 +293,227 @@ TEST_F(SlotRecoveryEtcdTest, PreservesOwnerFailoverOrder)
     ExpectIncidentDeleted(worker2);
 
     manager3.Shutdown();
+}
+
+TEST_F(SlotRecoveryEtcdTest, TakesOverRestartSlots)
+{
+    LOG(INFO) << "Scenario: restart takes over pending local slots from another incident.";
+    const std::string localWorker = "127.0.0.1:8001";
+    const std::string sourceIncident = "127.0.0.1:8002";
+    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "1*sleep(1000)"));
+
+    // Seed the local incident so restart has a canonical target to merge into.
+    SlotRecoveryInfoPb localInfo;
+    auto *localTask = localInfo.add_recovery_tasks();
+    localTask->set_failed_worker(localWorker);
+    localTask->set_owner_worker(localWorker);
+    localTask->set_task_status(RecoveryTaskPb::PENDING);
+    localTask->add_slots(0);
+    localInfo.set_total_slots(1);
+    localInfo.set_completed_slots(0);
+    localInfo.set_failed_slots(0);
+    DS_ASSERT_OK(store_->UpdateIncident(localWorker, localInfo));
+
+    // Seed a separate source incident that still owns pending work for the local worker.
+    SlotRecoveryInfoPb sourceInfo;
+    auto *pendingTask = sourceInfo.add_recovery_tasks();
+    pendingTask->set_failed_worker(localWorker);
+    pendingTask->set_owner_worker("127.0.0.1:8003");
+    pendingTask->set_task_status(RecoveryTaskPb::PENDING);
+    pendingTask->add_slots(1);
+    pendingTask->add_slots(2);
+    auto *inProgressTask = sourceInfo.add_recovery_tasks();
+    inProgressTask->set_failed_worker(localWorker);
+    inProgressTask->set_owner_worker("127.0.0.1:8004");
+    inProgressTask->set_task_status(RecoveryTaskPb::IN_PROGRESS);
+    inProgressTask->add_slots(3);
+    sourceInfo.set_total_slots(4);
+    sourceInfo.set_completed_slots(0);
+    sourceInfo.set_failed_slots(0);
+    DS_ASSERT_OK(store_->UpdateIncident(sourceIncident, sourceInfo));
+
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 8001), store_);
+    manager.SetActiveWorkers({ localWorker, "127.0.0.1:8003" });
+    DS_ASSERT_OK(manager.InitForTest());
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    // The source incident should fail only the task that restart took over.
+    auto updatedSource = LoadIncidentOrFail(sourceIncident);
+    ASSERT_EQ(updatedSource.recovery_tasks_size(), 2);
+    EXPECT_EQ(updatedSource.recovery_tasks(0).task_status(), RecoveryTaskPb::FAILED);
+    EXPECT_EQ(updatedSource.recovery_tasks(1).task_status(), RecoveryTaskPb::IN_PROGRESS);
+
+    // Wait until the rebuilt local incident visibly claims the inherited slots.
+    ASSERT_TRUE(WaitUntil([&]() {
+        SlotRecoveryInfoPb current;
+        auto rc = store_->GetIncident(localWorker, current);
+        if (rc.IsError()) {
+            return false;
+        }
+        bool hasTakenSlotsClaimed = false;
+        for (const auto &task : current.recovery_tasks()) {
+            if (task.owner_worker() == localWorker && task.task_status() == RecoveryTaskPb::IN_PROGRESS) {
+                for (auto slot : task.slots()) {
+                    if (slot == 1 || slot == 2) {
+                        hasTakenSlotsClaimed = true;
+                    }
+                }
+            }
+        }
+        return hasTakenSlotsClaimed;
+    }));
+
+    ExpectIncidentDeleted(localWorker);
+    manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryEtcdTest, ResumesLocalInProgressTask)
+{
+    LOG(INFO) << "Scenario: restart resumes the local in-progress task.";
+    const std::string localWorker = "127.0.0.1:8001";
+
+    // Seed the local incident with one resumable task and one already completed peer task.
+    SlotRecoveryInfoPb localInfo;
+    auto *localTask = localInfo.add_recovery_tasks();
+    localTask->set_failed_worker(localWorker);
+    localTask->set_owner_worker(localWorker);
+    localTask->set_task_status(RecoveryTaskPb::IN_PROGRESS);
+    localTask->add_slots(0);
+    localTask->add_slots(1);
+    auto *completedTask = localInfo.add_recovery_tasks();
+    completedTask->set_failed_worker(localWorker);
+    completedTask->set_owner_worker("127.0.0.1:8002");
+    completedTask->set_task_status(RecoveryTaskPb::COMPLETED);
+    completedTask->add_slots(2);
+    completedTask->add_slots(3);
+    localInfo.set_total_slots(4);
+    localInfo.set_completed_slots(2);
+    localInfo.set_failed_slots(0);
+    DS_ASSERT_OK(store_->UpdateIncident(localWorker, localInfo));
+
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 8001), store_);
+    manager.SetActiveWorkers({ localWorker, "127.0.0.1:8002" });
+    DS_ASSERT_OK(manager.InitForTest());
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    // Once the resumed task finishes, the local incident should be cleaned up.
+    ExpectIncidentDeleted(localWorker);
+
+    manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryEtcdTest, RebuildsLocalIncidentFirst)
+{
+    LOG(INFO) << "Scenario: restart rebuilds the local incident before deleting a terminal source.";
+    const std::string localWorker = "127.0.0.1:8001";
+    const std::string sourceIncident = "127.0.0.1:8002";
+    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "1*sleep(1000)"));
+
+    // Seed a terminal source incident whose pending task belongs to the restarting worker.
+    SlotRecoveryInfoPb sourceInfo;
+    auto *pendingTask = sourceInfo.add_recovery_tasks();
+    pendingTask->set_failed_worker(localWorker);
+    pendingTask->set_owner_worker("127.0.0.1:8003");
+    pendingTask->set_task_status(RecoveryTaskPb::PENDING);
+    pendingTask->add_slots(1);
+    pendingTask->add_slots(2);
+    auto *otherCompletedTask = sourceInfo.add_recovery_tasks();
+    otherCompletedTask->set_failed_worker(sourceIncident);
+    otherCompletedTask->set_owner_worker("127.0.0.1:8003");
+    otherCompletedTask->set_task_status(RecoveryTaskPb::COMPLETED);
+    otherCompletedTask->add_slots(0);
+    sourceInfo.set_total_slots(3);
+    sourceInfo.set_completed_slots(1);
+    sourceInfo.set_failed_slots(0);
+    DS_ASSERT_OK(store_->UpdateIncident(sourceIncident, sourceInfo));
+
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 8001), store_);
+    manager.SetActiveWorkers({ localWorker, "127.0.0.1:8002" });
+    DS_ASSERT_OK(manager.InitForTest());
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    // Restart rebuilds the local incident first, then claims the canonical task asynchronously.
+    ASSERT_TRUE(WaitUntil([&]() {
+        auto localCurrent = SlotRecoveryInfoPb{};
+        auto rc = store_->GetIncident(localWorker, localCurrent);
+        if (rc.IsError()) {
+            return false;
+        }
+        if (localCurrent.recovery_tasks_size() != 1) {
+            return false;
+        }
+        const auto &task = localCurrent.recovery_tasks(0);
+        return task.failed_worker() == localWorker && task.owner_worker() == localWorker
+               && task.task_status() == RecoveryTaskPb::IN_PROGRESS
+               && CollectSlots(task) == (std::set<uint32_t>{ 0, 1, 2, 3 });
+    }));
+
+    ExpectIncidentDeleted(sourceIncident);
+    ExpectIncidentDeleted(localWorker);
+
+    manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryEtcdTest, CanonicalizesLocalPendingTasks)
+{
+    LOG(INFO) << "Scenario: restart canonicalizes local pending tasks while preserving foreign progress.";
+    const std::string localWorker = "127.0.0.1:8001";
+    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "1*sleep(1000)"));
+
+    // Seed a local incident with split ownership so restart must rebuild the canonical local task.
+    SlotRecoveryInfoPb localInfo;
+    auto *foreignPendingTask = localInfo.add_recovery_tasks();
+    foreignPendingTask->set_failed_worker(localWorker);
+    foreignPendingTask->set_owner_worker("127.0.0.1:8002");
+    foreignPendingTask->set_task_status(RecoveryTaskPb::PENDING);
+    foreignPendingTask->add_slots(0);
+    foreignPendingTask->add_slots(1);
+    auto *localPendingTask = localInfo.add_recovery_tasks();
+    localPendingTask->set_failed_worker(localWorker);
+    localPendingTask->set_owner_worker(localWorker);
+    localPendingTask->set_task_status(RecoveryTaskPb::PENDING);
+    localPendingTask->add_slots(2);
+    localPendingTask->add_slots(3);
+    auto *foreignInProgressTask = localInfo.add_recovery_tasks();
+    foreignInProgressTask->set_failed_worker(localWorker);
+    foreignInProgressTask->set_owner_worker("127.0.0.1:8003");
+    foreignInProgressTask->set_task_status(RecoveryTaskPb::IN_PROGRESS);
+    foreignInProgressTask->add_slots(4);
+    localInfo.set_total_slots(5);
+    localInfo.set_completed_slots(0);
+    localInfo.set_failed_slots(0);
+    DS_ASSERT_OK(store_->UpdateIncident(localWorker, localInfo));
+
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 8001), store_);
+    manager.SetActiveWorkers({ localWorker, "127.0.0.1:8002" });
+    DS_ASSERT_OK(manager.InitForTest());
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    // The rebuilt canonical local task is claimed asynchronously; wait until the claimed state is visible
+    // while the foreign IN_PROGRESS task is still preserved.
+    ASSERT_TRUE(WaitUntil([&]() {
+        SlotRecoveryInfoPb current;
+        auto rc = store_->GetIncident(localWorker, current);
+        if (rc.IsError()) {
+            return false;
+        }
+        int localTaskCount = 0;
+        bool foreignInProgressKept = false;
+        for (const auto &task : current.recovery_tasks()) {
+            if (task.failed_worker() == localWorker && task.owner_worker() == localWorker
+                && task.task_status() == RecoveryTaskPb::IN_PROGRESS
+                && CollectSlots(task) == (std::set<uint32_t>{ 0, 1, 2, 3 })) {
+                ++localTaskCount;
+            }
+            if (task.failed_worker() == localWorker && task.owner_worker() == "127.0.0.1:8003") {
+                foreignInProgressKept = task.task_status() == RecoveryTaskPb::IN_PROGRESS
+                                        && CollectSlots(task) == (std::set<uint32_t>{ 4 });
+            }
+        }
+        return localTaskCount == 1 && foreignInProgressKept;
+    }));
+
+    manager.Shutdown();
 }
 
 }  // namespace st

@@ -143,6 +143,12 @@ public:
      */
     Status HandleFailedWorkers(const std::vector<HostPort> &failedWorkers);
 
+    /**
+     * @brief Handle local in-place restart slot recovery takeover.
+     * @return Status of the call.
+     */
+    Status HandleLocalRestart();
+
 protected:
     /**
      * @brief Plan the incident of one failed worker with its own tasks and inherited tasks in one CAS.
@@ -218,6 +224,77 @@ protected:
     static std::vector<std::string> PickProcessWorkers(const std::vector<std::string> &failedWorkers,
                                                        const std::vector<std::string> &activeWorkers,
                                                        size_t maxWorkers);
+
+    /**
+     * @brief One-shot read model for planning local restart work.
+     */
+    struct LocalRestartPlan {
+        bool localIncidentExists = false;
+        std::set<uint32_t> localPendingSlots;
+        std::set<uint32_t> localResumeSlots;
+        std::vector<std::string> sourceIncidentKeys;
+    };
+
+    /**
+     * @brief Collect the local restart plan in one ETCD scan.
+     * @param[in] localWorker The local restarted worker.
+     * @param[out] restartPlan Consolidated local/source restart state.
+     * @return Status of the call.
+     */
+    Status CollectLocalRestartPlan(const std::string &localWorker, LocalRestartPlan &restartPlan);
+
+    /**
+     * @brief Mark takeover candidates in one source incident as FAILED and collect their slots.
+     * @param[in] sourceIncidentKey Source incident key.
+     * @param[in] localWorker The local restarted worker.
+     * @param[out] takenSlots Slots successfully taken over from the source incident.
+     * @param[out] blockedSlots Slots that still belong to foreign IN_PROGRESS/COMPLETED tasks after the CAS finishes.
+     * @param[out] shouldDeleteSource True if the source incident becomes terminal after takeover.
+     * @return Status of the call.
+     */
+    Status TakeOverPendingFromSourceIncident(const std::string &sourceIncidentKey, const std::string &localWorker,
+                                             std::vector<uint32_t> &takenSlots, std::vector<uint32_t> &blockedSlots,
+                                             bool &shouldDeleteSource);
+
+    /**
+     * @brief Compute the canonical local slot set after restart planning.
+     *
+     * When the local incident exists, restart only resumes/takes over slots that already belong to the local
+     * recovery chain. When it does not exist, restart rebuilds a fresh local task covering all slots except slots
+     * already protected by foreign IN_PROGRESS/COMPLETED work.
+     *
+     * @param[in] restartPlan Consolidated local/source restart state.
+     * @param[in] takenSlots Slots taken over from source incidents during this restart.
+     * @param[in] blockedSlots Slots blocked by foreign IN_PROGRESS/COMPLETED work after source takeover CAS finishes.
+     * @param[out] plannedLocalSlots Canonical local slot set for rebuild.
+     * @return Status of the call.
+     */
+    Status BuildPlannedLocalRestartSlots(const LocalRestartPlan &restartPlan, const std::set<uint32_t> &takenSlots,
+                                         const std::set<uint32_t> &blockedSlots, std::set<uint32_t> &plannedLocalSlots);
+
+    /**
+     * @brief Rewrite the local incident into the post-restart canonical shape.
+     *
+     * The rebuilt incident keeps:
+     * 1. terminal tasks for failed_worker=localWorker, so finished history/counters are preserved;
+     * 2. foreign IN_PROGRESS tasks for failed_worker=localWorker, because restart must not rewrite them;
+     * 3. all tasks for other failed workers that happen to share the same incident key.
+     *
+     * All other tasks for failed_worker=localWorker are replaced by at most one local PENDING task whose slot set is
+     * @p plannedLocalSlots.
+     *
+     * @param[in] localWorker The local restarted worker.
+     * @param[in] plannedLocalSlots Canonical local slot set after restart planning.
+     * @return Status of the call.
+     */
+    Status RebuildLocalRestartIncident(const std::string &localWorker, const std::set<uint32_t> &plannedLocalSlots);
+
+    /**
+     * @brief Load latest local incident and schedule local tasks.
+     * @param[in] localWorker The local restarted worker.
+     * @return Status of the call.
+     */
+    Status ScheduleLocalRestartTasks(const std::string &localWorker);
 
     /**
      * @brief Execute the recovery task. The current stage only keeps the ETCD coordination contract.

@@ -1691,7 +1691,7 @@ std::vector<std::string> WorkerOCServiceImpl::StopAndGetAllUnfinishedObjects()
 
 Status WorkerOCServiceImpl::WhetherNonRestart()
 {
-    LOG(INFO) << "Trying to determine whether need reconciliation due to restart.";
+    LOG(INFO) << "Determining startup path for restart: reconciliation and local slot recovery.";
     bool isRestart = false;
     RETURN_IF_NOT_OK(etcdCM_->IsRestart(isRestart));
     if (!isRestart || !etcdCM_->IsEtcdAvailableWhenStart() || !FLAGS_enable_reconciliation) {
@@ -1708,6 +1708,9 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
             LOG(INFO) << "Local node has centralized master. Will trigger reconciliation by myself.";
             RETURN_IF_NOT_OK(IfNeedTriggerReconciliation());
         }
+    }
+    if (isRestart) {
+        RETURN_IF_NOT_OK(slotRecoveryManager_->HandleLocalRestart());
     }
     return Status::OK();
 }
