@@ -165,6 +165,12 @@ public:
     void SetRediscoverHandle(std::function<bool()> callback);
 
     /**
+     * @brief Set the timeout handle for local cleanup when heartbeat timeout happens.
+     * @param[in] callback Callback invoked once when workerAvailable_ changes from true to false due to timeout.
+     */
+    void SetWorkerTimeoutHandle(std::function<void()> callback);
+
+    /**
      * @brief Set standby worker is switched, it would happen when local worker is recover.
      */
     void SetSwitched()
@@ -300,6 +306,8 @@ private:
     std::atomic<bool> isWorkerVoluntaryScaleDown_{ false };
     FdReleaseHelper fdReleaseHelper_;
     std::function<bool()> rediscoverHandle_;
+    std::function<void()> workerTimeoutHandle_;
+    std::shared_timed_mutex workerTimeoutHandleMutex_;  // Protect 'workerTimeoutHandle_'.
     ThreadPool *asyncSwitchWorkerPool_;
     const uint32_t index_;
 };

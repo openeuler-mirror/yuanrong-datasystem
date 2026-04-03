@@ -364,6 +364,7 @@ Status ObjectClientImpl::InitListenWorker()
     listenWorker_[LOCAL_WORKER] = std::make_shared<client::ListenWorker>(workerApi_[LOCAL_WORKER], heartbeatType,
                                                                          LOCAL_WORKER, asyncSwitchWorkerPool_.get());
     listenWorker_[LOCAL_WORKER]->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
+    listenWorker_[LOCAL_WORKER]->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
     listenWorker_[LOCAL_WORKER]->SetReleaseFdCallBack(
         [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
     if (enableCrossNodeConnection_) {
@@ -447,15 +448,8 @@ void ObjectClientImpl::ProcessWorkerLost()
     if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
         return;
     }
+    ProcessWorkerTimeout();
     auto &workerApi = workerApi_[LOCAL_WORKER];
-    (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
-    // to split
-    mmapManager_->CleanInvalidMmapTable();
-    {
-        // Only shm object would record reference count, and they are
-        // unrecoverable, so clear their reference count directly.
-        memoryRefCount_.Clear();
-    }
     LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_.ToString();
     std::vector<std::string> ids;
     {
@@ -480,6 +474,19 @@ void ObjectClientImpl::ProcessWorkerLost()
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
     LOG(INFO) << "[Reconnect] Reconnect to local worker success.";
     INJECT_POINT("ObjectClientImpl.ProcessWorkerLost", []() {});
+}
+
+void ObjectClientImpl::ProcessWorkerTimeout()
+{
+    if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
+        return;
+    }
+    auto &workerApi = workerApi_[LOCAL_WORKER];
+    (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
+    mmapManager_->CleanInvalidMmapTable();
+    // Only shm object would record reference count, and they are
+    // unrecoverable after timeout until worker reconnects, so clear them directly.
+    memoryRefCount_.Clear();
 }
 
 void ObjectClientImpl::ProcessStandbyWorkerLost(WorkerNode node)

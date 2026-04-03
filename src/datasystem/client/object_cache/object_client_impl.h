@@ -1015,6 +1015,11 @@ private:
     void ProcessWorkerLost();
 
     /**
+     * @brief Clean local shm and mmap state when local worker heartbeat times out.
+     */
+    void ProcessWorkerTimeout();
+
+    /**
      * @brief Process standby worker lost.
      * @param[in] node Standby worker node index.
      */
