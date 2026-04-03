@@ -171,6 +171,12 @@ void ListenWorker::SetRediscoverHandle(std::function<bool()> callback)
     rediscoverHandle_ = std::move(callback);
 }
 
+void ListenWorker::SetWorkerTimeoutHandle(std::function<void()> callback)
+{
+    std::lock_guard<std::shared_timed_mutex> l(workerTimeoutHandleMutex_);
+    workerTimeoutHandle_ = std::move(callback);
+}
+
 Status ListenWorker::CheckHeartbeat()
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(clientId_);
@@ -273,6 +279,10 @@ void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTim
                 clientCommonWorker_->clientId_, clientCommonWorker_->hostPort_.ToString(), status.ToString());
             workerAvailable_ = false;
             NotifyFirstHeartbeat(false);
+            std::shared_lock<std::shared_timed_mutex> l(workerTimeoutHandleMutex_);
+            if (workerTimeoutHandle_) {
+                workerTimeoutHandle_();
+            }
         }
         SwitchToRemoteWorker();
     }
