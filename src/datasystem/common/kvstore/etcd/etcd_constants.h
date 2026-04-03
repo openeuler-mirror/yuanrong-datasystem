@@ -40,6 +40,7 @@ static constexpr char ETCD_RING_PREFIX[] = "/datasystem/ring";
 static constexpr char ETCD_CLUSTER_TABLE[] = "datasystem/cluster";  // Do not add leading '/'. prefix is customized
 static constexpr char ETCD_MASTER_ADDRESS_TABLE[] = "/datasystem";
 static constexpr char ETCD_REPLICA_GROUP_TABLE[] = "/datasystem/replica_group";
+static constexpr char ETCD_SLOT_RECOVERY_TABLE[] = "/datasystem/slot_recovery";
 // Save key without worker id metadata
 static constexpr char ETCD_META_TABLE_PREFIX[] = "/datasystem/metadata/meta_table/";
 static constexpr char ETCD_LOCATION_TABLE_PREFIX[] = "/datasystem/metadata/object_location_table/";

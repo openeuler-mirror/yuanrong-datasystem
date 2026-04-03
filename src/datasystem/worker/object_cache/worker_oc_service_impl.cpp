@@ -161,6 +161,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
     asyncRollbackManager_ = std::make_shared<AsyncRollbackManager>();
+    slotRecoveryManager_ = std::make_shared<SlotRecoveryManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
 
     // Set async send manager and persistence api to eviction manager
@@ -300,6 +301,8 @@ Status WorkerOCServiceImpl::Init()
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), etcdCM_, workerMasterApiManager_);
     getProc_->Init();
+    RETURN_IF_NOT_OK(
+        slotRecoveryManager_->Init(localAddress_, etcdCM_, persistenceApi_, workerMasterApiManager_, etcdStore_));
     HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(

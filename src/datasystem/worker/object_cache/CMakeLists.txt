@@ -38,7 +38,9 @@ set(WORKER_OC_SRCS
         service/worker_oc_service_global_reference_impl.cpp
         service/worker_oc_service_migrate_impl.cpp
         service/worker_oc_service_batch_get_impl.cpp
-        service/worker_oc_service_expire_impl.cpp)
+        service/worker_oc_service_expire_impl.cpp
+        slot_recovery/slot_recovery_store.cpp
+        slot_recovery/slot_recovery_manager.cpp)
 
 # Lightweight library for transport API
 set(WORKER_TRANSPORT_API_SRCS
@@ -71,6 +73,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         master_heartbeat_protos
         posix_protos
         worker_object_protos
+        slot_recovery_protos
         master_object_protos
         worker_client_manager
         cluster_manager

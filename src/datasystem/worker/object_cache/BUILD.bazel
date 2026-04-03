@@ -188,6 +188,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:async_send_manager",
         "//src/datasystem/worker/object_cache:async_update_location_manager",
         "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker:cluster_event_type",

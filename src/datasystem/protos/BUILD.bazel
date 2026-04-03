@@ -21,6 +21,17 @@ cc_proto_library(
 )
 
 proto_library(
+    name = "slot_recovery_proto",
+    srcs = ["slot_recovery.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "slot_recovery_cc_proto",
+    deps = [":slot_recovery_proto"],
+)
+
+proto_library(
     name = "rpc_option_proto",
     srcs = ["rpc_option.proto"],
     strip_import_prefix = PROTO_ROOT,
