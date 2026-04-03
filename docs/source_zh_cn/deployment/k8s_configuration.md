@@ -385,6 +385,7 @@ global:
 | global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
 | global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
+| global.metadata.enableMetadataRecovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
 
 
 ### 可靠性相关配置

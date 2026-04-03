@@ -30,6 +30,7 @@
 #include "datasystem/master/meta_addr_info.h"
 #define private public
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
+#include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #undef private
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -106,11 +107,11 @@ public:
     {
         CommonTest::SetUp();
 
-        localAddress_ = HostPort("127.0.0.1:18500");
+        localAddress_ = HostPort("127.0.0.1", 18500);
         objectTable_ = std::make_shared<ObjectTable>();
         workerMasterApiManager_ = std::make_shared<TestWorkerMasterApiManager>(localAddress_);
         manager_ = std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, nullptr,
-                                                             workerMasterApiManager_);
+                                                             workerMasterApiManager_, 128);
     }
 
     void AddObject(const std::string &objectKey, uint64_t version = 1, uint64_t dataSize = 1024)
@@ -132,9 +133,26 @@ protected:
     std::unique_ptr<MetaDataRecoveryManager> manager_;
 };
 
+ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
+                              const std::string &primaryAddress = "127.0.0.1:18500")
+{
+    ObjectMetaPb meta;
+    meta.set_object_key(objectKey);
+    meta.set_data_size(2048);
+    meta.set_version(9);
+    meta.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED));
+    meta.set_primary_address(primaryAddress);
+    auto *config = meta.mutable_config();
+    config->set_write_mode(static_cast<uint32_t>(writeMode));
+    config->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
+    config->set_consistency_type(static_cast<uint32_t>(ConsistencyType::PRAM));
+    config->set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
+    return meta;
+}
+
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
 {
-    BINEXPECT_CALL((Status (EtcdClusterManager::*)(const HostPort &, bool, bool)) & EtcdClusterManager::CheckConnection,
+    BINEXPECT_CALL((Status(EtcdClusterManager::*)(const HostPort &, bool, bool)) & EtcdClusterManager::CheckConnection,
                    (_, _, _))
         .WillRepeatedly(Return(Status::OK()));
 
@@ -147,7 +165,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
         objectKeys.emplace_back(std::move(objectKey));
     }
 
-    HostPort masterAddr("127.0.0.1:18501");
+    HostPort masterAddr("127.0.0.1", 18501);
     auto workerMasterApi = std::make_shared<TestWorkerMasterOCApi>(masterAddr, localAddress_);
     workerMasterApiManager_->SetApi(masterAddr, workerMasterApi);
 
@@ -169,11 +187,101 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataShouldReturnAllFailedIdsWhenM
         AddObject(objectKey);
     }
 
-    HostPort unreachableMaster("127.0.0.1:18502");
+    HostPort unreachableMaster("127.0.0.1", 18502);
     auto result = manager_->SendRecoverRequest(MetaAddrInfo(unreachableMaster, ""), objectKeys);
     DS_ASSERT_NOT_OK(result.status);
     EXPECT_EQ(result.status.GetCode(), K_RUNTIME_ERROR);
     EXPECT_EQ(result.failedIds.size(), objectKeys.size());
 }
+
+TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntries)
+{
+    std::vector<ObjectMetaPb> recoverMetas;
+    recoverMetas.emplace_back(BuildRecoverMeta("obj_l2", WriteMode::WRITE_THROUGH_L2_CACHE, "127.0.0.1:18501"));
+    recoverMetas.emplace_back(BuildRecoverMeta("obj_mem_only", WriteMode::NONE_L2_CACHE));
+
+    std::vector<std::string> recoveredObjectKeys;
+    DS_ASSERT_OK(manager_->RecoverLocalEntries(recoverMetas, recoveredObjectKeys));
+    ASSERT_EQ(recoveredObjectKeys, std::vector<std::string>({ "obj_l2" }));
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get("obj_l2", entry));
+    ASSERT_TRUE(entry->RLock().IsOk());
+    EXPECT_EQ((*entry)->GetDataSize(), 2048);
+    EXPECT_EQ((*entry)->GetCreateTime(), 9);
+    EXPECT_EQ((*entry)->GetMetadataSize(), 128);
+    EXPECT_EQ((*entry)->GetAddress(), "127.0.0.1:18500");
+    EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
+    EXPECT_FALSE((*entry)->stateInfo.IsCacheInvalid());
+    EXPECT_FALSE((*entry)->stateInfo.IsIncomplete());
+    EXPECT_TRUE((*entry)->HasL2Cache());
+    entry->RUnlock();
+
+    std::shared_ptr<SafeObjType> skippedEntry;
+    EXPECT_EQ(objectTable_->Get("obj_mem_only", skippedEntry).GetCode(), K_NOT_FOUND);
+}
+
+class MetadataRecoverySelectorTest : public CommonTest {
+public:
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        objectTable_ = std::make_shared<ObjectTable>();
+        selector_ = std::make_unique<MetadataRecoverySelector>(objectTable_, nullptr);
+    }
+
+    void AddObject(const std::string &objectKey, WriteMode writeMode)
+    {
+        auto obj = std::make_unique<ObjCacheShmUnit>();
+        obj->modeInfo.SetWriteMode(writeMode);
+        obj->stateInfo.SetDataFormat(DataFormat::BINARY);
+        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
+    }
+
+protected:
+    std::shared_ptr<ObjectTable> objectTable_;
+    std::unique_ptr<MetadataRecoverySelector> selector_;
+};
+
+TEST_F(MetadataRecoverySelectorTest, SelectShouldRespectIncludeL2Flag)
+{
+    AddObject("mem_only", WriteMode::NONE_L2_CACHE);
+    AddObject("l2_obj", WriteMode::WRITE_THROUGH_L2_CACHE);
+
+    std::vector<std::string> objectKeys;
+    selector_->Select([](const std::string &) { return true; }, false, objectKeys);
+    std::sort(objectKeys.begin(), objectKeys.end());
+    ASSERT_THAT(objectKeys, ElementsAre("mem_only"));
+
+    objectKeys.clear();
+    selector_->Select([](const std::string &) { return true; }, true, objectKeys);
+    std::sort(objectKeys.begin(), objectKeys.end());
+    ASSERT_THAT(objectKeys, ElementsAre("l2_obj", "mem_only"));
+}
+
+TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValidateEtcd)
+{
+    ClearDataReqPb req;
+    auto *range = req.add_ranges();
+    range->set_from(10);
+    range->set_end(20);
+    req.add_worker_ids("uuid_a");
+    req.add_worker_ids("uuid_b");
+
+    auto selectReq = MetadataRecoverySelector::BuildSelectionRequest(req, true);
+    ASSERT_FALSE(selectReq.Empty());
+    ASSERT_EQ(selectReq.ranges.size(), 1);
+    EXPECT_EQ(selectReq.ranges[0].first, 10);
+    EXPECT_EQ(selectReq.ranges[0].second, 20);
+    ASSERT_THAT(selectReq.workerUuids, ElementsAre("uuid_a", "uuid_b"));
+    EXPECT_TRUE(selectReq.includeL2CacheIds);
+
+    std::vector<std::string> objectKeys;
+    auto status = selector_->Select(selectReq, objectKeys);
+    DS_ASSERT_NOT_OK(status);
+    EXPECT_EQ(status.GetCode(), K_RUNTIME_ERROR);
+}
+
 }  // namespace ut
 }  // namespace datasystem

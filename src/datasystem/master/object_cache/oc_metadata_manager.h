@@ -1298,7 +1298,8 @@ private:
      * @param[in] version The object version
      * @param[out] firstOne Create first time or not
      */
-    Status UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address, int64_t &version);
+    Status UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address, int64_t &version,
+                      const std::set<ImmutableString> &nestedObjectKeys = {});
 
     /**
      * @brief Create meta info in cache and rocksdb.

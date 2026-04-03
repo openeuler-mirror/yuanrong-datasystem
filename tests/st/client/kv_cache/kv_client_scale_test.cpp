@@ -722,6 +722,7 @@ protected:
 };
 
 class STCScaleDownRecoverMetaTest : public STCScaleTest {
+public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
@@ -737,8 +738,8 @@ class STCScaleDownRecoverMetaTest : public STCScaleTest {
     }
 
 protected:
-    const int nodeTimeout_ = 6;
-    const int nodeDeadTimeout_ = 8;
+    int nodeTimeout_ = 6;
+    int nodeDeadTimeout_ = 8;
 };
 
 TEST_F(STCScaleDownRecoverMetaTest, WorkerScaleDown)
@@ -755,6 +756,38 @@ TEST_F(STCScaleDownRecoverMetaTest, WorkerScaleDown)
     client_.reset();
     kill(cluster_->GetWorkerPid(0), SIGTERM);  // worker index 0
     WaitAllNodesJoinIntoHashRing(2);
+    for (const auto &key : keys) {
+        std::string value;
+        DS_ASSERT_OK(client2_->Get(key, value));
+        ASSERT_EQ(value, "any_value");
+    }
+}
+
+class STCRestartRecoverMetaTest : public STCScaleDownRecoverMetaTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) {
+        nodeTimeout_ = 60;
+        nodeDeadTimeout_ = 80;
+        STCScaleDownRecoverMetaTest::SetClusterSetupOptions(opts);
+    }
+};
+
+TEST_F(STCRestartRecoverMetaTest, WorkerRestartRecoverTest)
+{
+    StartWorkerAndWaitReady({ 0, 1, 2 });
+    InitTestKVClient(0, client_);
+    InitTestKVClient(1, client1_);
+    InitTestKVClient(2, client2_);
+    std::vector<std::string> keys;
+    for (int i = 0; i < 10; i++) {
+        keys.emplace_back(client_->GenerateKey());
+        DS_ASSERT_OK(client1_->Set(keys.back(), "any_value"));
+    }
+    client_.reset();
+    kill(cluster_->GetWorkerPid(0), SIGTERM);  // worker index 0
+    const int interval = 2000;  // wait 10000ms for clean map;
+    std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+    StartWorkerAndWaitReady({ 0 });
     for (const auto &key : keys) {
         std::string value;
         DS_ASSERT_OK(client2_->Get(key, value));

@@ -547,6 +547,10 @@
         "value": "true",
         "description": "Enable query meta redirect when scale up or voluntary scale down, default is true"
     },
+    "enable_metadata_recovery": {
+        "value": "false",
+        "description": "Whether to recover worker metadata to master during worker restart cleanup."
+    },
     "enable_rdma": {
         "value": "false",
         "description": "Option to turn on rdma for OC worker to worker data transfer, default false"
