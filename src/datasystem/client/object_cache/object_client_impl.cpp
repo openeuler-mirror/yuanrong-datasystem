@@ -712,9 +712,8 @@ bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)
     }
 
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
-    rc = workerApi->PrepairForDecreaseShmRef(std::bind(
-        &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(),
-        std::placeholders::_1, std::placeholders::_2));
+    rc = workerApi->PrepairForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(),
+                                                       std::placeholders::_1, std::placeholders::_2));
     if (rc.IsError()) {
         LOG(ERROR) << "[Switch] PrepairForDecreaseShmRef failed: " << rc.ToString();
     }
@@ -1051,7 +1050,7 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
     }
 
     // existBufferList same as bufferList
- #ifdef ENABLE_PERF
+#ifdef ENABLE_PERF
     point.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
 #endif
     existBufferList.clear();
@@ -3266,6 +3265,10 @@ void ObjectClientImpl::StartShmRefReconcileThread()
 void ObjectClientImpl::ShutdownShmRefReconcileThread()
 {
     if (shmRefReconcileThread_ == nullptr) {
+        return;
+    }
+    bool expected = false;
+    if (!shmRefReconcileExitFlag_.compare_exchange_strong(expected, true)) {
         return;
     }
     shmRefReconcileExitFlag_ = true;

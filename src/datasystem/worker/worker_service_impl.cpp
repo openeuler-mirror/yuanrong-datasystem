@@ -237,12 +237,18 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
         RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is exiting and unhealthy now!");
     }
 
-    if (req.shm_enabled() && req.server_fd() > 0) {
+    auto serverFd = req.server_fd();
+    if (serverFd > 0) {
         std::lock_guard<std::shared_timed_mutex> lck(mutex_);
         INJECT_POINT("WorkerServiceImpl.RegisterClient.BlowAuth");
-        CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(req.server_fd()) != unboundedUnixSockFds_.end(),
-                                 K_SERVER_FD_CLOSED, FormatString("Fd %d has been released", req.server_fd()));
-        (void)unboundedUnixSockFds_.erase(req.server_fd());
+        CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(serverFd) != unboundedUnixSockFds_.end(),
+                                 K_SERVER_FD_CLOSED, FormatString("Fd %d has been released", serverFd));
+        (void)unboundedUnixSockFds_.erase(serverFd);
+        if (!req.shm_enabled()) {
+            // close scmtcp fd for remote client
+            LOG(INFO) << "the connection not enable shm, close fd: " << serverFd;
+            RETRY_ON_EINTR(close(serverFd));
+        }
     }
     RaiiPlus raiiP([&req]() {
         if (req.shm_enabled() && req.server_fd() > 0) {
@@ -413,6 +419,11 @@ void WorkerServiceImpl::CloseExpiredUnixSockFd()
 
 Status WorkerServiceImpl::operator()()
 {
+    UnixSockFd tmpSockFd;
+    RETURN_IF_NOT_OK(tmpSockFd.CreateUnixSocket());
+    Raii closeTmpSockFd([&tmpSockFd]() { tmpSockFd.Close(); });
+    int tmpfd = tmpSockFd.GetFd();
+
     bool hasBeenLogged = false;  //  This variable is used to avoid excessive log printing.
     // Loop forever until the main() is interrupted.
     const int checkCacheFdIntervalMs = 3'000;
@@ -453,7 +464,7 @@ Status WorkerServiceImpl::operator()()
             Status rc = sock.Send32(fd);
             INJECT_POINT("WorkerServiceImpl.AcceptFdLoop.AfterSend");
             if (rc.IsOk() && shmWorkerPort_ > 0) {
-                rc = SockSendFd(fd, true, { fd }, 1);
+                rc = SockSendFd(fd, true, { tmpfd }, 1);
             }
             if (rc.IsError()) {
                 RETRY_ON_EINTR(close(fd));
