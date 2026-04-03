@@ -426,7 +426,13 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
 
     do {
         std::set<ReadKey> needRetryIds;
-        status = ProcessObjectsNotExistInLocal(needRemoteGetIds, subTimeout, failedIds, needRetryIds, request);
+        std::unordered_set<std::string> tmpFailedIds;
+        status = ProcessObjectsNotExistInLocal(needRemoteGetIds, subTimeout, tmpFailedIds, needRetryIds, request);
+        std::for_each(tmpFailedIds.begin(), tmpFailedIds.end(), [&](const std::string &id) {
+            if (needRetryIds.count(ReadKey(id)) == 0) {
+                (void)failedIds.emplace(id);
+            }
+        });
         int64_t remainTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
         const int64_t timeoutThresholdMs = 100;
         INJECT_POINT_NO_RETURN("TryGetObjectFromRemote.NoRetry", [&remainTimeMs] { remainTimeMs = 0; });
@@ -1696,8 +1702,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
 
         Timer timer;
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-        futures.emplace_back(remoteGetThreadPool_->Submit([=,
-                                                           &queryMetas, &lockedEntries, &commonMutex, &abortAllTasks,
+        futures.emplace_back(remoteGetThreadPool_->Submit([=, &queryMetas, &lockedEntries, &commonMutex, &abortAllTasks,
                                                            &request, &payloads, &lastRc, &successIds, &needRetryIds,
                                                            &failedIds, &traceId]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
@@ -1720,7 +1725,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
             const auto &readKey = subIter->first;
             std::shared_ptr<SafeObjType> &subEntry = subIter->second.safeObj;
             bool isInsert = subIter->second.insert;
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(subEntry->TransferWLockToCurrentThread(), "Lock failed");
             Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, isInsert, queryMeta, payloads);
 
             // Protects access to successIds, needRetryIds, failedIds, and lastRc
@@ -1729,7 +1733,10 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
             if (status.IsOk()) {
                 LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", objectKey);
                 successIds.push_back(objectKey);
-            } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+                return status;
+            }
+            failedIds.emplace(objectKey);
+            if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
                 LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
                 (void)needRetryIds.emplace(readKey);
             } else if (status.GetCode() == K_OUT_OF_MEMORY) {
@@ -1738,10 +1745,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                 abortAllTasks.store(true);
             } else {
                 LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
-                failedIds.emplace(objectKey);
                 lastRc = status;
             }
-
             return status;
         }));
     }
@@ -1792,7 +1797,10 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<
         if (status.IsOk()) {
             LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", objectKey);
             successIds.push_back(objectKey);
-        } else if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+            continue;
+        }
+        failedIds.emplace(objectKey);
+        if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
             LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
             lastRc = Status::OK();
             (void)needRetryIds.emplace(readKey);
@@ -1803,7 +1811,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<
         } else {
             LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
             lastRc = status;
-            failedIds.emplace(objectKey);
         }
     }
 
@@ -1821,8 +1828,6 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
                                                              const master::QueryMetaInfoPb &queryMeta,
                                                              std::vector<RpcMessage> &payloads)
 {
-    Raii raii([&entry]() { entry->WUnlock(); });
-
     const auto &meta = queryMeta.meta();
     const auto &address = queryMeta.address();
     const auto objectKey = meta.object_key();
@@ -2149,9 +2154,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     }
     std::function<Status(CreateCopyMetaReqPb &, CreateCopyMetaRspPb &)> func =
         [&workerMasterApi](CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp) {
-            INJECT_POINT("CreateCopyMeta.skip", []() {
-                return Status::OK();
-            });
+            INJECT_POINT("CreateCopyMeta.skip", []() { return Status::OK(); });
             return workerMasterApi->CreateCopyMeta(req, rsp);
         };
     Status rc = RedirectRetryWhenMetaMoving(req, rsp, workerMasterApi, func);
@@ -2277,8 +2280,8 @@ void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
 }
 
 void WorkerOcServiceGetImpl::UpdateLocationRedirectKeysToRetry(
-    const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
-    const std::vector<UpdateLocationParam> &params, std::vector<UpdateLocationParam> &retryParams)
+    const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos, const std::vector<UpdateLocationParam> &params,
+    std::vector<UpdateLocationParam> &retryParams)
 {
     if (infos.empty()) {
         return;
@@ -2295,8 +2298,7 @@ void WorkerOcServiceGetImpl::UpdateLocationRedirectKeysToRetry(
     }
 }
 
-void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(
-    const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
+void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
 {
     LOG(INFO) << "clear objects by update location params";
     for (auto &keyVersion : clearKeyVersions) {

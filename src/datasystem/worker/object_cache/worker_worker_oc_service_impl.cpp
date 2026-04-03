@@ -584,14 +584,14 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
               << VectorToString(req.requests());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
-    RETURN_IF_NOT_OK(RunBatchGetObjectRemoteWithRetry(req, rsp, payload));
+    RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
-    VLOG(1) << FormatString("pull success");
+    VLOG(1) << "pull success with payload size: " << payload.size();
     point.Record();
     return Status::OK();
 }
@@ -604,27 +604,11 @@ Status WorkerWorkerOCServiceImpl::PrepareBatchGetObjectRemoteReq(BatchGetObjectR
     return CheckConnectionStable(*singleReq);
 }
 
-Status WorkerWorkerOCServiceImpl::RunBatchGetObjectRemoteWithRetry(BatchGetObjectRemoteReqPb &req,
-                                                                   BatchGetObjectRemoteRspPb &rsp,
-                                                                   std::vector<RpcMessage> &payload)
-{
-    const auto timeout = reqTimeoutDuration.CalcRealRemainingTime();
-    return RetryOnErrorRepent(
-        timeout,
-        [this, &req, &rsp, &payload](int32_t) {
-            rsp.clear_responses();
-            payload.clear();
-            return BatchGetObjectRemoteImpl(req, rsp, payload);
-        },
-        []() { return Status::OK(); }, { StatusCode::K_URMA_TRY_AGAIN });
-}
-
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req,
                                                            BatchGetObjectRemoteRspPb &rsp,
                                                            std::vector<RpcMessage> &payload)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
-    Status lastRc;
     std::vector<ParallelRes> parallelRes;
     if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
         RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes));
@@ -634,29 +618,22 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
         for (int i = 0; i < req.requests_size(); i++) {
             auto *subReq = req.mutable_requests(i);
             *(subReq->mutable_comm_id()) = req.comm_id();
-            auto rc = GetObjectRemoteBatchWrite(parallelSize - 1, *subReq, rsp, parallelRes, nullptr);
-            if (rc.GetCode() == K_URMA_TRY_AGAIN) {
-                lastRc = rc;
-            }
+            (void)GetObjectRemoteBatchWrite(parallelSize - 1, *subReq, rsp, parallelRes, nullptr);
         }
     }
 
     point.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);
-    RETURN_IF_NOT_OK(MergeParallelBatchGetResult(parallelRes, rsp, payload, lastRc));
-    return lastRc;
+    return MergeParallelBatchGetResult(parallelRes, rsp, payload);
 }
 
 Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<ParallelRes> &parallelRes,
                                                               BatchGetObjectRemoteRspPb &rsp,
-                                                              std::vector<RpcMessage> &payload, Status &lastRc)
+                                                              std::vector<RpcMessage> &payload)
 {
     uint64_t index = 0;
     for (auto &loc : parallelRes) {
         for (auto &resp : loc.respPbs) {
             rsp.add_responses()->Swap(&resp);
-            if (resp.error().error_code() == K_URMA_TRY_AGAIN) {
-                lastRc = Status(K_URMA_TRY_AGAIN, resp.error().error_msg());
-            }
         }
 
         for (auto &kp : loc.kps) {
@@ -676,7 +653,7 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<Parall
                 continue;
             }
 
-            RETURN_IF_NOT_OK(WaitFastTransportAndFallback(loc, kp, rsp, payload, index, lastRc, coveredRespNum));
+            RETURN_IF_NOT_OK(WaitFastTransportAndFallback(loc, kp, rsp, payload, index, coveredRespNum));
         }
 
         loc.kps.clear();
@@ -687,12 +664,11 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<Parall
 
 Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
     ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
-    BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, Status &lastRc,
-    uint64_t coveredRespNum)
+    BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum)
 {
     auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
-    auto errorHandler = [&index, &rsp, &lastRc, &loc, &kp, &payload, coveredRespNum](Status &status) {
-        const bool waitFailed = status.IsError() && status.GetCode() != K_URMA_TRY_AGAIN;
+    auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum](Status &status) {
+        const bool waitFailed = status.IsError();
         if (waitFailed) {
             const bool batchWaitFailed = kp.second.second.empty();
             if (batchWaitFailed) {
@@ -714,9 +690,6 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
             }
         }
 
-        if (status.GetCode() == K_URMA_TRY_AGAIN) {
-            lastRc = status;
-        }
         rsp.mutable_responses()->at(index).mutable_error()->set_error_code(status.GetCode());
         rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(status.GetMsg());
         return status;

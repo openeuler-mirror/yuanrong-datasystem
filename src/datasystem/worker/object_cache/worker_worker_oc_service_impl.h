@@ -182,25 +182,14 @@ private:
     Status PrepareBatchGetObjectRemoteReq(BatchGetObjectRemoteReqPb &req);
 
     /**
-     * @brief Run batch remote get with retry on recoverable transport errors.
-     * @param[in] req Remote get batch request.
-     * @param[out] rsp Remote get batch response.
-     * @param[out] payload Out payloads.
-     * @return Status of the call.
-     */
-    Status RunBatchGetObjectRemoteWithRetry(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                            std::vector<RpcMessage> &payload);
-
-    /**
      * @brief Merge parallel batch get results to final response and payload.
      * @param[in, out] parallelRes Parallel result list.
      * @param[out] rsp Remote get batch response.
      * @param[out] payload Out payloads.
-     * @param[in, out] lastRc Last retryable status seen during result merge.
      * @return Status of the call.
      */
     Status MergeParallelBatchGetResult(std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteRspPb &rsp,
-                                       std::vector<RpcMessage> &payload, Status &lastRc);
+                                       std::vector<RpcMessage> &payload);
 
     /**
      * @brief Wait fast transport events and fallback to payload when needed.
@@ -209,12 +198,11 @@ private:
      * @param[out] rsp Remote get batch response.
      * @param[out] payload Out payloads.
      * @param[in, out] index Current response index.
-     * @param[in, out] lastRc Last retryable status seen during waiting.
      * @return Status of the call.
      */
     Status WaitFastTransportAndFallback(
         ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
-        BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, Status &lastRc,
+        BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index,
         uint64_t coveredRespNum);
 
     /**
