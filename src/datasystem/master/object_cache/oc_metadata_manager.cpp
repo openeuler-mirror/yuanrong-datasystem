@@ -3780,10 +3780,15 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
                                                              WriteMode2MetaType(meta.config().write_mode()));
         }
         accessor->second.locations[workerAddr] = AckState::ACK;
-        accessor.release();
+        if (meta.is_recovered() && meta.primary_address() == workerAddr
+            && accessor->second.meta.primary_address() != workerAddr) {
+            accessor->second.meta.set_primary_address(workerAddr);
+        }
     } else {
         ObjectMeta metaCache;
         metaCache.meta = meta;
+        // This field is only used in recovery requests and should not be persisted as object metadata.
+        metaCache.meta.set_is_recovered(false);
         metaCache.meta.set_primary_address(workerAddr);
         // Object key is the key in a key/value pair for the metadata table.
         // Storing the same object key in the "value" part of the kv is redundant and
@@ -3794,14 +3799,14 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
         metaCache.meta.set_allocated_object_key(NULL);
         metaCache.locations[workerAddr] = AckState::ACK;
         (void)metaTable_.emplace(accessor, objectKey, metaCache);
-        std::string serializedStr;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
-            "serialize meta to rocksdb failed");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, WriteMode2MetaType(meta.config().write_mode())),
-            "Create meta to rocksdb failed");
     }
+    std::string serializedStr;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
+        "serialize meta to rocksdb failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, WriteMode2MetaType(meta.config().write_mode())),
+        "Create meta to rocksdb failed");
     return Status::OK();
 }
 

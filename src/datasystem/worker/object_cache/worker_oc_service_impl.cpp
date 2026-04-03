@@ -130,6 +130,7 @@ DS_DECLARE_bool(cross_cluster_get_data_from_worker);
 DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(memory_alignment);
+DS_DECLARE_bool(enable_metadata_recovery);
 
 using namespace datasystem::master;
 using namespace datasystem::worker;
@@ -295,7 +296,8 @@ Status WorkerOCServiceImpl::Init()
     workerDevOcManager_ = std::make_shared<WorkerDeviceOcManager>(this);
     lastReconTime_ = GetSteadyClockTimeStampMs();  // Record current timestamp in case we need reconciliation.
     RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
-
+    metadataRecoveryManager_ =
+        std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, etcdCM_, workerMasterApiManager_);
     asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
     AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
@@ -401,7 +403,7 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
 }
 
 void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
-                                          std::vector<std::string> &objKeys)
+                                          std::vector<std::string> &objKeys, bool includeL2CacheIds)
 {
     LOG(INFO) << "GetNoL2CacheObjectsMatch begin";
     Timer timer;
@@ -412,9 +414,13 @@ void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &
     LOG(INFO) << "Get all object in table ElapsedMilliSecond:" << timer.ElapsedMilliSecond()
               << " object size:" << objs.size();
     timer.Reset();
-    std::function batchFun = [this, matchFunc, &objKeys](std::vector<std::string> &objects) {
+    std::function batchFun = [this, matchFunc, &objKeys, includeL2CacheIds](std::vector<std::string> &objects) {
         for (const auto &id : objects)
             if (matchFunc(id)) {
+                if (includeL2CacheIds) {
+                    objKeys.emplace_back(id);
+                    continue;
+                }
                 std::shared_ptr<SafeObjType> entry;
                 if (objectTable_->Get(id, entry).IsError()) {
                     continue;
@@ -441,7 +447,8 @@ void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &
     if (!tmpIds.empty()) {
         batchFun(tmpIds);
     }
-    LOG(INFO) << "GetNoL2CacheObjectsMatch finish, objectKeys size: " << objKeys.size()
+    LOG(INFO) << "GetObjectsMatch finish, objectKeys size: " << objKeys.size()
+              << " , include l2cache ids: " << includeL2CacheIds
               << " ElapsedMilliSecond: " << timer.ElapsedMilliSecond();
 }
 
@@ -821,10 +828,17 @@ Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
         };
     }
     LOG(INFO) << rangesStr.str() << ", uuids: " << VectorToString(uuids);
-    std::vector<std::string> noL2CacheIds;
-    GetObjectsMatch(matchFunc, noL2CacheIds);
+    bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
+    std::vector<std::string> matchObjIds;
+    GetObjectsMatch(matchFunc, matchObjIds, includeL2CacheIds);
+    std::vector<std::string> failedIds;
     RETURN_IF_NOT_OK(gRefProc_->GIncreaseMasterRefWithLock(matchFunc, req.standby_worker()));
-    ClearObject(noL2CacheIds, req);
+    if (FLAGS_enable_metadata_recovery) {
+        metadataRecoveryManager_->RecoverMetadata(matchObjIds, failedIds, req.standby_worker());
+        ClearObject(failedIds, req);
+    } else {
+        ClearObject(matchObjIds, req);
+    }
     RETURN_IF_NOT_OK(RecoverMasterAppRefEvent::GetInstance().NotifyAll(matchFunc, req.standby_worker()));
     LOG(INFO) << "clear data without meta in worker finished";
     return Status::OK();

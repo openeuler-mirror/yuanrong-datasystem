@@ -119,9 +119,11 @@ ds_cc_library(
 ds_cc_library(
     name = "worker_oc_service_impl",
     srcs = [
+        "metadata_recovery_manager.cpp",
         "worker_oc_service_impl.cpp",
     ],
     hdrs = [
+        "metadata_recovery_manager.h",
         "worker_oc_service_impl.h",
     ],
     deps = [

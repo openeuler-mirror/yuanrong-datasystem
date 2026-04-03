@@ -13,6 +13,7 @@ set(WORKER_OC_SRCS
         async_send_manager.cpp
         async_rollback_manager.cpp
         async_update_location_manager.cpp
+        metadata_recovery_manager.cpp
         object_kv.cpp
         eviction_list.cpp
         cache_hit_info.cpp
