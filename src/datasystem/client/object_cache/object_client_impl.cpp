@@ -1274,18 +1274,20 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
     RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
-    RETURN_IF_NOT_OK(CheckConnection());
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     PerfPoint createPoint(PerfKey::CLIENT_CREATE_OBJECT);
     VLOG(1) << "Begin to create object, object_key: " << objectKey;
     buffer.reset();  // Decrease should precede increase to avoid worker lost (ref cnt will be clear) and then restart.
     std::shared_ptr<Buffer> newBuffer;
     uint32_t version = 0;
-    if (ShmCreateable(dataSize) || IsUrmaEnabled()) {
+    if (workerApi->ShmCreateable(dataSize) || IsUrmaEnabled()) {
         uint64_t metadataSize = 0;
         auto shmBuf = std::make_shared<ShmUnitInfo>();
         std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;
-        RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->Create(objectKey, dataSize, version, metadataSize, shmBuf,
-                                                          urmaDataInfo, param.cacheType));
+        RETURN_IF_NOT_OK(workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf,
+                                           urmaDataInfo, param.cacheType));
         std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
         if (!urmaDataInfo) {
@@ -1341,7 +1343,6 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
-    RETURN_IF_NOT_OK(CheckConnection());
     LOG(INFO) << "Start to MultiCreate " << objectKeyList.size();
 
     std::vector<MultiCreateParam> multiCreateParamList;
@@ -1355,12 +1356,15 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     // This variable is the output from MultiCreate, indicates whether shared memory was actually used
     auto useShmTransfer = false;
     // Pre-condition check for whether we should attempt shared memory or UB
-    bool canUseShm = workerApi_[LOCAL_WORKER]->IsShmEnable() && dataSizeSum >= workerApi_[LOCAL_WORKER]->shmThreshold_;
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    bool canUseShm = workerApi->IsShmEnable() && dataSizeSum >= workerApi->shmThreshold_;
     if (canUseShm || IsUrmaEnabled() || !skipCheckExistence) {
         // Call MultiCreate if: 1) using shared memory, OR 2) UB enabled (need urma_info), OR 3) need to check existence
         // When shared memory is unavailable but UB is enabled or we need to check existence, MultiCreate will use RPC
-        RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiCreate(skipCheckExistence, multiCreateParamList, version,
-                                                               exists, useShmTransfer));
+        RETURN_IF_NOT_OK(workerApi->MultiCreate(skipCheckExistence, multiCreateParamList, version,
+                                                exists, useShmTransfer));
     } else {
         // Only skip existence check when explicitly requested AND not using shared memory
         exists.resize(objectKeyList.size(), false);
@@ -1482,12 +1486,18 @@ Status ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isSh
 
 Status ObjectClientImpl::UpdateToken(SensitiveValue &token)
 {
-    return workerApi_[LOCAL_WORKER]->UpdateToken(token);
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    return workerApi->UpdateToken(token);
 }
 
 Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
 {
-    return workerApi_[LOCAL_WORKER]->UpdateAkSk(accessKey, secretKey);
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    return workerApi->UpdateAkSk(accessKey, secretKey);
 }
 
 Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
@@ -1521,7 +1531,6 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
     PerfPoint perfPoint(PerfKey::CLIENT_PUBLISH_OBJECT);
-    RETURN_IF_NOT_OK(CheckConnection());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(nestedObjectKeys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsBatchSizeUnderLimit(nestedObjectKeys.size()), K_INVALID,
@@ -1531,8 +1540,11 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     VLOG(1) << "Begin to publish object, object_key: " << objectKey << " with ttlSecond = " << ttlSecond;
 
     bufferInfo->isSeal = false;
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
+        workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
         FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
@@ -3042,7 +3054,10 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
         .isTx = false, .isReplica = true, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
     };
     MultiPublishRspPb rsp;
-    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->MultiPublish(bufferInfoList, param, rsp, blobSizes));
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, param, rsp, blobSizes));
     return HandleShmRefCountAfterMultiPublish(bufferList, rsp);
 }
 
@@ -3079,7 +3094,10 @@ Status ObjectClientImpl::QuerySize(const std::vector<std::string> &objectKeys, s
 Status ObjectClientImpl::HealthCheck(ServerState &state)
 {
     RETURN_IF_NOT_OK(IsClientReady());
-    return workerApi_[LOCAL_WORKER]->HealthCheck(state);
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    return workerApi->HealthCheck(state);
 }
 
 Status ObjectClientImpl::DevPublish(const std::vector<std::string> &objectKeys,

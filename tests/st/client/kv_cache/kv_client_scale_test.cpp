@@ -2211,6 +2211,100 @@ TEST_F(STCStandByTest, TestSwitchWorker)
     DS_ASSERT_OK(kvClient0->Get(key, valGet1));
 }
 
+TEST_F(STCStandByTest, TestFunctionAfterSwitchWorker)
+{
+    constexpr int64_t NON_SHM_SIZE = 50 * 1024;
+    constexpr int64_t SHM_SIZE = 500 * 1024;
+    DS_ASSERT_OK(cluster_->StartOBS());
+    StartWorkerAndWaitReady({ 0, 1 });
+    std::shared_ptr<KVClient> kvClient0;
+    std::shared_ptr<KVClient> kvClient1;
+    InitTestKVClient(0, kvClient0, [](ConnectOptions &opts) {
+        opts.enableCrossNodeConnection = true;
+        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        opts.tenantId = "tenant1";
+    });
+    InitTestKVClient(1, kvClient1, [](ConnectOptions &opts) {
+        opts.enableCrossNodeConnection = true;
+        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        opts.tenantId = "tenant1";
+    });
+    std::string key = "ooooo";
+    std::string key1 = "ppppp";
+    std::string value = "Level0_Ttl_001";
+    std::string valGet1;
+    std::string valGet2;
+    SetParam param;
+    DS_ASSERT_OK(kvClient0->Set(key, value, param));
+    DS_ASSERT_OK(kvClient0->Get(key, value));
+    std::string keySet = kvClient0->Set("value0", param);
+    externalCluster_->ShutdownNode(WORKER, 0);
+    sleep(7);
+    DS_ASSERT_OK(kvClient0->Set(key1, value, param));
+    DS_ASSERT_OK(kvClient0->HealthCheck());
+    std::vector<std::string> failedKeys;
+    {
+        // Create
+        std::string keyCreate = "key1_create";
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(kvClient0->Create(keyCreate, NON_SHM_SIZE, param, buffer));
+        DS_ASSERT_OK(kvClient0->Set(buffer));
+        Optional<Buffer> getBuffer;
+        DS_ASSERT_OK(kvClient0->Get(keyCreate, getBuffer));
+        Optional<ReadOnlyBuffer> getBuffer1;
+        DS_ASSERT_OK(kvClient0->Get(keyCreate, getBuffer1));
+    }
+    {
+        // MCreate
+        std::string key1 = "key1";
+        std::string key2 = "key2";
+        std::vector<std::string> keys{ key1, key2 };
+        std::vector<uint64_t> sizes{ NON_SHM_SIZE, SHM_SIZE };
+        std::vector<std::shared_ptr<Buffer>> buffers;
+        DS_ASSERT_OK(kvClient0->MCreate(keys, sizes, param, buffers));
+        DS_ASSERT_OK(kvClient0->MSet(buffers));
+        std::vector<std::string> valsToGet;
+        DS_ASSERT_OK(kvClient0->Get(keys, valsToGet));
+        std::vector<Optional<Buffer>> getBuffer;
+        DS_ASSERT_OK(kvClient0->Get(keys, getBuffer));
+        std::vector<Optional<ReadOnlyBuffer>> getBuffer1;
+        DS_ASSERT_OK(kvClient0->Get(keys, getBuffer1));
+        DS_ASSERT_OK(kvClient0->Read({ ReadParam{ .key = key1} }, getBuffer1));
+        DS_ASSERT_OK(kvClient0->Del(keys, failedKeys));
+    }
+    {
+        std::vector<std::string> keys;
+        std::vector<StringView> values;
+        size_t bigSize = 1024UL;
+        size_t batchSize = 10'000UL;
+        std::vector<std::string> vals;
+        for (size_t i = 0; i < batchSize; ++i) {
+            keys.emplace_back("key" + std::to_string(i));
+            vals.emplace_back(GenRandomString(bigSize));
+            values.emplace_back(vals.back());
+        }
+        DS_ASSERT_OK(kvClient0->MSet(keys, values, failedKeys));
+    }
+    DS_ASSERT_OK(kvClient0->Set(key, value, param));
+    std::vector<uint64_t> outSizes;
+    DS_ASSERT_OK(kvClient0->QuerySize({ key }, outSizes));
+    std::vector<bool> exists;
+    DS_ASSERT_OK(kvClient0->Exist({ key }, exists));
+    uint64_t ttlTimeout = 2;
+    DS_ASSERT_OK(kvClient0->Expire( { key }, ttlTimeout, failedKeys));
+    DS_ASSERT_OK(kvClient0->Del(key));
+
+    std::string accessKey = "accesskey";
+    std::string secretKey_ = "secretkey";
+    SensitiveValue secretKey(secretKey_);
+    DS_ASSERT_OK(kvClient0->UpdateAkSk(accessKey, secretKey));
+    std::string token = "qqqqqq";
+    SensitiveValue token0(token);
+    DS_ASSERT_OK(kvClient0->UpdateToken(token0));
+}
+
 constexpr int SCALE_RESTART_ADD_TIME = 3;
 class STCRestartTest : public STCScaleTest {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
