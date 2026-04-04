@@ -38,28 +38,32 @@ load("@rules_python//python:repositories.bzl", "python_register_toolchains")
 python_register_toolchains(
     name = "python_3_9",
     python_version = "3.9",
+    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_10",
     python_version = "3.10",
+    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_11",
     python_version = "3.11",
+    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_12",
     python_version = "3.12",
+    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_13",
     python_version = "3.13",
+    ignore_root_user_error= True
 )
-
 load("@python_3_9//:defs.bzl", "interpreter")
 load("@python_3_10//:defs.bzl", "interpreter")
 load("@python_3_11//:defs.bzl", "interpreter")
