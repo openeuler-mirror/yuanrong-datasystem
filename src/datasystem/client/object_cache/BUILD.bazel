@@ -53,6 +53,7 @@ ds_cc_library(
         "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
         "//src/datasystem/client/object_cache/client_worker_api:client_worker_local_api",
         ":client_memory_ref_table",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         # "//src/datasystem/client/object_cache/device:client_device_object_manager",
     ],
     alwayslink = True,

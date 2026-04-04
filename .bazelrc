@@ -33,6 +33,10 @@ build:urma --define=enable_urma=true
 build:urma --copt=-DUSE_URMA
 build:urma --copt=-DURMA_OVER_UB
 
+build:pipeline_h2d --config=urma
+build:pipeline_h2d --define=enable_pipeline_h2d=true
+build:pipeline_h2d --copt=-DBUILD_PIPLN_H2D
+
 build:asan --cxxopt=-fsanitize=address
 build:asan --cxxopt=-fno-omit-frame-pointer
 build:asan --cxxopt=-g3

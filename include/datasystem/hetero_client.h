@@ -37,10 +37,6 @@ class ObjectClientImpl;
 }  // namespace datasystem
 
 namespace datasystem {
-struct AsyncResult {
-    Status status;
-    std::vector<std::string> failedList;
-};
 
 struct MetaInfo {
     std::vector<uint64_t> blobSizeList;

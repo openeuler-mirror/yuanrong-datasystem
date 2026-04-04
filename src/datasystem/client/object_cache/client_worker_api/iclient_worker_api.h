@@ -56,6 +56,7 @@
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_types.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -91,6 +92,12 @@ struct GetParam {
     bool queryL2Cache;
     bool isRH2DSupported = false;
     uint64_t ubTotalSize = 0;  // Pre-fetched total UB data size; 0 means not pre-fetched.
+};
+
+struct H2DParam {
+    int64_t subTimeoutMs;
+    std::vector<std::string> objectKeys;
+    std::vector<OsXprtPipln::DevShmInfo> devInfos;
 };
 
 class IClientWorkerApi : virtual public client::IClientWorkerCommonApi {
@@ -158,6 +165,14 @@ public:
      * @return Status of the call.
      */
     virtual Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) = 0;
+
+    /**
+     * @brief Decrease the object worker reference count by one and if no client holds the object, release it.
+     * @param[in] h2dParam object key and device target handle.
+     * @param[out] rsp H2DRspPb rsp.
+     * @return Status of the call.
+     */
+    virtual Status PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp) = 0;
 
     /**
      * @brief Send getting object rpc request to worker.

@@ -20,7 +20,7 @@ readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
                      [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off] [-e on/off]
-                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on]
+                     [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on] [-T on/off]
                      [-A on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
 
 Options:
@@ -43,6 +43,7 @@ Options:
     -G Build Go sdk, choose from: on/off, default: off.
     -v Specified version.The default value is using 'cat ./VERSION'.
     -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'on'.
+    -T Compiles the code for os pipeline h2d feature in kvclient. The options are on and off. The default value is 'off'.
 
     For communication layer
     -M Build with URMA framework in addition to ZMQ, choose from on/off, default: off.
@@ -157,6 +158,9 @@ function init_default_opts() {
 
   # Whether to build device object.
   export BUILD_HETERO="on"
+
+  # whether support os pipeline h2d 
+  export BUILD_PIPLN_H2D="off"
 
   # Whether support jemalloc memory profiling
   export SUPPORT_JEPROF="off"
@@ -465,6 +469,7 @@ function generate_config()
   [[ -f "${config_file}" ]] && rm -f "${config_file}"
   echo "set(INSTALL_DIR \"${INSTALL_DIR}\")" >> "${config_file}"
   echo "set(BUILD_HETERO \"${BUILD_HETERO}\")" >> "${config_file}"
+  echo "set(BUILD_PIPLN_H2D \"${BUILD_PIPLN_H2D}\")" >> "${config_file}"
   echo "set(PACKAGE_PYTHON \"${PACKAGE_PYTHON}\")" >> "${config_file}"
 }
 
@@ -498,6 +503,7 @@ function build_datasystem()
     "-DTRANSFER_ENGINE_BUILD_THREAD_NUM:STRING=${TRANSFER_ENGINE_BUILD_THREAD_NUM}"
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
+    "-DBUILD_PIPLN_H2D:BOOL=${BUILD_PIPLN_H2D}"
     "-DBUILD_GO_API:BOOL=${PACKAGE_GO}"
     "-DBUILD_JAVA_API:BOOL=${PACKAGE_JAVA}"
     "-DSUPPORT_JEPROF:BOOL=${SUPPORT_JEPROF}"
@@ -607,7 +613,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:x:m:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:x:m:T:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -721,6 +727,10 @@ function main() {
     X)
       check_on_off "${OPTARG}" X
       BUILD_HETERO="${OPTARG}"
+      ;;
+    T)
+      check_on_off "${OPTARG}" T
+      BUILD_PIPLN_H2D="${OPTARG}"
       ;;
     l)
       check_labels "${OPTARG}" l

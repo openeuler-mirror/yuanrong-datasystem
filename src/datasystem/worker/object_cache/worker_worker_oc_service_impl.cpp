@@ -31,6 +31,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -620,6 +621,17 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
             *(subReq->mutable_comm_id()) = req.comm_id();
             (void)GetObjectRemoteBatchWrite(parallelSize - 1, *subReq, rsp, parallelRes, nullptr);
         }
+    }
+
+    // pipeline h2d don't need wait and retry, just fill in response
+    if (OsXprtPipln::IsPiplnH2DRequest(req)) {
+        for (auto &loc : parallelRes) {
+            for (auto &resp : loc.respPbs) {
+                rsp.add_responses()->Swap(&resp);
+            }
+        }
+        // no try again
+        return Status::OK();
     }
 
     point.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);

@@ -584,6 +584,42 @@ Status ClientWorkerRemoteApi::ReconcileShmRef(const std::unordered_set<ShmKey> &
     return Status::OK();
 }
 
+Status ClientWorkerRemoteApi::PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp)
+{
+#ifdef BUILD_PIPLN_H2D
+    reqTimeoutDuration.Init(connectTimeoutMs_);
+    GetReqPb req;
+
+    H2DChunkManager chunkManager{ true /* isClient */ };
+    RETURN_IF_NOT_OK(PreparePipelineRH2DReq(h2DParam, chunkManager, req));
+
+    // send and wait
+    int64_t rpcTimeout = std::max<int64_t>(h2DParam.subTimeoutMs, rpcTimeoutMs_);
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_PIPELINE_H2D);
+    Status status = RetryOnError(
+        std::max<int32_t>(requestTimeoutMs_, h2DParam.subTimeoutMs),
+        [this, &req, &rsp](int32_t realRpcTimeout) {
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
+                                             "Fail to generate signature when sending H2D request.");
+            VLOG(1) << "Start to send rpc to do H2D, rpc timeout: " << realRpcTimeout;
+            std::vector<RpcMessage> payloads;
+            RETURN_IF_NOT_OK(stub_->Get(opts, req, rsp, payloads));
+            return Status::OK();
+        },
+        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
+    perfPoint.Record();
+
+    return status;
+#else
+    (void)h2DParam;
+    (void)rsp;
+    return Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D");
+#endif
+}
+
 Status ClientWorkerRemoteApi::GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds,
                                                  std::vector<std::string> &failedObjectKeys,
                                                  const std::string &remoteClientId)

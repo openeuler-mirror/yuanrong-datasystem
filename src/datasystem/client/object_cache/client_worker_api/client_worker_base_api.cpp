@@ -66,6 +66,44 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
 }
 
 #ifdef USE_URMA
+
+Status ClientWorkerBaseApi::PreparePipelineRH2DReq(H2DParam &h2DParam, H2DChunkManager &chunkManager, GetReqPb &req)
+{
+#ifdef BUILD_PIPLN_H2D
+    // adapt to get request
+    auto &objectKeys = h2DParam.objectKeys;
+    auto &devInfos = h2DParam.devInfos;
+    int size = static_cast<int>(objectKeys.size());
+    req.mutable_object_keys()->Reserve(size);
+    *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
+    req.mutable_h2d_infos()->Reserve(size);
+    for (size_t i = 0; i < objectKeys.size(); i++) {
+        uint32_t reqId = chunkManager.GenerateReqId();
+        RETURN_IF_NOT_OK(chunkManager.AddKey(objectKeys[i], reqId, devInfos[i], ""));
+        const auto reqInfo = chunkManager.GetReqInfo(reqId);
+        if (reqInfo == nullptr) {
+            return Status(K_INVALID,
+                          "should not happen: reqId " + std::to_string(reqId) + " has no reqInfo in chunkManager");
+        }
+        auto info = req.add_h2d_infos();
+        info->set_dev_id(reqInfo->driver->devId);
+        info->set_target_device_handle(reqInfo->driver->targetHandle);
+        info->set_target_size(reqInfo->driver->targetSize);
+    }
+    req.set_no_query_l2cache(false);  // force access l2 cache
+    req.set_sub_timeout(ClientGetRequestTimeout(h2DParam.subTimeoutMs));
+    req.set_client_id(clientId_);
+    req.set_return_object_index(false);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when H2D.");
+    return Status::OK();
+#else
+    (void)h2DParam;
+    (void)chunkManager;
+    (void)req;
+    return Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D");
+#endif
+}
+
 void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
                                             uint8_t *&ubBufferPtr, uint64_t &ubBufferSize, uint64_t requiredSize)
 {

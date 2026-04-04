@@ -83,6 +83,7 @@ ds_cc_library(
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         #"//src/datasystem/worker/object_cache:worker_oc_service_impl",
     ],
 )
@@ -95,6 +96,7 @@ ds_cc_library(
     deps = [
         ":cache_hit_info",
         ":worker_request_manager_header",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
     ],
     alwayslink = True,

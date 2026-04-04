@@ -40,6 +40,8 @@
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_common_api.h"
+
 namespace datasystem {
 namespace object_cache {
 struct GetObjEntryParams {
@@ -188,6 +190,7 @@ public:
     const std::string &GetClientId() const;
     bool NoQueryL2Cache() const;
     const std::string &GetClientCommUuid() const;
+    H2DChunkManager& GetH2DChunkManager();
 
     std::vector<ObjectKey> GetUniqueObjectkeys() const;
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> GetServerApi() const;
@@ -226,6 +229,9 @@ private:
     AccessRecorder recorder_;
     Status lastRc_;
     std::atomic<bool> isReturn_{ false };
+
+    // for h2d
+    H2DChunkManager chunkManager_{ false /* isClient */ };
 
     int64_t subTimeout_{ 0 };
     int64_t requestTimeoutMs_{ 0 };

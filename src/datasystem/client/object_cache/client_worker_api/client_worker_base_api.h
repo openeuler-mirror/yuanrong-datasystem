@@ -35,6 +35,8 @@
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"
 
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_common_api.h"
+
 namespace datasystem {
 namespace object_cache {
 class ClientWorkerBaseApi : public IClientWorkerApi {
@@ -67,6 +69,8 @@ protected:
     Status PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
                              const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
                              PublishReqPb &req);
+
+    Status PreparePipelineRH2DReq(H2DParam &h2DParam, H2DChunkManager &chunkManager, GetReqPb &req);
 
     Status PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req);
 

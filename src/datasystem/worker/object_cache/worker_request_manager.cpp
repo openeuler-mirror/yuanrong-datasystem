@@ -29,6 +29,7 @@
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -101,6 +102,8 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
             CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(iter->second.offsetInfo == offsetInfo, K_INVALID,
                                                  FormatString("Duplicate offset read for objectKey %s", objectKey));
         }
+        if (OsXprtPipln::IsPiplnH2DRequest(req))
+            RETURN_IF_NOT_OK(OsXprtPipln::ParsePiplnH2DRequest(req, GetH2DChunkManager(), objectKey, i));
         VLOG(1) << "objectKey " << objectKey << " add to GetRequest success";
     }
     threadPool_ = std::move(threadPool);
@@ -218,6 +221,11 @@ bool GetRequest::NoQueryL2Cache() const
 const std::string &GetRequest::GetClientCommUuid() const
 {
     return clientCommId_;
+}
+
+H2DChunkManager& GetRequest::GetH2DChunkManager()
+{
+    return chunkManager_;
 }
 
 const std::vector<ObjectKey> &GetRequest::GetRawObjectKeys() const
@@ -352,6 +360,10 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
     bool shmEnabled = clientInfo != nullptr && clientInfo->ShmEnabled();
     bool useUbGet = IsUrmaEnabled() && !shmEnabled && hasUbGetInfo_;
     uint64_t ubWriteOffset = 0;
+
+    if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_))
+        return OsXprtPipln::ConstructPipelineRH2DResponse(resp, chunkManager_, rawObjectKeys_);
+
     if (shmEnabled && !rawObjectKeys_.empty()) {
         // avoid per key allocation. pre-allocate all the required space
         resp.mutable_objects()->Reserve(static_cast<int>(rawObjectKeys_.size()));

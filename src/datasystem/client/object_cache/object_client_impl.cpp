@@ -1703,6 +1703,114 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     return Status::OK();
 }
 
+#define COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(func_ret)                         \
+    do {                                                                        \
+        Status ret = func_ret;                                                  \
+        if (ret.IsError()) {                                                    \
+            asyncResource->promise.set_value({ ret, asyncResource->failList }); \
+            return future;                                                      \
+        };                                                                      \
+    } while (0)
+
+#define CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(cond, err, msg)          \
+    do {                                                                        \
+        if (!(cond)) {                                                          \
+            asyncResource->promise.set_value({ Status(err, msg), objectKeys }); \
+            LOG(ERROR) << (msg);                                                  \
+            return future;                                                      \
+        }                                                                       \
+    } while (0)
+
+struct PipelineAsyncResource {
+    std::future<Status> rpcFuture;
+    std::promise<AsyncResult> promise;
+    H2DParam h2DParam;
+    std::vector<std::string> failList;
+};
+
+std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
+    const std::vector<std::string> &objectKeys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
+    const std::vector<uint32_t> &devIds, int64_t subTimeoutMs)
+{
+    auto asyncResource = std::make_shared<PipelineAsyncResource>();
+    std::shared_future<AsyncResult> future = asyncResource->promise.get_future().share();
+
+#ifdef BUILD_PIPLN_H2D
+    PerfPoint perfPoint(PerfKey::CLIENT_GET_WITH_OS_XPRT_PIPLINE);
+
+    // check args
+    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(objectKeys.size() == devShmChunk.size(), K_INVALID,
+                                                   "objectKeys size is not equal to devShmChunk size");
+    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(objectKeys.size() == devIds.size(), K_INVALID,
+                                                   "objectKeys size is not equal to devIds size");
+    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(
+        Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
+        FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(CheckValidObjectKeyVector(objectKeys));
+
+    // check status
+    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(IsClientReady());
+    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(CheckConnection());
+
+    // copy params
+    std::vector<OsXprtPipln::DevShmInfo> devInfos;
+    for (size_t i = 0; i < objectKeys.size(); i++) {
+        devInfos.emplace_back(OsXprtPipln::DevShmInfo{ OsXprtPipln::TargetDeviceType::CUDA, devIds[i],
+                                                       devShmChunk[i].first, devShmChunk[i].second });
+    }
+    asyncResource->h2DParam = H2DParam{
+        .subTimeoutMs = subTimeoutMs,
+        .objectKeys = objectKeys,
+        .devInfos = std::move(devInfos),
+    };
+
+    auto traceID = Trace::Instance().GetTraceID();
+    asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceID]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+
+        // client should be at same site with worker
+        std::shared_ptr<IClientWorkerApi> workerApi = workerApi_[LOCAL_WORKER];
+        workerApi->IncreaseInvokeCount();
+        std::unique_ptr<Raii> raii = std::make_unique<Raii>([workerApi]() { workerApi->DecreaseInvokeCount(); });
+
+        // do H2D
+        GetRspPb getRsp;
+        Status ret = workerApi->PipelineRH2D(asyncResource->h2DParam, getRsp);
+        if (ret.IsError()) {
+            asyncResource->promise.set_value({ ret, asyncResource->h2DParam.objectKeys });
+            return ret;
+        }
+
+        // check result
+        for (int i = 0; i < getRsp.objects_size(); i++) {
+            asyncResource->failList.emplace_back(getRsp.objects(i).object_key());
+        }
+
+        Status recvRc(static_cast<StatusCode>(getRsp.last_rc().error_code()), getRsp.last_rc().error_msg());
+        if (recvRc.IsError()) {
+            LOG(WARNING) << "request to worker may be failed, status:" << recvRc.ToString()
+                         << " failed keys:" << VectorToString(asyncResource->failList);
+        } else if (!asyncResource->failList.empty()) {
+            LOG(WARNING) << "Not all H2D sucess, failed keys:" << VectorToString(asyncResource->failList);
+        }
+        asyncResource->promise.set_value({ recvRc, asyncResource->failList });
+        return recvRc;
+    });
+
+    perfPoint.Record();
+#else
+    (void)objectKeys;
+    (void)devShmChunk;
+    (void)devIds;
+    (void)subTimeoutMs;
+    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D"));
+#endif
+    return future;
+}
+
+#undef COMPLETE_FUTURE_WHEN_ERROR
+#undef CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR
+
 Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys, std::vector<std::string> &vals,
                                       int64_t subTimeoutMs, std::vector<Optional<Buffer>> &buffers, size_t &dataSize)
 {

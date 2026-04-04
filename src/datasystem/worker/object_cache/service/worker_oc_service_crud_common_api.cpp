@@ -26,6 +26,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -141,6 +142,12 @@ Status WorkerOcServiceCrudCommonApi::SaveBinaryObjectToPersistence(ObjectKV &obj
 Status WorkerOcServiceCrudCommonApi::UpdateRequestForSuccess(ReadObjectKV &objectKV,
                                                              const std::shared_ptr<GetRequest> &request)
 {
+    // trigger local pipeline h2d if data is fetched from other point
+    // ignore failure now, this will be treated in fillinresponse
+    if (OsXprtPipln::IsPiplnH2DRequest(request->GetH2DChunkManager()))
+        OsXprtPipln::MaybeTriggerLocalPipelineRH2D(request->GetH2DChunkManager(), objectKV.GetObjKey(),
+            objectKV.GetReadOffset() + objectKV.GetObjEntry()->GetMetadataSize(),
+            objectKV.GetReadSize(), objectKV.GetObjEntry()->GetShmUnit());
     const auto dataFormat = objectKV.GetObjEntry()->stateInfo.GetDataFormat();
     if (dataFormat == DataFormat::BINARY) {
         if (request != nullptr) {

@@ -52,6 +52,10 @@ if (WITH_TESTS)
     list(APPEND WORKER_DEPEND_LIBS ut_object_protos)
 endif ()
 
+if (BUILD_PIPLN_H2D)
+    list(APPEND WORKER_DEPEND_LIBS os_transport_pipeline)
+endif ()
+
 if (ENABLE_PERF)
     list(APPEND WORKER_SRCS "perf_service/perf_service_impl.cpp")
     list(APPEND WORKER_DEPEND_LIBS perf_posix_protos)

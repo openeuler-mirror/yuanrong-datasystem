@@ -29,6 +29,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -438,6 +439,7 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, uint32_t con
     }
     constexpr uint32_t threadCount = 1;
     deleteJfsThread_ = std::make_unique<ThreadPool>(0, threadCount, "RecreateJfs");
+    RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnH2DEnv(context, jfc, jfce_->Raw()));
     return Status::OK();
 }
 
@@ -483,6 +485,7 @@ bool UrmaResource::GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) con
 
 void UrmaResource::Clear()
 {
+    OsXprtPipln::UnInitOsPiplnH2DEnv();
     {
         std::lock_guard<std::mutex> jfsLock(jfsListMutex_);
         jfsLists_.clear();

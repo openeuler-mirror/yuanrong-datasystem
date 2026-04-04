@@ -88,3 +88,7 @@ DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection");
+
+DS_DEFINE_bool(enable_pipeline_h2d, false, "Enable pipeline H2D. Default is false");
+DS_DEFINE_int32(pipeline_h2d_thread_num, 64,
+                "Pipeline H2D worker thread number. Default value 64");
