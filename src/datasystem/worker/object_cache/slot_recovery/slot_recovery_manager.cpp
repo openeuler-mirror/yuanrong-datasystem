@@ -28,17 +28,14 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
-DS_DEFINE_uint32(l2_cache_slot_num, 128, "Total number of logical slots used for L2 cache writes.");
-DS_DEFINE_validator(l2_cache_slot_num, [](const char *flagName, uint32_t value) {
-    (void)flagName;
-    return value > 0;
-});
+DS_DECLARE_uint32(distributed_disk_slot_num);
 
 namespace datasystem {
 namespace object_cache {
@@ -106,13 +103,62 @@ std::string IncidentSummary(const SlotRecoveryInfoPb &info)
 
 std::string TaskSummary(const RecoveryTaskPb &task)
 {
-    return FormatString("failed_worker=%s owner_worker=%s task_status=%s slots_summary={%s}", task.failed_worker(),
-                        task.owner_worker(), TaskStatusName(task.task_status()), SlotsSummary(task.slots()));
+    return FormatString("failed_worker=%s owner_worker=%s source_worker=%s task_status=%s slots_summary={%s}",
+                        task.failed_worker(), task.owner_worker(), task.source_worker(),
+                        TaskStatusName(task.task_status()), SlotsSummary(task.slots()));
 }
 
-bool IsSameTaskOwnerPair(const RecoveryTaskPb &lhs, const RecoveryTaskPb &rhs)
+bool IsSameTaskIdentity(const RecoveryTaskPb &lhs, const RecoveryTaskPb &rhs)
 {
-    return lhs.failed_worker() == rhs.failed_worker() && lhs.owner_worker() == rhs.owner_worker();
+    return lhs.failed_worker() == rhs.failed_worker() && lhs.owner_worker() == rhs.owner_worker()
+           && lhs.source_worker() == rhs.source_worker();
+}
+
+std::string GetTaskSourceWorker(const RecoveryTaskPb &task)
+{
+    if (!task.source_worker().empty()) {
+        return task.source_worker();
+    }
+    if (task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED
+        || task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
+        return task.owner_worker();
+    }
+    return task.failed_worker();
+}
+
+void AddPlannedSlots(std::unordered_map<std::string, std::set<uint32_t>> &plannedSlotsBySource,
+                     const std::string &sourceWorker, const google::protobuf::RepeatedField<uint32_t> &slots)
+{
+    auto &plannedSlots = plannedSlotsBySource[sourceWorker];
+    plannedSlots.insert(slots.begin(), slots.end());
+}
+
+bool ShouldRetainTerminalIncidentForRestart(const std::string &incidentKey, const SlotRecoveryInfoPb &info)
+{
+    for (const auto &task : info.recovery_tasks()) {
+        if (task.failed_worker() != incidentKey) {
+            continue;
+        }
+        if (task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED && task.owner_worker() != incidentKey) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ObjectMetaPb BuildRecoveredMetadata(const SlotPreloadMeta &meta, const std::string &localWorker)
+{
+    ObjectMetaPb objectMeta;
+    objectMeta.set_object_key(meta.objectKey);
+    objectMeta.set_data_size(meta.size);
+    objectMeta.set_version(meta.version);
+    objectMeta.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
+    objectMeta.set_primary_address(localWorker);
+    objectMeta.set_is_recovered(true);
+    auto *config = objectMeta.mutable_config();
+    config->set_write_mode(static_cast<uint32_t>(meta.writeMode));
+    config->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
+    return objectMeta;
 }
 }  // namespace
 
@@ -175,6 +221,7 @@ Status SlotRecoveryPlanner::BuildInitialTasks(const std::string &failedWorker, u
             auto *task = info.add_recovery_tasks();
             task->set_failed_worker(failedWorker);
             task->set_owner_worker(owner);
+            task->set_source_worker(failedWorker);
             task->set_task_status(RecoveryTaskPb_TaskStatus_PENDING);
             found = tasksByOwner.emplace(owner, info.recovery_tasks_size() - 1).first;
         }
@@ -198,6 +245,9 @@ Status SlotRecoveryPlanner::CollectInheritedTasks(const std::string &failedWorke
             continue;
         }
         tasks.emplace_back(task);
+        if (tasks.back().source_worker().empty()) {
+            tasks.back().set_source_worker(task.failed_worker());
+        }
     }
     if (!tasks.empty()) {
         VLOG(1) << FormatString("action=collect_inherited_raw_tasks owner_worker=%s task_count=%zu", failedWorker,
@@ -246,6 +296,7 @@ Status SlotRecoveryPlanner::ReassignInheritedTasks(const std::vector<RecoveryTas
             inheritedTask = &tasks.back();
             inheritedTask->set_failed_worker(rawTask.failed_worker());
             inheritedTask->set_owner_worker(owner);
+            inheritedTask->set_source_worker(rawTask.owner_worker());
             inheritedTask->set_task_status(RecoveryTaskPb_TaskStatus_PENDING);
         }
         for (const auto slot : rawTask.slots()) {
@@ -276,12 +327,13 @@ SlotRecoveryManager::~SlotRecoveryManager()
 Status SlotRecoveryManager::Init(
     const HostPort &localAddress, EtcdClusterManager *etcdCM, std::shared_ptr<PersistenceApi> persistApi,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
-    datasystem::EtcdStore *etcdStore)
+    datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager)
 {
     localAddress_ = localAddress;
     etcdCM_ = etcdCM;
     persistenceApi_ = std::move(persistApi);
     workerMasterApiManager_ = std::move(apiManager);
+    metadataRecoveryManager_ = metadataRecoveryManager;
     store_ = CreateStore(etcdStore);
     if (!IsFeatureEnabled()) {
         return Status::OK();
@@ -408,8 +460,8 @@ Status SlotRecoveryManager::PlanIncident(const std::string &failedWorker, const 
     std::vector<RecoveryTaskPb> inheritedTasks;
     RETURN_IF_NOT_OK(CollectInheritedTasks(failedWorker, activeWorkers, incidents, inheritedTasks));
     SlotRecoveryInfoPb plannedInfo;
-    RETURN_IF_NOT_OK(
-        SlotRecoveryPlanner::BuildInitialTasks(failedWorker, FLAGS_l2_cache_slot_num, activeWorkers, plannedInfo));
+    RETURN_IF_NOT_OK(SlotRecoveryPlanner::BuildInitialTasks(failedWorker, FLAGS_distributed_disk_slot_num,
+                                                            activeWorkers, plannedInfo));
     const auto initialTaskCount = plannedInfo.recovery_tasks_size();
     RETURN_IF_NOT_OK(SlotRecoveryPlanner::AppendRecoveryTasks(std::move(inheritedTasks), plannedInfo));
     RETURN_IF_NOT_OK(store_->CASIncident(failedWorker, [failedWorker, &plannedInfo](SlotRecoveryInfoPb &info,
@@ -560,7 +612,7 @@ Status SlotRecoveryManager::ClaimLocalTask(const std::string &incidentKey, const
             return Status::OK();
         }
         for (auto &current : *info.mutable_recovery_tasks()) {
-            if (!IsSameTaskOwnerPair(current, task)) {
+            if (!IsSameTaskIdentity(current, task)) {
                 continue;
             }
             if (current.owner_worker() != localWorker || SlotRecoveryIncidentState::IsTaskTerminal(current)) {
@@ -588,7 +640,7 @@ Status SlotRecoveryManager::CompleteLocalTask(const std::string &incidentKey, co
     const std::string localWorker = localAddress_.ToString();
     // The completion write still uses CAS because multiple workers may read the same incident concurrently, and only
     // the owner that still sees a non-terminal task should publish the terminal transition.
-    auto rc = store_->CASIncident(incidentKey, [&task, &shouldDelete, &taskCompleted, &localWorker](
+    auto rc = store_->CASIncident(incidentKey, [&task, &shouldDelete, &taskCompleted, &localWorker, &incidentKey](
                                                    SlotRecoveryInfoPb &info, bool &exists, bool &writeBack) {
         if (!exists) {
             writeBack = false;
@@ -596,7 +648,7 @@ Status SlotRecoveryManager::CompleteLocalTask(const std::string &incidentKey, co
         }
         writeBack = false;
         for (auto &current : *info.mutable_recovery_tasks()) {
-            if (!IsSameTaskOwnerPair(current, task)) {
+            if (!IsSameTaskIdentity(current, task)) {
                 continue;
             }
             if (current.owner_worker() != localWorker || SlotRecoveryIncidentState::IsTaskTerminal(current)) {
@@ -607,8 +659,10 @@ Status SlotRecoveryManager::CompleteLocalTask(const std::string &incidentKey, co
                 continue;
             }
             current.set_task_status(RecoveryTaskPb_TaskStatus_COMPLETED);
+            current.set_source_worker(current.owner_worker());
             SlotRecoveryIncidentState::RefreshCounters(info);
-            shouldDelete = SlotRecoveryIncidentState::IsFullyTerminal(info);
+            shouldDelete = SlotRecoveryIncidentState::IsFullyTerminal(info)
+                           && !ShouldRetainTerminalIncidentForRestart(incidentKey, info);
             taskCompleted = true;
             writeBack = true;
             return Status::OK();
@@ -640,26 +694,29 @@ Status SlotRecoveryManager::HandleLocalRestart()
     LocalRestartPlan restartPlan;
     RETURN_IF_NOT_OK(CollectLocalRestartPlan(localWorker, restartPlan));
     LOG(INFO) << FormatString(
-        "action=restart_begin local_worker=%s local_incident_exists=%d pending_slots={%s} resume_slots={%s} "
+        "action=restart_begin local_worker=%s local_incident_exists=%d planned_sources=%zu "
         "source_incidents=%zu",
-        localWorker, restartPlan.localIncidentExists, SlotsSummary(restartPlan.localPendingSlots),
-        SlotsSummary(restartPlan.localResumeSlots), restartPlan.sourceIncidentKeys.size());
+        localWorker, restartPlan.localIncidentExists, restartPlan.plannedSlotsBySource.size(),
+        restartPlan.sourceIncidentKeys.size());
 
     // Stage 1: mark source PENDING tasks as FAILED so ownership transfer is serialized by source-incident CAS.
-    std::set<uint32_t> takenSlotSet;
+    std::unordered_map<std::string, std::set<uint32_t>> takenSlotsBySource;
     std::set<uint32_t> blockedSlotSet;
     for (const auto &incidentKey : restartPlan.sourceIncidentKeys) {
-        std::vector<uint32_t> takenSlots;
+        std::unordered_map<std::string, std::set<uint32_t>> takenFromIncident;
         std::vector<uint32_t> blockedSlots;
         bool shouldDeleteSource = false;
-        RETURN_IF_NOT_OK(
-            TakeOverPendingFromSourceIncident(incidentKey, localWorker, takenSlots, blockedSlots, shouldDeleteSource));
-        takenSlotSet.insert(takenSlots.begin(), takenSlots.end());
+        RETURN_IF_NOT_OK(TakeOverPendingFromSourceIncident(incidentKey, localWorker, takenFromIncident, blockedSlots,
+                                                           shouldDeleteSource));
+        for (const auto &it : takenFromIncident) {
+            auto &slots = takenSlotsBySource[it.first];
+            slots.insert(it.second.begin(), it.second.end());
+        }
         blockedSlotSet.insert(blockedSlots.begin(), blockedSlots.end());
         LOG(INFO) << FormatString(
-            "action=restart_takeover_source incident_key=%s local_worker=%s taken_slots=%zu blocked_slots=%zu "
+            "action=restart_takeover_source incident_key=%s local_worker=%s taken_sources=%zu blocked_slots=%zu "
             "delete_source_incident=%d",
-            incidentKey, localWorker, takenSlots.size(), blockedSlots.size(), shouldDeleteSource);
+            incidentKey, localWorker, takenFromIncident.size(), blockedSlots.size(), shouldDeleteSource);
         if (shouldDeleteSource) {
             auto deleteRc = store_->DeleteIncident(incidentKey);
             if (deleteRc.IsError() && deleteRc.GetCode() != K_NOT_FOUND) {
@@ -672,16 +729,18 @@ Status SlotRecoveryManager::HandleLocalRestart()
     }
 
     // Stage 2: compute the single canonical local task that restart should own after takeover.
-    std::set<uint32_t> plannedLocalSlots;
-    RETURN_IF_NOT_OK(BuildPlannedLocalRestartSlots(restartPlan, takenSlotSet, blockedSlotSet, plannedLocalSlots));
+    std::vector<RecoveryTaskPb> plannedLocalTasks;
+    RETURN_IF_NOT_OK(
+        BuildPlannedLocalRestartTasks(localWorker, restartPlan, takenSlotsBySource, blockedSlotSet, plannedLocalTasks));
     VLOG(1) << FormatString(
-        "action=restart_plan_local_slots local_worker=%s taken_slots={%s} blocked_slots={%s} planned_slots={%s}",
-        localWorker, SlotsSummary(takenSlotSet), SlotsSummary(blockedSlotSet), SlotsSummary(plannedLocalSlots));
+        "action=restart_plan_local_slots local_worker=%s taken_source_count=%zu blocked_slots={%s} "
+        "planned_task_count=%zu",
+        localWorker, takenSlotsBySource.size(), SlotsSummary(blockedSlotSet), plannedLocalTasks.size());
 
     // Stage 3: rewrite the local incident into one canonical local task while preserving foreign in-flight work.
-    RETURN_IF_NOT_OK(RebuildLocalRestartIncident(localWorker, plannedLocalSlots));
-    LOG(INFO) << FormatString("action=restart_rebuild_local_incident local_worker=%s planned_slots={%s}", localWorker,
-                              SlotsSummary(plannedLocalSlots));
+    RETURN_IF_NOT_OK(RebuildLocalRestartIncident(localWorker, plannedLocalTasks));
+    LOG(INFO) << FormatString("action=restart_rebuild_local_incident local_worker=%s planned_task_count=%zu",
+                              localWorker, plannedLocalTasks.size());
 
     // Stage 4: schedule the canonical local task through the normal claim/execute/complete flow.
     return ScheduleLocalRestartTasks(localWorker);
@@ -699,21 +758,29 @@ Status SlotRecoveryManager::CollectLocalRestartPlan(const std::string &localWork
             if (task.failed_worker() != localWorker) {
                 continue;
             }
+            const auto sourceWorker = GetTaskSourceWorker(task);
             if (isLocalIncident) {
                 restartPlan.localIncidentExists = true;
-                if (task.task_status() == RecoveryTaskPb_TaskStatus_PENDING) {
-                    restartPlan.localPendingSlots.insert(task.slots().begin(), task.slots().end());
-                } else if (task.owner_worker() == localWorker
-                           && task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
-                    restartPlan.localResumeSlots.insert(task.slots().begin(), task.slots().end());
+                if (task.owner_worker() == localWorker
+                    && (task.task_status() == RecoveryTaskPb_TaskStatus_PENDING
+                        || task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS)) {
+                    AddPlannedSlots(restartPlan.plannedSlotsBySource, sourceWorker, task.slots());
+                } else if (task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED) {
+                    AddPlannedSlots(restartPlan.plannedSlotsBySource, sourceWorker, task.slots());
+                } else if (task.task_status() == RecoveryTaskPb_TaskStatus_PENDING) {
+                    AddPlannedSlots(restartPlan.plannedSlotsBySource, sourceWorker, task.slots());
                 }
                 continue;
             }
 
-            // source incidents still matter to restart as long as they retain a non-FAILED recovery fact for the
-            // local worker. PENDING may be taken over; IN_PROGRESS/COMPLETED must remain blocked from local rebuild.
+            // Source incidents still matter to restart as long as they retain a non-FAILED recovery fact for the
+            // local worker. PENDING may be taken over, IN_PROGRESS must stay blocked, and COMPLETED remains a valid
+            // preload source for rebuilding the restarted worker.
             if (task.task_status() != RecoveryTaskPb_TaskStatus_FAILED) {
                 hasRelevantSourceTask = true;
+                if (task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED) {
+                    AddPlannedSlots(restartPlan.plannedSlotsBySource, sourceWorker, task.slots());
+                }
             }
         }
         if (hasRelevantSourceTask) {
@@ -723,18 +790,17 @@ Status SlotRecoveryManager::CollectLocalRestartPlan(const std::string &localWork
     return Status::OK();
 }
 
-Status SlotRecoveryManager::TakeOverPendingFromSourceIncident(const std::string &sourceIncidentKey,
-                                                              const std::string &localWorker,
-                                                              std::vector<uint32_t> &takenSlots,
-                                                              std::vector<uint32_t> &blockedSlots,
-                                                              bool &shouldDeleteSource)
+Status SlotRecoveryManager::TakeOverPendingFromSourceIncident(
+    const std::string &sourceIncidentKey, const std::string &localWorker,
+    std::unordered_map<std::string, std::set<uint32_t>> &takenSlotsBySource, std::vector<uint32_t> &blockedSlots,
+    bool &shouldDeleteSource)
 {
     shouldDeleteSource = false;
-    std::set<uint32_t> takenSlotSet;
+    takenSlotsBySource.clear();
     std::set<uint32_t> blockedSlotSet;
     RETURN_IF_NOT_OK(store_->CASIncident(
-        sourceIncidentKey, [&localWorker, &takenSlotSet, &blockedSlotSet, &shouldDeleteSource, &sourceIncidentKey](
-                               SlotRecoveryInfoPb &info, bool &exists, bool &writeBack) {
+        sourceIncidentKey, [&localWorker, &takenSlotsBySource, &blockedSlotSet, &shouldDeleteSource,
+                            &sourceIncidentKey](SlotRecoveryInfoPb &info, bool &exists, bool &writeBack) {
             if (!exists) {
                 writeBack = false;
                 return Status::OK();
@@ -747,15 +813,15 @@ Status SlotRecoveryManager::TakeOverPendingFromSourceIncident(const std::string 
 
                 if (task.task_status() == RecoveryTaskPb_TaskStatus_PENDING) {
                     task.set_task_status(RecoveryTaskPb_TaskStatus_FAILED);
-                    takenSlotSet.insert(task.slots().begin(), task.slots().end());
+                    auto &takenSlots = takenSlotsBySource[GetTaskSourceWorker(task)];
+                    takenSlots.insert(task.slots().begin(), task.slots().end());
                     writeBack = true;
                     continue;
                 }
 
-                // blocked slots are computed from the task state that survives this CAS, so restart will not rebuild
-                // slots that another owner has already claimed or completed.
-                if (task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS
-                    || task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED) {
+                // Restart must not race with an owner that is still actively transferring slots. COMPLETED tasks stay
+                // available as preload source for the local worker.
+                if (task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
                     blockedSlotSet.insert(task.slots().begin(), task.slots().end());
                 }
             }
@@ -763,81 +829,108 @@ Status SlotRecoveryManager::TakeOverPendingFromSourceIncident(const std::string 
             if (writeBack) {
                 SlotRecoveryIncidentState::RefreshCounters(info);
             }
-            shouldDeleteSource = SlotRecoveryIncidentState::IsFullyTerminal(info);
+            shouldDeleteSource = SlotRecoveryIncidentState::IsFullyTerminal(info)
+                                 && !ShouldRetainTerminalIncidentForRestart(sourceIncidentKey, info);
             VLOG(1) << FormatString(
                 "action=restart_source_takeover_cas incident_key=%s local_worker=%s cas_result=%s summary={%s}",
                 sourceIncidentKey, localWorker, writeBack ? "updated" : "unchanged", IncidentSummary(info));
             return Status::OK();
         }));
-    takenSlots.assign(takenSlotSet.begin(), takenSlotSet.end());
     blockedSlots.assign(blockedSlotSet.begin(), blockedSlotSet.end());
     return Status::OK();
 }
 
-Status SlotRecoveryManager::BuildPlannedLocalRestartSlots(const LocalRestartPlan &restartPlan,
-                                                          const std::set<uint32_t> &takenSlots,
-                                                          const std::set<uint32_t> &blockedSlots,
-                                                          std::set<uint32_t> &plannedLocalSlots)
+Status SlotRecoveryManager::BuildPlannedLocalRestartTasks(
+    const std::string &localWorker, const LocalRestartPlan &restartPlan,
+    const std::unordered_map<std::string, std::set<uint32_t>> &takenSlotsBySource,
+    const std::set<uint32_t> &blockedSlots, std::vector<RecoveryTaskPb> &plannedLocalTasks)
 {
-    plannedLocalSlots.clear();
-    if (restartPlan.localIncidentExists) {
-        plannedLocalSlots = takenSlots;
-        plannedLocalSlots.insert(restartPlan.localPendingSlots.begin(), restartPlan.localPendingSlots.end());
-        plannedLocalSlots.insert(restartPlan.localResumeSlots.begin(), restartPlan.localResumeSlots.end());
-        return Status::OK();
+    std::unordered_map<std::string, std::set<uint32_t>> plannedSlotsBySource = restartPlan.plannedSlotsBySource;
+    for (const auto &it : takenSlotsBySource) {
+        auto &slots = plannedSlotsBySource[it.first];
+        slots.insert(it.second.begin(), it.second.end());
     }
-
-    // When local incident does not exist, build the self-incident from the final blocked view observed after source
-    // takeover CAS. The scan-time view is stale and may still see slots as PENDING even though a foreign owner has
-    // already claimed them.
-    for (uint32_t slot = 0; slot < FLAGS_l2_cache_slot_num; ++slot) {
-        if (blockedSlots.find(slot) == blockedSlots.end()) {
-            plannedLocalSlots.insert(slot);
+    if (!restartPlan.localIncidentExists) {
+        std::set<uint32_t> assignedSlots;
+        for (const auto &it : plannedSlotsBySource) {
+            assignedSlots.insert(it.second.begin(), it.second.end());
+        }
+        auto &selfSlots = plannedSlotsBySource[localWorker];
+        for (uint32_t slot = 0; slot < FLAGS_distributed_disk_slot_num; ++slot) {
+            if (blockedSlots.find(slot) == blockedSlots.end() && assignedSlots.find(slot) == assignedSlots.end()) {
+                selfSlots.insert(slot);
+            }
         }
     }
+
+    plannedLocalTasks.clear();
+    for (auto &[sourceWorker, slots] : plannedSlotsBySource) {
+        for (auto it = slots.begin(); it != slots.end();) {
+            if (blockedSlots.find(*it) != blockedSlots.end()) {
+                it = slots.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (slots.empty()) {
+            continue;
+        }
+        RecoveryTaskPb task;
+        task.set_failed_worker(localWorker);
+        task.set_owner_worker(localWorker);
+        task.set_source_worker(sourceWorker);
+        task.set_task_status(RecoveryTaskPb_TaskStatus_PENDING);
+        for (const auto slot : slots) {
+            task.add_slots(slot);
+        }
+        plannedLocalTasks.emplace_back(std::move(task));
+    }
+    std::sort(plannedLocalTasks.begin(), plannedLocalTasks.end(),
+              [](const RecoveryTaskPb &lhs, const RecoveryTaskPb &rhs) {
+                  if (lhs.source_worker() != rhs.source_worker()) {
+                      return lhs.source_worker() < rhs.source_worker();
+                  }
+                  return lhs.slots_size() < rhs.slots_size();
+              });
     return Status::OK();
 }
 
 Status SlotRecoveryManager::RebuildLocalRestartIncident(const std::string &localWorker,
-                                                        const std::set<uint32_t> &plannedLocalSlots)
+                                                        const std::vector<RecoveryTaskPb> &plannedLocalTasks)
 {
-    return store_->CASIncident(localWorker, [&localWorker, &plannedLocalSlots](SlotRecoveryInfoPb &info, bool &exists,
-                                                                               bool &writeBack) {
-        SlotRecoveryInfoPb newInfo;
-        bool localChanged = !exists;
-        for (const auto &task : info.recovery_tasks()) {
-            // Keep finished local tasks, because they are already terminal and part of the incident history.
-            const bool isLocalFailedWorker = task.failed_worker() == localWorker;
-            const bool keepCompleted = isLocalFailedWorker && task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED;
-            // Keep foreign in-flight local tasks, because restart is not allowed to rewrite another worker's
-            // IN_PROGRESS ownership.
-            const bool keepForeignInProgress = isLocalFailedWorker && task.owner_worker() != localWorker
-                                               && task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS;
-            // Keep unrelated failed-worker chains that happen to share this incident key.
-            const bool keepOtherFailedWorker = !isLocalFailedWorker;
-            if (keepCompleted || keepForeignInProgress || keepOtherFailedWorker) {
-                *newInfo.add_recovery_tasks() = task;
-            } else {
+    return store_->CASIncident(
+        localWorker, [&localWorker, &plannedLocalTasks](SlotRecoveryInfoPb &info, bool &exists, bool &writeBack) {
+            SlotRecoveryInfoPb newInfo;
+            bool localChanged = !exists;
+            for (const auto &task : info.recovery_tasks()) {
+                // Keep finished local tasks, because they are already terminal and part of the incident history.
+                const bool isLocalFailedWorker = task.failed_worker() == localWorker;
+                const bool keepCompleted = isLocalFailedWorker && task.owner_worker() == localWorker
+                                           && task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED;
+                // Keep foreign in-flight local tasks, because restart is not allowed to rewrite another worker's
+                // IN_PROGRESS ownership.
+                const bool keepForeignInProgress = isLocalFailedWorker && task.owner_worker() != localWorker
+                                                   && task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS;
+                // Keep unrelated failed-worker chains that happen to share this incident key.
+                const bool keepOtherFailedWorker = !isLocalFailedWorker;
+                if (keepCompleted || keepForeignInProgress || keepOtherFailedWorker) {
+                    *newInfo.add_recovery_tasks() = task;
+                } else {
+                    localChanged = true;
+                }
+            }
+
+            for (const auto &task : plannedLocalTasks) {
+                auto *canonicalTask = newInfo.add_recovery_tasks();
+                *canonicalTask = task;
                 localChanged = true;
             }
-        }
 
-        if (!plannedLocalSlots.empty()) {
-            auto *canonicalTask = newInfo.add_recovery_tasks();
-            canonicalTask->set_failed_worker(localWorker);
-            canonicalTask->set_owner_worker(localWorker);
-            canonicalTask->set_task_status(RecoveryTaskPb_TaskStatus_PENDING);
-            for (const auto slot : plannedLocalSlots) {
-                canonicalTask->add_slots(slot);
-            }
-            localChanged = true;
-        }
-
-        SlotRecoveryIncidentState::RefreshCounters(newInfo);
-        info = std::move(newInfo);
-        writeBack = localChanged;
-        return Status::OK();
-    });
+            SlotRecoveryIncidentState::RefreshCounters(newInfo);
+            info = std::move(newInfo);
+            writeBack = localChanged;
+            return Status::OK();
+        });
 }
 
 Status SlotRecoveryManager::ScheduleLocalRestartTasks(const std::string &localWorker)
@@ -853,11 +946,30 @@ Status SlotRecoveryManager::ScheduleLocalRestartTasks(const std::string &localWo
 
 Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
 {
-    // The current stage only validates the ETCD coordination flow. Real data recovery is plugged in later.
     LOG(INFO) << FormatString("action=execute_recovery_task local_worker=%s task={%s}", localAddress_.ToString(),
                               TaskSummary(task));
     INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover");
-    (void)task;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(persistenceApi_ != nullptr, K_RUNTIME_ERROR, "PersistenceApi is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR,
+                                         "MetaDataRecoveryManager is null");
+    std::vector<ObjectMetaPb> recoveredMetas;
+    const auto sourceWorker = task.source_worker().empty() ? task.failed_worker() : task.source_worker();
+    SlotPreloadCallback callback = [this, &recoveredMetas](const SlotPreloadMeta &meta,
+                                                           const std::shared_ptr<std::stringstream> &content) {
+        (void)content;
+        recoveredMetas.emplace_back(BuildRecoveredMetadata(meta, localAddress_.ToString()));
+        return Status::OK();
+    };
+    for (const auto slotId : task.slots()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(persistenceApi_->PreloadSlot(sourceWorker, slotId, callback),
+                                         FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
+    }
+    std::vector<std::string> failedIds;
+    auto recoverRc = metadataRecoveryManager_->RecoverMetadata(recoveredMetas, failedIds);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(recoverRc.IsOk() && failedIds.empty(),
+                                         recoverRc.IsOk() ? K_RUNTIME_ERROR : recoverRc.GetCode(),
+                                         FormatString("Recover metadata failed. status=%s failedIds=%s",
+                                                      recoverRc.ToString(), VectorToString(failedIds)));
     return Status::OK();
 }
 

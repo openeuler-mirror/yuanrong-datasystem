@@ -79,6 +79,15 @@ public:
     Status RecoverLocalEntries(const std::vector<ObjectMetaPb> &recoverMetas,
                                std::vector<std::string> &recoveredObjectKeys) const;
 
+    /**
+     * @brief Recover metadata that is already materialized from slot preload callbacks.
+     * @param[in] metas Metadata records to recover.
+     * @param[out] failedIds Object keys failed because master is unreachable or the request cannot be built.
+     * @return Status of the call.
+     */
+    Status RecoverMetadata(const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failedIds,
+                           std::string stanbyMasterAddr = "");
+
 private:
     struct DispatchResult {
         Status status = Status::OK();

@@ -35,6 +35,7 @@ message RecoveryTaskPb {
   string owner_worker = 2;
   repeated uint32 slots = 3;
   TaskStatus task_status = 4;
+  string source_worker = 5;
 }
 
 message SlotRecoveryInfoPb {

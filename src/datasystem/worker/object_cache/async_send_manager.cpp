@@ -142,6 +142,7 @@ Status AsyncSendManager::RLockAndSendToRemote(const std::string &objectKey, std:
 {
     auto &entry = *entryPtr;
     uint64_t createTime;
+    WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     auto buf = std::make_shared<std::stringstream>();
     uint64_t dataSize = 0;
     {
@@ -164,14 +165,15 @@ Status AsyncSendManager::RLockAndSendToRemote(const std::string &objectKey, std:
         buf->write(static_cast<char *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize(),
                    entry->GetDataSize());
         createTime = entry->GetCreateTime();
+        writeMode = entry->modeInfo.GetWriteMode();
         dataSize = entry->GetDataSize();
     }
-    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, beginTime));
+    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, writeMode, beginTime));
     return AfterSendToRemote(objectKey, entry, createTime);
 }
 
 Status AsyncSendManager::SendToRemoteOnLock(const std::string &objectKey, std::shared_ptr<std::stringstream> buf,
-                                            uint64_t createTime, uint64_t &dataSize,
+                                            uint64_t createTime, uint64_t &dataSize, WriteMode writeMode,
                                             std::chrono::time_point<std::chrono::steady_clock> &beginTime)
 {
     static const int timeout = 60000;
@@ -179,7 +181,7 @@ Status AsyncSendManager::SendToRemoteOnLock(const std::string &objectKey, std::s
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - beginTime).count());
     LOG(INFO) << FormatString("The elapsed time of async l2cache is %llu.", elapsed);
     limiter_.WaitAllow(dataSize);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(persistenceApi_->Save(objectKey, createTime, timeout, buf, elapsed),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(persistenceApi_->Save(objectKey, createTime, timeout, buf, elapsed, writeMode),
                                      FormatString("Call save to l2cache failed. objectKey:%s", objectKey));
     VLOG(1) << FormatString("[ObjectKey %s] Send to l2cache success.", objectKey);
     uint64_t oldVersionMax = createTime == 0 ? 0 : createTime - 1;
@@ -202,6 +204,7 @@ Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::
     // use TryWLock load object from disk for the first step failed because of object not in memory,
     auto &entry = *entryPtr;
     uint64_t createTime;
+    WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     std::unique_ptr<char[]> data;
     auto buf = std::make_shared<std::stringstream>();
     uint64_t dataSize = 0;
@@ -234,8 +237,9 @@ Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::
                        entry->GetDataSize());
         }
         createTime = entry->GetCreateTime();
+        writeMode = entry->modeInfo.GetWriteMode();
     }
-    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, beginTime));
+    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, writeMode, beginTime));
     return AfterSendToRemote(objectKey, entry, createTime);
 }
 

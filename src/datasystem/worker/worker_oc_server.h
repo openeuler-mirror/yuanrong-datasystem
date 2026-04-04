@@ -39,6 +39,7 @@
 #include "datasystem/server/common_server.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
@@ -461,7 +462,25 @@ private:
      */
     bool IsAsyncTasksRunning();
 
+#ifdef WITH_TESTS
+public:
+#endif
+    /**
+     * @brief Initialize the worker-scoped slot namespace for aggregated SFS.
+     */
+    void InitSlotWorkerNamespace();
+
+    /**
+     * @brief Initialize worker-local slot startup recovery.
+     * @return Status of the call.
+     */
+    Status InitSlotRecovery();
+#ifdef WITH_TESTS
+private:
+#endif
+
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
+    std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
     std::unique_ptr<EtcdStore> etcdStore_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;

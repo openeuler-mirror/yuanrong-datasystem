@@ -28,6 +28,7 @@ set(WORKER_DEPEND_LIBS
         common_perf
         common_rocksdb
         common_rpc_zmq
+        common_slot_client
         common_shared_memory
         common_util
         common_metrics

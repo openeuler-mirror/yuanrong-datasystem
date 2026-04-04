@@ -20,21 +20,28 @@
 #ifndef DATASYSTEM_COMMON_PERSISTENCE_API_H
 #define DATASYSTEM_COMMON_PERSISTENCE_API_H
 
-#include "datasystem/common/l2cache/l2cache_client.h"
-#include "datasystem/common/l2cache/l2cache_object_info.h"
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+
+#include "datasystem/common/l2cache/slot_client/slot_transfer.h"
+#include "datasystem/object/object_enum.h"
 
 namespace datasystem {
 class PersistenceApi {
 public:
-    PersistenceApi() = default;
+    virtual ~PersistenceApi() = default;
 
-    ~PersistenceApi() = default;
+    static std::unique_ptr<PersistenceApi> Create();
+
+    static std::shared_ptr<PersistenceApi> CreateShared();
 
     /**
      * @brief init the PersistenceApi
      * @return execute result
      */
-    Status Init();
+    virtual Status Init() = 0;
 
     /**
      * @brief save the object to 3rd storage, for example obs
@@ -45,8 +52,9 @@ public:
      * @param[in] asyncElapse The time this object being in the async queue
      * @return execute result
      */
-    Status Save(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
-                const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse = 0);
+    virtual Status Save(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
+                        const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse = 0,
+                        WriteMode writeMode = WriteMode::NONE_L2_CACHE) = 0;
 
     /**
      * @brief get the persistence object with the given version.
@@ -58,8 +66,8 @@ public:
      * @param[out] content the string stream byte of the object
      * @return Status of call
      */
-    Status Get(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
-               std::shared_ptr<std::stringstream> &content);
+    virtual Status Get(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
+                       std::shared_ptr<std::stringstream> &content) = 0;
 
     /**
      * @brief get the persistence object without any given version.
@@ -69,8 +77,8 @@ public:
      * @param[out] content the string stream byte of the object
      * @return Status of call
      */
-    Status GetWithoutVersion(const std::string &objectKey, int64_t timeoutMs, uint64_t minVersion,
-                             std::shared_ptr<std::stringstream> &content);
+    virtual Status GetWithoutVersion(const std::string &objectKey, int64_t timeoutMs, uint64_t minVersion,
+                                     std::shared_ptr<std::stringstream> &content) = 0;
 
     /**
      * @brief delete all the satisfied version of the object
@@ -96,14 +104,20 @@ public:
      * @param[in] listIncompleteVersions whether to list those incomplete versions. Usually they are partially uploaded.
      * @return Status of call
      */
-    Status Del(const std::string &objectKey, uint64_t maxVerToDelete, bool deleteAllVersion, uint64_t asyncElapse = 0,
-               const uint64_t * const objectVersion = nullptr, bool listIncompleteVersions = false);
+    virtual Status Del(const std::string &objectKey, uint64_t maxVerToDelete, bool deleteAllVersion,
+                       uint64_t asyncElapse = 0, const uint64_t *const objectVersion = nullptr,
+                       bool listIncompleteVersions = false) = 0;
+
+    virtual Status PreloadSlot(const std::string &sourceWorkerAddress, uint32_t slotId,
+                               const SlotPreloadCallback &callback = SlotPreloadCallback{}) = 0;
+
+    virtual Status MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId) = 0;
 
     /**
      * @brief Obtains the request success rate of l2cache.
      * @return Success rate of l2cache request.
      */
-    std::string GetL2CacheRequestSuccessRate() const;
+    virtual std::string GetL2CacheRequestSuccessRate() const = 0;
 
     /**
      * @brief we need url encode the objectPath for the below reason:
@@ -116,21 +130,6 @@ public:
      * @return real object path in l2cache
      */
     static Status UrlEncode(const std::string &objectPath, std::string &encodePath);
-
-protected:
-    /**
-     * @brief list all the version of the object in persistence
-     * @param[in] objectKey the object key in datasystem
-     * @param[in] timeoutMs the connect and request timeout in million second
-     * @param[out] objInfoList the object info list
-     * @param[out] existMaxVersion the max version of the object exist in persistence
-     * @param[in] listIncompleteVersions whether to list those incomplete versions. Usually they are partially uploaded.
-     * @return Status of call
-     */
-    Status ListAllVersion(const std::string &objectKey, int64_t timeoutMs, std::vector<L2CacheObjectInfo> &objInfoList,
-                          uint64_t &existMaxVersion, bool listIncompleteVersions = false);
-
-    std::unique_ptr<L2CacheClient> client_;
 };
 }  // namespace datasystem
 

@@ -21,7 +21,9 @@
 #define DATASYSTEM_WORKER_OBJECT_CACHE_SLOT_RECOVERY_MANAGER_H
 
 #include <memory>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,6 +33,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/slot_recovery.pb.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
@@ -129,7 +132,7 @@ public:
      */
     Status Init(const HostPort &localAddress, EtcdClusterManager *etcdCM, std::shared_ptr<PersistenceApi> persistApi,
                 std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
-                datasystem::EtcdStore *etcdStore);
+                datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager = nullptr);
 
     /**
      * @brief Shutdown the manager.
@@ -230,8 +233,7 @@ protected:
      */
     struct LocalRestartPlan {
         bool localIncidentExists = false;
-        std::set<uint32_t> localPendingSlots;
-        std::set<uint32_t> localResumeSlots;
+        std::unordered_map<std::string, std::set<uint32_t>> plannedSlotsBySource;
         std::vector<std::string> sourceIncidentKeys;
     };
 
@@ -247,14 +249,15 @@ protected:
      * @brief Mark takeover candidates in one source incident as FAILED and collect their slots.
      * @param[in] sourceIncidentKey Source incident key.
      * @param[in] localWorker The local restarted worker.
-     * @param[out] takenSlots Slots successfully taken over from the source incident.
-     * @param[out] blockedSlots Slots that still belong to foreign IN_PROGRESS/COMPLETED tasks after the CAS finishes.
+     * @param[out] takenSlotsBySource Slots successfully taken over from the source incident, grouped by preload
+     *                                source worker.
+     * @param[out] blockedSlots Slots that still belong to foreign IN_PROGRESS tasks after the CAS finishes.
      * @param[out] shouldDeleteSource True if the source incident becomes terminal after takeover.
      * @return Status of the call.
      */
     Status TakeOverPendingFromSourceIncident(const std::string &sourceIncidentKey, const std::string &localWorker,
-                                             std::vector<uint32_t> &takenSlots, std::vector<uint32_t> &blockedSlots,
-                                             bool &shouldDeleteSource);
+                                             std::unordered_map<std::string, std::set<uint32_t>> &takenSlotsBySource,
+                                             std::vector<uint32_t> &blockedSlots, bool &shouldDeleteSource);
 
     /**
      * @brief Compute the canonical local slot set after restart planning.
@@ -264,13 +267,15 @@ protected:
      * already protected by foreign IN_PROGRESS/COMPLETED work.
      *
      * @param[in] restartPlan Consolidated local/source restart state.
-     * @param[in] takenSlots Slots taken over from source incidents during this restart.
+     * @param[in] takenSlotsBySource Slots taken over from source incidents during this restart.
      * @param[in] blockedSlots Slots blocked by foreign IN_PROGRESS/COMPLETED work after source takeover CAS finishes.
      * @param[out] plannedLocalSlots Canonical local slot set for rebuild.
      * @return Status of the call.
      */
-    Status BuildPlannedLocalRestartSlots(const LocalRestartPlan &restartPlan, const std::set<uint32_t> &takenSlots,
-                                         const std::set<uint32_t> &blockedSlots, std::set<uint32_t> &plannedLocalSlots);
+    Status BuildPlannedLocalRestartTasks(const std::string &localWorker, const LocalRestartPlan &restartPlan,
+                                         const std::unordered_map<std::string, std::set<uint32_t>> &takenSlotsBySource,
+                                         const std::set<uint32_t> &blockedSlots,
+                                         std::vector<RecoveryTaskPb> &plannedLocalTasks);
 
     /**
      * @brief Rewrite the local incident into the post-restart canonical shape.
@@ -280,14 +285,14 @@ protected:
      * 2. foreign IN_PROGRESS tasks for failed_worker=localWorker, because restart must not rewrite them;
      * 3. all tasks for other failed workers that happen to share the same incident key.
      *
-     * All other tasks for failed_worker=localWorker are replaced by at most one local PENDING task whose slot set is
-     * @p plannedLocalSlots.
+     * All other tasks for failed_worker=localWorker are replaced by local PENDING tasks grouped by preload source.
      *
      * @param[in] localWorker The local restarted worker.
-     * @param[in] plannedLocalSlots Canonical local slot set after restart planning.
+     * @param[in] plannedLocalTasks Canonical local tasks after restart planning.
      * @return Status of the call.
      */
-    Status RebuildLocalRestartIncident(const std::string &localWorker, const std::set<uint32_t> &plannedLocalSlots);
+    Status RebuildLocalRestartIncident(const std::string &localWorker,
+                                       const std::vector<RecoveryTaskPb> &plannedLocalTasks);
 
     /**
      * @brief Load latest local incident and schedule local tasks.
@@ -297,7 +302,7 @@ protected:
     Status ScheduleLocalRestartTasks(const std::string &localWorker);
 
     /**
-     * @brief Execute the recovery task. The current stage only keeps the ETCD coordination contract.
+     * @brief Execute the recovery task by preloading slot data locally and pushing recovered metadata to master.
      * @param[in] task The task being executed.
      * @return Status of the call.
      */
@@ -321,6 +326,7 @@ private:
     EtcdClusterManager *etcdCM_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_;
+    MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };
     std::shared_ptr<SlotRecoveryStore> store_;
     std::shared_ptr<ThreadPool> recoveryTaskThreadPool_{ nullptr };
 };

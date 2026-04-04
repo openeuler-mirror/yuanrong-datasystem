@@ -49,7 +49,7 @@ void SfsPersistenceApiTest::SetUp()
     RecursiveDelete(FLAGS_sfs_path);
     LOG(INFO) << "Creating mock SFS. Path: " << FLAGS_sfs_path;
     ASSERT_EQ(mkdir(FLAGS_sfs_path.c_str(), S_IRWXU | S_IRWXG | S_IROTH), 0);
-    pApi_ = std::make_unique<PersistenceApi>();
+    pApi_ = PersistenceApi::Create();
     pApi_->Init();
 }
 

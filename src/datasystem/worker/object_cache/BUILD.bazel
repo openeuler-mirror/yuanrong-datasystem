@@ -166,11 +166,13 @@ ds_cc_library(
 ds_cc_library(
     name = "worker_oc_service_impl",
     srcs = [
+        "slot_recovery_orchestrator.cpp",
         "metadata_recovery_manager.cpp",
         "worker_oc_service_impl.cpp",
     ],
     hdrs = [
         "metadata_recovery_manager.h",
+        "slot_recovery_orchestrator.h",
         "worker_oc_service_impl.h",
     ],
     deps = [
@@ -184,6 +186,7 @@ ds_cc_library(
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/l2cache:l2_storage",
         "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/l2cache:slot_client",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/common/object_cache:object_base",
@@ -201,6 +204,7 @@ ds_cc_library(
         "//src/datasystem/common/util/queue:common_util_queue",
         "//src/datasystem/common/util:deadlock_util",
         "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:memory",
         "//src/datasystem/common/util:meta_route_tool_header",

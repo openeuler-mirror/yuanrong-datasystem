@@ -48,6 +48,7 @@ set(UT_COMMON_SRCS
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/binmock/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
 
@@ -60,16 +61,28 @@ list(APPEND DS_UT_STREAM_SRCS)
 add_executable(ds_ut ${DS_TEST_UT_SRCS})
 add_executable(ds_ut_stream ${DS_UT_STREAM_SRCS} ${UT_COMMON_SRCS})
 add_executable(ds_ut_object ${DS_UT_OBJECT_SRCS} ${UT_COMMON_SRCS})
+add_executable(ds_ut_slot_store
+        common/l2cache/slot_store_test.cpp
+        test_main.cpp)
 
 target_link_libraries(ds_ut PRIVATE ${DS_UT_DEPEND_LIBS})
 target_link_libraries(ds_ut_stream PRIVATE ${DS_UT_DEPEND_LIBS} worker_stream_cache datasystem_worker_static)
 target_link_libraries(ds_ut_object PRIVATE ${DS_UT_DEPEND_LIBS})
+target_link_libraries(ds_ut_slot_store PRIVATE
+        GTest::gtest
+        GTest::gmock
+        binmock
+        common_persistence_api
+        common_slot_client
+        common_log
+        common_util)
 
 set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
 
 target_compile_definitions(ds_ut PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_stream PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_object PRIVATE ${BIN_PATH_LIST})
+target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)
     set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${OBS_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
@@ -91,6 +104,7 @@ endif()
 add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
 target_link_libraries(flags_ut ds_flags GTest::gtest GTest::gmock)

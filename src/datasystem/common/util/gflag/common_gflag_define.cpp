@@ -20,7 +20,8 @@
 // and libdatasystem_worker.so, which will cause a double free error. These libraries need to be packaged as static
 // libraries to avoid this issue.
 
-DS_DEFINE_string(l2_cache_type, "none", "L2 cache type, optional value: 'obs' or 'none', default is none");
+DS_DEFINE_string(l2_cache_type, "none",
+                 "L2 cache type, optional value: 'obs', 'sfs', 'distributed_disk' or 'none', default is none");
 DS_DEFINE_string(log_dir, GetStringFromEnv("GOOGLE_LOG_DIR", ""),
                  "If specified, logfiles are written into this directory instead of the default logging directory.");
 DS_DEFINE_string(monitor_config_file, "~/datasystem/config/datasystem.config",
@@ -88,7 +89,6 @@ DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection");
-
 DS_DEFINE_bool(enable_pipeline_h2d, false, "Enable pipeline H2D. Default is false");
 DS_DEFINE_int32(pipeline_h2d_thread_num, 64,
                 "Pipeline H2D worker thread number. Default value 64");

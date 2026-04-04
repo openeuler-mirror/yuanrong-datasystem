@@ -128,7 +128,8 @@ Status WorkerOcServiceCrudCommonApi::SaveBinaryObjectToPersistence(ObjectKV &obj
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));
     PerfPoint point(PerfKey::WORKER_SAVE_L2_CACHE);
-    Status res = persistenceApi_->Save(objectKey, entry->GetCreateTime(), remainingTime, buf);
+    Status res = persistenceApi_->Save(
+        objectKey, entry->GetCreateTime(), remainingTime, buf, 0, entry->modeInfo.GetWriteMode());
     point.Record();
 
     uint64_t oldVersionMax = entry->GetCreateTime() - 1;

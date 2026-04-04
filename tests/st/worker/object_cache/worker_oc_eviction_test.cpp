@@ -408,7 +408,7 @@ TEST_F(AsyncSendManagerWriteSpeedTest, TestAsyncWriteBigElement)
     evictionManager->SetClusterManager(cm_.get());
     DS_EXPECT_OK(evictionManager->Init(std::make_shared<ObjectGlobalRefTable<ClientKey>>(), akSkManager_));
 
-    std::shared_ptr<PersistenceApi> api = std::make_shared<PersistenceApi>();
+    std::shared_ptr<PersistenceApi> api = PersistenceApi::CreateShared();
     DS_ASSERT_OK(api->Init());
 
     // Put
@@ -845,7 +845,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_WriteBackDelayTest)
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     DS_EXPECT_OK(evictionManager->Init(globalRefTable, akSkManager_));
 
-    std::shared_ptr<PersistenceApi> api = std::make_shared<PersistenceApi>();
+    std::shared_ptr<PersistenceApi> api = PersistenceApi::CreateShared();
     DS_ASSERT_OK(api->Init());
     AsyncSendManager asyncMgr(api, evictionManager);
     // Stop async send thread.

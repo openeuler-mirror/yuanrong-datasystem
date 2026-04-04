@@ -38,6 +38,44 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "slot_client",
+    srcs = [
+        "slot_client/slot_compactor.cpp",
+        "slot_client/slot_file_util.cpp",
+        "slot_client/slot_index_codec.cpp",
+        "slot_client/slot_manifest.cpp",
+        "slot_client/slot.cpp",
+        "slot_client/slot_snapshot.cpp",
+        "slot_client/slot_takeover_planner.cpp",
+        "slot_client/slot_client.cpp",
+        "slot_client/slot_writer.cpp",
+    ],
+    hdrs = [
+        "slot_client/slot_compactor.h",
+        "slot_client/slot_file_util.h",
+        "slot_client/slot_index_codec.h",
+        "slot_client/slot_manifest.h",
+        "slot_client/slot.h",
+        "slot_client/slot_snapshot.h",
+        "slot_client/slot_takeover_planner.h",
+        "slot_client/slot_client.h",
+        "slot_client/slot_writer.h",
+    ],
+    deps = [
+        "//include/datasystem/object:object_headers",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_library(
     name = "persistence_api",
     srcs = [
         "persistence_api.cpp",
@@ -48,6 +86,7 @@ ds_cc_library(
     deps = [
         ":l2cache_client",
         ":l2cache_object_info_header",
+        ":slot_client",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/l2cache/sfs_client",
