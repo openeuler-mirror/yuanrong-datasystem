@@ -54,7 +54,7 @@ void ObsPersistenceApiTest::SetUp()
     FLAGS_obs_access_key = obsAk_;
     FLAGS_obs_secret_key = obsSk_;
     FLAGS_obs_https_enabled = true;
-    pApi_ = std::make_unique<PersistenceApi>();
+    pApi_ = PersistenceApi::Create();
     pApi_->Init();
 }
 

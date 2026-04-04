@@ -60,6 +60,20 @@
 static thread_local bool ifPrintwriteFailLog = true;
 
 namespace datasystem {
+namespace {
+std::string DirName(const std::string &path)
+{
+    auto pos = path.find_last_of('/');
+    if (pos == std::string::npos) {
+        return ".";
+    }
+    if (pos == 0) {
+        return "/";
+    }
+    return path.substr(0, pos);
+}
+}  // namespace
+
 off_t FileSize(const std::string &filename, bool logError)
 {
     struct stat st{};
@@ -291,6 +305,89 @@ Status RenameFile(const std::string &srcFile, const std::string &targetFile)
     return Status::OK();
 }
 
+std::string JoinPath(const std::string &lhs, const std::string &rhs)
+{
+    if (lhs.empty()) {
+        return rhs;
+    }
+    if (rhs.empty()) {
+        return lhs;
+    }
+    if (lhs.back() == '/') {
+        return rhs.front() == '/' ? lhs + rhs.substr(1) : lhs + rhs;
+    }
+    return rhs.front() == '/' ? lhs + rhs : lhs + "/" + rhs;
+}
+
+Status EnsureFile(const std::string &path)
+{
+    if (FileExist(path)) {
+        return Status::OK();
+    }
+    int fd = -1;
+    RETURN_IF_NOT_OK(OpenFile(path, O_CREAT | O_RDWR, 0644, &fd));
+    Raii closeFd([fd]() {
+        if (fd >= 0) {
+            close(fd);
+        }
+    });
+    return Status::OK();
+}
+
+Status FsyncFd(int fd)
+{
+    if (fd < 0) {
+        RETURN_STATUS(StatusCode::K_INVALID, "Invalid fd");
+    }
+    if (fsync(fd) != 0) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
+                                FormatString("fsync failed, errno=%d, errmsg=%s", errno, StrErr(errno)));
+    }
+    return Status::OK();
+}
+
+Status FsyncDir(const std::string &dirPath)
+{
+    int fd = open(dirPath.c_str(), O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
+                                FormatString("open dir failed, dir=%s, errno=%d", dirPath, errno));
+    }
+    Raii closeFd([fd]() { close(fd); });
+    RETURN_IF_NOT_OK(FsyncFd(fd));
+    return Status::OK();
+}
+
+Status ReadWholeFile(const std::string &path, std::string &content)
+{
+    std::ifstream in(path, std::ios::binary);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(in.is_open(), StatusCode::K_IO_ERROR,
+                                         FormatString("Open file failed: %s", path));
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    content = ss.str();
+    return Status::OK();
+}
+
+Status AtomicWriteTextFile(const std::string &path, const std::string &content)
+{
+    auto dirPath = DirName(path);
+    RETURN_IF_NOT_OK(CreateDir(dirPath, true));
+    auto tmpPath = path + ".tmp";
+    int fd = -1;
+    RETURN_IF_NOT_OK(OpenFile(tmpPath, O_CREAT | O_TRUNC | O_WRONLY, 0644, &fd));
+    Raii closeFd([fd]() {
+        if (fd >= 0) {
+            close(fd);
+        }
+    });
+    RETURN_IF_NOT_OK(WriteFile(fd, content.data(), content.size(), 0));
+    RETURN_IF_NOT_OK(FsyncFd(fd));
+    RETURN_IF_NOT_OK(RenameFile(tmpPath, path));
+    RETURN_IF_NOT_OK(FsyncDir(dirPath));
+    return Status::OK();
+}
+
 Status IsDirectory(const std::string &path, bool &isDir)
 {
     struct stat statBuf{};
@@ -308,6 +405,13 @@ Status CreateDir(const std::string &dir, bool recursively, uint32_t mode)
     if (!recursively) {
         int ret = mkdir(dir.c_str(), mode);
         if (ret != 0) {
+            if (errno == EEXIST) {
+                bool isDir = false;
+                RETURN_IF_NOT_OK(IsDirectory(dir, isDir));
+                CHECK_FAIL_RETURN_STATUS(isDir, StatusCode::K_RUNTIME_ERROR,
+                                         "Path exists but is not a directory: " + dir);
+                return Status::OK();
+            }
             std::stringstream ss;
             ss << "mkdir path: " << dir << " failed with code: " << ret << ", errno: " << errno
                << ", errmsg: " << StrErr(errno);

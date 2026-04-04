@@ -5,6 +5,7 @@ set(OBS_SRCS
 set(OBS_LIBS
         l2cache
         httpclient
+        common_encrypt_client
         nlohmann_json::nlohmann_json
         ${OBS_LIB_PATH}/libeSDKOBS.so
         ${PCRE}
@@ -12,4 +13,4 @@ set(OBS_LIBS
         ${XML2})
 
 add_library(common_obs STATIC ${OBS_SRCS})
-target_link_libraries(common_obs PRIVATE ${OBS_LIBS})
+target_link_libraries(common_obs PUBLIC ${OBS_LIBS})

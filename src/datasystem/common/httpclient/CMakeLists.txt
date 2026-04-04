@@ -11,6 +11,7 @@ set(HTTP_CLIENT_DEPEND_LIBS
         ${OPENSSL_LIBRARIES}
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        common_ak_sk
         common_log
         common_util
         common_perf

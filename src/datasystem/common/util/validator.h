@@ -311,11 +311,11 @@ public:
      */
     static bool ValidateL2CacheType(const char *flagName, const std::string &value)
     {
-        if (value == "obs" || value == "sfs" || value == "none") {
+        if (value == "obs" || value == "sfs" || value == "distributed_disk" || value == "none") {
             return true;
         }
-        LOG(ERROR) << datasystem::FormatString("The value of %s flag is %s, which must be 'sfs'/'none.", flagName,
-                                               value);
+        LOG(ERROR) << datasystem::FormatString(
+            "The value of %s flag is %s, which must be 'obs'/'sfs'/'distributed_disk'/'none'.", flagName, value);
         return false;
     }
 

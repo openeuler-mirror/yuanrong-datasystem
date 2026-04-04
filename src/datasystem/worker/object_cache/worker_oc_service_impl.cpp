@@ -307,8 +307,8 @@ Status WorkerOCServiceImpl::Init()
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), etcdCM_, workerMasterApiManager_);
     getProc_->Init();
-    RETURN_IF_NOT_OK(
-        slotRecoveryManager_->Init(localAddress_, etcdCM_, persistenceApi_, workerMasterApiManager_, etcdStore_));
+    RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, etcdCM_, persistenceApi_, workerMasterApiManager_,
+                                                etcdStore_, metadataRecoveryManager_.get()));
     HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(

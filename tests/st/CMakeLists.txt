@@ -31,7 +31,8 @@ set(DS_ST_DEPEND_LIBS
         master_stream_cache_store
         master_stream_protos
         httpclient
-        common_persistence_api)
+        common_persistence_api
+        common_slot_client)
 
 
 #include dirs

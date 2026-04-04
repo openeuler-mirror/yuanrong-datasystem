@@ -15,6 +15,7 @@ set(WORKER_OC_SRCS
         async_update_location_manager.cpp
         metadata_recovery_manager.cpp
         metadata_recovery_selector.cpp
+        slot_recovery_orchestrator.cpp
         object_kv.cpp
         eviction_list.cpp
         cache_hit_info.cpp
@@ -71,6 +72,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         common_immutable_string
         string_ref
         common_persistence_api
+        common_slot_client
         common_parallel
         master_heartbeat_protos
         posix_protos

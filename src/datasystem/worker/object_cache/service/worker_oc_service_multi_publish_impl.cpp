@@ -986,6 +986,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
                 workerMasterApiManager_->GetWorkerMasterApi(kv.GetObjKey(), etcdCM_);
             master::RollbackMultiMetaReqPb req;
             master::RollbackMultiMetaRspPb resp;
+            req.set_address(localAddress_.ToString());
             req.set_persistence_only(true);
             req.add_object_keys(kv.GetObjKey());
             req.add_versions(versions[idx]);

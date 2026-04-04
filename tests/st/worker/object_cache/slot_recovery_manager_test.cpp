@@ -34,7 +34,7 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
-DS_DECLARE_uint32(l2_cache_slot_num);
+DS_DECLARE_uint32(distributed_disk_slot_num);
 DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
@@ -93,6 +93,7 @@ public:
     {
     }
 
+    using SlotRecoveryManager::ExecuteRecoveryTask;
     using SlotRecoveryManager::GetStableActiveWorkers;
     using SlotRecoveryManager::HandleFailedWorkers;
     using SlotRecoveryManager::HandleLocalRestart;
@@ -101,6 +102,13 @@ public:
 
     Status InitForTest()
     {
+        BINEXPECT_CALL(&SlotRecoveryManagerTestHelper::ExecuteRecoveryTask, (_))
+            .WillRepeatedly(Invoke([this](const RecoveryTaskPb &task) {
+                if (executionHook_) {
+                    return executionHook_(task);
+                }
+                return Status::OK();
+            }));
         return SlotRecoveryManager::Init(localAddress_, nullptr, nullptr, nullptr, nullptr);
     }
 
@@ -110,6 +118,11 @@ public:
         BINEXPECT_CALL(&SlotRecoveryManagerTestHelper::GetStableActiveWorkers, ()).WillRepeatedly(Invoke([this]() {
             return activeWorkers_;
         }));
+    }
+
+    void SetExecutionHook(std::function<Status(const RecoveryTaskPb &)> hook)
+    {
+        executionHook_ = std::move(hook);
     }
 
 private:
@@ -122,6 +135,7 @@ private:
     HostPort localAddress_;
     std::shared_ptr<SlotRecoveryStore> store_;
     std::vector<std::string> activeWorkers_;
+    std::function<Status(const RecoveryTaskPb &)> executionHook_;
 };
 }  // namespace
 
@@ -138,7 +152,7 @@ public:
     {
         ExternalClusterTest::SetUp();
         FLAGS_l2_cache_type = "distributed_disk";
-        FLAGS_l2_cache_slot_num = 4;
+        FLAGS_distributed_disk_slot_num = 4;
 
         FLAGS_etcd_address = cluster_->GetEtcdAddrs();
         LOG(INFO) << "Real ETCD test uses endpoint: " << FLAGS_etcd_address;
@@ -198,7 +212,14 @@ TEST_F(SlotRecoveryEtcdTest, HandlesSingleFailure)
     SlotRecoveryManagerTestHelper manager3(HostPort("127.0.0.1", 8003), store_);
     manager2.SetActiveWorkers({ worker2, worker3 });
     manager3.SetActiveWorkers({ worker2, worker3 });
-    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "2*sleep(1000)"));
+    manager2.SetExecutionHook([](const RecoveryTaskPb &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        return Status::OK();
+    });
+    manager3.SetExecutionHook([](const RecoveryTaskPb &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        return Status::OK();
+    });
 
     // Start two managers so they race on the same ETCD-backed incident.
     DS_ASSERT_OK(manager2.InitForTest());
@@ -214,13 +235,26 @@ TEST_F(SlotRecoveryEtcdTest, HandlesSingleFailure)
     EXPECT_EQ(info.total_slots(), 4);
     EXPECT_EQ(info.completed_slots(), 0);
     EXPECT_EQ(info.failed_slots(), 0);
-    EXPECT_EQ(info.recovery_tasks(0).task_status(), RecoveryTaskPb::IN_PROGRESS);
-    EXPECT_EQ(info.recovery_tasks(1).task_status(), RecoveryTaskPb::IN_PROGRESS);
+    size_t inProgressTasks = 0;
+    for (const auto &task : info.recovery_tasks()) {
+        EXPECT_NE(task.task_status(), RecoveryTaskPb::COMPLETED);
+        EXPECT_NE(task.task_status(), RecoveryTaskPb::FAILED);
+        if (task.task_status() == RecoveryTaskPb::IN_PROGRESS) {
+            ++inProgressTasks;
+        }
+    }
+    EXPECT_GE(inProgressTasks, 1U);
 
-    ExpectIncidentDeleted(failedWorker);
-
-    auto rc = store_->GetIncident(failedWorker, info);
-    EXPECT_EQ(rc.GetCode(), K_NOT_FOUND);
+    ASSERT_TRUE(WaitUntil([&]() {
+        auto current = LoadIncidentOrFail(failedWorker);
+        return current.completed_slots() == 4 && current.failed_slots() == 0;
+    }));
+    auto current = LoadIncidentOrFail(failedWorker);
+    EXPECT_EQ(current.completed_slots(), 4);
+    for (const auto &task : current.recovery_tasks()) {
+        EXPECT_EQ(task.task_status(), RecoveryTaskPb::COMPLETED);
+        EXPECT_EQ(task.source_worker(), task.owner_worker());
+    }
 
     manager2.Shutdown();
     manager3.Shutdown();
@@ -258,6 +292,7 @@ TEST_F(SlotRecoveryEtcdTest, PreservesOwnerFailoverOrder)
     DS_ASSERT_OK(manager3.InitForTest());
 
     // Pause after successor planning so we can inspect the transition state in ETCD.
+    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "1*return(K_OK)"));
     DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.HandleFailedWorkers.AfterPlanIncident", "1*sleep(1000)"));
     std::thread thread([&]() { DS_ASSERT_OK(manager3.HandleFailedWorkers({ HostPort("127.0.0.1", 8002) })); });
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -290,7 +325,21 @@ TEST_F(SlotRecoveryEtcdTest, PreservesOwnerFailoverOrder)
     thread.join();
 
     ExpectIncidentDeleted(worker1);
-    ExpectIncidentDeleted(worker2);
+    ASSERT_TRUE(WaitUntil([&]() {
+        auto current = LoadIncidentOrFail(worker2);
+        return current.completed_slots() == 6 && current.failed_slots() == 0;
+    }));
+    auto retainedWorker2 = LoadIncidentOrFail(worker2);
+    EXPECT_EQ(retainedWorker2.completed_slots(), 6);
+    EXPECT_EQ(retainedWorker2.failed_slots(), 0);
+    const auto *retainedInheritedTask = FindTaskByFailedWorker(retainedWorker2, worker1);
+    const auto *retainedOwnTask = FindTaskByFailedWorker(retainedWorker2, worker2);
+    ASSERT_NE(retainedInheritedTask, nullptr);
+    ASSERT_NE(retainedOwnTask, nullptr);
+    EXPECT_EQ(retainedInheritedTask->task_status(), RecoveryTaskPb::COMPLETED);
+    EXPECT_EQ(retainedOwnTask->task_status(), RecoveryTaskPb::COMPLETED);
+    EXPECT_EQ(retainedInheritedTask->source_worker(), worker3);
+    EXPECT_EQ(retainedOwnTask->source_worker(), worker3);
 
     manager3.Shutdown();
 }
@@ -448,7 +497,9 @@ TEST_F(SlotRecoveryEtcdTest, RebuildsLocalIncidentFirst)
                && CollectSlots(task) == (std::set<uint32_t>{ 0, 1, 2, 3 });
     }));
 
-    ExpectIncidentDeleted(sourceIncident);
+    auto retainedSource = LoadIncidentOrFail(sourceIncident);
+    EXPECT_EQ(retainedSource.completed_slots(), 1);
+    EXPECT_EQ(retainedSource.failed_slots(), 2);
     ExpectIncidentDeleted(localWorker);
 
     manager.Shutdown();

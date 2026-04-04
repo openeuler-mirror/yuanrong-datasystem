@@ -282,6 +282,88 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(const std::vector<ObjectMeta
     return Status::OK();
 }
 
+Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failedIds,
+                                                std::string stanbyMasterAddr)
+{
+    RETURN_OK_IF_TRUE(metas.empty());
+    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
+    CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR, "workerMasterApiManager is null");
+    LOG(INFO) << "recovery meta from slot preload begin";
+
+    std::unordered_map<std::string, ObjectMetaPb> latestMetaByKey;
+    latestMetaByKey.reserve(metas.size());
+    std::vector<std::string> objectKeys;
+    objectKeys.reserve(metas.size());
+    for (const auto &meta : metas) {
+        if (meta.object_key().empty()) {
+            failedIds.emplace_back("");
+            continue;
+        }
+        auto it = latestMetaByKey.find(meta.object_key());
+        if (it == latestMetaByKey.end()) {
+            latestMetaByKey.emplace(meta.object_key(), meta);
+            objectKeys.emplace_back(meta.object_key());
+            continue;
+        }
+        if (meta.version() >= it->second.version()) {
+            it->second = meta;
+        }
+    }
+    RETURN_OK_IF_TRUE(latestMetaByKey.empty());
+
+    std::unordered_map<MetaAddrInfo, std::vector<std::string>> groupedKeysByMaster;
+    if (!stanbyMasterAddr.empty()) {
+        MetaAddrInfo info;
+        HostPort masterAddr;
+        masterAddr.ParseString(stanbyMasterAddr);
+        info.SetDbName(etcdCM_->GetWorkerIdByWorkerAddr(stanbyMasterAddr));
+        info.SetAddress(masterAddr);
+        groupedKeysByMaster[info] = { objectKeys.begin(), objectKeys.end() };
+    } else {
+        groupedKeysByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    }
+
+    std::unordered_map<MetaAddrInfo, std::vector<ObjectMetaPb>> groupedMetasByMaster;
+    groupedMetasByMaster.reserve(groupedKeysByMaster.size());
+    for (const auto &item : groupedKeysByMaster) {
+        auto &groupedMetas = groupedMetasByMaster[item.first];
+        groupedMetas.reserve(item.second.size());
+        for (const auto &objectKey : item.second) {
+            auto found = latestMetaByKey.find(objectKey);
+            if (found != latestMetaByKey.end()) {
+                groupedMetas.emplace_back(found->second);
+            }
+        }
+    }
+
+    using GroupItem = decltype(groupedMetasByMaster)::value_type;
+    std::vector<const GroupItem *> groupedMetas;
+    groupedMetas.reserve(groupedMetasByMaster.size());
+    for (const auto &item : groupedMetasByMaster) {
+        groupedMetas.emplace_back(&item);
+    }
+
+    std::vector<DispatchResult> results(groupedMetas.size());
+    RETURN_IF_NOT_OK(Parallel::ParallelFor<size_t>(
+        0, groupedMetas.size(),
+        [this, &groupedMetas, &results](size_t start, size_t end) {
+            for (size_t idx = start; idx < end; ++idx) {
+                const auto *group = groupedMetas[idx];
+                results[idx] = SendRecoverRequest(group->first, group->second);
+            }
+        },
+        1));
+
+    Status lastRrr = Status::OK();
+    for (auto &result : results) {
+        failedIds.insert(failedIds.end(), result.failedIds.begin(), result.failedIds.end());
+        if (result.status.IsError()) {
+            lastRrr = result.status;
+        }
+    }
+    return lastRrr;
+}
+
 bool MetaDataRecoveryManager::FillRecoveredMeta(const std::string &objectKey, ObjectMetaPb &metadata) const
 {
     std::shared_ptr<SafeObjType> currSafeObj;

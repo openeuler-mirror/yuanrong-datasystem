@@ -120,6 +120,51 @@ Status DeleteFile(const std::string &filename);
 Status RenameFile(const std::string &srcFile, const std::string &targetFile);
 
 /**
+ * @brief Join two path fragments with exactly one slash.
+ * @param[in] lhs Left-hand path fragment.
+ * @param[in] rhs Right-hand path fragment.
+ * @return Joined path.
+ */
+std::string JoinPath(const std::string &lhs, const std::string &rhs);
+
+/**
+ * @brief Ensure that the target file exists.
+ * @param[in] path Target file path.
+ * @return Status of the call.
+ */
+Status EnsureFile(const std::string &path);
+
+/**
+ * @brief Flush file content and metadata to disk.
+ * @param[in] fd Target file descriptor.
+ * @return Status of the call.
+ */
+Status FsyncFd(int fd);
+
+/**
+ * @brief Flush directory metadata to disk.
+ * @param[in] dirPath Target directory path.
+ * @return Status of the call.
+ */
+Status FsyncDir(const std::string &dirPath);
+
+/**
+ * @brief Read the whole file into memory.
+ * @param[in] path Target file path.
+ * @param[out] content Full file content.
+ * @return Status of the call.
+ */
+Status ReadWholeFile(const std::string &path, std::string &content);
+
+/**
+ * @brief Atomically replace a text file via temp-file + fsync + rename.
+ * @param[in] path Target file path.
+ * @param[in] content File content to persist.
+ * @return Status of the call.
+ */
+Status AtomicWriteTextFile(const std::string &path, const std::string &content);
+
+/**
  * @brief Check whether the file is directory.
  * @param[in] path File path.
  * @param[out] isDir Determine is directory.

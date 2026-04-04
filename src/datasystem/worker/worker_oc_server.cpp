@@ -32,6 +32,7 @@
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/l2cache/persistence_api.h"
+#include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -169,7 +170,9 @@ DS_DEFINE_uint64(oc_worker_aggregate_single_max, 65536,
 DS_DEFINE_uint64(oc_worker_aggregate_merge_size, 2097152,
                  "Target batch size for worker worker responses, default is 2MB");
 
+DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
+DS_DECLARE_string(worker_address);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 
@@ -187,6 +190,11 @@ constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time inter
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
 
 namespace {
+bool IsWorkerScopedSlotStoreEnabled()
+{
+    return FLAGS_l2_cache_type == "distributed_disk";
+}
+
 bool EnableOCService()
 {
     return FLAGS_rpc_thread_num > 0;
@@ -234,6 +242,22 @@ WorkerOCServer::~WorkerOCServer()
     etcdCM_.reset();
     replicaSvc_.reset();
     datasystem::memory::Allocator::Instance()->Shutdown();
+}
+
+void WorkerOCServer::InitSlotWorkerNamespace()
+{
+    if (!IsWorkerScopedSlotStoreEnabled()) {
+        return;
+    }
+    SetSlotWorkerNamespace(SanitizeSlotWorkerNamespace(FLAGS_worker_address));
+}
+
+Status WorkerOCServer::InitSlotRecovery()
+{
+    RETURN_OK_IF_TRUE(!IsWorkerScopedSlotStoreEnabled());
+    slotRecoveryOrchestrator_ = std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_sfs_path);
+    RETURN_IF_NOT_OK(slotRecoveryOrchestrator_->Init());
+    return slotRecoveryOrchestrator_->RepairLocalSlots();
 }
 
 Status WorkerOCServer::InitWorkerOCService()
@@ -846,8 +870,9 @@ Status WorkerOCServer::Init()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_),
                                      "Fast transport (URMA/RDMA) init failed");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_max_rpc_session_num, hostPort_));
+    InitSlotWorkerNamespace();
     if (IsSupportL2Storage(GetCurrentStorageType())) {
-        persistenceApi_ = std::make_shared<PersistenceApi>();
+        persistenceApi_ = PersistenceApi::CreateShared();
         RETURN_IF_NOT_OK(persistenceApi_->Init());
     }
 
@@ -908,6 +933,7 @@ Status WorkerOCServer::Init()
 
     // after setting ETCD cluster manager, it time to initialize all services
     RETURN_IF_NOT_OK(InitializeAllServices(clusterInfo));
+    RETURN_IF_NOT_OK(InitSlotRecovery());
 
     HashRingEvent::DataMigrationReady::GetInstance().AddSubscriber(WORKER_OC_SERVER, [this]() {
         return IsClientsExist() || IsAsyncTasksRunning() ? Status(K_NOT_READY, "Not Ready") : Status::OK();
