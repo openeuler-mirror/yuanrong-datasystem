@@ -629,6 +629,7 @@ Status ObjectMetaStore::RemoveMeta(const std::string &key, bool needRemoveEtcdDa
 Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr,
                                          const std::string &ackPersistenceVal)
 {
+    INJECT_POINT("ObjectMetaStore.AddObjectLocation");
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_ADD_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;

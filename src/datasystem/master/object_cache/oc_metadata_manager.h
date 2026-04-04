@@ -313,6 +313,14 @@ public:
     Status CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp);
 
     /**
+     * @brief Add location for an existing key when NX conflict happens in CreateMultiMetaNtx.
+     * @param[in] objectKey The object key.
+     * @param[in] address The worker address.
+     * @return Status of the call.
+     */
+    Status AddLocationForExistingKeyOnNx(const std::string &objectKey, const std::string &address);
+
+    /**
      * @brief Set meta info for meta
      * @param[in] newMeta Meta info
      * @param[in] address request address

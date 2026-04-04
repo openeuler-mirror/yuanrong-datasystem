@@ -205,7 +205,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
 {
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_NTX_BATCH_LOCK);
     ExistenceOptPb existenceOpt = static_cast<::datasystem::ExistenceOptPb>(req.existence());
-    RETURN_IF_NOT_OK(BatchLockForSetNtx(namespaceUri, existenceOpt, ifInserts, entries));
+    std::unordered_set<std::string> localExistKeys;
+    RETURN_IF_NOT_OK(BatchLockForSetNtx(namespaceUri, existenceOpt, ifInserts, entries, localExistKeys));
     point.Record();
     Raii unlockRaii([&entries]() {
         for (const auto &entry : entries) {
@@ -215,7 +216,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
         }
     });
     std::unordered_set<std::string> failedKeys;
-    VerifyObjectsNtx(req, namespaceUri, entries, failedKeys);
+    VerifyObjectsNtx(req, namespaceUri, entries, failedKeys, localExistKeys);
     Status lastRc;
     point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_IMPL);
     Status rc = MultiPublishObjectNtx(req, namespaceUri, entries, payloads, lastRc, failedKeys);
@@ -244,10 +245,14 @@ Status WorkerOcServiceMultiPublishImpl::VerifyDuplicateKeys(const std::vector<st
 void WorkerOcServiceMultiPublishImpl::VerifyObjectsNtx(const MultiPublishReqPb &req,
                                                        const std::vector<std::string> &objectKeys,
                                                        std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                                       std::unordered_set<std::string> &failedKeys)
+                                                       std::unordered_set<std::string> &failedKeys,
+                                                       const std::unordered_set<std::string> &localExistKeys)
 {
     for (size_t i = 0; i < entries.size(); i++) {
         if (entries[i] == nullptr) {
+            if (localExistKeys.find(objectKeys[i]) != localExistKeys.end()) {
+                continue;
+            }
             failedKeys.emplace(objectKeys[i]);
             continue;
         }
@@ -276,25 +281,6 @@ Status WorkerOcServiceMultiPublishImpl::VerifyObjectReleaseValidity(const MultiP
     return Status::OK();
 }
 
-bool WorkerOcServiceMultiPublishImpl::GetObjectsNeedToMaster(const std::vector<std::string> &objectKeys,
-                                                             const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                                             const std::unordered_set<std::string> &failedKeys,
-                                                             std::vector<std::string> &outKeys,
-                                                             std::vector<std::shared_ptr<SafeObjType>> &outEntries)
-{
-    if (failedKeys.empty()) {
-        return false;
-    }
-    for (size_t i = 0; i < objectKeys.size(); i++) {
-        if (failedKeys.find(objectKeys[i]) != failedKeys.end()) {
-            continue;
-        }
-        outKeys.emplace_back(objectKeys[i]);
-        outEntries.emplace_back(entries[i]);
-    }
-    return true;
-}
-
 Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublishReqPb &req,
                                                               std::vector<std::string> &objectKeys,
                                                               std::vector<std::shared_ptr<SafeObjType>> &entries,
@@ -306,7 +292,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
     const auto &clientId = ClientKey::Intern(req.client_id());
     for (size_t i = 0; i < entries.size(); i++) {
         PerfPoint pointIn(PerfKey::WORKER_MULTI_PUBLISH_NTX_SET_ENTRY);
-        if (entries[i] == nullptr) {
+        if (failedKeys.find(objectKeys[i]) != failedKeys.end() || entries[i] == nullptr) {
             continue;
         }
         if (entries[i]->Get() != nullptr) {
@@ -972,13 +958,10 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToCentralMaster(
 
 void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
-    const std::vector<uint64_t> &versions, const std::unordered_set<std::string> &failedKeys)
+    const std::vector<uint64_t> &versions)
 {
-    std::vector<std::string> tmpKeys;
-    std::vector<std::shared_ptr<SafeObjType>> tmpEntries;
-    bool isUse = GetObjectsNeedToMaster(objectKeys, objectEntries, failedKeys, tmpKeys, tmpEntries);
-    const auto &keys = isUse ? tmpKeys : objectKeys;
-    const auto &entries = isUse ? tmpEntries : objectEntries;
+    const auto &keys = objectKeys;
+    const auto &entries = objectEntries;
     auto rollBackPersistenceIfFail = [this, &versions, &keys](const Status &rc, const ObjectKV &kv, size_t idx) {
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", keys[idx]);
@@ -1047,15 +1030,23 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
     std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc)
 {
     CreateMultiMetaRspPb rsp;
-    std::vector<std::string> tmpKeys;
-    std::vector<std::shared_ptr<SafeObjType>> tmpEntries;
-    bool isUse = GetObjectsNeedToMaster(objectKeys, objectEntries, failedKeys, tmpKeys, tmpEntries);
-    const auto &keys = isUse ? tmpKeys : objectKeys;
-    const auto &entries = isUse ? tmpEntries : objectEntries;
+    std::vector<std::string> keys;
+    std::vector<std::shared_ptr<SafeObjType>> entries;
+    keys.reserve(objectKeys.size());
+    entries.reserve(objectEntries.size());
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        if (failedKeys.find(objectKeys[i]) != failedKeys.end() || objectEntries[i] == nullptr) {
+            continue;
+        }
+        keys.emplace_back(objectKeys[i]);
+        entries.emplace_back(objectEntries[i]);
+    }
 
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_NTX);
-    std::vector<uint64_t> versions(objectKeys.size());
-    RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMasterNtx(keys, entries, req, rsp, versions));
+    std::vector<uint64_t> versions(keys.size());
+    if (!keys.empty()) {
+        RETURN_IF_NOT_OK(CreateMultiMetaToDistributedMasterNtx(keys, entries, req, rsp, versions));
+    }
     point.Record();
 
     failedKeys.insert(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
@@ -1065,7 +1056,7 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
         lastRc = recvRc.IsOk() ? lastRc : recvRc;
     }
     point.Reset(PerfKey::WORKER_UPDATE_OBJECT_AFTER_CREATE_META);
-    UpdateObjectAfterCreatingMeta(keys, entries, versions, failedKeys);
+    UpdateObjectAfterCreatingMeta(keys, entries, versions);
 
     return Status::OK();
 }
@@ -1163,7 +1154,8 @@ void WorkerOcServiceMultiPublishImpl::BatchRollBackEntries(const std::vector<std
 Status WorkerOcServiceMultiPublishImpl::BatchLockForSetNtx(const std::vector<std::string> &objectKeys,
                                                            const ExistenceOptPb &existence,
                                                            std::vector<bool> &isInserts,
-                                                           std::vector<std::shared_ptr<SafeObjType>> &entries)
+                                                           std::vector<std::shared_ptr<SafeObjType>> &entries,
+                                                           std::unordered_set<std::string> &localExistKeys)
 {
     std::map<std::string, size_t> objectToIdx;
     for (size_t i = 0; i < objectKeys.size(); ++i) {
@@ -1176,6 +1168,10 @@ Status WorkerOcServiceMultiPublishImpl::BatchLockForSetNtx(const std::vector<std
             bool isInsert;
             auto rc = objectTable_->ReserveGetAndLock(itr->first, entry, isInsert, existence == ExistenceOptPb::NX);
             if (rc.IsError()) {
+                if (existence == ExistenceOptPb::NX && rc.GetCode() == K_OC_KEY_ALREADY_EXIST) {
+                    localExistKeys.emplace(itr->first);
+                    continue;
+                }
                 LOG(ERROR) << FormatString("Lock for object %s failed, rc=%s", itr->first.c_str(), rc.ToString());
                 failCnt.fetch_add(1);
                 continue;
