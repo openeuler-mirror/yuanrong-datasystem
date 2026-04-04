@@ -32,8 +32,8 @@ namespace object_cache {
 class WorkerOcServiceDeleteImpl : public WorkerOcServiceCrudCommonApi {
 public:
     WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
-        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
-        std::shared_ptr<WorkerOcServiceGetImpl> getProc);
+                              std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
+                              std::shared_ptr<WorkerOcServiceGetImpl> getProc);
 
     /**
      * @brief The rpc method used to delete the objects.
@@ -50,6 +50,14 @@ public:
      * @return Status of the call.
      */
     Status DeleteCopyNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp);
+
+    /**
+     * @brief Delete object from persistence only.
+     * @param[in] req The rpc request protobuf.
+     * @param[out] rsp The rpc response protobuf.
+     * @return Status of the call.
+     */
+    Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp);
 
 private:
     /**
@@ -68,8 +76,8 @@ private:
      * @param[out] deletedSize The size that has been deleted.
      * @return Status of the call.
      */
-    Status DeleteAllCopyWithLock(const std::vector<std::string> &objectKeys,
-        std::vector<std::string> &failedObjectKeys, uint64_t &deletedSize);
+    Status DeleteAllCopyWithLock(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
+                                 uint64_t &deletedSize);
 
     /**
      * @brief Send request to master to delete meta and get response.
@@ -79,7 +87,7 @@ private:
      * @return Status of the call.
      */
     Status DeleteAllCopyMetaFromMaster(const std::vector<std::string> &needDeleteObjectKey,
-        std::unordered_set<std::string> &failedObjectKeys);
+                                       std::unordered_set<std::string> &failedObjectKeys);
 
     /**
      * @brief Insert failed ids when delete failed.
@@ -91,7 +99,8 @@ private:
      * @return Status of the call.
      */
     Status InsertFailedId(Status &rpcStatus, Status &recvRc, std::unordered_set<std::string> &failedObjectKeys,
-        const std::vector<std::string> &needDeleteObjectKey, master::DeleteAllCopyMetaRspPb &deleteRsp);
+                          const std::vector<std::string> &needDeleteObjectKey,
+                          master::DeleteAllCopyMetaRspPb &deleteRsp);
 
     /**
      * @brief Delete object from notification.

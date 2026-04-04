@@ -85,6 +85,15 @@ public:
     virtual Status DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp) = 0;
 
     /**
+     * @brief Notify worker to delete L2 persistence data only.
+     * @param[in] req The rpc request protobuf.
+     * @param[out] rsp The rpc response protobuf.
+     * @return Status of the call.
+     */
+    virtual Status DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
+                                           DeletePersistenceObjectRspPb &rsp) = 0;
+
+    /**
      * @brief Notify worker to delete object.
      * @param[in] req The rpc request protobuf.
      * @param[out] tag The flag to identify this rpc request.
@@ -198,6 +207,8 @@ public:
     Status ClearData(ClearDataReqPb &req, ClearDataRspPb &rsp) override;
     Status UpdateNotification(UpdateObjectReqPb &req, UpdateObjectRspPb &rsp) override;
     Status DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp) override;
+    Status DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
+                                   DeletePersistenceObjectRspPb &rsp) override;
     Status DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag) override;
     Status DeleteNotificationReceive(int64_t tag, DeleteObjectRspPb &rsp) override;
     Status QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp) override;

@@ -64,8 +64,7 @@ MasterRemoteWorkerOCApi::MasterRemoteWorkerOCApi(const HostPort &workerHostPort,
 Status MasterRemoteWorkerOCApi::Init()
 {
     std::shared_ptr<RpcStubBase> rpcStub;
-    RETURN_IF_NOT_OK(
-        RpcStubCacheMgr::Instance().GetStub(workerHostPort_, StubType::MASTER_WORKER_OC_SVC, rpcStub));
+    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(workerHostPort_, StubType::MASTER_WORKER_OC_SVC, rpcStub));
     rpcSession_ = std::dynamic_pointer_cast<MasterWorkerOCService_Stub>(rpcStub);
     RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
     return Status::OK();
@@ -138,6 +137,18 @@ Status MasterRemoteWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectR
     Timer timer;
     Status rc = rpcSession_->DeleteNotification(opts, *req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc DeleteNotification", timer.ElapsedMilliSecond());
+    return rc;
+}
+
+Status MasterRemoteWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
+                                                        DeletePersistenceObjectRspPb &rsp)
+{
+    RpcOptions opts;
+    SET_RPC_TIMEOUT(timeoutDuration, opts);
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
+    Timer timer;
+    Status rc = rpcSession_->DeletePersistenceObject(opts, *req, rsp);
+    masterOperationTimeCost.Append("Master to worker rpc DeletePersistenceObject", timer.ElapsedMilliSecond());
     return rc;
 }
 

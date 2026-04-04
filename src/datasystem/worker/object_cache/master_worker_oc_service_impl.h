@@ -69,6 +69,14 @@ public:
     Status DeleteNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp) override;
 
     /**
+     * @brief Process L2-persistence-only delete request from master.
+     * @param[in] req The rpc request protobuf.
+     * @param[out] rsp The rpc response protobuf.
+     * @return Status of the call.
+     */
+    Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp) override;
+
+    /**
      * @brief Publish already sealed object meta from master to worker.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.

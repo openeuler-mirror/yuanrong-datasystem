@@ -329,10 +329,9 @@ bool OCMigrateMetadataManager::TryFillObjectRefMeta(const std::string &objectKey
     return true;
 }
 
-bool OCMigrateMetadataManager::TryFillGlobalCacheDeleteMeta(
-    const std::string &objectKey,
-    const std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>> &globalCacheDeletes,
-    MetaForMigrationPb &meta)
+bool OCMigrateMetadataManager::TryFillGlobalCacheDeleteMeta(const std::string &objectKey,
+                                                            const GlobalDeleteInfoMap &globalCacheDeletes,
+                                                            MetaForMigrationPb &meta)
 {
     auto it = globalCacheDeletes.find(objectKey);
     if (it == globalCacheDeletes.end()) {
@@ -340,10 +339,11 @@ bool OCMigrateMetadataManager::TryFillGlobalCacheDeleteMeta(
     }
     for (const auto &versions : it->second) {
         VLOG(1) << "[Migrate Metadata] Global cache delelte id: " << objectKey << ", object version: " << versions.first
-                << ", delelte version: " << versions.second;
+                << ", delelte version: " << versions.second.deleteVersion;
         auto *deletePb = meta.add_global_cache_dels();
         deletePb->set_object_version(versions.first);
-        deletePb->set_delete_version(versions.second);
+        deletePb->set_delete_version(versions.second.deleteVersion);
+        deletePb->set_target_worker_address(versions.second.targetWorkerAddress);
     }
     return true;
 }
@@ -505,7 +505,7 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
     allKeys.insert(objectNestedRefs.begin(), objectNestedRefs.end());
 
     // migrate objs only have global cache
-    std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>> globalCacheDeletes;
+    GlobalDeleteInfoMap globalCacheDeletes;
     ocMetadataManager->GetObjGlobalCacheDeletesMatch(matchFunc, globalCacheDeletes);
     std::transform(globalCacheDeletes.begin(), globalCacheDeletes.end(), std::inserter(allKeys, allKeys.begin()),
                    [](const auto &pair) { return pair.first; });

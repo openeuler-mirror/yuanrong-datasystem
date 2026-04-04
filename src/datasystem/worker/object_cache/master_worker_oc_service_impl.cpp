@@ -212,6 +212,16 @@ Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &re
     return Status::OK();
 }
 
+Status MasterWorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &req,
+                                                          DeletePersistenceObjectRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    auto rc = ocClientWorkerSvc_->DeletePersistenceObject(req, rsp);
+    rsp.mutable_last_rc()->set_error_code(rc.GetCode());
+    rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+    return Status::OK();
+}
+
 Status MasterWorkerOCServiceImpl::QueryGlobalRefNumOnWorker(const QueryGlobalRefNumReqPb &req,
                                                             QueryGlobalRefNumRspPb &rsp)
 {

@@ -77,7 +77,6 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 DS_DEFINE_bool(enable_redirect, "true",
                "Enable query meta redirect when scale up or voluntary scale down, default is true");
-DS_DECLARE_bool(enable_metadata_recovery);
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
@@ -135,8 +134,8 @@ Status OCMetadataManager::Init()
     notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(objectStore_, skipRecoveryFromEtcd, akSkManager_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
-    globalCacheDeleteManager_ =
-        std::make_unique<OCGlobalCacheDeleteManager>(objectStore_, persistApi_, skipRecoveryFromEtcd);
+    globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
+        objectStore_, persistApi_, skipRecoveryFromEtcd, masterAddress_, akSkManager_);
     RETURN_IF_NOT_OK(globalCacheDeleteManager_->Init());
     expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(masterAddress_, this);
     expiredObjectManager_->Init();
@@ -547,16 +546,13 @@ Status OCMetadataManager::CheckBinaryFormatParamMatch(const std::string &objectK
     const auto oldWriteMode = prevConfig.write_mode();
     const auto oldCacheType = prevConfig.cache_type();
     const bool oldIsReplica = prevConfig.is_replica();
-    const bool bypassRecoveredConfigCheck = prevMeta.meta.is_recovered();
 
     const bool isBinaryFormatConsistent =
         (newMeta.dataFormat == static_cast<uint32_t>(DataFormat::BINARY)) && prevMeta.IsBinary();
 
-    const bool isConfigConsistent = bypassRecoveredConfigCheck
-                                    || ((newMeta.consistencyType == oldConsistencyType)
-                                        && (newMeta.writeMode == oldWriteMode)
-                                        && (newMeta.cacheType == oldCacheType)
-                                        && (newMeta.isReplica == oldIsReplica));
+    const bool isConfigConsistent = (newMeta.consistencyType == oldConsistencyType)
+                                    && (newMeta.writeMode == oldWriteMode) && (newMeta.cacheType == oldCacheType)
+                                    && (newMeta.isReplica == oldIsReplica);
     CHECK_FAIL_RETURN_STATUS(
         isBinaryFormatConsistent && isConfigConsistent, StatusCode::K_INVALID,
         FormatString(
@@ -656,16 +652,54 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
                                                     bool &firstOne)
 {
     const std::string &objectKey = newMeta.object_key();
+    // Case 1: not first time create meta.
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     TbbMetaTable::accessor accessor;
     firstOne = metaTable_.insert(accessor, objectKey);
-    if (!firstOne) {
-        RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
-        version = static_cast<int64_t>(GetSystemClockTimeStampUs());
-        return UpdateMeta(accessor->second, newMeta, address, version, nestedObjectKeys);
-    }
+    // In the NX Set scenario, when the worker restarts, if there is data in the L2 cache,
+    // it is not allowed to double Set.
     RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
     version = static_cast<int64_t>(GetSystemClockTimeStampUs());
+
+    RaiiPlus raiiP;
+    if (!firstOne && !HasWorkerId(objectKey)) {
+        MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
+    }
+
+    if (!firstOne) {
+        auto &prevMeta = accessor->second;
+        CHECK_FAIL_RETURN_STATUS(
+            prevMeta.multiSetState != PENDING, K_TRY_AGAIN,
+            FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
+        BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
+                                                 .dataFormat = newMeta.config().data_format(),
+                                                 .consistencyType = newMeta.config().consistency_type(),
+                                                 .cacheType = newMeta.config().cache_type(),
+                                                 .isReplica = newMeta.config().is_replica() };
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
+
+        // Cache Invalidation Logic.
+        Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
+                                                     { .newAddress = address,
+                                                       .newVersion = version,
+                                                       .newDataSz = newMeta.data_size(),
+                                                       .newLifeState = newMeta.life_state(),
+                                                       .newBlobSizes = newMeta.device_info().blob_sizes() });
+        if (s.IsError()) {
+            // If the cache invalid processing fails, delete the address from the meta.
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
+                                             "Remove location failed from rocksdb.");
+            (void)prevMeta.locations.erase(address);
+        }
+
+        if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
+            RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
+        }
+        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
+        return s;
+    }
+    // Case 2: first time creating meta.
     RETURN_IF_NOT_OK(CreateMetaFirstTime(newMeta, address, version, nestedObjectKeys, accessor));
     RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
     VLOG(1) << FormatString("[ObjectKey %s] CreateMeta finished: objectKey: %s, worker address: %s", objectKey,
@@ -691,7 +725,7 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
 }
 
 Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address,
-                                     int64_t &version, const std::set<ImmutableString> &nestedObjectKeys)
+                                     int64_t &version)
 {
     const std::string &objectKey = newMeta.object_key();
     // In the NX Set scenario, when the worker restarts, if there is data in the L2 cache,
@@ -710,15 +744,7 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
                                              .consistencyType = newMeta.config().consistency_type(),
                                              .cacheType = newMeta.config().cache_type(),
                                              .isReplica = newMeta.config().is_replica() };
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate, nestedObjectKeys),
-                                     "Check format failed");
-    const bool bypassRecoveredConfigCheck = meta.meta.is_recovered();
-    ConfigPb oldConfig;
-    if (bypassRecoveredConfigCheck) {
-        oldConfig = meta.meta.config();
-        *meta.meta.mutable_config() = newMeta.config();
-        meta.meta.set_is_recovered(false);
-    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate), "Check format failed");
 
     // Cache Invalidation Logic.
     Status s = DoBinaryCacheInvalidationUnlocked(objectKey, meta,
@@ -728,19 +754,12 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
                                                    .newLifeState = newMeta.life_state(),
                                                    .newBlobSizes = newMeta.device_info().blob_sizes() });
     if (s.IsError()) {
-        if (bypassRecoveredConfigCheck) {
-            *meta.meta.mutable_config() = oldConfig;
-            meta.meta.set_is_recovered(true);
-        }
         // If the cache invalid processing fails, delete the address from the meta.
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
                                          "Remove location failed from rocksdb.");
         (void)meta.locations.erase(address);
     }
 
-    if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
-        RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
-    }
     RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
     return s;
 }
@@ -1849,9 +1868,18 @@ void OCMetadataManager::AsyncNotifyCrossAzDelete(
     std::stringstream asyncNotifyMsg;
     auto deleteAllCopyMetaVersion = static_cast<int64_t>(GetSystemClockTimeStampUs());
     for (auto &kv : objsNeedAsyncNotify) {
+        std::string targetWorkerAddress;
+        {
+            std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
+            TbbMetaTable::const_accessor accessor;
+            if (metaTable_.find(accessor, kv.first)) {
+                targetWorkerAddress = accessor->second.meta.primary_address();
+            }
+        }
         // 1. delete l2 cache at first, in case a get operation later retrive data from l2 cache
-        Status status = globalCacheDeleteManager_->InsertDeletedObject(
-            kv.first, UINT64_MAX, deleteAllCopyMetaVersion, true, ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD);
+        Status status = globalCacheDeleteManager_->InsertDeletedObject(kv.first, UINT64_MAX, deleteAllCopyMetaVersion,
+                                                                       targetWorkerAddress, true,
+                                                                       ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD);
         if (status.IsError()) {
             LOG(ERROR) << FormatString("[ObjectKey %s] Global cache delete failed, error: %s", kv.first,
                                        status.ToString());
@@ -2075,7 +2103,9 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             // try to delete all versions of the object from L2 Cache using async delete.
             if (!FLAGS_oc_io_from_l2cache_need_metadata) {
                 auto maxVersionToDel = static_cast<int64_t>(GetSystemClockTimeStampUs());
-                (void)globalCacheDeleteManager_->InsertDeletedObject(objectKey, UINT64_MAX, maxVersionToDel);
+                Status gcStatus =
+                    globalCacheDeleteManager_->InsertDeletedObject(objectKey, UINT64_MAX, maxVersionToDel);
+                LOG_IF_ERROR(gcStatus, FormatString("[ObjectKey %s] Global cache delete enqueue failed", objectKey));
             }
             continue;
         } else if (accessor->second.meta.version() > static_cast<uint64_t>(info.second.version)) {
@@ -2092,7 +2122,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             uint64_t objectVersion = accessor->second.meta.version();
             uint64_t delVersion = objectVersion;
             Status status = globalCacheDeleteManager_->InsertDeletedObject(
-                objectKey, objectVersion, delVersion, true,
+                objectKey, objectVersion, delVersion, accessor->second.meta.primary_address(), true,
                 WriteMode2MetaType(accessor->second.meta.config().write_mode()));
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("[ObjectKey %s] Global cache delete failed, error: %s", objectKey,
@@ -2316,28 +2346,12 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
         MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
     }
 
-    const bool bypassRecoveredConfigCheck = objectMeta.IsBinary() && objectMeta.meta.is_recovered();
-    ConfigPb oldConfig;
-    if (bypassRecoveredConfigCheck) {
-        oldConfig = objectMeta.meta.config();
-        auto *config = objectMeta.meta.mutable_config();
-        config->set_write_mode(request.binary_format_params().write_mode());
-        config->set_data_format(request.binary_format_params().data_format());
-        config->set_consistency_type(request.binary_format_params().consistency_type());
-        config->set_cache_type(request.binary_format_params().cache_type());
-        objectMeta.meta.set_is_recovered(false);
-    }
-
     response.set_version(version);
     Status s = DoBinaryCacheInvalidationUnlocked(
         objectKey, objectMeta,
         ChangedMeta{
             address, static_cast<int64_t>(response.version()), request.data_size(), request.life_state(), {} });
     if (s.IsError()) {
-        if (bypassRecoveredConfigCheck) {
-            *objectMeta.meta.mutable_config() = oldConfig;
-            objectMeta.meta.set_is_recovered(true);
-        }
         LOG(ERROR) << "DoBinaryCacheInvalidationUnlocked failed, status : " << s.ToString();
         // If the cache invalid processing fails, delete the address from the meta.
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
@@ -2720,9 +2734,8 @@ void OCMetadataManager::GetObjRefsMatch(const std::function<bool(const std::stri
     }
 }
 
-void OCMetadataManager::GetObjGlobalCacheDeletesMatch(
-    const std::function<bool(const std::string &)> &matchFunc,
-    std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>> &objectDeleteInfos)
+void OCMetadataManager::GetObjGlobalCacheDeletesMatch(const std::function<bool(const std::string &)> &matchFunc,
+                                                      GlobalDeleteInfoMap &objectDeleteInfos)
 {
     if (globalCacheDeleteManager_ == nullptr) {
         return;
@@ -3784,8 +3797,9 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
     } else {
         ObjectMeta metaCache;
         metaCache.meta = meta;
-        // Keep the recovery marker until the first successful normal update patches the missing config fields.
-        metaCache.meta.set_primary_address(meta.primary_address().empty() ? workerAddr : meta.primary_address());
+        // This field is only used in recovery requests and should not be persisted as object metadata.
+        metaCache.meta.set_is_recovered(false);
+        metaCache.meta.set_primary_address(workerAddr);
         // Object key is the key in a key/value pair for the metadata table.
         // Storing the same object key in the "value" part of the kv is redundant and
         // deprecated. Save memory and resources by removing this from the value.
@@ -3857,6 +3871,7 @@ void OCMetadataManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImp
 {
     localApi_ = std::make_unique<object_cache::WorkerLocalWorkerOCApi>(workerWorkerService, akSkManager_);
     notifyWorkerManager_->AssignLocalWorker(masterWorkerService, masterAddr);
+    globalCacheDeleteManager_->AssignLocalWorker(masterWorkerService);
     // We set initialized_ as true at the end of OCMetadataManager::AssignLocalWorker, because if
     // OCMetadataManager::AssignLocalWorker is not called, the masterAddr_ in OCNotifyWorkerManager will be empty
     // and thus OCMetadataManager is not fully initialized.
@@ -3986,7 +4001,8 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
     for (const auto &op : objMeta.global_cache_dels()) {
         VLOG(1) << FormatString("Insert global cache delete for object:%s, version:%d, delete version: %d", objectKey,
                                 op.object_version(), op.delete_version());
-        (void)globalCacheDeleteManager_->InsertDeletedObject(objectKey, op.object_version(), op.delete_version(), true);
+        (void)globalCacheDeleteManager_->InsertDeletedObject(objectKey, op.object_version(), op.delete_version(),
+                                                             op.target_worker_address(), true);
     }
     return true;
 }
@@ -4192,7 +4208,8 @@ Status OCMetadataManager::FillMetadataForMigration(
     for (const auto &op : delOps) {
         auto opPb = meta.add_global_cache_dels();
         opPb->set_object_version(op.first);
-        opPb->set_delete_version(op.second);
+        opPb->set_delete_version(op.second.deleteVersion);
+        opPb->set_target_worker_address(op.second.targetWorkerAddress);
     }
     return Status::OK();
 }
@@ -4512,11 +4529,11 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
 
         if (accessor->second.meta.version() == version
             && accessor->second.meta.primary_address() == req.new_primary_addr()) {
-                LOG(INFO) << FormatString(
-                    "[ObjectKey %s] The object has been changed to this primary, set success directly", objectKey);
-                rsp.add_success_ids(objectKey);
-                continue;
-            }
+            LOG(INFO) << FormatString(
+                "[ObjectKey %s] The object has been changed to this primary, set success directly", objectKey);
+            rsp.add_success_ids(objectKey);
+            continue;
+        }
         if (accessor->second.meta.version() != version
             || accessor->second.meta.primary_address() != req.origin_primary_addr()) {
             LOG(WARNING) << FormatString(
@@ -4590,7 +4607,8 @@ Status OCMetadataManager::RollbackMultiMeta(const RollbackMultiMetaReqPb &req, R
             if (i >= req.versions_size()) {
                 RETURN_STATUS(K_RUNTIME_ERROR, "No object version found");
             }
-            if (globalCacheDeleteManager_->InsertDeletedObject(objKey, req.versions(i), req.versions(i), true)
+            if (globalCacheDeleteManager_
+                    ->InsertDeletedObject(objKey, req.versions(i), req.versions(i), req.address(), true)
                     .IsError()) {
                 rsp.add_failed_object_keys(objKey);
             }

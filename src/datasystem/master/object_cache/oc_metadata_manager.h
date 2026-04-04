@@ -89,10 +89,7 @@ struct SubscribeMeta {
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
 };
 
-enum class AckState: int {
-    UNACK = 0,
-    ACK = 1
-};
+enum class AckState : int { UNACK = 0, ACK = 1 };
 
 struct ObjectMeta {
     ObjectMetaPb meta;
@@ -667,9 +664,8 @@ public:
      * @param[in] matchFunc The conditions to meet.
      * @param[out] objectDeleteInfos The global cache delete info need to migrate.
      */
-    void GetObjGlobalCacheDeletesMatch(
-        const std::function<bool(const std::string &)> &matchFunc,
-        std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>> &objectDeleteInfos);
+    void GetObjGlobalCacheDeletesMatch(const std::function<bool(const std::string &)> &matchFunc,
+                                       GlobalDeleteInfoMap &objectDeleteInfos);
 
     /**
      * @brief Get the Remote Client Ids Match object
@@ -1053,7 +1049,7 @@ public:
         std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &objAsyncMap);
 
     void GetAsyncElementsByObjectKey(const std::string &objectKey,
-                                    std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
+                                     std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
 
     /**
      * @brief Recover data of faulty worker from etcd.
@@ -1214,8 +1210,8 @@ protected:
      * @param[out] objLocMap The map record object and locations.
      * @return Status of the call
      */
-    Status LoadObjectLocations(bool isFromRocksdb,
-        std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
+    Status LoadObjectLocations(
+        bool isFromRocksdb, std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
 
     std::shared_timed_mutex metaTableMutex_;
     TbbMetaTable metaTable_;  // Metadata table.
@@ -1298,8 +1294,7 @@ private:
      * @param[in] version The object version
      * @param[out] firstOne Create first time or not
      */
-    Status UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address, int64_t &version,
-                      const std::set<ImmutableString> &nestedObjectKeys = {});
+    Status UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address, int64_t &version);
 
     /**
      * @brief Create meta info in cache and rocksdb.
@@ -1336,7 +1331,8 @@ private:
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @return Status of the call.
      */
-    Status HandleLoadMeta(std::vector<std::pair<std::string, std::string>> &metas,
+    Status HandleLoadMeta(
+        std::vector<std::pair<std::string, std::string>> &metas,
         std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
         const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
         bool &isFromRocksdb, const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges);
@@ -1574,7 +1570,7 @@ private:
                                      const std::unordered_map<ImmutableString, AckState> &locations);
 
     template <class F, class... Args>
-    void ExecuteAsyncTask(F &&f, Args &&... args)
+    void ExecuteAsyncTask(F &&f, Args &&...args)
     {
         // if interrupt manager, stop to execute task.
         if (!interruptFlag_) {
@@ -1806,18 +1802,18 @@ private:
      * @return Status of the call.
      */
     Status ProcessCopyMetaHelper(const std::string &address, const std::string &objectKey, uint64_t version,
-                                    uint32_t dataFormat, TbbMetaTable::accessor &accessor, bool &isExpired);
+                                 uint32_t dataFormat, TbbMetaTable::accessor &accessor, bool &isExpired);
 
     std::string masterAddress_;
 
     std::shared_ptr<AkSkManager> akSkManager_;
     std::unique_ptr<object_cache::WorkerLocalWorkerOCApi> localApi_;
 
-    std::shared_ptr<ObjectMetaStore> objectStore_{ nullptr };                        // Metadata store for object.
+    std::shared_ptr<ObjectMetaStore> objectStore_{ nullptr };  // Metadata store for object.
     std::unique_ptr<object_cache::ObjectGlobalRefTable<ImmutableString>> globalRefTable_{
         nullptr
-    };                                                                               // object global reference.
-    std::unique_ptr<OCNestedManager> nestedRefManager_{ nullptr };                   // object nested reference manager.
+    };  // object global reference.
+    std::unique_ptr<OCNestedManager> nestedRefManager_{ nullptr };  // object nested reference manager.
 
     TbbRemoteClientIdRefTable clientIdRefTable_;     // remote client id to master ip table
     std::shared_timed_mutex clientIdRefTableMutex_;  // mutex for clientIdRefTable

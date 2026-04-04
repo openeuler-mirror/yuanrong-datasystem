@@ -482,6 +482,7 @@ message ObjectAsyncOpPb {
 message GlobalCacheDelPb {
   uint64 object_version = 1;
   uint64 delete_version = 2;
+  string target_worker_address = 3;
 }
 
 message AsyncElementPb {

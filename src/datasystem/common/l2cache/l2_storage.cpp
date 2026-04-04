@@ -28,12 +28,15 @@ L2StorageType GetCurrentStorageType()
         SETFLAG(l2StorageType, L2StorageType::OBS);
     } else if (FLAGS_l2_cache_type == "sfs") {
         SETFLAG(l2StorageType, L2StorageType::SFS);
+    } else if (FLAGS_l2_cache_type == "distributed_disk") {
+        SETFLAG(l2StorageType, L2StorageType::DISTRIBUTED_DISK);
     }
     return l2StorageType;
 }
 
 bool IsSupportL2Storage(L2StorageType type)
 {
-    return TESTFLAG(type, L2StorageType::OBS) || TESTFLAG(type, L2StorageType::SFS);
+    return TESTFLAG(type, L2StorageType::OBS) || TESTFLAG(type, L2StorageType::SFS)
+           || TESTFLAG(type, L2StorageType::DISTRIBUTED_DISK);
 }
 }  // namespace datasystem
