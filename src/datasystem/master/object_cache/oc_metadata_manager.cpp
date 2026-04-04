@@ -77,6 +77,7 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 DS_DEFINE_bool(enable_redirect, "true",
                "Enable query meta redirect when scale up or voluntary scale down, default is true");
+DS_DECLARE_bool(enable_metadata_recovery);
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
@@ -546,13 +547,16 @@ Status OCMetadataManager::CheckBinaryFormatParamMatch(const std::string &objectK
     const auto oldWriteMode = prevConfig.write_mode();
     const auto oldCacheType = prevConfig.cache_type();
     const bool oldIsReplica = prevConfig.is_replica();
+    const bool bypassRecoveredConfigCheck = prevMeta.meta.is_recovered();
 
     const bool isBinaryFormatConsistent =
         (newMeta.dataFormat == static_cast<uint32_t>(DataFormat::BINARY)) && prevMeta.IsBinary();
 
-    const bool isConfigConsistent = (newMeta.consistencyType == oldConsistencyType)
-                                    && (newMeta.writeMode == oldWriteMode) && (newMeta.cacheType == oldCacheType)
-                                    && (newMeta.isReplica == oldIsReplica);
+    const bool isConfigConsistent = bypassRecoveredConfigCheck
+                                    || ((newMeta.consistencyType == oldConsistencyType)
+                                        && (newMeta.writeMode == oldWriteMode)
+                                        && (newMeta.cacheType == oldCacheType)
+                                        && (newMeta.isReplica == oldIsReplica));
     CHECK_FAIL_RETURN_STATUS(
         isBinaryFormatConsistent && isConfigConsistent, StatusCode::K_INVALID,
         FormatString(
@@ -652,54 +656,16 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
                                                     bool &firstOne)
 {
     const std::string &objectKey = newMeta.object_key();
-    // Case 1: not first time create meta.
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     TbbMetaTable::accessor accessor;
     firstOne = metaTable_.insert(accessor, objectKey);
-    // In the NX Set scenario, when the worker restarts, if there is data in the L2 cache,
-    // it is not allowed to double Set.
+    if (!firstOne) {
+        RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
+        version = static_cast<int64_t>(GetSystemClockTimeStampUs());
+        return UpdateMeta(accessor->second, newMeta, address, version, nestedObjectKeys);
+    }
     RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
     version = static_cast<int64_t>(GetSystemClockTimeStampUs());
-
-    RaiiPlus raiiP;
-    if (!firstOne && !HasWorkerId(objectKey)) {
-        MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
-    }
-
-    if (!firstOne) {
-        auto &prevMeta = accessor->second;
-        CHECK_FAIL_RETURN_STATUS(
-            prevMeta.multiSetState != PENDING, K_TRY_AGAIN,
-            FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
-        BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
-                                                 .dataFormat = newMeta.config().data_format(),
-                                                 .consistencyType = newMeta.config().consistency_type(),
-                                                 .cacheType = newMeta.config().cache_type(),
-                                                 .isReplica = newMeta.config().is_replica() };
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
-
-        // Cache Invalidation Logic.
-        Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
-                                                     { .newAddress = address,
-                                                       .newVersion = version,
-                                                       .newDataSz = newMeta.data_size(),
-                                                       .newLifeState = newMeta.life_state(),
-                                                       .newBlobSizes = newMeta.device_info().blob_sizes() });
-        if (s.IsError()) {
-            // If the cache invalid processing fails, delete the address from the meta.
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
-                                             "Remove location failed from rocksdb.");
-            (void)prevMeta.locations.erase(address);
-        }
-
-        if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
-            RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
-        }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
-        return s;
-    }
-    // Case 2: first time creating meta.
     RETURN_IF_NOT_OK(CreateMetaFirstTime(newMeta, address, version, nestedObjectKeys, accessor));
     RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
     VLOG(1) << FormatString("[ObjectKey %s] CreateMeta finished: objectKey: %s, worker address: %s", objectKey,
@@ -725,7 +691,7 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
 }
 
 Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMeta, const std::string &address,
-                                     int64_t &version)
+                                     int64_t &version, const std::set<ImmutableString> &nestedObjectKeys)
 {
     const std::string &objectKey = newMeta.object_key();
     // In the NX Set scenario, when the worker restarts, if there is data in the L2 cache,
@@ -744,7 +710,15 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
                                              .consistencyType = newMeta.config().consistency_type(),
                                              .cacheType = newMeta.config().cache_type(),
                                              .isReplica = newMeta.config().is_replica() };
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate), "Check format failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate, nestedObjectKeys),
+                                     "Check format failed");
+    const bool bypassRecoveredConfigCheck = meta.meta.is_recovered();
+    ConfigPb oldConfig;
+    if (bypassRecoveredConfigCheck) {
+        oldConfig = meta.meta.config();
+        *meta.meta.mutable_config() = newMeta.config();
+        meta.meta.set_is_recovered(false);
+    }
 
     // Cache Invalidation Logic.
     Status s = DoBinaryCacheInvalidationUnlocked(objectKey, meta,
@@ -754,12 +728,19 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
                                                    .newLifeState = newMeta.life_state(),
                                                    .newBlobSizes = newMeta.device_info().blob_sizes() });
     if (s.IsError()) {
+        if (bypassRecoveredConfigCheck) {
+            *meta.meta.mutable_config() = oldConfig;
+            meta.meta.set_is_recovered(true);
+        }
         // If the cache invalid processing fails, delete the address from the meta.
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
                                          "Remove location failed from rocksdb.");
         (void)meta.locations.erase(address);
     }
 
+    if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
+        RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
+    }
     RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
     return s;
 }
@@ -2335,12 +2316,28 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
         MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
     }
 
+    const bool bypassRecoveredConfigCheck = objectMeta.IsBinary() && objectMeta.meta.is_recovered();
+    ConfigPb oldConfig;
+    if (bypassRecoveredConfigCheck) {
+        oldConfig = objectMeta.meta.config();
+        auto *config = objectMeta.meta.mutable_config();
+        config->set_write_mode(request.binary_format_params().write_mode());
+        config->set_data_format(request.binary_format_params().data_format());
+        config->set_consistency_type(request.binary_format_params().consistency_type());
+        config->set_cache_type(request.binary_format_params().cache_type());
+        objectMeta.meta.set_is_recovered(false);
+    }
+
     response.set_version(version);
     Status s = DoBinaryCacheInvalidationUnlocked(
         objectKey, objectMeta,
         ChangedMeta{
             address, static_cast<int64_t>(response.version()), request.data_size(), request.life_state(), {} });
     if (s.IsError()) {
+        if (bypassRecoveredConfigCheck) {
+            *objectMeta.meta.mutable_config() = oldConfig;
+            objectMeta.meta.set_is_recovered(true);
+        }
         LOG(ERROR) << "DoBinaryCacheInvalidationUnlocked failed, status : " << s.ToString();
         // If the cache invalid processing fails, delete the address from the meta.
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
@@ -3787,9 +3784,8 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
     } else {
         ObjectMeta metaCache;
         metaCache.meta = meta;
-        // This field is only used in recovery requests and should not be persisted as object metadata.
-        metaCache.meta.set_is_recovered(false);
-        metaCache.meta.set_primary_address(workerAddr);
+        // Keep the recovery marker until the first successful normal update patches the missing config fields.
+        metaCache.meta.set_primary_address(meta.primary_address().empty() ? workerAddr : meta.primary_address());
         // Object key is the key in a key/value pair for the metadata table.
         // Storing the same object key in the "value" part of the kv is redundant and
         // deprecated. Save memory and resources by removing this from the value.

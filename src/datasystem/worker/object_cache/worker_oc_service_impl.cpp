@@ -102,6 +102,7 @@
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
+#include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -112,6 +113,8 @@ DS_DEFINE_validator(oc_thread_num, &Validator::ValidateThreadNum);
 DS_DEFINE_uint32(client_reconnect_wait_s, 10, "Client reconnect wait seconds, default is 10.");
 DS_DEFINE_validator(client_reconnect_wait_s, &Validator::ValidateUint32);
 DS_DEFINE_bool(enable_reconciliation, true, "Whether to enable reconciliation, default is true");
+DS_DEFINE_bool(enable_metadata_recovery, false,
+               "Whether to recover worker metadata to master during worker restart cleanup.");
 DS_DEFINE_bool(oc_io_from_l2cache_need_metadata, true,
                "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it "
                "indicates that the metadata is not stored in etcd.");
@@ -141,7 +144,6 @@ static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
 static constexpr int OLD_VERSION_DEL_THREAD_MAX_NUM = 1;
 static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
 static const std::string WORKER_OC_SERVICE_IMPL = "WorkerOCServiceImpl";
-constexpr size_t GET_MATCH_OBJECT_BATCH = 500;  // batch number is 500.
 
 WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr,
                                          std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<AkSkManager> manager,
@@ -179,6 +181,7 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
     }
     HashRingEvent::BeforeVoluntaryExit::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     AddLocalFailedNodeEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
+    NodeRestartEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     EraseFailedNodeApiEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     StartNodeCheckEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     AsyncResourceReleaser::Instance().Shutdown();
@@ -296,8 +299,9 @@ Status WorkerOCServiceImpl::Init()
     workerDevOcManager_ = std::make_shared<WorkerDeviceOcManager>(this);
     lastReconTime_ = GetSteadyClockTimeStampMs();  // Record current timestamp in case we need reconciliation.
     RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
-    metadataRecoveryManager_ =
-        std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, etcdCM_, workerMasterApiManager_);
+    metadataRecoveryManager_ = std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, etcdCM_,
+                                                                         workerMasterApiManager_, GetMetadataSize());
+
     asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
     AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
@@ -309,6 +313,8 @@ Status WorkerOCServiceImpl::Init()
         WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const HostPort &node) { return PushMetadataToMaster(node); });
+    NodeRestartEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL,
+        [this](const std::string &workerAddr, int64_t, bool) { return HandleNodeRestartEvent(workerAddr); });
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL,
                                                          [this](HostPort &node) { EraseFailedWorkerMasterApi(node); });
     StartNodeCheckEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL, [this] { return GiveUpReconciliation(); });
@@ -402,54 +408,78 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     return Status::OK();
 }
 
-void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
-                                          std::vector<std::string> &objKeys, bool includeL2CacheIds)
+Status WorkerOCServiceImpl::RecoverMetadataOfData(const std::vector<std::string> &objectKeys,
+                                                  std::vector<std::string> &failedIds, std::string standbyWorker)
 {
-    LOG(INFO) << "GetNoL2CacheObjectsMatch begin";
-    Timer timer;
-    std::vector<std::string> objs;
-    for (const auto &it : *objectTable_) {
-        objs.emplace_back(it.first);
+    if (metadataRecoveryManager_ == nullptr) {
+        failedIds = objectKeys;
+        return Status(K_RUNTIME_ERROR, "metadataRecoveryManager is null");
     }
-    LOG(INFO) << "Get all object in table ElapsedMilliSecond:" << timer.ElapsedMilliSecond()
-              << " object size:" << objs.size();
-    timer.Reset();
-    std::function batchFun = [this, matchFunc, &objKeys, includeL2CacheIds](std::vector<std::string> &objects) {
-        for (const auto &id : objects)
-            if (matchFunc(id)) {
-                if (includeL2CacheIds) {
-                    objKeys.emplace_back(id);
-                    continue;
-                }
-                std::shared_ptr<SafeObjType> entry;
-                if (objectTable_->Get(id, entry).IsError()) {
-                    continue;
-                }
-                if (entry->TryRLock().IsError()) {
-                    continue;
-                }
-                Raii entryUnlock([&entry] { entry->RUnlock(); });
-                if (!(*entry)->HasL2Cache()) {
-                    objKeys.emplace_back(id);
-                }
-            }
-    };
+    auto summary = metadataRecoveryManager_->RecoverMetadataWithSummary(objectKeys, standbyWorker);
+    failedIds = summary.failedIds;
+    return summary.status;
+}
 
-    std::vector<std::string> tmpIds;
-    for (const auto &id : objs) {
-        tmpIds.emplace_back(id);
-        if (tmpIds.size() < GET_MATCH_OBJECT_BATCH) {
-            continue;
+Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &workerAddr)
+{
+    RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
+    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
+    CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
+    auto *hashRing = etcdCM_->GetHashRing();
+    CHECK_FAIL_RETURN_STATUS(hashRing != nullptr, K_RUNTIME_ERROR, "hashRing is null");
+
+    std::string restartWorkerUuid;
+    RETURN_IF_NOT_OK(hashRing->GetUuidByWorkerAddr(workerAddr, restartWorkerUuid));
+    auto ringPb = hashRing->GetHashRingPb();
+    std::vector<std::string> recoverUuids;
+    CollectRecoveryWorkerUuidsForRestart(workerAddr, restartWorkerUuid, ringPb, recoverUuids);
+    RETURN_OK_IF_TRUE(recoverUuids.empty());
+
+    MetadataRecoverySelector selector(objectTable_, etcdCM_);
+    MetadataRecoverySelector::SelectionRequest selectReq;
+    selectReq.includeL2CacheIds = true;
+    selectReq.workerUuids = recoverUuids;
+    std::vector<std::string> matchObjIds;
+    RETURN_IF_NOT_OK(selector.Select(selectReq, matchObjIds));
+    RETURN_OK_IF_TRUE(matchObjIds.empty());
+
+    std::vector<std::string> failedIds;
+    std::string standbyWorker;
+    Status rc = RecoverMetadataOfData(matchObjIds, failedIds, standbyWorker);
+    if (!failedIds.empty()) {
+        LOG(WARNING) << "Recover metadata after node restart has failed object keys: " << VectorToString(failedIds)
+                     << ", restartWorker: " << workerAddr;
+    }
+    return rc;
+}
+
+Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr)
+{
+    RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
+    RETURN_OK_IF_TRUE(workerAddr.empty() || workerAddr == localAddress_.ToString());
+    if (threadPool_ == nullptr) {
+        return RecoverMetadataOfRestartedWorker(workerAddr);
+    }
+    threadPool_->Execute([this, workerAddr]() {
+        LOG_IF_ERROR(RecoverMetadataOfRestartedWorker(workerAddr),
+                     "RecoverMetadataOfRestartedWorker failed after NodeRestartEvent");
+    });
+    return Status::OK();
+}
+
+void WorkerOCServiceImpl::CollectRecoveryWorkerUuidsForRestart(const std::string &workerAddr,
+                                                               const std::string &restartWorkerUuid,
+                                                               const HashRingPb &ringPb,
+                                                               std::vector<std::string> &recoverUuids)
+{
+    recoverUuids.emplace_back(restartWorkerUuid);
+    for (const auto &item : ringPb.key_with_worker_id_meta_map()) {
+        if (item.second == workerAddr && item.first != restartWorkerUuid) {
+            recoverUuids.emplace_back(item.first);
         }
-        batchFun(tmpIds);
-        tmpIds.clear();
     }
-    if (!tmpIds.empty()) {
-        batchFun(tmpIds);
-    }
-    LOG(INFO) << "GetObjectsMatch finish, objectKeys size: " << objKeys.size()
-              << " , include l2cache ids: " << includeL2CacheIds
-              << " ElapsedMilliSecond: " << timer.ElapsedMilliSecond();
+    std::sort(recoverUuids.begin(), recoverUuids.end());
+    recoverUuids.erase(std::unique(recoverUuids.begin(), recoverUuids.end()), recoverUuids.end());
 }
 
 Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
@@ -806,42 +836,71 @@ void WorkerOCServiceImpl::ClearObject(const std::vector<std::string> objKeys, co
 Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
 {
     LOG(INFO) << "clear data without meta in worker, standby worker: " << req.standby_worker();
-    HashRange ranges;
-    std::stringstream rangesStr;
-    rangesStr << "ranges: ";
-    for (const auto &range : req.ranges()) {
-        ranges.emplace_back(range.from(), range.end());
-        rangesStr << "[" << range.from() << ", " << range.end() << "],";
-    }
-    if (ranges.empty() && req.worker_ids().empty()) {
+    MetadataRecoverySelector selector(objectTable_, etcdCM_);
+    auto selectReq = MetadataRecoverySelector::BuildSelectionRequest(req, FLAGS_enable_metadata_recovery);
+    if (selectReq.Empty()) {
         LOG(INFO) << "range and worker ids all empty";
         return Status::OK();
     }
-    std::vector<std::string> uuids;
-    std::function<bool(const std::string &obj)> matchFunc;
-    if (req.worker_ids().empty()) {
-        matchFunc = [this, &ranges](const std::string &objKey) { return etcdCM_->IsInRange(ranges, objKey, ""); };
-    } else {
-        uuids = { req.worker_ids().begin(), req.worker_ids().end() };
-        matchFunc = [this, &ranges, &uuids](const std::string &objKey) {
-            return etcdCM_->NeedToClear(objKey, ranges, uuids);
-        };
-    }
-    LOG(INFO) << rangesStr.str() << ", uuids: " << VectorToString(uuids);
-    bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
+    LOG(INFO) << selectReq.ToString();
+
+    MetadataRecoverySelector::MatchFunc matchFunc;
+    RETURN_IF_NOT_OK(selector.BuildMatchFunc(selectReq, matchFunc));
     std::vector<std::string> matchObjIds;
-    GetObjectsMatch(matchFunc, matchObjIds, includeL2CacheIds);
-    std::vector<std::string> failedIds;
+    selector.Select(matchFunc, selectReq.includeL2CacheIds, matchObjIds);
     RETURN_IF_NOT_OK(gRefProc_->GIncreaseMasterRefWithLock(matchFunc, req.standby_worker()));
-    if (FLAGS_enable_metadata_recovery) {
-        metadataRecoveryManager_->RecoverMetadata(matchObjIds, failedIds, req.standby_worker());
-        ClearObject(failedIds, req);
-    } else {
+    if (!FLAGS_enable_metadata_recovery) {
         ClearObject(matchObjIds, req);
+    } else if (metadataRecoveryManager_ == nullptr) {
+        LOG(WARNING) << "metadata recovery is enabled but metadataRecoveryManager is null, fallback to clear path";
+        ClearObject(matchObjIds, req);
+    } else {
+        std::vector<std::string> failedIds;
+        Status rc = RecoverMetadataOfData(matchObjIds, failedIds, req.standby_worker());
+        LOG_IF_ERROR(rc, FormatString("RecoverMetadataOfData failed, fallback clear count: %zu", failedIds.size()));
+        ClearObject(failedIds, req);
     }
     RETURN_IF_NOT_OK(RecoverMasterAppRefEvent::GetInstance().NotifyAll(matchFunc, req.standby_worker()));
     LOG(INFO) << "clear data without meta in worker finished";
     return Status::OK();
+}
+
+Status WorkerOCServiceImpl::PostPreloadRecovery(const std::vector<ObjectMetaPb> &recoverMetas)
+{
+    RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
+    RETURN_OK_IF_TRUE(recoverMetas.empty());
+    CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
+
+    auto recoverySummary = metadataRecoveryManager_->RecoverMetadataWithSummary(recoverMetas);
+    Status rc = recoverySummary.status;
+    LOG_IF_ERROR(rc, FormatString("Recover preload metadata to master failed, requested count: %zu, failed count: %zu",
+                                  recoverMetas.size(), recoverySummary.failedIds.size()));
+    if (!recoverySummary.failedIds.empty()) {
+        LOG(WARNING) << "Preload metadata recovery to master has failed ids: "
+                     << VectorToString(recoverySummary.failedIds);
+    }
+
+    std::unordered_set<std::string> failedObjectKeySet(recoverySummary.failedIds.begin(),
+                                                       recoverySummary.failedIds.end());
+    std::vector<ObjectMetaPb> succeededRecoverMetas;
+    succeededRecoverMetas.reserve(recoverMetas.size() - std::min(recoverMetas.size(), failedObjectKeySet.size()));
+    for (const auto &recoverMeta : recoverMetas) {
+        if (failedObjectKeySet.find(recoverMeta.object_key()) != failedObjectKeySet.end()) {
+            continue;
+        }
+        succeededRecoverMetas.emplace_back(recoverMeta);
+    }
+    if (succeededRecoverMetas.empty()) {
+        return rc;
+    }
+
+    std::vector<std::string> recoveredObjectKeys;
+    RETURN_IF_NOT_OK(metadataRecoveryManager_->RecoverLocalEntries(succeededRecoverMetas, recoveredObjectKeys));
+    if (recoveredObjectKeys.empty()) {
+        return rc;
+    }
+    INJECT_POINT("WorkerOCServiceImpl.PostPreloadRecovery.AfterRecoverLocalEntries");
+    return rc;
 }
 
 Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs)
@@ -912,7 +971,6 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     }
     // If not healthy, it means that we still not give up reconciliation, so lock it.
     WriteLock haveRecon(IsHealthy() ? nullptr : &reconFlag_);
-    Status rc;
     if (req.event_timestamp() > timestamp_) {
         numRecon_ = 0;
         timestamp_ = req.event_timestamp();
@@ -947,22 +1005,22 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     if (!needDelGrefIds.empty() && FLAGS_enable_reconciliation) {
         auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(needDelGrefIds);
         Status result = ReconciliationDecrRef(objKeysGrpByMaster);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(result, "Decrease gref in master failed. Error: " + rc.ToString());
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(result, "Decrease gref in master failed. Error: " + result.ToString());
     }
     LOG(INFO) << "Reconciliation with master " << req.source_address() << " is done.";
-    RETURN_IF_NOT_OK(GetReadyToWork(req));
+    RETURN_IF_NOT_OK(GetReadyToWork(req.is_restart()));
 
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
+Status WorkerOCServiceImpl::GetReadyToWork(bool isRestart)
 {
     int hashWorkerNum = 0;
     RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum, true));
     if ((hashWorkerNum >= 0 && hashWorkerNum == numRecon_) || (hashWorkerNum < 0 && numRecon_ == 1)) {
         LOG(INFO) << "Reconciliation with all masters is done.";
         RETURN_IF_NOT_OK(CheckWaitNodeTableComplete());
-        if (req.is_restart()) {
+        if (isRestart) {
             LOG(INFO) << "Restart finish. Set health file.";
             if (!etcdCM_->IsCreateFirstLease() && etcdCM_->IsEtcdAvailableWhenStart()) {
                 RETURN_STATUS(K_NOT_READY,

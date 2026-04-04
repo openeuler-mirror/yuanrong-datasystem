@@ -21,6 +21,7 @@
 
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -28,50 +29,65 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/common/util/status_helper.h"
-
-DS_DEFINE_bool(enable_metadata_recovery, false, "enable metadata recovery when worker failed");
+#include "datasystem/worker/object_cache/device/device_obj_cache.h"
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+bool IsRestartRecoverableWriteMode(uint32_t writeMode)
+{
+    auto mode = static_cast<WriteMode>(writeMode);
+    return mode == WriteMode::WRITE_THROUGH_L2_CACHE || mode == WriteMode::WRITE_BACK_L2_CACHE
+           || mode == WriteMode::WRITE_BACK_L2_CACHE_EVICT;
+}
+}  // namespace
+
 MetaDataRecoveryManager::MetaDataRecoveryManager(
     const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, EtcdClusterManager *etcdCM,
-    const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager)
+    const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
+    uint64_t metadataSize)
     : localAddress_(localAddress),
       objectTable_(objectTable),
       etcdCM_(etcdCM),
-      workerMasterApiManager_(workerMasterApiManager)
+      workerMasterApiManager_(workerMasterApiManager),
+      metadataSize_(metadataSize)
 {
 }
 
-Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<std::string> &objectKeys,
-                                                std::vector<std::string> &failedIds, std::string stanbyMasterAddr)
+MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadataWithSummary(
+    const std::vector<std::string> &objectKeys, std::string stanbyAddr)
 {
-    RETURN_OK_IF_TRUE(objectKeys.empty());
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
-    CHECK_FAIL_RETURN_STATUS(objectTable_ != nullptr, K_RUNTIME_ERROR, "objectTable is null");
-    CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR, "workerMasterApiManager is null");
-    LOG(INFO) << "recovery meta begin";
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> groupedByMaster;
-    if (!stanbyMasterAddr.empty()) {
-        MetaAddrInfo info;
-        HostPort masterAddr;
-        masterAddr.ParseString(stanbyMasterAddr);
-        info.SetDbName(etcdCM_->GetWorkerIdByWorkerAddr(stanbyMasterAddr));
-        info.SetAddress(masterAddr);
-        groupedByMaster[info] = { objectKeys.begin(), objectKeys.end() };
-    } else {
-        groupedByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    RecoverySummary summary;
+    summary.requestedCount = objectKeys.size();
+    if (objectKeys.empty()) {
+        return summary;
     }
-    using GroupItem = decltype(groupedByMaster)::value_type;
+    if (etcdCM_ == nullptr) {
+        summary.status = Status(K_RUNTIME_ERROR, "etcdCM is null");
+        summary.failedIds = objectKeys;
+        return summary;
+    }
+    if (objectTable_ == nullptr) {
+        summary.status = Status(K_RUNTIME_ERROR, "objectTable is null");
+        summary.failedIds = objectKeys;
+        return summary;
+    }
+    if (workerMasterApiManager_ == nullptr) {
+        summary.status = Status(K_RUNTIME_ERROR, "workerMasterApiManager is null");
+        summary.failedIds = objectKeys;
+        return summary;
+    }
+
+    auto groupedByMaster = BuildGroupedByMaster(objectKeys, stanbyAddr);
     std::vector<const GroupItem *> groupedByMasterKeys;
     groupedByMasterKeys.reserve(groupedByMaster.size());
     for (const auto &item : groupedByMaster) {
         groupedByMasterKeys.emplace_back(&item);
     }
+    summary.groupedMasterCount = groupedByMasterKeys.size();
 
     std::vector<DispatchResult> results(groupedByMasterKeys.size());
-    RETURN_IF_NOT_OK(Parallel::ParallelFor<size_t>(
+    Status parallelRc = Parallel::ParallelFor<size_t>(
         0, groupedByMasterKeys.size(),
         [this, &groupedByMasterKeys, &results](size_t start, size_t end) {
             for (size_t idx = start; idx < end; ++idx) {
@@ -79,18 +95,191 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<std::string> &
                 results[idx] = SendRecoverRequest(group->first, group->second);
             }
         },
-        1));
+        1);
+    if (parallelRc.IsError()) {
+        summary.status = parallelRc;
+        summary.failedIds = objectKeys;
+        return summary;
+    }
 
-    Status lastRrr = Status::OK();
-    for (auto &result : results) {
-        for (const auto &objectKey : result.failedIds) {
-            failedIds.emplace_back(objectKey);
+    MergeDispatchResults(results, summary);
+    LogRecoverySummary(summary, "Recover metadata");
+    return summary;
+}
+
+MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadataWithSummary(
+    const std::vector<ObjectMetaPb> &metas)
+{
+    RecoverySummary summary;
+    summary.requestedCount = metas.size();
+    auto appendFailedMetas = [&summary, &metas]() {
+        for (const auto &meta : metas) {
+            summary.failedIds.emplace_back(meta.object_key());
         }
+    };
+    if (metas.empty()) {
+        return summary;
+    }
+    if (etcdCM_ == nullptr || workerMasterApiManager_ == nullptr) {
+        summary.status = etcdCM_ == nullptr ? Status(K_RUNTIME_ERROR, "etcdCM is null")
+                                            : Status(K_RUNTIME_ERROR, "workerMasterApiManager is null");
+        appendFailedMetas();
+        return summary;
+    }
+
+    std::vector<std::string> objectKeys;
+    std::unordered_map<std::string, std::vector<const ObjectMetaPb *>> metasByObjectKey;
+    BuildMetaIndex(metas, objectKeys, metasByObjectKey, summary);
+    if (objectKeys.empty()) {
+        return summary;
+    }
+
+    auto groupedByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    std::vector<const GroupItem *> groupedByMasterKeys;
+    groupedByMasterKeys.reserve(groupedByMaster.size());
+    for (const auto &item : groupedByMaster) {
+        groupedByMasterKeys.emplace_back(&item);
+    }
+    summary.groupedMasterCount = groupedByMasterKeys.size();
+
+    std::vector<DispatchResult> results(groupedByMasterKeys.size());
+    Status parallelRc = Parallel::ParallelFor<size_t>(
+        0, groupedByMasterKeys.size(),
+        [this, &groupedByMasterKeys, &metasByObjectKey, &results](size_t start, size_t end) {
+            for (size_t idx = start; idx < end; ++idx) {
+                const auto *group = groupedByMasterKeys[idx];
+                auto groupedMetas = BuildGroupedMetas(group->second, metasByObjectKey);
+                results[idx] = SendRecoverRequest(group->first, groupedMetas);
+            }
+        },
+        1);
+    if (parallelRc.IsError()) {
+        summary.status = parallelRc;
+        appendFailedMetas();
+        return summary;
+    }
+
+    MergeDispatchResults(results, summary);
+    LogRecoverySummary(summary, "Recover metadata from metas");
+    return summary;
+}
+
+MetaDataRecoveryManager::GroupedByMaster MetaDataRecoveryManager::BuildGroupedByMaster(
+    const std::vector<std::string> &objectKeys, const std::string &stanbyAddr) const
+{
+    if (stanbyAddr.empty()) {
+        return etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    }
+    MetaAddrInfo info;
+    HostPort masterAddr;
+    masterAddr.ParseString(stanbyAddr);
+    info.SetDbName(etcdCM_->GetWorkerIdByWorkerAddr(stanbyAddr));
+    info.SetAddress(masterAddr);
+    return { { info, { objectKeys.begin(), objectKeys.end() } } };
+}
+
+void MetaDataRecoveryManager::MergeDispatchResults(const std::vector<DispatchResult> &results,
+                                                   RecoverySummary &summary) const
+{
+    for (const auto &result : results) {
+        summary.recoveredCount += result.recoveredCount;
+        summary.failedIds.insert(summary.failedIds.end(), result.failedIds.begin(), result.failedIds.end());
         if (result.status.IsError()) {
-            lastRrr = result.status;
+            summary.status = result.status;
         }
     }
-    return lastRrr;
+}
+
+void MetaDataRecoveryManager::BuildMetaIndex(
+    const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &objectKeys,
+    std::unordered_map<std::string, std::vector<const ObjectMetaPb *>> &metasByObjectKey,
+    RecoverySummary &summary) const
+{
+    objectKeys.reserve(metas.size());
+    for (const auto &meta : metas) {
+        if (meta.object_key().empty()) {
+            summary.failedIds.emplace_back("");
+            if (summary.status.IsOk()) {
+                summary.status = Status(K_INVALID, "recovery metadata contains empty object key");
+            }
+            continue;
+        }
+        objectKeys.emplace_back(meta.object_key());
+        metasByObjectKey[meta.object_key()].emplace_back(&meta);
+    }
+}
+
+std::vector<ObjectMetaPb> MetaDataRecoveryManager::BuildGroupedMetas(
+    const std::vector<std::string> &objectKeys,
+    const std::unordered_map<std::string, std::vector<const ObjectMetaPb *>> &metasByObjectKey) const
+{
+    std::vector<ObjectMetaPb> groupedMetas;
+    for (const auto &objectKey : objectKeys) {
+        auto iter = metasByObjectKey.find(objectKey);
+        if (iter == metasByObjectKey.end()) {
+            continue;
+        }
+        for (const auto *meta : iter->second) {
+            groupedMetas.emplace_back(*meta);
+        }
+    }
+    return groupedMetas;
+}
+
+void MetaDataRecoveryManager::LogRecoverySummary(const RecoverySummary &summary, const std::string &prefix) const
+{
+    if (summary.status.IsError()) {
+        LOG(WARNING) << FormatString(
+            "%s finished with partial failures. requested: %zu, recovered: %zu, "
+            "failed: %zu, grouped masters: %zu, status: %s",
+            prefix, summary.requestedCount, summary.recoveredCount, summary.failedIds.size(),
+            summary.groupedMasterCount, summary.status.ToString());
+        return;
+    }
+    LOG(INFO) << FormatString("%s finished. requested: %zu, recovered: %zu, grouped masters: %zu", prefix,
+                              summary.requestedCount, summary.recoveredCount, summary.groupedMasterCount);
+}
+
+Status MetaDataRecoveryManager::RecoverLocalEntries(const std::vector<ObjectMetaPb> &recoverMetas,
+                                                    std::vector<std::string> &recoveredObjectKeys) const
+{
+    RETURN_OK_IF_TRUE(recoverMetas.empty());
+    CHECK_FAIL_RETURN_STATUS(objectTable_ != nullptr, K_RUNTIME_ERROR, "objectTable is null");
+
+    for (const auto &meta : recoverMetas) {
+        if (meta.object_key().empty()) {
+            LOG(WARNING) << "Skip restart recovery metadata with empty object key.";
+            continue;
+        }
+        if (static_cast<DataFormat>(meta.config().data_format()) != DataFormat::BINARY) {
+            LOG(INFO) << FormatString("[ObjectKey %s] Skip non-binary restart recovery metadata.", meta.object_key());
+            continue;
+        }
+        if (!IsRestartRecoverableWriteMode(meta.config().write_mode())) {
+            LOG(INFO) << FormatString("[ObjectKey %s] Skip non-L2 restart recovery metadata.", meta.object_key());
+            continue;
+        }
+        if (static_cast<ObjectLifeState>(meta.life_state()) == ObjectLifeState::OBJECT_INVALID) {
+            LOG(INFO) << FormatString("[ObjectKey %s] Skip invalid restart recovery metadata.", meta.object_key());
+            continue;
+        }
+
+        std::shared_ptr<SafeObjType> entry;
+        bool isInsert = false;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectTable_->ReserveGetAndLock(meta.object_key(), entry, isInsert),
+                                         FormatString("[ObjectKey %s] ReserveGetAndLock failed.", meta.object_key()));
+        Raii unlock([&entry]() { entry->WUnlock(); });
+
+        SetObjectEntryAccordingToMeta(meta, metadataSize_, *entry);
+        (*entry)->SetAddress(localAddress_.ToString());
+        (*entry)->stateInfo.SetPrimaryCopy(true);
+        recoveredObjectKeys.emplace_back(meta.object_key());
+
+        LOG(INFO) << FormatString(
+            "[ObjectKey %s] Recover restart metadata success, primary copy: %d, primary address: %s, local worker: %s",
+            meta.object_key(), true, localAddress_.ToString(), localAddress_.ToString());
+    }
+    return Status::OK();
 }
 
 bool MetaDataRecoveryManager::FillRecoveredMeta(const std::string &objectKey, ObjectMetaPb &metadata) const
@@ -108,23 +297,42 @@ bool MetaDataRecoveryManager::FillRecoveredMeta(const std::string &objectKey, Ob
     if ((*currSafeObj)->IsBinary() && (*currSafeObj)->IsInvalid()) {
         return false;
     }
+
     metadata.set_object_key(objectKey);
     metadata.set_data_size((*currSafeObj)->GetDataSize());
-    metadata.set_life_state(static_cast<uint64_t>((*currSafeObj)->GetLifeState()));
+    metadata.set_life_state(static_cast<uint32_t>((*currSafeObj)->GetLifeState()));
     metadata.set_version((*currSafeObj)->GetCreateTime());
     metadata.set_is_recovered(true);
+
     ConfigPb *configPb = metadata.mutable_config();
     configPb->set_write_mode(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>((*currSafeObj)->stateInfo.GetDataFormat()));
+    configPb->set_consistency_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetConsistencyType()));
+    configPb->set_cache_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetCacheType()));
+    configPb->set_is_replica(!(*currSafeObj)->stateInfo.IsPrimaryCopy());
     if ((*currSafeObj)->stateInfo.IsPrimaryCopy()) {
         metadata.set_primary_address(localAddress_.ToString());
+    } else if (!(*currSafeObj)->GetAddress().empty()) {
+        metadata.set_primary_address((*currSafeObj)->GetAddress());
+    }
+    if ((*currSafeObj)->stateInfo.GetDataFormat() == DataFormat::HETERO) {
+        auto *devObj = SafeObjType::GetDerived<DeviceObjCache>(*currSafeObj);
+        if (devObj == nullptr) {
+            LOG(WARNING) << FormatString("[ObjectKey %s] FillRecoveredMeta found HETERO object without DeviceObjCache.",
+                                         objectKey);
+            return false;
+        }
+        auto *deviceInfo = metadata.mutable_device_info();
+        deviceInfo->set_device_id(devObj->GetDeviceIdx());
+        deviceInfo->set_offset(devObj->GetOffset());
     }
     return true;
 }
 
-bool MetaDataRecoveryManager::InitRecoverApi(
-    const MetaAddrInfo &metaAddrInfo, const std::vector<std::string> &objectKeys, HostPort &addr,
-    std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi, DispatchResult &result) const
+bool MetaDataRecoveryManager::InitRecoverApi(const MetaAddrInfo &metaAddrInfo,
+                                             const std::vector<std::string> &objectKeys, HostPort &addr,
+                                             std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                                             DispatchResult &result) const
 {
     addr = metaAddrInfo.GetAddressAndSaveDbName();
     workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(addr);
@@ -197,6 +405,48 @@ MetaDataRecoveryManager::DispatchResult MetaDataRecoveryManager::SendRecoverRequ
             continue;
         }
         batchObjectKeys.emplace_back(objectKey);
+        if (batchObjectKeys.size() >= maxBatchSize) {
+            SendRecoverBatch(metaAddrInfo, addr, workerMasterApi, req, batchObjectKeys, result);
+        }
+    }
+    SendRecoverBatch(metaAddrInfo, addr, workerMasterApi, req, batchObjectKeys, result);
+    return result;
+}
+
+MetaDataRecoveryManager::DispatchResult MetaDataRecoveryManager::SendRecoverRequest(
+    const MetaAddrInfo &metaAddrInfo, const std::vector<ObjectMetaPb> &metas) const
+{
+    DispatchResult result;
+    result.requestedCount = metas.size();
+    auto addr = metaAddrInfo.GetAddressAndSaveDbName();
+    std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(addr);
+    if (workerMasterApi == nullptr) {
+        for (const auto &meta : metas) {
+            result.failedIds.emplace_back(meta.object_key());
+        }
+        result.status = Status(K_RUNTIME_ERROR, "get worker master api failed");
+        LOG(ERROR) << "Failed to get worker master api, master addr: " << addr.ToString();
+        return result;
+    }
+
+    constexpr size_t maxBatchSize = 500;
+    master::PushMetaToMasterReqPb req;
+    req.set_address(localAddress_.ToString());
+    std::vector<std::string> batchObjectKeys;
+    batchObjectKeys.reserve(maxBatchSize);
+
+    for (const auto &meta : metas) {
+        if (meta.object_key().empty()) {
+            result.failedIds.emplace_back("");
+            if (result.status.IsOk()) {
+                result.status = Status(K_INVALID, "recovery metadata contains empty object key");
+            }
+            continue;
+        }
+        ObjectMetaPb *metaPb = req.add_metas();
+        *metaPb = meta;
+        metaPb->set_is_recovered(true);
+        batchObjectKeys.emplace_back(meta.object_key());
         if (batchObjectKeys.size() >= maxBatchSize) {
             SendRecoverBatch(metaAddrInfo, addr, workerMasterApi, req, batchObjectKeys, result);
         }

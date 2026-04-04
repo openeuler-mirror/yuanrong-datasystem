@@ -117,6 +117,51 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "metadata_recovery_selector",
+    srcs = [
+        "metadata_recovery_selector.cpp",
+    ],
+    hdrs = [
+        "metadata_recovery_selector.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/hash_ring:hash_ring_allocator",
+        "//src/datasystem/worker/object_cache:object_kv",
+    ],
+)
+
+ds_cc_library(
+    name = "metadata_recovery_manager",
+    srcs = [
+        "metadata_recovery_manager.cpp",
+    ],
+    hdrs = [
+        "metadata_recovery_manager.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/parallel:common_parallel",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/master:meta_addr_info",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+    ],
+)
+
+ds_cc_library(
     name = "worker_oc_service_impl",
     srcs = [
         "metadata_recovery_manager.cpp",
@@ -189,6 +234,8 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:async_rpc_request_manager",
         "//src/datasystem/worker/object_cache:async_send_manager",
         "//src/datasystem/worker/object_cache:async_update_location_manager",
+        "//src/datasystem/worker/object_cache:metadata_recovery_manager",
+        "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",

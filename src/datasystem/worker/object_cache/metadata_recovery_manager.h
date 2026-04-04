@@ -15,13 +15,16 @@
  */
 
 /**
- * Description: Manager for recovering object metadata from worker to master.
+ * Description: Manager for worker-side metadata recovery.
  */
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_METADATA_RECOVERY_MANAGER_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_METADATA_RECOVERY_MANAGER_H
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "datasystem/common/util/net_util.h"
@@ -38,25 +41,65 @@ namespace datasystem {
 namespace object_cache {
 class MetaDataRecoveryManager {
 public:
+    struct RecoverySummary {
+        Status status = Status::OK();
+        size_t requestedCount{ 0 };
+        size_t groupedMasterCount{ 0 };
+        size_t recoveredCount{ 0 };
+        std::vector<std::string> failedIds;
+    };
+
     MetaDataRecoveryManager(
         const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, EtcdClusterManager *etcdCM,
-        const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager);
+        const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
+        uint64_t metadataSize = 0);
 
     ~MetaDataRecoveryManager() = default;
+
     /**
-     * @brief Recover metadata for object keys. Requests to different masters are dispatched concurrently.
+     * @brief Recover metadata for object keys and return aggregated summary for later restart-flow decisions.
      * @param[in] objectKeys Object keys to recover.
-     * @param[out] failedIds Object keys failed because master is unreachable.
+     * @return Summary of the recovery attempt.
+     */
+    RecoverySummary RecoverMetadataWithSummary(const std::vector<std::string> &objectKeys, std::string stanbyAddr);
+
+    /**
+     * @brief Recover metadata for explicit object metas and return aggregated summary.
+     * @param[in] metas Object metas to recover.
+     * @return Summary of the recovery attempt.
+     */
+    RecoverySummary RecoverMetadataWithSummary(const std::vector<ObjectMetaPb> &metas);
+
+    /**
+     * @brief Rebuild local object-table entries from restart/preload metadata.
+     * @param[in] recoverMetas Recovery metadata produced by restart or preload flow.
+     * @param[out] recoveredObjectKeys Object keys whose local entries were rebuilt.
      * @return Status of the call.
      */
-    Status RecoverMetadata(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedIds,
-                           std::string stanbyMasterAddr = "");
+    Status RecoverLocalEntries(const std::vector<ObjectMetaPb> &recoverMetas,
+                               std::vector<std::string> &recoveredObjectKeys) const;
 
 private:
     struct DispatchResult {
         Status status = Status::OK();
+        size_t requestedCount{ 0 };
+        size_t recoveredCount{ 0 };
         std::vector<std::string> failedIds;
     };
+
+    using GroupedByMaster = std::unordered_map<MetaAddrInfo, std::vector<std::string>>;
+    using GroupItem = GroupedByMaster::value_type;
+
+    GroupedByMaster BuildGroupedByMaster(const std::vector<std::string> &objectKeys,
+                                         const std::string &stanbyAddr) const;
+    void MergeDispatchResults(const std::vector<DispatchResult> &results, RecoverySummary &summary) const;
+    void BuildMetaIndex(const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &objectKeys,
+                        std::unordered_map<std::string, std::vector<const ObjectMetaPb *>> &metasByObjectKey,
+                        RecoverySummary &summary) const;
+    std::vector<ObjectMetaPb> BuildGroupedMetas(
+        const std::vector<std::string> &objectKeys,
+        const std::unordered_map<std::string, std::vector<const ObjectMetaPb *>> &metasByObjectKey) const;
+    void LogRecoverySummary(const RecoverySummary &summary, const std::string &prefix) const;
 
     bool FillRecoveredMeta(const std::string &objectKey, ObjectMetaPb &metadata) const;
     bool InitRecoverApi(const MetaAddrInfo &metaAddrInfo, const std::vector<std::string> &objectKeys, HostPort &addr,
@@ -68,11 +111,13 @@ private:
                           DispatchResult &result) const;
     DispatchResult SendRecoverRequest(const MetaAddrInfo &metaAddrInfo,
                                       const std::vector<std::string> &objectKeys) const;
+    DispatchResult SendRecoverRequest(const MetaAddrInfo &metaAddrInfo, const std::vector<ObjectMetaPb> &metas) const;
 
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
     EtcdClusterManager *etcdCM_{ nullptr };
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
+    uint64_t metadataSize_{ 0 };
 };
 }  // namespace object_cache
 }  // namespace datasystem

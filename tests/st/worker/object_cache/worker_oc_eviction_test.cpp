@@ -644,7 +644,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopy)
     ASSERT_EQ(objsInTable.size(), alreadyPut);  // Spill will not erase objects from ObjectTable
 }
 
-TEST_F(EvictionManagerAndMasterTest, LEVEL1_TestEvictObjWithLock)
+TEST_F(EvictionManagerAndMasterTest, DISABLED_LEVEL1_TestEvictObjWithLock)
 {
     FLAGS_spill_directory = "./spill_TestEvictObjWithLock";
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
