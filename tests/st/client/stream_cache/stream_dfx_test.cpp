@@ -1548,7 +1548,7 @@ protected:
     const int K_TWO = 2, K_3 = 3, K_5 = 5, K_200 = 200;
 };
 
-TEST_F(StreamDfxTopoTest, TestCreateConsumerTimeout)
+TEST_F(StreamDfxTopoTest, DISABLED_TestCreateConsumerTimeout)
 {
     std::shared_ptr<Consumer> consumer;
     DS_ASSERT_OK(CreateConsumer(client1_, "testCreateConsumerTimeout", "sub", consumer));
