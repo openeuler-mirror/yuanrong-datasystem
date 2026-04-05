@@ -127,13 +127,6 @@ public:
     void InitServiceImpl();
 
     /**
-     * @brief Reserved worker-side integration point for post-preload metadata rebuild.
-     * @param[in] recoverMetas Recovery metadata produced by future preload flow on the local worker.
-     * @return Status of the call.
-     */
-    Status PostPreloadRecovery(const std::vector<ObjectMetaPb> &recoverMetas);
-
-    /**
      * @brief Before calling RPC method, this method would be call to check whether this worker is doing reconciliation.
      * If it is doing reconciliation (write lock acquired), return error;
      * otherwise, acquire read lock to block reconciliation but allows other common RPCs.
@@ -584,6 +577,48 @@ public:
         std::shared_ptr<ServerUnaryWriterReader<GetDeviceObjectRspPb, GetDeviceObjectReqPb>> serverApi) override;
 
     /**
+     * @brief Get match object keys.
+     * @param[in] matchFunc The function to match object.
+     * @param[out] objKeys All object keys match.
+     */
+    void GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
+                         std::vector<std::string> &nooL2CacheobjKeys, bool includeL2CacheIds);
+
+    /**
+     * @brief Recover metadata of the input object keys to master.
+     * @param[in] objectKeys Object keys to recover.
+     * @param[out] failedIds Failed object keys.
+     * @param[in] standbyWorker Standby worker address.
+     * @return Status of the call.
+     */
+    Status RecoverMetadataOfData(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedIds,
+                                 std::string standbyWorker);
+
+    /**
+     * @brief Recover metadata associated with a restarted worker.
+     * @param[in] workerAddr Restarted worker address.
+     * @return Status of the call.
+     */
+    Status RecoverMetadataOfRestartedWorker(const std::string &workerAddr);
+
+    /**
+     * @brief Collect worker UUIDs whose metadata should be recovered after restart.
+     * @param[in] workerAddr Restarted worker address.
+     * @param[in] restartWorkerUuid Restarted worker uuid.
+     * @param[in] ringPb Current hash ring protobuf.
+     * @param[out] recoverUuids UUIDs to recover.
+     */
+    void CollectRecoveryWorkerUuidsForRestart(const std::string &workerAddr, const std::string &restartWorkerUuid,
+                                              const HashRingPb &ringPb, std::vector<std::string> &recoverUuids);
+
+    /**
+     * @brief Handle worker restart event for metadata recovery.
+     * @param[in] workerAddr Restarted worker address.
+     * @return Status of the call.
+     */
+    Status HandleNodeRestartEvent(const std::string &workerAddr);
+
+    /**
      * @brief ClearObject for scale down worker.
      * @param objKeys need to clear objectKeys.
      * @param req clear object req.
@@ -850,6 +885,14 @@ private:
     Status DeleteCopyNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp);
 
     /**
+     * @brief Delete object from L2 persistence only.
+     * @param[in] req The rpc request protobuf.
+     * @param[out] rsp The rpc response protobuf.
+     * @return Status of the call.
+     */
+    Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp);
+
+    /**
      * @brief Delete object if memory ref count is 0, otherwise set buffer invalid.
      * @param[in] objectKey The object key.
      * @param[in] version The version of the object.
@@ -970,40 +1013,6 @@ private:
     void GetAllObjectKeys(std::vector<std::string> &objectKeys);
 
     /**
-     * @brief Recover metadata of the matched data to master.
-     * @param[in] objectKeys The matched object keys.
-     * @param[out] failedIds The object keys that fail to recover and still need local cleanup.
-     * @return Status of the call.
-     */
-    Status RecoverMetadataOfData(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedIds,
-                                 std::string standby_worker);
-
-    /**
-     * @brief Recover metadata for objects that belong to the restarted worker.
-     * @param[in] workerAddr Restarted worker address.
-     * @return Status of the call.
-     */
-    Status RecoverMetadataOfRestartedWorker(const std::string &workerAddr);
-
-    /**
-     * @brief Process node restart event and trigger metadata recovery when needed.
-     * @param[in] workerAddr Restarted worker address from event.
-     * @return Status of the call.
-     */
-    Status HandleNodeRestartEvent(const std::string &workerAddr);
-
-    /**
-     * @brief Collect worker uuids whose objects should be rebuilt after a worker restart.
-     * @param[in] workerAddr The restarted worker address.
-     * @param[in] restartWorkerUuid The worker uuid of the restarted worker.
-     * @param[in] ringPb Current hash ring snapshot.
-     * @param[out] recoverUuids Worker uuids whose objects should be rebuilt.
-     */
-    static void CollectRecoveryWorkerUuidsForRestart(const std::string &workerAddr,
-                                                     const std::string &restartWorkerUuid, const HashRingPb &ringPb,
-                                                     std::vector<std::string> &recoverUuids);
-
-    /**
      * @brief Fill object metadata.
      * @param[in] objectKey The id of object.
      * @param[in] targetMetaAddrInfo The meta address information.
@@ -1015,10 +1024,10 @@ private:
 
     /**
      * @brief Check node table; remove "restart" tag; set health file.
-     * @param[in] isRestart Whether the current reconciliation belongs to worker restart.
+     * @param[in] req PushMetaToWorkerReqPb request.
      * @return OK if success.
      */
-    Status GetReadyToWork(bool isRestart);
+    Status GetReadyToWork(const PushMetaToWorkerReqPb &req);
 
     /**
      * @brief Check if object is in rollback progress.

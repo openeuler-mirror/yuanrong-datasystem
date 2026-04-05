@@ -173,14 +173,6 @@ message GetReqPb {
   uint64 ub_buffer_size = 12;
   int64 request_timeout = 13;
 
-  // for server H2D op
-  message H2DReqInfo {
-    uint32 dev_id = 1;
-    uint64 target_size = 2;
-    bytes target_device_handle = 3;
-  }
-  repeated H2DReqInfo h2d_infos = 14;
-
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
   string signature = 101;
@@ -347,6 +339,24 @@ message DeleteObjectReqPb {
 message DeleteObjectRspPb {
   repeated string failed_object_keys = 1;
   ErrorInfoPb last_rc = 2;
+}
+
+message DeletePersistenceObjectReqPb {
+  string object_key = 1;
+  uint64 object_version = 2;
+  uint64 max_version_to_delete = 3;
+  bool delete_all_version = 4;
+  uint64 async_elapse = 5;
+  bool list_incomplete_versions = 6;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message DeletePersistenceObjectRspPb {
+  ErrorInfoPb last_rc = 1;
 }
 
 message LpushRequestPb {

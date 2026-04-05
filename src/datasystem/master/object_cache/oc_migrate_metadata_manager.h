@@ -32,6 +32,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/master/object_cache/oc_global_cache_delete_manager.h"
 #include "datasystem/master/replica_manager.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -200,10 +201,8 @@ private:
      * @param[out] meta Need fill meta.
      * @return True if fill success.
      */
-    bool TryFillGlobalCacheDeleteMeta(
-        const std::string &objectKey,
-        const std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>> &globalCacheDeletes,
-        MetaForMigrationPb &meta);
+    bool TryFillGlobalCacheDeleteMeta(const std::string &objectKey, const GlobalDeleteInfoMap &globalCacheDeletes,
+                                      MetaForMigrationPb &meta);
 
     /**
      * @brief Try fill migrate nested object references.

@@ -28,11 +28,7 @@
 DS_DECLARE_string(l2_cache_type);
 
 namespace datasystem {
-enum class L2StorageType : uint32_t {
-    NONE = 0,
-    OBS = 1u,
-    SFS = 1u << 2
-};
+enum class L2StorageType : uint32_t { NONE = 0, OBS = 1u, SFS = 1u << 2, DISTRIBUTED_DISK = 1u << 3 };
 ENABLE_BITMASK_ENUM_OPS(L2StorageType);
 
 L2StorageType GetCurrentStorageType();

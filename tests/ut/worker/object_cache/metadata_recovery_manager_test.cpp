@@ -28,11 +28,13 @@
 #include "common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/master/meta_addr_info.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #define private public
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #undef private
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 using namespace ::testing;
@@ -108,10 +110,23 @@ public:
         CommonTest::SetUp();
 
         localAddress_ = HostPort("127.0.0.1", 18500);
+        DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(64UL * 1024UL * 1024UL));
         objectTable_ = std::make_shared<ObjectTable>();
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_);
+        memCpyThreadPool_ = std::make_shared<ThreadPool>(1);
         workerMasterApiManager_ = std::make_shared<TestWorkerMasterApiManager>(localAddress_);
         manager_ = std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, nullptr,
-                                                             workerMasterApiManager_, 128);
+                                                             workerMasterApiManager_, 128, evictionManager_,
+                                                             memCpyThreadPool_);
+    }
+
+    void TearDown() override
+    {
+        manager_.reset();
+        memCpyThreadPool_.reset();
+        evictionManager_.reset();
+        datasystem::memory::Allocator::Instance()->Shutdown();
+        CommonTest::TearDown();
     }
 
     void AddObject(const std::string &objectKey, uint64_t version = 1, uint64_t dataSize = 1024)
@@ -129,6 +144,8 @@ public:
 protected:
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
+    std::shared_ptr<ThreadPool> memCpyThreadPool_;
     std::shared_ptr<TestWorkerMasterApiManager> workerMasterApiManager_;
     std::unique_ptr<MetaDataRecoveryManager> manager_;
 };
@@ -219,6 +236,32 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntries)
 
     std::shared_ptr<SafeObjType> skippedEntry;
     EXPECT_EQ(objectTable_->Get("obj_mem_only", skippedEntry).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesLoadsPayloadIntoMemory)
+{
+    std::vector<ObjectMetaPb> recoverMetas;
+    recoverMetas.emplace_back(BuildRecoverMeta("tenant/payload_obj", WriteMode::WRITE_THROUGH_L2_CACHE));
+    auto content = std::make_shared<std::stringstream>();
+    const std::string expected = "payload_for_restart_recovery";
+    (*content) << expected;
+    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{
+        { "tenant/payload_obj", content }
+    };
+
+    std::vector<std::string> recoveredObjectKeys;
+    DS_ASSERT_OK(manager_->RecoverLocalEntries(recoverMetas, recoveredContents, recoveredObjectKeys));
+    ASSERT_EQ(recoveredObjectKeys, std::vector<std::string>({ "tenant/payload_obj" }));
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get("tenant/payload_obj", entry));
+    ASSERT_TRUE(entry->RLock().IsOk());
+    ASSERT_NE((*entry)->GetShmUnit(), nullptr);
+    ASSERT_EQ((*entry)->GetDataSize(), expected.size());
+    ASSERT_FALSE((*entry)->stateInfo.IsCacheInvalid());
+    auto *data = static_cast<const char *>((*entry)->GetShmUnit()->GetPointer()) + (*entry)->GetMetadataSize();
+    EXPECT_EQ(std::string(data, expected.size()), expected);
+    entry->RUnlock();
 }
 
 class MetadataRecoverySelectorTest : public CommonTest {

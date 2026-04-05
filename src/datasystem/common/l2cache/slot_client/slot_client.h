@@ -22,11 +22,15 @@
 #define DATASYSTEM_COMMON_L2CACHE_SLOT_CLIENT_SLOT_CLIENT_H
 
 #include <cstdint>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/l2cache/storage_client.h"
 #include "datasystem/object/object_enum.h"
@@ -138,6 +142,14 @@ public:
     std::string GetRequestSuccessRate() const override;
 
 private:
+    void StartBackgroundCompactThread();
+    void StopBackgroundCompactThread();
+    void BackgroundCompactLoop();
+    bool ShouldStopBackgroundCompactThread();
+    void WakeBackgroundCompactThread();
+    int64_t ComputeNextCompactDelayMs() const;
+    std::vector<uint32_t> CollectCompactionCandidates() const;
+
     uint32_t GetSlotId(const std::string &objectKey) const;
     Slot &GetSlot(uint32_t slotId);
     std::string GetSlotPath(uint32_t slotId) const;
@@ -150,6 +162,11 @@ private:
     mutable std::shared_mutex mu_;
     // Protected by mu_. One Slot is created lazily for each slot id.
     std::unordered_map<uint32_t, std::unique_ptr<Slot>> slots_;
+    mutable std::mutex compactMu_;
+    std::condition_variable compactCv_;
+    bool stopCompactThread_{ false };
+    uint64_t compactWakeupSeq_{ 0 };
+    std::thread compactThread_;
 };
 }  // namespace datasystem
 

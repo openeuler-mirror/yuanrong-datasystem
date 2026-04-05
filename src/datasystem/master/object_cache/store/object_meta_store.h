@@ -167,7 +167,7 @@ public:
      * @return Status of the call.
      */
     Status AddObjectLocation(const std::string &objectKey, const std::string &workerAddr,
-                                const std::string &ackPersistenceVal = "");
+                             const std::string &ackPersistenceVal = "");
 
     /**
      * @brief Add object location to rocksdb.
@@ -176,7 +176,7 @@ public:
      * @return Status of the call.
      */
     Status AddObjectLocations(const std::unordered_map<std::string, std::string> &keyLocations,
-                                const std::string &ackPersistenceVal);
+                              const std::string &ackPersistenceVal);
 
     /**
      * @brief Remove object location from rocksdb.
@@ -319,7 +319,7 @@ public:
      * @return Status of the call.
      */
     Status AddDeletedObjectWithDelVersion(const std::string &key, uint64_t version, uint64_t delVersion,
-                                          WriteType type);
+                                          const std::string &targetWorkerAddress = "", WriteType type = ROCKS_ONLY);
 
     /**
      * @brief Remove the id of global cache to delete.
@@ -328,6 +328,11 @@ public:
      * @return Status of the call.
      */
     Status RemoveDeletedObject(const std::string &objectKey, uint64_t version);
+
+    static std::string EncodeDeletedObjectValue(uint64_t delVersion, const std::string &targetWorkerAddress);
+
+    static bool DecodeDeletedObjectValue(const std::string &objectKey, const std::string &encodedValue,
+                                         uint64_t &delVersion, std::string &targetWorkerAddress);
 
     /**
      * @brief Get hash and table name.

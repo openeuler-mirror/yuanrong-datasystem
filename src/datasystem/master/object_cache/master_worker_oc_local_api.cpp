@@ -30,7 +30,7 @@
 
 namespace datasystem {
 namespace master {
-std::atomic<int64_t> MasterLocalWorkerOCApi::g_localTagGen_{1};
+std::atomic<int64_t> MasterLocalWorkerOCApi::g_localTagGen_{ 1 };
 // MasterLocalWorkerOCApi methods
 
 MasterLocalWorkerOCApi::MasterLocalWorkerOCApi(object_cache::MasterWorkerOCServiceImpl *service,
@@ -61,6 +61,13 @@ Status MasterLocalWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectRe
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     return workerOC_->DeleteNotification(*req, rsp);
+}
+
+Status MasterLocalWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
+                                                       DeletePersistenceObjectRspPb &rsp)
+{
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
+    return workerOC_->DeletePersistenceObject(*req, rsp);
 }
 
 Status MasterLocalWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag)

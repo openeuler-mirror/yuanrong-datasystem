@@ -23,9 +23,12 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <fcntl.h>
 #include <unistd.h>
+
+#include <chrono>
 
 #include <gtest/gtest.h>
 
@@ -365,6 +368,18 @@ void VerifyLargeScaleDataset(Slot &manager, const std::string &prefix, size_t ke
             ASSERT_EQ(ReadAll(latest), MakeLargeScalePayload(prefix, index, expectedLatest, payloadBytes));
         }
     }
+}
+
+bool WaitUntil(const std::function<bool()> &predicate, int timeoutMs = 5000, int intervalMs = 20)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+    }
+    return predicate();
 }
 }  // namespace
 
@@ -1090,6 +1105,51 @@ TEST_F(SlotStoreTest, SlotCompactAbsorbsConcurrentDeleteBeforeCutover)
     ASSERT_TRUE(SlotManifest::Load(slotPath, manifest).IsOk());
     ExpectManifestNormal(manifest);
     (void)RemoveAll(slotPath.substr(0, slotPath.find("/slot_compact_catch_up_delete")));
+}
+
+TEST_F(SlotStoreTest, SlotClientBackgroundCompactAbsorbsConcurrentMutations)
+{
+    SlotClient client(baseDir_);
+    ASSERT_TRUE(client.Init().IsOk());
+
+    ASSERT_TRUE(inject::Set("slotstore.SlotClient.BackgroundCompact.WaitMs", "100*call(20)").IsOk());
+    ASSERT_TRUE(inject::Set("slotstore.Slot.Compact.BeforeCommit", "1*sleep(300)").IsOk());
+
+    const std::string keepKey = "tenant/background_keep";
+    const std::string deleteKey = "tenant/background_delete";
+    auto keepSlotId = static_cast<uint32_t>(std::hash<std::string>{}(keepKey) % FLAGS_distributed_disk_slot_num);
+    auto slotPath = GetSlotPath(baseDir_, keepSlotId, TARGET_WORKER_ADDRESS);
+
+    ASSERT_TRUE(client.Save(keepKey, 1, 0, MakeBody("v1"), 0, WriteMode::WRITE_THROUGH_L2_CACHE).IsOk());
+    ASSERT_TRUE(client.Save(deleteKey, 1, 0, MakeBody("old"), 0, WriteMode::WRITE_THROUGH_L2_CACHE).IsOk());
+
+    ASSERT_TRUE(WaitUntil([&]() { return inject::GetExecuteCount("slotstore.Slot.Compact.BeforeCommit") >= 1; }));
+
+    ASSERT_TRUE(client.Save(keepKey, 2, 0, MakeBody("v2"), 0, WriteMode::WRITE_THROUGH_L2_CACHE).IsOk());
+    ASSERT_TRUE(client.Delete(deleteKey, UINT64_MAX, true).IsOk());
+
+    ASSERT_TRUE(WaitUntil([&]() {
+        SlotManifestData manifest;
+        auto rc = SlotManifest::Load(slotPath, manifest);
+        return rc.IsOk() && manifest.lastCompactEpochMs > 0 && manifest.state == SlotState::NORMAL
+               && manifest.opType == SlotOperationType::NONE;
+    }));
+
+    auto contentV1 = std::make_shared<std::stringstream>();
+    ASSERT_TRUE(client.Get(keepKey, 1, 0, contentV1).IsOk());
+    ASSERT_EQ(ReadAll(contentV1), "v1");
+    auto contentV2 = std::make_shared<std::stringstream>();
+    ASSERT_TRUE(client.Get(keepKey, 2, 0, contentV2).IsOk());
+    ASSERT_EQ(ReadAll(contentV2), "v2");
+    auto deletedContent = std::make_shared<std::stringstream>();
+    ASSERT_EQ(client.GetWithoutVersion(deleteKey, 0, 0, deletedContent).GetCode(), StatusCode::K_NOT_FOUND_IN_L2CACHE);
+
+    SlotManifestData manifest;
+    ASSERT_TRUE(SlotManifest::Load(slotPath, manifest).IsOk());
+    ASSERT_GT(manifest.lastCompactEpochMs, 0u);
+
+    ASSERT_TRUE(inject::Clear("slotstore.Slot.Compact.BeforeCommit").IsOk());
+    ASSERT_TRUE(inject::Clear("slotstore.SlotClient.BackgroundCompact.WaitMs").IsOk());
 }
 
 TEST_F(SlotStoreTest, SlotCompactorBuildArtifactsCleansResidualFilesOnFailure)

@@ -627,7 +627,7 @@ Status ObjectMetaStore::RemoveMeta(const std::string &key, bool needRemoveEtcdDa
 }
 
 Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr,
-                                         const std::string &ackPersistenceVal)
+                                          const std::string &ackPersistenceVal)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_ADD_OBJ_LOCATION);
@@ -639,7 +639,7 @@ Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const st
 }
 
 Status ObjectMetaStore::AddObjectLocations(const std::unordered_map<std::string, std::string> &keyLocations,
-                                          const std::string &ackPersistenceVal)
+                                           const std::string &ackPersistenceVal)
 {
     RETURN_OK_IF_TRUE(keyLocations.empty());
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
@@ -647,10 +647,11 @@ Status ObjectMetaStore::AddObjectLocations(const std::unordered_map<std::string,
     // for compatibility: empty string "" stands for ACK, "0" stands for UNACK
     std::unordered_map<std::string, std::string> locationInfos;
     for (const auto &keyLocation : keyLocations) {
-        std::string key = keyLocation.second + "_" + keyLocation.first; // workerAddr + "_" + objectKey
+        std::string key = keyLocation.second + "_" + keyLocation.first;  // workerAddr + "_" + objectKey
         locationInfos[key] = ackPersistenceVal;
     }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->BatchPut(LOCATION_TABLE, locationInfos),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        rocksStore_->BatchPut(LOCATION_TABLE, locationInfos),
         FormatString("Failed to batch add global ref to rocksdb: key is %s", keyLocations.begin()->first));
     return Status::OK();
 }
@@ -895,11 +896,39 @@ Status ObjectMetaStore::RemoveGlobalRef(const std::string &key, const std::strin
     return Status::OK();
 }
 
+std::string ObjectMetaStore::EncodeDeletedObjectValue(uint64_t delVersion, const std::string &targetWorkerAddress)
+{
+    if (targetWorkerAddress.empty()) {
+        return std::to_string(delVersion);
+    }
+    return std::to_string(delVersion) + "|" + targetWorkerAddress;
+}
+
+bool ObjectMetaStore::DecodeDeletedObjectValue(const std::string &objectKey, const std::string &encodedValue,
+                                               uint64_t &delVersion, std::string &targetWorkerAddress)
+{
+    auto delimiter = encodedValue.find('|');
+    auto versionStr = delimiter == std::string::npos ? encodedValue : encodedValue.substr(0, delimiter);
+    try {
+        delVersion = StrToUnsignedLongLong(versionStr);
+    } catch (std::invalid_argument &) {
+        LOG(WARNING) << "Cannot convert delete version to uint64_t. objectKey:" << objectKey
+                     << ", encoded value:" << encodedValue;
+        return false;
+    } catch (const std::out_of_range &) {
+        LOG(WARNING) << "Delete version is out of range. objectKey:" << objectKey << ", encoded value:" << encodedValue;
+        return false;
+    }
+    targetWorkerAddress = delimiter == std::string::npos ? "" : encodedValue.substr(delimiter + 1);
+    return true;
+}
+
 Status ObjectMetaStore::AddDeletedObjectWithDelVersion(const std::string &objectKey, uint64_t version,
-                                                       uint64_t delVersion, WriteType type)
+                                                       uint64_t delVersion, const std::string &targetWorkerAddress,
+                                                       WriteType type)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
-    std::string versionStr = std::to_string(delVersion);
+    std::string versionStr = EncodeDeletedObjectValue(delVersion, targetWorkerAddress);
     std::string key = objectKey + "/" + std::to_string(version);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         rocksStore_->Put(GLOBAL_CACHE_TABLE, key, versionStr),
@@ -918,7 +947,7 @@ Status ObjectMetaStore::AddDeletedObjectWithDelVersion(const std::string &object
 
 Status ObjectMetaStore::AddDeletedObject(const std::string &objectKey, uint64_t version, WriteType type)
 {
-    return AddDeletedObjectWithDelVersion(objectKey, version, version, type);
+    return AddDeletedObjectWithDelVersion(objectKey, version, version, "", type);
 }
 
 Status ObjectMetaStore::RemoveDeletedObject(const std::string &objectKey, uint64_t version)

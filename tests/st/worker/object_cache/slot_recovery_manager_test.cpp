@@ -567,5 +567,157 @@ TEST_F(SlotRecoveryEtcdTest, CanonicalizesLocalPendingTasks)
     manager.Shutdown();
 }
 
+TEST_F(SlotRecoveryEtcdTest, ContinuesRecoveryAfterConsecutiveFailures)
+{
+    LOG(INFO) << "Scenario: worker1 fails, worker2 is recovering it, then worker2 fails as well.";
+    const std::string worker1 = "127.0.0.1:8001";
+    const std::string worker2 = "127.0.0.1:8002";
+    const std::string worker3 = "127.0.0.1:8003";
+    const std::string worker4 = "127.0.0.1:8004";
+
+    SlotRecoveryManagerTestHelper manager3(HostPort("127.0.0.1", 8003), store_);
+    SlotRecoveryManagerTestHelper manager4(HostPort("127.0.0.1", 8004), store_);
+    manager3.SetActiveWorkers({ worker3, worker4 });
+    manager4.SetActiveWorkers({ worker3, worker4 });
+
+    // Seed an existing incident where worker2 is still recovering worker1 when worker2 itself fails.
+    SlotRecoveryInfoPb existingIncident;
+    auto *inProgressTask = existingIncident.add_recovery_tasks();
+    inProgressTask->set_failed_worker(worker1);
+    inProgressTask->set_owner_worker(worker2);
+    inProgressTask->set_task_status(RecoveryTaskPb::IN_PROGRESS);
+    inProgressTask->add_slots(0);
+    inProgressTask->add_slots(2);
+
+    auto *completedTask = existingIncident.add_recovery_tasks();
+    completedTask->set_failed_worker(worker1);
+    completedTask->set_owner_worker(worker3);
+    completedTask->set_task_status(RecoveryTaskPb::COMPLETED);
+    completedTask->add_slots(1);
+    completedTask->add_slots(3);
+    existingIncident.set_total_slots(4);
+    existingIncident.set_completed_slots(2);
+    existingIncident.set_failed_slots(0);
+    DS_ASSERT_OK(store_->UpdateIncident(worker1, existingIncident));
+
+    DS_ASSERT_OK(manager3.InitForTest());
+    DS_ASSERT_OK(manager4.InitForTest());
+
+    DS_ASSERT_OK(manager3.HandleFailedWorkers({ HostPort("127.0.0.1", 8002) }));
+    DS_ASSERT_OK(manager4.HandleFailedWorkers({ HostPort("127.0.0.1", 8002) }));
+
+    ASSERT_TRUE(WaitUntil([&]() {
+        SlotRecoveryInfoPb info;
+        auto rc = store_->GetIncident(worker2, info);
+        if (rc.IsError()) {
+            return false;
+        }
+        bool hasInheritedChain = false;
+        bool hasOwnRecovery = false;
+        for (const auto &task : info.recovery_tasks()) {
+            if (task.failed_worker() == worker1 && task.source_worker() == worker2) {
+                hasInheritedChain = true;
+            }
+            if (task.failed_worker() == worker2 && task.source_worker() == worker2) {
+                hasOwnRecovery = true;
+            }
+        }
+        return hasInheritedChain && hasOwnRecovery;
+    }));
+
+    ASSERT_TRUE(WaitUntil([&]() {
+        SlotRecoveryInfoPb info;
+        auto rc = store_->GetIncident(worker2, info);
+        if (rc.IsError()) {
+            return false;
+        }
+        return info.total_slots() != 0 && info.completed_slots() == info.total_slots();
+    }));
+
+    auto info = LoadIncidentOrFail(worker2);
+    bool inheritedCompleted = false;
+    bool ownCompleted = false;
+    for (const auto &task : info.recovery_tasks()) {
+        EXPECT_EQ(task.task_status(), RecoveryTaskPb::COMPLETED);
+        EXPECT_EQ(task.source_worker(), task.owner_worker());
+        if (task.failed_worker() == worker1) {
+            inheritedCompleted = true;
+        }
+        if (task.failed_worker() == worker2) {
+            ownCompleted = true;
+        }
+    }
+    EXPECT_TRUE(inheritedCompleted);
+    EXPECT_TRUE(ownCompleted);
+
+    ExpectIncidentDeleted(worker1);
+
+    manager3.Shutdown();
+    manager4.Shutdown();
+}
+
+TEST_F(SlotRecoveryEtcdTest, HandlesMultipleWorkersFailingTogether)
+{
+    LOG(INFO) << "Scenario: two workers fail simultaneously while two survivors plan both incidents.";
+    const std::string worker1 = "127.0.0.1:8001";
+    const std::string worker2 = "127.0.0.1:8002";
+    const std::string worker3 = "127.0.0.1:8003";
+    const std::string worker4 = "127.0.0.1:8004";
+
+    SlotRecoveryManagerTestHelper manager3(HostPort("127.0.0.1", 8003), store_);
+    SlotRecoveryManagerTestHelper manager4(HostPort("127.0.0.1", 8004), store_);
+    manager3.SetActiveWorkers({ worker3, worker4 });
+    manager4.SetActiveWorkers({ worker3, worker4 });
+    manager3.SetExecutionHook([](const RecoveryTaskPb &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        return Status::OK();
+    });
+    manager4.SetExecutionHook([](const RecoveryTaskPb &) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        return Status::OK();
+    });
+    DS_ASSERT_OK(manager3.InitForTest());
+    DS_ASSERT_OK(manager4.InitForTest());
+
+    std::vector<HostPort> failedWorkers{ HostPort("127.0.0.1", 8001), HostPort("127.0.0.1", 8002) };
+    std::thread t1([&]() { DS_ASSERT_OK(manager3.HandleFailedWorkers(failedWorkers)); });
+    std::thread t2([&]() { DS_ASSERT_OK(manager4.HandleFailedWorkers(failedWorkers)); });
+
+    ASSERT_TRUE(WaitUntil([&]() {
+        SlotRecoveryInfoPb info1;
+        SlotRecoveryInfoPb info2;
+        return store_->GetIncident(worker1, info1).IsOk() && store_->GetIncident(worker2, info2).IsOk()
+               && info1.recovery_tasks_size() == 2 && info2.recovery_tasks_size() == 2;
+    }));
+
+    auto incident1 = LoadIncidentOrFail(worker1);
+    auto incident2 = LoadIncidentOrFail(worker2);
+    EXPECT_EQ(incident1.total_slots(), 4);
+    EXPECT_EQ(incident2.total_slots(), 4);
+
+    t1.join();
+    t2.join();
+
+    ASSERT_TRUE(WaitUntil([&]() {
+        auto info1 = LoadIncidentOrFail(worker1);
+        auto info2 = LoadIncidentOrFail(worker2);
+        return info1.completed_slots() == info1.total_slots() && info2.completed_slots() == info2.total_slots();
+    }));
+
+    incident1 = LoadIncidentOrFail(worker1);
+    incident2 = LoadIncidentOrFail(worker2);
+    for (const auto &task : incident1.recovery_tasks()) {
+        EXPECT_EQ(task.task_status(), RecoveryTaskPb::COMPLETED);
+        EXPECT_TRUE(task.owner_worker() == worker3 || task.owner_worker() == worker4);
+    }
+    for (const auto &task : incident2.recovery_tasks()) {
+        EXPECT_EQ(task.task_status(), RecoveryTaskPb::COMPLETED);
+        EXPECT_TRUE(task.owner_worker() == worker3 || task.owner_worker() == worker4);
+    }
+
+    manager3.Shutdown();
+    manager4.Shutdown();
+}
+
 }  // namespace st
 }  // namespace datasystem

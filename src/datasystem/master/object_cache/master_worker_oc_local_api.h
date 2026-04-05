@@ -55,6 +55,8 @@ public:
     Status UpdateNotification(UpdateObjectReqPb &req, UpdateObjectRspPb &rsp) override;
     Status ClearData(ClearDataReqPb &req, ClearDataRspPb &rsp) override;
     Status DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp) override;
+    Status DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
+                                   DeletePersistenceObjectRspPb &rsp) override;
     Status DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag) override;
     Status DeleteNotificationReceive(int64_t tag, DeleteObjectRspPb &rsp) override;
     Status QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp) override;
@@ -66,7 +68,7 @@ public:
 
 private:
     object_cache::MasterWorkerOCServiceImpl *workerOC_{ nullptr };
-    mutable std::shared_mutex localReqMutex_; // protects localReqMap_
+    mutable std::shared_mutex localReqMutex_;  // protects localReqMap_
     // Map from local tag to pending DeleteObject request.
     std::unordered_map<int64_t, std::unique_ptr<DeleteObjectReqPb>> localReqMap_;
     // Atomic tag generator for unique local DeleteObject request identification.

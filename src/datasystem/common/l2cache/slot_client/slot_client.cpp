@@ -20,14 +20,20 @@
 
 #include "datasystem/common/l2cache/slot_client/slot_client.h"
 
+#include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <functional>
+#include <set>
 #include <shared_mutex>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 
 DS_DEFINE_uint32(distributed_disk_slot_num, 128, "The number of slot partitions used by distributed disk.");
@@ -43,12 +49,38 @@ DS_DEFINE_validator(distributed_disk_max_data_file_size_mb, [](const char *flagN
 DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
+namespace {
+constexpr int BACKGROUND_COMPACT_HOUR = 2;
+
+bool ParseSlotIdFromPath(const std::string &path, uint32_t &slotId)
+{
+    auto pos = path.find_last_of('/');
+    auto name = pos == std::string::npos ? path : path.substr(pos + 1);
+    constexpr char prefix[] = "slot_";
+    if (name.rfind(prefix, 0) != 0) {
+        return false;
+    }
+    const auto idStr = name.substr(sizeof(prefix) - 1);
+    if (idStr.empty() || !std::all_of(idStr.begin(), idStr.end(), [](char ch) { return ch >= '0' && ch <= '9'; })) {
+        return false;
+    }
+    try {
+        slotId = static_cast<uint32_t>(std::stoul(idStr));
+    } catch (const std::exception &) {
+        return false;
+    }
+    return true;
+}
+}  // namespace
 
 SlotClient::SlotClient(const std::string &sfsPath) : sfsPath_(sfsPath)
 {
 }
 
-SlotClient::~SlotClient() = default;
+SlotClient::~SlotClient()
+{
+    StopBackgroundCompactThread();
+}
 
 Status SlotClient::Init()
 {
@@ -56,6 +88,7 @@ Status SlotClient::Init()
     slotNum_ = FLAGS_distributed_disk_slot_num;
     maxDataFileBytes_ = static_cast<uint64_t>(FLAGS_distributed_disk_max_data_file_size_mb) * 1024ul * 1024ul;
     RETURN_IF_NOT_OK(CreateDir(rootPath_, true));
+    StartBackgroundCompactThread();
     return Status::OK();
 }
 
@@ -63,7 +96,11 @@ Status SlotClient::Save(const std::string &objectKey, uint64_t version, int64_t 
                         const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse, WriteMode writeMode)
 {
     (void)timeoutMs;
-    return GetSlot(GetSlotId(objectKey)).Save(objectKey, version, body, asyncElapse, writeMode);
+    auto rc = GetSlot(GetSlotId(objectKey)).Save(objectKey, version, body, asyncElapse, writeMode);
+    if (rc.IsOk()) {
+        WakeBackgroundCompactThread();
+    }
+    return rc;
 }
 
 Status SlotClient::Get(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
@@ -84,7 +121,11 @@ Status SlotClient::Delete(const std::string &objectKey, uint64_t maxVerToDelete,
                           uint64_t asyncElapse)
 {
     (void)asyncElapse;
-    return GetSlot(GetSlotId(objectKey)).Delete(objectKey, maxVerToDelete, deleteAllVersion);
+    auto rc = GetSlot(GetSlotId(objectKey)).Delete(objectKey, maxVerToDelete, deleteAllVersion);
+    if (rc.IsOk()) {
+        WakeBackgroundCompactThread();
+    }
+    return rc;
 }
 
 Status SlotClient::RepairSlot(uint32_t slotId)
@@ -117,6 +158,123 @@ Status SlotClient::PreloadSlot(const std::string &sourceWorkerAddress, uint32_t 
 std::string SlotClient::GetRequestSuccessRate() const
 {
     return "";
+}
+
+void SlotClient::StartBackgroundCompactThread()
+{
+    std::lock_guard<std::mutex> lock(compactMu_);
+    if (compactThread_.joinable()) {
+        return;
+    }
+    stopCompactThread_ = false;
+    compactThread_ = std::thread(&SlotClient::BackgroundCompactLoop, this);
+}
+
+void SlotClient::StopBackgroundCompactThread()
+{
+    {
+        std::lock_guard<std::mutex> lock(compactMu_);
+        stopCompactThread_ = true;
+    }
+    compactCv_.notify_all();
+    if (compactThread_.joinable()) {
+        compactThread_.join();
+    }
+}
+
+void SlotClient::WakeBackgroundCompactThread()
+{
+    {
+        std::lock_guard<std::mutex> lock(compactMu_);
+        ++compactWakeupSeq_;
+    }
+    compactCv_.notify_all();
+}
+
+bool SlotClient::ShouldStopBackgroundCompactThread()
+{
+    std::lock_guard<std::mutex> lock(compactMu_);
+    return stopCompactThread_;
+}
+
+void SlotClient::BackgroundCompactLoop()
+{
+    while (!ShouldStopBackgroundCompactThread()) {
+        auto waitMs = ComputeNextCompactDelayMs();
+        INJECT_POINT_NO_RETURN("slotstore.SlotClient.BackgroundCompact.WaitMs",
+                               [&waitMs](int64_t overrideWaitMs) { waitMs = std::max<int64_t>(overrideWaitMs, 0); });
+        {
+            std::unique_lock<std::mutex> lock(compactMu_);
+            const auto observedWakeupSeq = compactWakeupSeq_;
+            if (compactCv_.wait_for(lock, std::chrono::milliseconds(waitMs), [this, observedWakeupSeq]() {
+                    return stopCompactThread_ || compactWakeupSeq_ != observedWakeupSeq;
+                })) {
+                if (!stopCompactThread_) {
+                    continue;
+                }
+                return;
+            }
+        }
+
+        auto slotIds = CollectCompactionCandidates();
+        for (const auto slotId : slotIds) {
+            auto rc = CompactSlot(slotId);
+            if (rc.IsOk()) {
+                LOG(INFO) << FormatString("action=background_compact_success slot_id=%u root=%s", slotId, rootPath_);
+                continue;
+            }
+            if (rc.GetCode() == StatusCode::K_TRY_AGAIN || rc.GetCode() == StatusCode::K_NOT_FOUND) {
+                LOG(INFO) << FormatString("action=background_compact_skip slot_id=%u status=%s", slotId, rc.ToString());
+                continue;
+            }
+            LOG(WARNING) << FormatString("action=background_compact_failed slot_id=%u status=%s", slotId,
+                                         rc.ToString());
+        }
+    }
+}
+
+int64_t SlotClient::ComputeNextCompactDelayMs() const
+{
+    auto now = std::chrono::system_clock::now();
+    auto nowTimeT = std::chrono::system_clock::to_time_t(now);
+    tm localTm{};
+    localtime_r(&nowTimeT, &localTm);
+    localTm.tm_hour = BACKGROUND_COMPACT_HOUR;
+    localTm.tm_min = 0;
+    localTm.tm_sec = 0;
+    auto nextTimeT = mktime(&localTm);
+    if (nextTimeT <= nowTimeT) {
+        localTm.tm_mday += 1;
+        nextTimeT = mktime(&localTm);
+    }
+    auto nextRun = std::chrono::system_clock::from_time_t(nextTimeT);
+    return std::max<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(nextRun - now).count(), 0);
+}
+
+std::vector<uint32_t> SlotClient::CollectCompactionCandidates() const
+{
+    std::set<uint32_t> slotIds;
+    {
+        std::shared_lock<std::shared_mutex> readLock(mu_);
+        for (const auto &entry : slots_) {
+            slotIds.insert(entry.first);
+        }
+    }
+
+    std::vector<std::string> slotPaths;
+    auto rc = Glob(JoinPath(rootPath_, "slot_*"), slotPaths);
+    if (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND) {
+        LOG(WARNING) << FormatString("action=background_compact_glob_failed root=%s status=%s", rootPath_,
+                                     rc.ToString());
+        return std::vector<uint32_t>(slotIds.begin(), slotIds.end());
+    }
+    for (const auto &slotPath : slotPaths) {
+        uint32_t slotId = 0;
+        if (ParseSlotIdFromPath(slotPath, slotId)) {
+            slotIds.insert(slotId);
+        }
+    }
+    return std::vector<uint32_t>(slotIds.begin(), slotIds.end());
 }
 
 uint32_t SlotClient::GetSlotId(const std::string &objectKey) const

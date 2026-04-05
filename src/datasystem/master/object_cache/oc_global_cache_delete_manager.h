@@ -38,13 +38,23 @@
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 
 namespace datasystem {
+namespace object_cache {
+class MasterWorkerOCServiceImpl;
+}
+
 namespace master {
-using GlobalDeleteInfoMap = std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>>;
+struct GlobalDeleteInfo {
+    uint64_t deleteVersion;
+    std::string targetWorkerAddress;
+};
+
+using GlobalDeleteInfoMap = std::unordered_map<std::string, std::unordered_map<uint64_t, GlobalDeleteInfo>>;
 
 class OCGlobalCacheDeleteManager {
     struct DeleteMeta {
         uint64_t version;
         bool failed;
+        std::string targetWorkerAddress;
     };
 
 public:
@@ -52,7 +62,8 @@ public:
      * @brief Construct OCGlobalCacheDeleteManager for notifying global cache to delete object.
      */
     OCGlobalCacheDeleteManager(std::shared_ptr<ObjectMetaStore> objectStore, std::shared_ptr<PersistenceApi> persistApi,
-                               bool backendStoreExist);
+                               bool backendStoreExist, const std::string &masterAddress,
+                               std::shared_ptr<AkSkManager> akSkManager);
 
     ~OCGlobalCacheDeleteManager();
 
@@ -76,7 +87,7 @@ public:
      * @return Status of the call.
      */
     Status InsertDeletedObject(const std::string &objectKey, uint64_t objectVersion, uint64_t delVersion,
-                               bool needPersist = false,
+                               const std::string &targetWorkerAddress = "", bool needPersist = false,
                                ObjectMetaStore::WriteType type = ObjectMetaStore::WriteType::ROCKS_ONLY);
 
     /**
@@ -110,7 +121,7 @@ public:
      * @param[in] objectKey Object key.
      * @return object version and delete version pair list.
      */
-    std::vector<std::pair<uint64_t, uint64_t>> GetDeletedInfos(const std::string &objectKey);
+    std::vector<std::pair<uint64_t, GlobalDeleteInfo>> GetDeletedInfos(const std::string &objectKey);
 
     /**
      * @brief Get global cache delete infos via match function.
@@ -124,6 +135,12 @@ public:
      * @param[in] objMeta Migrate object meta.
      */
     void InsertDeletedObjectFromMigrateNode(const MetaForMigrationPb &objMeta);
+
+    /**
+     * @brief Takes a copy of the local MasterWorkerService to allow rpc bypass when master and worker are collocated.
+     * @param[in] service Pointer to the receiving side service of the MasterWorker api's.
+     */
+    void AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *service);
 
     /**
      * @brief Get deleting object count.
@@ -160,7 +177,12 @@ private:
      * @param[in] maxVersionToDel indicate delete all the versions which <= maxVersionToDel
      * @return Status of the call.
      */
-    Status DelPersistenceObj(const std::string &objectKey, uint64_t objectVersion, uint64_t maxVersionToDel);
+    Status DelPersistenceObj(const std::string &objectKey, uint64_t objectVersion, uint64_t maxVersionToDel,
+                             const std::string &targetWorkerAddress);
+
+    bool UseWorkerDeleteRpc() const;
+
+    Status GetMasterWorkerApi(const std::string &workerAddress, std::shared_ptr<MasterWorkerOCApi> &api);
 
     /**
      * @brief Version string to number
@@ -173,16 +195,21 @@ private:
 
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::shared_ptr<ObjectMetaStore> objectStore_;
+    HostPort masterAddr_;
+    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
 
     const int SEND_DELETE_L2CACHE_TIME_MS = 100;  // Time interval between two delete l2cache object.
-    WaitPost cvLock_;                           // Wait to send cache update to worker.
+    WaitPost cvLock_;                             // Wait to send cache update to worker.
     std::unique_ptr<Thread> thread_{ nullptr };
     std::shared_timed_mutex mutex_;  // For deleteIds_ and deleteFailedIds_.
+    std::mutex apiMutex_;
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     // The table deleteIds_ is used to store objects ready to be deleted, and another asynchronous thread polls and
     // deletes objects in the table. deleteIds_ is: std::unordered_map<objectKey+"/"+version, version>
     std::map<std::string, DeleteMeta> deleteIds_;
-    std::unordered_map<std::string, std::unordered_map<uint64_t, uint64_t>> objDeleteMap_;
+    GlobalDeleteInfoMap objDeleteMap_;
+    std::unordered_map<std::string, std::shared_ptr<MasterWorkerOCApi>> workerApiMap_;
     std::atomic<bool> interruptFlag_;
 
     /**

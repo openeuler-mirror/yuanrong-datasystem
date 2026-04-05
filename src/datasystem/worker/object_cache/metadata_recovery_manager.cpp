@@ -25,11 +25,17 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_table.h"
+#include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/worker/object_cache/device/device_obj_cache.h"
+
+DS_DEFINE_bool(enable_metadata_recovery, false, "enable metadata recovery when worker failed");
 
 namespace datasystem {
 namespace object_cache {
@@ -45,12 +51,15 @@ bool IsRestartRecoverableWriteMode(uint32_t writeMode)
 MetaDataRecoveryManager::MetaDataRecoveryManager(
     const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, EtcdClusterManager *etcdCM,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
-    uint64_t metadataSize)
+    uint64_t metadataSize, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
+    const std::shared_ptr<ThreadPool> &memCpyThreadPool)
     : localAddress_(localAddress),
       objectTable_(objectTable),
       etcdCM_(etcdCM),
       workerMasterApiManager_(workerMasterApiManager),
-      metadataSize_(metadataSize)
+      metadataSize_(metadataSize),
+      evictionManager_(evictionManager),
+      memCpyThreadPool_(memCpyThreadPool)
 {
 }
 
@@ -243,6 +252,15 @@ void MetaDataRecoveryManager::LogRecoverySummary(const RecoverySummary &summary,
 Status MetaDataRecoveryManager::RecoverLocalEntries(const std::vector<ObjectMetaPb> &recoverMetas,
                                                     std::vector<std::string> &recoveredObjectKeys) const
 {
+    static const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> emptyContents;
+    return RecoverLocalEntries(recoverMetas, emptyContents, recoveredObjectKeys);
+}
+
+Status MetaDataRecoveryManager::RecoverLocalEntries(
+    const std::vector<ObjectMetaPb> &recoverMetas,
+    const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &recoveredContents,
+    std::vector<std::string> &recoveredObjectKeys) const
+{
     RETURN_OK_IF_TRUE(recoverMetas.empty());
     CHECK_FAIL_RETURN_STATUS(objectTable_ != nullptr, K_RUNTIME_ERROR, "objectTable is null");
 
@@ -273,6 +291,26 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(const std::vector<ObjectMeta
         SetObjectEntryAccordingToMeta(meta, metadataSize_, *entry);
         (*entry)->SetAddress(localAddress_.ToString());
         (*entry)->stateInfo.SetPrimaryCopy(true);
+
+        auto foundContent = recoveredContents.find(meta.object_key());
+        if (foundContent != recoveredContents.end() && foundContent->second != nullptr) {
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(evictionManager_ != nullptr, K_RUNTIME_ERROR,
+                                                 "evictionManager is null");
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(memCpyThreadPool_ != nullptr, K_RUNTIME_ERROR,
+                                                 "memCpyThreadPool is null");
+            const auto content = foundContent->second->str();
+            std::vector<RpcMessage> payloads;
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                CopyAndSplitBuffer(TenantAuthManager::ExtractTenantId(meta.object_key()), content.data(),
+                                   content.size(), payloads),
+                FormatString("[ObjectKey %s] CopyAndSplitBuffer failed.", meta.object_key()));
+            ObjectKV objectKV(meta.object_key(), *entry);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_),
+                FormatString("[ObjectKey %s] SaveBinaryObjectToMemory failed.", meta.object_key()));
+            (*entry)->stateInfo.SetCacheInvalid(false);
+            (*entry)->stateInfo.SetIncompleted(false);
+        }
         recoveredObjectKeys.emplace_back(meta.object_key());
 
         LOG(INFO) << FormatString(

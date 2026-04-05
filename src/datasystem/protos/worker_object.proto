@@ -449,6 +449,7 @@ service MasterWorkerOCService {
   rpc MetaChange(MetaChangeReqPb) returns (MetaChangeRspPb) {}
   rpc UpdateNotification(UpdateObjectReqPb) returns (UpdateObjectRspPb) {}
   rpc DeleteNotification(DeleteObjectReqPb) returns (DeleteObjectRspPb) {}
+  rpc DeletePersistenceObject(DeletePersistenceObjectReqPb) returns (DeletePersistenceObjectRspPb) {}
   rpc QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb) returns (QueryGlobalRefNumRspPb) {}
   rpc PushMetaToWorker(PushMetaToWorkerReqPb) returns (PushMetaToWorkerRspPb) {}
   rpc RequestMetaFromWorker(RequestMetaFromWorkerReqPb) returns (RequestMetaFromWorkerRspPb) {}

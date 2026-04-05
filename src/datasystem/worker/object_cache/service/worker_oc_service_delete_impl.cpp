@@ -93,6 +93,18 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
     return Status::OK();
 }
 
+Status WorkerOcServiceDeleteImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &req,
+                                                          DeletePersistenceObjectRspPb &rsp)
+{
+    (void)rsp;
+    VLOG(1) << "DeletePersistenceObject begin, request: " << LogHelper::IgnoreSensitive(req);
+    auto objectVersion = req.object_version();
+    auto rc = persistenceApi_->Del(req.object_key(), req.max_version_to_delete(), req.delete_all_version(),
+                                   req.async_elapse(), &objectVersion, req.list_incomplete_versions());
+    VLOG(1) << "DeletePersistenceObject end, rc: " << rc.ToString();
+    return rc;
+}
+
 Status WorkerOcServiceDeleteImpl::DeleteObjectFromNotification(const std::string &objectKey, uint64_t version,
                                                                bool async)
 {
