@@ -166,6 +166,15 @@ spec:
         {{- if eq ($.Values.global.l2Cache.l2CacheType) "sfs" }}
         - -sfs_path=/opt/data/datasystem/sfs-turbo
         {{- end }}
+        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
+        - -distributed_disk_path={{ $.Values.global.l2Cache.distributedDisk.path }}
+        - -distributed_disk_slot_num={{ $.Values.global.l2Cache.distributedDisk.slotNum }}
+        - -distributed_disk_max_data_file_size_mb={{ $.Values.global.l2Cache.distributedDisk.maxDataFileSizeMb }}
+        - -distributed_disk_sync_interval_ms={{ $.Values.global.l2Cache.distributedDisk.syncIntervalMs }}
+        - -distributed_disk_sync_batch_bytes={{ $.Values.global.l2Cache.distributedDisk.syncBatchBytes }}
+        - -distributed_disk_compact_cutover_bytes={{ $.Values.global.l2Cache.distributedDisk.compactCutoverBytes }}
+        - -distributed_disk_compact_cutover_records={{ $.Values.global.l2Cache.distributedDisk.compactCutoverRecords }}
+        {{- end }}
         - -enable_cloud_service_token_rotation={{ $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
         - -l2_cache_type={{ $.Values.global.l2Cache.l2CacheType }}
         - -l2_cache_delete_thread_num={{ $.Values.global.l2Cache.l2CacheDeleteThreadNum }}

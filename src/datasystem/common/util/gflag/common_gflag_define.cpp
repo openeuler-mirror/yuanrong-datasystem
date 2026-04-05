@@ -22,6 +22,9 @@
 
 DS_DEFINE_string(l2_cache_type, "none",
                  "L2 cache type, optional value: 'obs', 'sfs', 'distributed_disk' or 'none', default is none");
+DS_DEFINE_string(distributed_disk_path, "",
+                 "Root path of distributed disk storage. This flag takes effect only when l2_cache_type is "
+                 "'distributed_disk'.");
 DS_DEFINE_string(log_dir, GetStringFromEnv("GOOGLE_LOG_DIR", ""),
                  "If specified, logfiles are written into this directory instead of the default logging directory.");
 DS_DEFINE_string(monitor_config_file, "~/datasystem/config/datasystem.config",

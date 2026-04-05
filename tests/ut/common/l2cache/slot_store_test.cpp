@@ -47,6 +47,7 @@
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
+DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_uint32(distributed_disk_slot_num);
 DS_DECLARE_uint32(distributed_disk_max_data_file_size_mb);
@@ -391,6 +392,7 @@ public:
         ASSERT_FALSE(baseDir_.empty());
         ASSERT_TRUE(CreateDir(baseDir_, true).IsOk());
         FLAGS_l2_cache_type = "distributed_disk";
+        FLAGS_distributed_disk_path = baseDir_;
         FLAGS_sfs_path = baseDir_;
         FLAGS_cluster_name = "ut_cluster";
         FLAGS_distributed_disk_slot_num = 4;
@@ -636,7 +638,7 @@ TEST_F(SlotStoreTest, PersistenceApiAggregateSavePreservesWriteMode)
     *body << "write_mode_payload";
     ASSERT_TRUE(api->Save("tenant/keyWriteModeApi", 7, 1000, body, 0, WriteMode::WRITE_BACK_L2_CACHE).IsOk());
 
-    auto slotRoot = BuildSlotStoreRoot(FLAGS_sfs_path, FLAGS_cluster_name);
+    auto slotRoot = BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name);
     uint32_t slotId =
         static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyWriteModeApi") % FLAGS_distributed_disk_slot_num);
     auto slotPath = slotRoot + "/" + FormatSlotDir(slotId);
@@ -648,6 +650,34 @@ TEST_F(SlotStoreTest, PersistenceApiAggregateSavePreservesWriteMode)
     SlotSnapshotValue value;
     ASSERT_TRUE(snapshot.FindExact("tenant/keyWriteModeApi", 7, value).IsOk());
     ASSERT_EQ(value.writeMode, WriteMode::WRITE_BACK_L2_CACHE);
+}
+
+TEST_F(SlotStoreTest, DistributedDiskUsesDistributedDiskPathInsteadOfSfsPath)
+{
+    auto distributedDiskPath = MakeTempDir() + "/distributed_disk";
+    auto legacySfsPath = MakeTempDir() + "/legacy_sfs";
+    ASSERT_TRUE(CreateDir(distributedDiskPath, true).IsOk());
+    ASSERT_TRUE(CreateDir(legacySfsPath, true).IsOk());
+
+    FLAGS_distributed_disk_path = distributedDiskPath;
+    FLAGS_sfs_path = legacySfsPath;
+
+    auto api = PersistenceApi::Create();
+    ASSERT_TRUE(api->Init().IsOk());
+
+    auto body = std::make_shared<std::stringstream>();
+    *body << "disk_root_payload";
+    ASSERT_TRUE(api->Save("tenant/keyDiskRoot", 1, 1000, body).IsOk());
+
+    auto distributedRoot = BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name);
+    auto legacyRoot = BuildSlotStoreRoot(FLAGS_sfs_path, FLAGS_cluster_name);
+    uint32_t slotId =
+        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyDiskRoot") % FLAGS_distributed_disk_slot_num);
+    ASSERT_TRUE(FileExist(JoinPath(distributedRoot, FormatSlotDir(slotId))));
+    ASSERT_FALSE(FileExist(JoinPath(legacyRoot, FormatSlotDir(slotId))));
+
+    ASSERT_TRUE(RemoveAll(distributedDiskPath.substr(0, distributedDiskPath.find("/distributed_disk"))).IsOk());
+    ASSERT_TRUE(RemoveAll(legacySfsPath.substr(0, legacySfsPath.find("/legacy_sfs"))).IsOk());
 }
 
 TEST_F(SlotStoreTest, PersistenceApiNonAggregateModeKeepsOriginalSfsBehavior)
@@ -667,7 +697,7 @@ TEST_F(SlotStoreTest, PersistenceApiNonAggregateModeKeepsOriginalSfsBehavior)
     std::string encodedKey;
     ASSERT_TRUE(PersistenceApi::UrlEncode("tenant/keyPlain", encodedKey).IsOk());
     ASSERT_TRUE(FileExist(baseDir_ + "/datasystem/" + encodedKey + "/1"));
-    ASSERT_FALSE(FileExist(BuildSlotStoreRoot(FLAGS_sfs_path, FLAGS_cluster_name)));
+    ASSERT_FALSE(FileExist(BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name)));
 
     ASSERT_TRUE(api->Del("tenant/keyPlain", 1, true).IsOk());
     auto deleted = std::make_shared<std::stringstream>();
@@ -684,7 +714,7 @@ TEST_F(SlotStoreTest, ReplaySkipsInvalidPut)
     *body << "abc";
     ASSERT_TRUE(api->Save("tenant/keyB", 5, 1000, body).IsOk());
 
-    auto slotRoot = BuildSlotStoreRoot(FLAGS_sfs_path, FLAGS_cluster_name);
+    auto slotRoot = BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name);
     uint32_t slotId = static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyB") % FLAGS_distributed_disk_slot_num);
     auto slotPath = slotRoot + "/" + FormatSlotDir(slotId);
     auto dataPath = slotPath + "/" + FormatDataFileName(1);

@@ -39,6 +39,7 @@ DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
 DS_DECLARE_bool(enable_remote_h2d);
 DS_DECLARE_string(l2_cache_type);
+DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(unix_domain_socket_dir);

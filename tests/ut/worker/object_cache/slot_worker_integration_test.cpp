@@ -39,6 +39,7 @@
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
+DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(distributed_disk_slot_num);
@@ -78,10 +79,11 @@ public:
     {
         CommonTest::SetUp();
         tempRoot_ = MakeTempDir();
-        sfsPath_ = tempRoot_ + "/sfs";
-        DS_ASSERT_OK(CreateDir(sfsPath_, true));
+        distributedDiskPath_ = tempRoot_ + "/distributed_disk";
+        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         FLAGS_l2_cache_type = "distributed_disk";
-        FLAGS_sfs_path = sfsPath_;
+        FLAGS_distributed_disk_path = distributedDiskPath_;
+        FLAGS_sfs_path = distributedDiskPath_;
         FLAGS_cluster_name = "slot_worker_cluster";
         FLAGS_distributed_disk_slot_num = 8;
         oldSyncIntervalMs_ = FLAGS_distributed_disk_sync_interval_ms;
@@ -110,12 +112,13 @@ protected:
 
     std::string CurrentSlotRoot() const
     {
-        return BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name);
+        return BuildSlotStoreRoot(distributedDiskPath_, FLAGS_cluster_name);
     }
 
     std::string SlotRootForWorker(const std::string &workerAddress) const
     {
-        return BuildSlotStoreRootForWorker(sfsPath_, FLAGS_cluster_name, SanitizeSlotWorkerNamespace(workerAddress));
+        return BuildSlotStoreRootForWorker(distributedDiskPath_, FLAGS_cluster_name,
+                                           SanitizeSlotWorkerNamespace(workerAddress));
     }
 
     std::string SlotPathForKey(const std::string &objectKey) const
@@ -144,7 +147,7 @@ protected:
     }
 
     std::string tempRoot_;
-    std::string sfsPath_;
+    std::string distributedDiskPath_;
     uint32_t oldSyncIntervalMs_{ 0 };
     uint64_t oldSyncBatchBytes_{ 0 };
 };
@@ -152,14 +155,15 @@ protected:
 TEST_F(SlotWorkerIntegrationTest, SlotRootUsesWorkerNamespace)
 {
     SetSlotWorkerNamespace(DEFAULT_WORKER_NAME);
-    EXPECT_EQ(BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name),
-              JoinPath(JoinPath(JoinPath(JoinPath(sfsPath_, "datasystem"), FLAGS_cluster_name), "slot_store"),
+    EXPECT_EQ(BuildSlotStoreRoot(distributedDiskPath_, FLAGS_cluster_name),
+              JoinPath(JoinPath(JoinPath(JoinPath(distributedDiskPath_, "datasystem"), FLAGS_cluster_name),
+                                "slot_store"),
                        DEFAULT_WORKER_NAME));
 
     const auto workerAddress = std::string("10.11.12.13:31501");
     const auto workerNamespace = SanitizeSlotWorkerNamespace(workerAddress);
     SetSlotWorkerNamespace(workerNamespace);
-    EXPECT_EQ(BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name), SlotRootForWorker(workerAddress));
+    EXPECT_EQ(BuildSlotStoreRoot(distributedDiskPath_, FLAGS_cluster_name), SlotRootForWorker(workerAddress));
     EXPECT_EQ(workerNamespace, "10.11.12.13_31501");
 }
 
@@ -194,7 +198,7 @@ TEST_F(SlotWorkerIntegrationTest, RepairLocalSlotsOnly)
     DS_ASSERT_OK(slot3.Save("tenant/slot3", 1, MakeBody("beta")));
     AppendCorruption(slot1Path);
 
-    object_cache::SlotRecoveryOrchestrator orchestrator(sfsPath_);
+    object_cache::SlotRecoveryOrchestrator orchestrator(distributedDiskPath_);
     DS_ASSERT_OK(orchestrator.Init());
     DS_ASSERT_OK(orchestrator.RepairLocalSlots());
 
@@ -228,7 +232,7 @@ TEST_F(SlotWorkerIntegrationTest, RepairSkipsOtherNamespaces)
     AppendCorruption(slotBPath);
     const auto workerBIndexSize = FileSize(ActiveIndexPath(slotBPath));
 
-    object_cache::SlotRecoveryOrchestrator orchestrator(sfsPath_);
+    object_cache::SlotRecoveryOrchestrator orchestrator(distributedDiskPath_);
     DS_ASSERT_OK(orchestrator.Init());
     DS_ASSERT_OK(orchestrator.RepairLocalSlots());
 
@@ -250,7 +254,7 @@ TEST_F(SlotWorkerIntegrationTest, StartupRepairRestoresRead)
     DS_ASSERT_OK(writer->Save(objectKey, 1, 1000, MakeBody(payload)));
     AppendCorruption(SlotPathForKey(objectKey));
 
-    object_cache::SlotRecoveryOrchestrator orchestrator(sfsPath_);
+    object_cache::SlotRecoveryOrchestrator orchestrator(distributedDiskPath_);
     DS_ASSERT_OK(orchestrator.Init());
     DS_ASSERT_OK(orchestrator.RepairLocalSlots());
 
