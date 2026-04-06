@@ -1236,9 +1236,8 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             VLOG(1) << "select object location is: " << info.address();
             info.set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
         };
-        bool isReadLock = IsUrmaEnabled() && FLAGS_enable_data_replication;
         QueryMetaInfoPb info;
-        if (isReadLock) {
+        if (!FLAGS_enable_data_replication) {
             TbbMetaTable::const_accessor accessor;
             if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
                 getMetaInfo(accessor, info);
@@ -1257,8 +1256,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
                 // 3. If the key type is hash and the req is from another worker, no need to keep worker address to
                 // location.
                 auto isHashKeyCrossAz = req.is_from_other_az() && !HasWorkerId(objectKey);
-                if (FLAGS_enable_data_replication
-                    && accessor->second.locations.find(address) == accessor->second.locations.end()
+                if (accessor->second.locations.find(address) == accessor->second.locations.end()
                     && !isHashKeyCrossAz) {
                     accessor->second.locations[address] = AckState::UNACK;
                     RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
