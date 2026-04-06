@@ -314,10 +314,12 @@ global:
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`] |
+| global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
 | global.l2Cache.l2CacheDeleteThreadNum | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
 | global.l2Cache.ocIoFromL2CacheNeedMetadata | bool | `true` | 配置L2缓存守护进程的数据读写是否依赖元数据，设置为false，则表示元数据不存储在etcd中 |
 | global.l2Cache.enableL2CacheFallback | bool | `true` | 控制是否允许从二级缓存拉数据，当worker失败时，是否启用从二级缓存拉取数据的回退机制 |
+| global.l2Cache.l2CacheAsyncWriteQueueSize | int | `10000` | 配置二级缓存异步写队列大小 |
+| global.l2Cache.l2CacheAsyncWriteRateLimitMb | int | `200` | 配置二级缓存异步写入限速，单位 MB/s |
 
 ::::{tab-set}
 
@@ -350,6 +352,20 @@ global:
 | global.l2Cache.sfsTurbo.id | string | `"0"` | 指定 sfs-turbo 的 ID，该 ID 可在 sfs-turbo 页面查看 |
 | global.l2Cache.sfsTurbo.projectId | string | `"0"` | 指定sfs-turbo的企业项目ID，该ID可在sfs-turbo页面查看 |
 | global.l2Cache.sfsTurbo.capacity | string | `"500Gi"` | 指定 sfs-turbo 的最大可用容量，该值必须要小于 sfs-turbo 的实际可用大小 |
+
+:::
+
+:::{tab-item} Distributed Disk
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.l2Cache.distributedDisk.path | string | `""` | distributed_disk 模式下的根路径。当 `global.l2Cache.l2CacheType=distributed_disk` 时，slot root path 基于该路径构建，不再使用 `sfs_path` |
+| global.l2Cache.distributedDisk.slotNum | int | `128` | distributed_disk 的 slot 分片数 |
+| global.l2Cache.distributedDisk.maxDataFileSizeMb | int | `1024` | 单个 distributed_disk data 文件的最大大小，单位 MB |
+| global.l2Cache.distributedDisk.syncIntervalMs | int | `5000` | distributed_disk group commit 的最长刷盘间隔，单位毫秒 |
+| global.l2Cache.distributedDisk.syncBatchBytes | int | `4194304` | distributed_disk group commit 的批量刷盘阈值，单位字节 |
+| global.l2Cache.distributedDisk.compactCutoverBytes | int | `4194304` | distributed_disk compact 最终切换阶段允许的最大增量字节数 |
+| global.l2Cache.distributedDisk.compactCutoverRecords | int | `4096` | distributed_disk compact 最终切换阶段允许的最大增量记录数 |
 
 :::
 

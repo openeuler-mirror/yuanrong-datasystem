@@ -30,12 +30,13 @@
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
+DS_DECLARE_string(distributed_disk_path);
 
 namespace datasystem {
 std::unique_ptr<PersistenceApi> PersistenceApi::Create()
 {
     if (FLAGS_l2_cache_type == "distributed_disk") {
-        return std::make_unique<AggregatedPersistenceApi>(std::make_unique<SlotClient>(FLAGS_sfs_path));
+        return std::make_unique<AggregatedPersistenceApi>(std::make_unique<SlotClient>(FLAGS_distributed_disk_path));
     }
     return std::make_unique<ObjectPersistenceApi>();
 }

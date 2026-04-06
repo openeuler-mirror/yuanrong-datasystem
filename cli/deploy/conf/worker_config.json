@@ -237,7 +237,7 @@
     },
     "l2_cache_type": {
         "value": "none",
-        "description": "Config the l2 cache type, obs. Optional value: 'obs', 'sfs', 'none'"
+        "description": "Config the l2 cache type. Optional value: 'obs', 'sfs', 'distributed_disk', 'none'"
     },
     "l2_cache_delete_thread_num": {
         "value": "32",
@@ -370,6 +370,34 @@
     "sfs_path": {
         "value": "",
         "description": "The path to the mounted SFS."
+    },
+    "distributed_disk_path": {
+        "value": "",
+        "description": "The root path used by distributed disk storage. This path takes effect only when l2_cache_type is 'distributed_disk'."
+    },
+    "distributed_disk_slot_num": {
+        "value": "128",
+        "description": "The number of slot partitions used by distributed disk. Must be greater than 0."
+    },
+    "distributed_disk_max_data_file_size_mb": {
+        "value": "1024",
+        "description": "The maximum size in MB of a single distributed disk data file. Must be greater than 0."
+    },
+    "distributed_disk_sync_interval_ms": {
+        "value": "5000",
+        "description": "The maximum time interval in milliseconds before distributed disk group commit flushes pending index and data writes."
+    },
+    "distributed_disk_sync_batch_bytes": {
+        "value": "4194304",
+        "description": "The batch size threshold in bytes that triggers distributed disk group commit flush."
+    },
+    "distributed_disk_compact_cutover_bytes": {
+        "value": "4194304",
+        "description": "The maximum delta bytes allowed during distributed disk compact final cutover."
+    },
+    "distributed_disk_compact_cutover_records": {
+        "value": "4096",
+        "description": "The maximum delta record count allowed during distributed disk compact final cutover."
     },
     "health_check_path": {
         "value": "./datasystem/probe/healthy",

@@ -37,9 +37,9 @@ class SlotRecoveryOrchestrator {
 public:
     /**
      * @brief Construct an orchestrator for one worker-scoped slot namespace.
-     * @param[in] sfsPath Shared filesystem root.
+     * @param[in] rootPath Distributed disk storage root path.
      */
-    explicit SlotRecoveryOrchestrator(const std::string &sfsPath);
+    explicit SlotRecoveryOrchestrator(const std::string &rootPath);
 
     ~SlotRecoveryOrchestrator() = default;
 
@@ -59,7 +59,7 @@ private:
     Status ParseSlotId(const std::string &slotDirName, uint32_t &slotId) const;
     std::string BaseName(const std::string &path) const;
 
-    std::string sfsPath_;
+    std::string rootPath_;
     std::unique_ptr<SlotClient> slotClient_;
 };
 }  // namespace object_cache

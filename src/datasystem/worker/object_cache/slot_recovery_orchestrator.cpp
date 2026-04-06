@@ -35,20 +35,20 @@ DS_DECLARE_string(cluster_name);
 namespace datasystem {
 namespace object_cache {
 
-SlotRecoveryOrchestrator::SlotRecoveryOrchestrator(const std::string &sfsPath) : sfsPath_(sfsPath)
+SlotRecoveryOrchestrator::SlotRecoveryOrchestrator(const std::string &rootPath) : rootPath_(rootPath)
 {
 }
 
 Status SlotRecoveryOrchestrator::Init()
 {
-    slotClient_ = std::make_unique<SlotClient>(sfsPath_);
+    slotClient_ = std::make_unique<SlotClient>(rootPath_);
     return slotClient_->Init();
 }
 
 Status SlotRecoveryOrchestrator::RepairLocalSlots()
 {
     CHECK_FAIL_RETURN_STATUS(slotClient_ != nullptr, StatusCode::K_RUNTIME_ERROR, "slotClient_ is nullptr");
-    const auto slotRoot = BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name);
+    const auto slotRoot = BuildSlotStoreRoot(rootPath_, FLAGS_cluster_name);
     if (!FileExist(slotRoot)) {
         LOG(INFO) << "Skip slot repair because local slot root does not exist, root=" << slotRoot;
         return Status::OK();

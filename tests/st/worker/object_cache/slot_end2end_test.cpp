@@ -70,14 +70,14 @@ public:
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
         opts.addNodeTime = SCALE_DOWN_ADD_TIME;
-        sfsPath_ = testCasePath_ + "/mock_sfs";
-        DS_ASSERT_OK(CreateDir(sfsPath_, true));
+        distributedDiskPath_ = testCasePath_ + "/distributed_disk";
+        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         const bool autoDeleteDeadNode = IsPassiveScaleDownCase();
         const uint64_t nodeDeadTimeoutS =
             autoDeleteDeadNode ? PASSIVE_NODE_DEAD_TIMEOUT_S : RESTART_NODE_DEAD_TIMEOUT_S;
         std::stringstream ss;
         ss << "-l2_cache_type=distributed_disk "
-           << "-sfs_path=" << sfsPath_ << " "
+           << "-distributed_disk_path=" << distributedDiskPath_ << " "
            << "-cluster_name=" << CLUSTER_NAME << " "
            << "-distributed_disk_slot_num=" << SLOT_NUM << " "
            << "-distributed_disk_sync_interval_ms=0 "
@@ -134,7 +134,8 @@ protected:
         HostPort workerAddr;
         auto rc = cluster_->GetWorkerAddr(workerIndex, workerAddr);
         EXPECT_TRUE(rc.IsOk()) << rc.ToString() << ".";
-        return BuildSlotStoreRootForWorker(sfsPath_, CLUSTER_NAME, SanitizeSlotWorkerNamespace(workerAddr.ToString()));
+        return BuildSlotStoreRootForWorker(distributedDiskPath_, CLUSTER_NAME,
+                                           SanitizeSlotWorkerNamespace(workerAddr.ToString()));
     }
 
     std::string SlotPathForWorkerAndKey(uint32_t workerIndex, const std::string &key) const
@@ -249,7 +250,7 @@ protected:
         ASSERT_EQ(close(fd), 0);
     }
 
-    std::string sfsPath_;
+    std::string distributedDiskPath_;
 };
 
 TEST_F(SlotEndToEndTest, WorkerRestartRepairsSlot)

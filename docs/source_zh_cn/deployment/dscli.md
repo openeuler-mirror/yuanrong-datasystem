@@ -782,7 +782,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| l2_cache_type | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`] |
+| l2_cache_type | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
 | l2_cache_delete_thread_num | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
 | l2_cache_async_write_queue_size | int | `10000` | 用于写入二级缓存的每线程异步队列大小。共有 8 个线程，支持的最大总容量为 8 * l2_cache_async_write_queue_size 个待写入的键值对 |
 | l2_cache_async_write_rate_limit_mb | int | `200` | 配置写入二级缓存异步任务速率(以MB/s为单位) |
@@ -792,6 +792,13 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | obs_bucket | string | `""` | 对象存储服务(OBS) 桶的名称 |
 | obs_https_enabled | bool | `false` | 是否启用HTTPS连接对象存储服务（OBS），默认为HTTP |
 | sfs_path | string | `""` | 挂载的SFS路径 |
+| distributed_disk_path | string | `""` | distributed_disk 模式下的根路径。当 `l2_cache_type=distributed_disk` 时，slot root path 基于该路径构建，不再使用 `sfs_path` |
+| distributed_disk_slot_num | uint32 | `128` | distributed_disk 的 slot 分片数，必须大于0 |
+| distributed_disk_max_data_file_size_mb | uint32 | `1024` | 单个 distributed_disk data 文件的最大大小，单位 MB |
+| distributed_disk_sync_interval_ms | uint32 | `5000` | distributed_disk group commit 的最长刷盘间隔，单位毫秒 |
+| distributed_disk_sync_batch_bytes | uint64 | `4194304` | distributed_disk group commit 的批量刷盘阈值，单位字节 |
+| distributed_disk_compact_cutover_bytes | uint64 | `4194304` | distributed_disk compact 最终切换阶段允许的最大增量字节数 |
+| distributed_disk_compact_cutover_records | uint32 | `4096` | distributed_disk compact 最终切换阶段允许的最大增量记录数 |
 | enable_cloud_service_token_rotation | bool | `false` | 启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS |
 
 #### 多集群相关配置

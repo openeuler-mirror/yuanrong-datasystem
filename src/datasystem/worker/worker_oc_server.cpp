@@ -172,6 +172,7 @@ DS_DEFINE_uint64(oc_worker_aggregate_merge_size, 2097152,
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
+DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
@@ -255,7 +256,8 @@ void WorkerOCServer::InitSlotWorkerNamespace()
 Status WorkerOCServer::InitSlotRecovery()
 {
     RETURN_OK_IF_TRUE(!IsWorkerScopedSlotStoreEnabled());
-    slotRecoveryOrchestrator_ = std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_sfs_path);
+    slotRecoveryOrchestrator_ =
+        std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_distributed_disk_path);
     RETURN_IF_NOT_OK(slotRecoveryOrchestrator_->Init());
     return slotRecoveryOrchestrator_->RepairLocalSlots();
 }
