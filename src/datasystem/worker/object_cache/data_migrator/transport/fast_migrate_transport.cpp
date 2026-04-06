@@ -73,6 +73,9 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
     // 1. Construct request.
     MigrateDataDirectReqPb reqPb;
     reqPb.set_worker_addr(req.localAddr);
+    reqPb.set_is_slot_migration(req.isSlotMigration);
+    reqPb.set_slot_id(req.slotId);
+    reqPb.set_is_retry(req.isRetry);
     uint64_t totalDataBytes = 0;
     for (const auto &data : *req.datas) {
         Status s = data->LockData();

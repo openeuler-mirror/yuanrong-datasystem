@@ -301,6 +301,7 @@ public:
      * @param failedIds Remove meta failed ids
      * @param needMigrateIds Need migrateIds.
      * @param needWaitIds Need waited Ids
+     * @param needMigrateL2CacheIds Need migrate L2 cache ids.
      * @return Status of the call
      */
     Status RemoveMetadataFromRedirectMaster(master::RemoveMetaRspPb &rsp,
@@ -309,7 +310,8 @@ public:
                                             const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
                                             std::vector<std::string> &failedIds,
                                             std::vector<std::string> &needMigrateIds,
-                                            std::vector<std::string> &needWaitIds);
+                                            std::vector<std::string> &needWaitIds,
+                                            std::vector<std::string> &needMigrateL2CacheIds);
 
     /**
      * @brief
@@ -321,13 +323,14 @@ public:
      * @param[out] failedIds Failed Ids.
      * @param[out] needMigrateIds need to migrate ids.
      * @param[out] needWaitIds Need wait ids.
+     * @param[out] needMigrateL2CacheIds Need migrate L2 cache ids.
      */
     void BatchRemoveMeta(const std::vector<std::string> &objectKeys,
                          const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                          const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
                          const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
                          std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                         std::vector<std::string> &needWaitIds);
+                         std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds);
 
     /**
      * @brief GroupAndRemoveMeta
@@ -338,12 +341,13 @@ public:
      * @param[out] failedIds Failed Ids.
      * @param[out] needMigrateIds need to migrate ids.
      * @param[out] needWaitIds Need wait ids.
+     * @param[out] needMigrateL2CacheIds Need migrate L2 cache ids.
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             const std::string &localAddress,
                             const std::unordered_map<std::string, uint64_t> &objKeyVersions,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds);
+                            std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds);
 
 protected:
     /**

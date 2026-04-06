@@ -354,7 +354,8 @@ Status WorkerOcServiceCrudCommonApi::RemoveMeta(const std::list<std::string> &ob
 Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
     master::RemoveMetaRspPb &rsp, const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
     const std::unordered_map<std::string, uint64_t> &batchKeyVersions, std::vector<std::string> &failedIds,
-    std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds)
+    std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
+    std::vector<std::string> &needMigrateL2CacheIds)
 {
     for (const auto &redirectInfo : rsp.info()) {
         master::RemoveMetaReqPb redirectReq;
@@ -388,6 +389,8 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
                                   redirectRsp.need_data_ids().end());
             needWaitIds.insert(needWaitIds.end(), redirectRsp.need_wait_ids().begin(),
                                redirectRsp.need_wait_ids().end());
+            needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), redirectRsp.need_l2cache_ids().begin(),
+                                         redirectRsp.need_l2cache_ids().end());
         }
     }
     return Status::OK();
@@ -398,7 +401,7 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
     const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
     const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
     std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-    std::vector<std::string> &needWaitIds)
+    std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
 {
     std::list<std::string> objectKeysRemoveList;
     const uint32_t objBatch = 300;
@@ -432,9 +435,11 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
                 needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(),
                                       response.need_data_ids().end());
                 needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
+                needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), response.need_l2cache_ids().begin(),
+                                             response.need_l2cache_ids().end());
             }
-            RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions,
-                                            failedIds, needMigrateIds, needWaitIds);
+            RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions, failedIds,
+                                             needMigrateIds, needWaitIds, needMigrateL2CacheIds);
             objectKeysRemoveList.clear();
             count = 0;
         }
@@ -454,19 +459,19 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
             needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(),
                                   response.need_data_ids().end());
             needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
+            needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), response.need_l2cache_ids().begin(),
+                                         response.need_l2cache_ids().end());
         }
-        RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions,
-                                        failedIds, needMigrateIds, needWaitIds);
+        RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions, failedIds,
+                                         needMigrateIds, needWaitIds, needMigrateL2CacheIds);
     }
 }
 
-void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(const std::vector<std::string> &objKeys,
-                                                      const master::RemoveMetaReqPb::Cause &removeCase,
-                                                      const std::string &localAddress,
-                                                      const std::unordered_map<std::string, uint64_t> &objKeyVersions,
-                                                      std::vector<std::string> &failedIds,
-                                                      std::vector<std::string> &needMigrateIds,
-                                                      std::vector<std::string> &needWaitIds)
+void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(
+    const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
+    const std::string &localAddress, const std::unordered_map<std::string, uint64_t> &objKeyVersions,
+    std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
+    std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
 {
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objKeys);
     for (const auto &item : objKeysGrpByMaster) {
@@ -489,7 +494,7 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(const std::vector<std::str
         }
         LOG(INFO) << "remove meta req send to master: " << masterAddr.ToString() << ", removeCase: " << removeCase;
         BatchRemoveMeta(currentObjectKeysRemove, workerMasterApi, removeCase, localAddress, batchKeyVersions, failedIds,
-                        needMigrateIds, needWaitIds);
+                        needMigrateIds, needWaitIds, needMigrateL2CacheIds);
     }
 }
 }  // namespace object_cache

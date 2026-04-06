@@ -262,10 +262,11 @@ Status AggregateAllocate(
     const std::string &firstObjectKey,
     std::function<void(std::function<void(uint64_t, uint64_t, uint32_t)>, bool &)> &traversalHelper,
     std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-    std::vector<uint32_t> &shmIndexMapping, bool retryOnOOM)
+    std::vector<uint32_t> &shmIndexMapping, bool retryOnOOM, bool includeLargeObjects)
 {
     // Pre-allocate aggregated chunks of shared memory as ShmOwner, to reduce the number of allocation calls.
-    // Aggregate only for small objects (< 1MB size), and batch up to 1024 keys and 2MB size.
+    // By default only aggregate small objects (< 1MB), and batch up to 1024 keys and configured total size.
+    // Slot migration can opt in to include large objects as well.
     const uint64_t batchLimitKeys = 1024;
     const uint64_t batchLimitSingleSize = 1024 * 1024;
     const uint64_t batchLimitTotalSize = FLAGS_oc_worker_aggregate_merge_size;
@@ -278,13 +279,14 @@ Status AggregateAllocate(
     std::function<void(uint64_t, uint64_t, uint32_t)> aggregateCollector = [&](uint64_t dataSz, uint64_t shmSize,
                                                                                uint32_t objectIndex) {
         // Skip any object that has size beyond 1MB.
-        if (dataSz >= batchLimitSingleSize) {
+        if (!includeLargeObjects && dataSz >= batchLimitSingleSize) {
             return;
         }
 
         // Seal the last batch and start the new batch.
         uint64_t ceilingSize = Align4BitsCeiling(shmSize);
-        if (currentKeyCount >= batchLimitKeys || (currentBatchSize + ceilingSize) > batchLimitTotalSize) {
+        if (currentKeyCount >= batchLimitKeys
+            || ((currentBatchSize + ceilingSize) > batchLimitTotalSize && currentBatchSize > 0)) {
             aggreatedSizes.emplace_back(currentBatchSize);
             currentBatchSize = 0;
             currentKeyCount = 0;

@@ -733,7 +733,7 @@ public:
      */
     std::string GetWorkerAddress() const;
 
-private:
+protected:
     using WorkerId2MetaInfoType = std::unordered_map<std::string, MetaAddrInfo, TransparentStringHash, std::equal_to<>>;
     using Hash2MetaInfoType = std::pair<std::map<HashPosition, std::pair<Range, MetaAddrInfo>>, int64_t>;
 

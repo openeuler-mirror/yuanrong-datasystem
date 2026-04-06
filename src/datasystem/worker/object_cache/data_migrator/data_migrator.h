@@ -20,6 +20,11 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_H
 #define DATASYSTEM_MIGRATE_DATA_H
 
+#include <future>
+#include <map>
+#include <unordered_map>
+#include <utility>
+
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
@@ -57,6 +62,25 @@ public:
                    const std::unordered_map<std::string, uint64_t> &objectSizes);
 
     /**
+     * @brief Migrate objects to a specific target node (slot migration).
+     * @param[in] objectKeys Object keys to migrate.
+     * @param[in] targetAddr Target node address.
+     * @param[in] strategy Selection strategy for node selection on failure.
+     * @return Future of migrate result.
+     */
+    std::future<MigrateDataHandler::MigrateResult> MigrateToTargetNode(
+        const std::vector<std::string> &objectKeys, const HostPort &targetAddr,
+        std::shared_ptr<SelectionStrategy> strategy = nullptr, bool isRetry = false, uint32_t slotId = 0);
+
+    /**
+     * @brief Migrate L2 cache objects by slot grouping.
+     * @param[in] objectKeys Object keys to migrate.
+     * @param[in] standbyWorker Standby worker address (preferred target).
+     * @return Status of the call.
+     */
+    Status MigrateL2CacheBySlot(const std::vector<std::string> &objectKeys);
+
+    /**
      * @brief Get not migrated object keys.
      * @param[out] failedMigrateObjectKeys The list of object keys that are failed.
      */
@@ -67,7 +91,18 @@ public:
         std::copy(failedKeys_.begin(), failedKeys_.end(), std::back_inserter(failedMigrateObjectKeys));
     }
 
+        /**
+     * @brief Checks the connection to the target Worker node and creates a remote Worker API if connected.
+     * @param[in,out] remoteWorkerStub Pointer to the remote Worker API.
+     * @param[in] workerAddr Address of the target Worker node.
+     * @return Status The status of the connection and API creation.
+     */
+    Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
+                                     const HostPort &workerAddr);
+
 private:
+    using SlotMigrateFuture = std::pair<uint32_t, std::future<MigrateDataHandler::MigrateResult>>;
+
     /**
      * @brief Log migration progress periodically.
      */
@@ -77,6 +112,32 @@ private:
      * @brief Create progress reporter for migration.
      */
     static std::shared_ptr<MigrateProgress> CreateMigrateProgress(uint64_t objectCount);
+
+    /**
+     * @brief Initialize migration state.
+     * @param[in] objectCount Number of objects to migrate.
+     */
+    void InitMigrateState(uint64_t objectCount);
+
+    /**
+     * @brief Migrate data to a specific target node (slot migration).
+     * @param[in] objectKeys Object keys to migrate.
+     * @param[in] targetAddr Target node address.
+     * @param[in] strategy Selection strategy for node selection on failure.
+     * @return Future of migrate result.
+     */
+    std::future<MigrateDataHandler::MigrateResult> MigrateToSpecificNode(
+        const std::vector<std::string> &objectKeys, const HostPort &targetAddr,
+        std::shared_ptr<SelectionStrategy> strategy);
+
+    /**
+     * @brief Migrate data by master group (normal migration).
+     * @param[in] objectKeys Object keys to migrate.
+     * @param[in] objectSizes Object sizes mapping.
+     * @return Status of the call.
+     */
+    Status MigrateByMasterGroup(const std::vector<std::string> &objectKeys,
+                                const std::unordered_map<std::string, uint64_t> &objectSizes);
 
     /**
      * @brief Get migration strategy by type.
@@ -109,20 +170,12 @@ private:
      * @param[in] remoteWorkerStub Remote node rpc stub.
      * @param[in] objectKeys Need migrate data object keys.
      * @param[in] strategy Migration data strategy instance used to select the target node for data migration.
+     * @param[in] isSlotMigration Whether this is a slot migration (no retry, no redirect).
      * @return Task future.
      */
     MigrateDataHandler::MigrateResult MigrateDataByNodeImpl(
         const std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub, const std::vector<std::string> &objectKeys,
-        const std::shared_ptr<SelectionStrategy> &strategy);
-
-    /**
-     * @brief Checks the connection to the target Worker node and creates a remote Worker API if connected.
-     * @param[in,out] remoteWorkerStub Pointer to the remote Worker API.
-     * @param[in] workerAddr Address of the target Worker node.
-     * @return Status The status of the connection and API creation.
-     */
-    Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
-                                     const HostPort &workerAddr);
+        const std::shared_ptr<SelectionStrategy> &strategy, bool isSlotMigration = false, uint32_t slotId = 0);
 
     /**
      * @brief Handle migration failure result.
@@ -162,6 +215,59 @@ private:
                                                                          const Status &status,
                                                                          const std::vector<std::string> &objectKeys,
                                                                          std::shared_ptr<SelectionStrategy> &strategy);
+
+    /**
+     * @brief Group L2 cache objects by slot id.
+     * @param[in] objectKeys L2 cache object keys.
+     * @return Slot to object list mapping.
+     */
+    std::map<uint32_t, std::vector<std::string>> GroupL2CacheObjectsBySlot(
+        const std::vector<std::string> &objectKeys) const;
+
+    /**
+     * @brief Submit the initial migrate task for each slot.
+     * @param[in] objectsBySlot Slot groups.
+     * @param[in] standbyWorker Standby worker address.
+     * @param[out] futures Submitted migrate tasks.
+     * @param[out] sameNodeRetryCounts Same-node retry counters by slot.
+     */
+    void SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector<std::string>> &objectsBySlot,
+                                  const std::string &standbyWorker, std::vector<SlotMigrateFuture> &futures,
+                                  std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
+
+    /**
+     * @brief Try submit same-node retry for a slot that has entered the same-node retry flow.
+     * @param[in] slot Slot id.
+     * @param[in] result Migrate result.
+     * @param[in] maxSameNodeRetryCount Max retry count on the same node.
+     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
+     * @param[in,out] newFutures Newly generated futures.
+     * @return true if handled in this method, false if caller should try redirect retry.
+     */
+    bool TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateDataHandler::MigrateResult &result,
+                                         int maxSameNodeRetryCount,
+                                         std::unordered_map<uint32_t, int> &sameNodeRetryCounts,
+                                         std::vector<SlotMigrateFuture> &newFutures);
+
+    /**
+     * @brief Try submit redirect retry for a fully failed slot.
+     * @param[in] slot Slot id.
+     * @param[in,out] result Migrate result.
+     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
+     * @param[in,out] newFutures Newly generated futures.
+     */
+    void TrySubmitRedirectRetryForL2Slot(uint32_t slot, MigrateDataHandler::MigrateResult &result,
+                                         std::unordered_map<uint32_t, int> &sameNodeRetryCounts,
+                                         std::vector<SlotMigrateFuture> &newFutures);
+
+    /**
+     * @brief Process migrate futures for all slots until completion.
+     * @param[in,out] futures Current futures.
+     * @param[in] maxSameNodeRetryCount Max retry count on same node.
+     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
+     */
+    void ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
+                                   std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
 
     MigrateType type_;
     EtcdClusterManager *etcdCM_{ nullptr };

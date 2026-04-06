@@ -107,11 +107,15 @@ message MigrateDataReqPb {
     uint64 version = 2;
     uint64 data_size = 3;
     repeated uint32 part_index = 4;
+    uint32 cache_type = 5;
   }
   repeated ObjectInfoPb objects = 1;
   string worker_addr = 2;
-  uint64 bytes_send =3;
+  uint64 bytes_send = 3;
   MigrateType type = 4;
+  bool is_slot_migration = 5;
+  bool is_retry = 6;
+  uint32 slot_id = 7;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -144,6 +148,9 @@ message MigrateDataDirectReqPb {
   }
   repeated ObjectInfoPb objects = 1;
   string worker_addr = 2;
+  bool is_slot_migration = 3;
+  uint32 slot_id = 4;
+  bool is_retry = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

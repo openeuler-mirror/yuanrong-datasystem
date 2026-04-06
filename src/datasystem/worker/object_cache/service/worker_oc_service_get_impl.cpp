@@ -502,6 +502,7 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
     std::vector<std::string> failedIds;
     std::vector<std::string> needMigrateIds;
     std::vector<std::string> needWaitIds;
+    std::vector<std::string> noUseNeedL2DataIds;
     objKeys.reserve(deleteKeyVersions.size());
     for (const auto &kv : deleteKeyVersions) {
         objKeys.emplace_back(kv.first);
@@ -517,7 +518,7 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
             continue;
         }
         GroupAndRemoveMeta(objKeys, RemoveMetaReqPb_Cause_EVICTION, localAddress_.ToString(), deleteKeyVersions,
-                           failedIds, needMigrateIds, needWaitIds);
+                           failedIds, needMigrateIds, needWaitIds, noUseNeedL2DataIds);
         objKeys.clear();
         if (!failedIds.empty() || !needMigrateIds.empty() || !needWaitIds.empty()) {
             objKeys.insert(objKeys.end(), std::make_move_iterator(failedIds.begin()),

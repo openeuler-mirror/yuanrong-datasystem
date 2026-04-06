@@ -234,6 +234,7 @@ message RemoveMetaRspPb {
   repeated RedirectMetaInfo info = 5;
   bool meta_is_moving = 6;
   repeated string outdated_ids = 7;
+  repeated string need_l2cache_ids = 8;
 }
 
 message RollbackSealReqPb {

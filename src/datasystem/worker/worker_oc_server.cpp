@@ -537,6 +537,15 @@ void WorkerOCServer::CreateWorkerServices()
             hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
             objCacheMasterSvc_.get());
         objCacheClientWorkerSvc_->SetClusterManager(etcdCM_.get());
+        objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &taskId) {
+            while (!checkAsyncTasksDone_.load()) {
+                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+                    !etcdCM_->CheckVoluntaryTaskExpired(taskId), K_RUNTIME_ERROR,
+                    FormatString("task id %s has expired while waiting async tasks done", taskId));
+                std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
+            }
+            return Status::OK();
+        });
         // create WorkerWorkerOCService
         objCacheWorkerWkSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerOCServiceImpl>(
             objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), etcdCM_.get());
