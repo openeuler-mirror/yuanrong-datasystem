@@ -85,6 +85,7 @@ struct P2PPeer {
 struct FullParam : public CreateParam {
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     uint32_t ttlSecond = 0;
+    ExistenceOpt existence = ExistenceOpt::NONE;
 };
 
 using P2PPeerTable = tbb::concurrent_hash_map<std::string, P2PPeer>;

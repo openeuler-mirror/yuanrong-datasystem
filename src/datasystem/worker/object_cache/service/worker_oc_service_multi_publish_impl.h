@@ -124,20 +124,6 @@ private:
                                  Status &lastRc, std::unordered_set<std::string> &failedKeys);
 
     /**
-     * @brief Get the objects that need send to master.
-     * @param[in] objectKeys The object keys.
-     * @param[in] entries The object entries.
-     * @param[in] failedKeys The failed object keys.
-     * @param[in] outKeys The out keys.
-     * @param[in] outEntries The out entries.
-     * @return true If use outKeys and outEntries.
-     */
-    bool GetObjectsNeedToMaster(const std::vector<std::string> &objectKeys,
-                                const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                const std::unordered_set<std::string> &failedKeys, std::vector<std::string> &outKeys,
-                                std::vector<std::shared_ptr<SafeObjType>> &outEntries);
-
-    /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.
      * @param[in] req The rpc request protobuf.
      * @param[in] objectKeys Object key list.
@@ -331,13 +317,11 @@ private:
      * @param[in] objectKeys Object key list.
      * @param[in] objectEntries The object entries.
      * @param[in] versions The versions of objects.
-     * @param[in] failedKeys The failed object keys.
      * @return K_OK on success; the error code otherwise.
      */
     void UpdateObjectAfterCreatingMeta(const std::vector<std::string> &objectKeys,
                                        const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
-                                       const std::vector<uint64_t> &versions,
-                                       const std::unordered_set<std::string> &failedKeys = {});
+                                       const std::vector<uint64_t> &versions);
 
     /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.
@@ -407,7 +391,8 @@ private:
      * @param[out] entries Locked entry list
      */
     Status BatchLockForSetNtx(const std::vector<std::string> &objectKeys, const ExistenceOptPb &existence,
-                               std::vector<bool> &isInserts, std::vector<std::shared_ptr<SafeObjType>> &entries);
+                              std::vector<bool> &isInserts, std::vector<std::shared_ptr<SafeObjType>> &entries,
+                              std::unordered_set<std::string> &localExistKeys);
     /**
      * @brief Verify the validity of the object release.
      * @param[in] req Publish request meta.
@@ -436,7 +421,8 @@ private:
      */
     void VerifyObjectsNtx(const MultiPublishReqPb &req, const std::vector<std::string> &objectKeys,
                           std::vector<std::shared_ptr<SafeObjType>> &entries,
-                          std::unordered_set<std::string> &failedKeys);
+                          std::unordered_set<std::string> &failedKeys,
+                          const std::unordered_set<std::string> &localExistKeys);
 
     /**
      * @brief Verify objects is valid.

@@ -624,7 +624,7 @@ TEST_F(KVClientMSetTest, MsetNtxExistenceNx)
     DS_ASSERT_OK(client2_->Set(keys[index], "qqq"));
     DS_ASSERT_OK(client2_->Set(keys[index1], "qqq"));
     DS_ASSERT_OK(client2_->MSet(keys, values, failedKeys, param));
-    size_t failedSize = 2;
+    size_t failedSize = 0;
     ASSERT_EQ(failedKeys.size(), failedSize);
     for (size_t i = 0; i < maxElementSize; i++) {
         std::string val;
@@ -635,6 +635,137 @@ TEST_F(KVClientMSetTest, MsetNtxExistenceNx)
             ASSERT_EQ(val, vals[i]);
         }
     }
+}
+
+TEST_F(KVClientMSetTest, MsetNtxNxExistingKeySameValueNoFailedKeys)
+{
+    MSetParam param;
+    param.existence = ExistenceOpt::NX;
+    std::string key = "mset_ntx_nx_existing_same_" + randomData_.GetRandomString(8);
+    std::string presetValue = randomData_.GetRandomString(64 * 1024);
+    DS_ASSERT_OK(client0_->Set(key, presetValue));
+
+    std::vector<std::string> keys{ key };
+    std::vector<std::string> rawVals{ presetValue };
+    std::vector<StringView> values{ rawVals[0] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client1_->MSet(keys, values, failedKeys, param));
+    ASSERT_TRUE(failedKeys.empty());
+
+    std::string valueGet;
+    DS_ASSERT_OK(client2_->Get(key, valueGet));
+    ASSERT_EQ(valueGet, presetValue);
+}
+
+TEST_F(KVClientMSetTest, LEVEL1_MsetNtxNxAddLocationAfterOwnerWorkerDown)
+{
+    MSetParam param;
+    param.existence = ExistenceOpt::NX;
+    std::string key = "mset_ntx_nx_location_" + randomData_.GetRandomString(8);
+    std::string presetValue = randomData_.GetRandomString(64 * 1024);
+    DS_ASSERT_OK(client1_->Set(key, presetValue));
+
+    std::vector<std::string> keys{ key };
+    std::vector<std::string> rawVals{ presetValue };
+    std::vector<StringView> values{ rawVals[0] };
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client2_->MSet(keys, values, failedKeys, param));
+    ASSERT_TRUE(failedKeys.empty());
+
+    HostPort worker2Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr));
+    constexpr size_t centralMasterWorkerIdx = 0;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, centralMasterWorkerIdx, "master.select_location",
+                                           "return(" + worker2Addr.ToString() + ")"));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
+    std::string valueGet;
+    Status rc = Status::OK();
+    int retryTimes = 20;
+    int waitMs = 200;
+    for (int i = 0; i < retryTimes; ++i) {
+        rc = client0_->Get(key, valueGet);
+        if (rc.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
+    }
+    Status clearInjectRc = Status::OK();
+    for (int i = 0; i < 5; ++i) {
+        clearInjectRc = cluster_->ClearInjectAction(WORKER, centralMasterWorkerIdx, "master.select_location");
+        if (clearInjectRc.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    DS_ASSERT_OK(clearInjectRc);
+    DS_ASSERT_OK(rc);
+    ASSERT_EQ(valueGet, presetValue);
+}
+
+TEST_F(KVClientMSetTest, MsetNtxNxAllLocalExistSkipMasterCreate)
+{
+    MSetParam param;
+    param.existence = ExistenceOpt::NX;
+    std::vector<std::string> keys, vals;
+    std::vector<StringView> values;
+    size_t keyNum = 6;
+    auto valSize = 256;
+    GenerateKeyValues(keys, vals, keyNum, valSize);
+    for (size_t i = 0; i < keyNum; ++i) {
+        DS_ASSERT_OK(client1_->Set(keys[i], vals[i]));
+        values.emplace_back(vals[i]);
+    }
+
+    for (size_t i = 0; i < DEFAULT_WORKER_NUM; ++i) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "master.CreateMultiMeta.begin", "1*return(K_RUNTIME_ERROR)"));
+    }
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client1_->MSet(keys, values, failedKeys, param));
+    ASSERT_TRUE(failedKeys.empty());
+    for (size_t i = 0; i < keyNum; ++i) {
+        std::string valueGet;
+        DS_ASSERT_OK(client1_->Get(keys[i], valueGet));
+        ASSERT_EQ(valueGet, vals[i]);
+    }
+    for (size_t i = 0; i < DEFAULT_WORKER_NUM; ++i) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "master.CreateMultiMeta.begin"));
+    }
+}
+
+TEST_F(KVClientMSetTest, MsetNtxNxMixedLocalExistAndAbsentFailedKeysPrecise)
+{
+    MSetParam param;
+    param.existence = ExistenceOpt::NX;
+    std::string keyExist = "mset_ntx_nx_exist_" + randomData_.GetRandomString(8);
+    std::string keyFail = "mset_ntx_nx_fail_" + randomData_.GetRandomString(8);
+    std::string keyOk = "mset_ntx_nx_ok_" + randomData_.GetRandomString(8);
+    std::string existValue = randomData_.GetRandomString(64);
+    std::string failValue = randomData_.GetRandomString(64);
+    std::string okValue = randomData_.GetRandomString(64);
+    DS_ASSERT_OK(client1_->Set(keyExist, existValue));
+
+    std::vector<std::string> keys{ keyExist, keyFail, keyOk };
+    std::vector<std::string> rawVals{ existValue, failValue, okValue };
+    std::vector<StringView> values;
+    for (const auto &val : rawVals) {
+        values.emplace_back(val);
+    }
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "AttachShmUnitToObject.error", "1*return(K_RUNTIME_ERROR)"));
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client1_->MSet(keys, values, failedKeys, param));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "AttachShmUnitToObject.error"));
+
+    size_t failedSize = 1;
+    ASSERT_EQ(failedKeys.size(), failedSize);
+    ASSERT_EQ(failedKeys[0], keyFail);
+
+    std::string valueGet;
+    DS_ASSERT_OK(client0_->Get(keyExist, valueGet));
+    ASSERT_EQ(valueGet, existValue);
+    DS_ASSERT_OK(client0_->Get(keyOk, valueGet));
+    ASSERT_EQ(valueGet, okValue);
+    DS_ASSERT_NOT_OK(client0_->Get(keyFail, valueGet));
 }
 
 TEST_F(KVClientMSetTest, MsetNtxBigObj)

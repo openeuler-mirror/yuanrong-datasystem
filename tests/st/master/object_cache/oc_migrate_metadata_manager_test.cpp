@@ -411,6 +411,38 @@ public:
         return Status::OK();
     }
 
+    Status CreateMultiMetadataNtx(const std::vector<std::string> &objectKeys, const std::string &address,
+                                  CreateMultiMetaRspPb &response)
+    {
+        CreateMultiMetaReqPb request;
+        for (const auto &objectKey : objectKeys) {
+            datasystem::ObjectBaseInfoPb *metadata = request.add_metas();
+            metadata->set_object_key(objectKey);
+            metadata->set_data_size(dataSize_);
+        }
+        request.set_life_state(static_cast<uint32_t>(lifeState_));
+        request.set_ttl_second(ttlSecond_);
+        request.set_existence(ExistenceOptPb::NX);
+        ConfigPb *configPb = request.mutable_config();
+        configPb->set_write_mode(static_cast<uint32_t>(writeMode_));
+        configPb->set_data_format(static_cast<uint32_t>(dataFormat_));
+        configPb->set_consistency_type(static_cast<uint32_t>(consistencyType_));
+        request.set_istx(false);
+        request.set_address(address);
+
+        std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        return ocMetadataManager->CreateMultiMeta(request, response);
+    }
+
+    Status FillMetaForMigration(const std::string &objectKey, MetaForMigrationPb &meta)
+    {
+        std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> asyncMap;
+        std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        return ocMetadataManager->FillMetadataForMigration(objectKey, meta, asyncMap);
+    }
+
     Status CheckMetadata(const std::string &objectKey)
     {
         // Check whether the old node has no data.
@@ -497,6 +529,52 @@ TEST_F(OCMetaManagerCreateMultiMetaTest, CreateAndMultiCreateMetaTest)
     int metaNum1 = 3;
     DS_ASSERT_OK(CreateMetadata(metaNum1));
     ASSERT_EQ(CreateMultiMetadata(metaNum).GetCode(), K_OC_KEY_ALREADY_EXIST);
+}
+
+TEST_F(OCMetaManagerCreateMultiMetaTest, CreateMultiMetaNtxNxExistingAddsLocation)
+{
+    DS_ASSERT_OK(InitInstance());
+    std::string objectKey = "CreateMultiMetaNtxNxExistingAddsLocation";
+    std::string address0 = hostPort_.ToString();
+    std::string address1 = "127.0.0.1:28999";
+
+    CreateMultiMetaRspPb response;
+    DS_ASSERT_OK(CreateMultiMetadataNtx({ objectKey }, address0, response));
+    ASSERT_EQ(response.failed_object_keys_size(), 0);
+
+    response.Clear();
+    DS_ASSERT_OK(CreateMultiMetadataNtx({ objectKey }, address1, response));
+    ASSERT_EQ(response.failed_object_keys_size(), 0);
+
+    MetaForMigrationPb meta;
+    DS_ASSERT_OK(FillMetaForMigration(objectKey, meta));
+    ASSERT_EQ(meta.locations_size(), 2);
+}
+
+TEST_F(OCMetaManagerCreateMultiMetaTest, CreateMultiMetaNtxNxExistingAddLocationPersistFailRollback)
+{
+    DS_ASSERT_OK(InitInstance());
+    std::string objectKey = "CreateMultiMetaNtxNxExistingAddLocationPersistFailRollback";
+    std::string address0 = hostPort_.ToString();
+    std::string address1 = "127.0.0.1:29999";
+
+    CreateMultiMetaRspPb response;
+    DS_ASSERT_OK(CreateMultiMetadataNtx({ objectKey }, address0, response));
+    ASSERT_EQ(response.failed_object_keys_size(), 0);
+
+    DS_ASSERT_OK(inject::Set("ObjectMetaStore.AddObjectLocation", "1*return(K_RUNTIME_ERROR)"));
+    response.Clear();
+    DS_ASSERT_OK(CreateMultiMetadataNtx({ objectKey }, address1, response));
+    DS_ASSERT_OK(inject::Clear("ObjectMetaStore.AddObjectLocation"));
+    ASSERT_EQ(response.failed_object_keys_size(), 1);
+    ASSERT_EQ(response.failed_object_keys(0), objectKey);
+    ASSERT_TRUE(response.has_last_rc());
+    ASSERT_EQ(response.last_rc().error_code(), K_RUNTIME_ERROR);
+
+    MetaForMigrationPb meta;
+    DS_ASSERT_OK(FillMetaForMigration(objectKey, meta));
+    ASSERT_EQ(meta.locations_size(), 1);
+    ASSERT_EQ(meta.locations(0), address0);
 }
 
 class OCMetaManagerTest : public OCMigrateMetadataManagerTest {

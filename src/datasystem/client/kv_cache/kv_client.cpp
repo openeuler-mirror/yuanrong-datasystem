@@ -115,7 +115,6 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
 Status KVClient::MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
 const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 {
-    CHECK_FAIL_RETURN_STATUS(param.existence != ExistenceOpt::NX, K_INVALID, "Not support NX setting.");
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MCREATE_BUFFERS);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
@@ -124,6 +123,7 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     creatParam.ttlSecond = param.ttlSecond;
     creatParam.consistencyType = ConsistencyType::CAUSAL;
     creatParam.cacheType = param.cacheType;
+    creatParam.existence = param.existence;
     Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
     RequestParam reqParam;
     std::string key = (keys.empty() ? "" : keys[0]);

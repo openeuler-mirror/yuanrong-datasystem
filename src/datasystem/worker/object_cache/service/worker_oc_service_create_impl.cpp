@@ -88,10 +88,9 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, rawObjectKey);
     // Check whether the object is sealed.
     std::shared_ptr<SafeObjType> entry;
-    CHECK_FAIL_RETURN_STATUS(
-        !(objectTable_->Get(objectKey, entry).IsOk() && entry->Get() != nullptr && (*entry)->IsSealed()),
+    bool isExist = objectTable_->Get(objectKey, entry).IsOk();
+    CHECK_FAIL_RETURN_STATUS(!(isExist && entry->Get() != nullptr && (*entry)->IsSealed()),
         K_OC_ALREADY_SEALED, "Cannot create sealed object.");
-
     // Given size, construct shmUnit, generate shm uuid and add client's reference on shmUnit.
     auto shmUnit = std::make_shared<ShmUnit>();
     auto metadataSize = GetMetadataSize();

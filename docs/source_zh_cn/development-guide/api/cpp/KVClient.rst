@@ -65,6 +65,7 @@ KVClient
     .. cpp:function:: Status Set(const std::string &key, const StringView &val, const SetParam &param)
 
         设置键值对数据缓存到数据系统。
+        当 ``param.existence=ExistenceOpt::NX`` 时：key不存在时写入；key已存在时返回成功且不覆盖。重复Set同一key时需保证 value 一致。
 
         参数：
             - **key** - 键，key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节.
@@ -111,6 +112,7 @@ KVClient
     .. cpp:function:: Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals, std::vector<std::string> &outFailedKeys, const MSetParam &param)
 
         键值对批量设置接口。可批量设置键值对并返回失败的键。
+        当 ``param.existence=ExistenceOpt::NX`` 时：key 不存在则创建；key 已存在视为成功，不覆盖已有值，且不会写入 ``outFailedKeys``。
 
         参数：
             - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。

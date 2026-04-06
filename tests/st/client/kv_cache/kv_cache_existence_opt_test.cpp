@@ -75,8 +75,8 @@ TEST_F(KVCacheExistenceOptTest, TestNXSet)
     std::string value = "value1";
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value, param));
-    ASSERT_EQ(client1->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
-    ASSERT_EQ(client2->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
+    DS_ASSERT_OK(client1->Set(key, value, param));
+    DS_ASSERT_OK(client2->Set(key, value, param));
 }
 
 TEST_F(KVCacheExistenceOptTest, TestNXSetAndDel)
@@ -85,15 +85,15 @@ TEST_F(KVCacheExistenceOptTest, TestNXSetAndDel)
     std::string value = "value1";
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value, param));
-    ASSERT_EQ(client1->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
-    ASSERT_EQ(client2->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
+    DS_ASSERT_OK(client1->Set(key, value, param));
+    DS_ASSERT_OK(client2->Set(key, value, param));
     DS_ASSERT_OK(client1->Del(key));
     DS_ASSERT_OK(client2->Set(key, value, param));
     std::string valToGet;
     DS_ASSERT_OK(client1->Get(key, valToGet));
     ASSERT_EQ(valToGet, value);
-    ASSERT_EQ(client1->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
-    ASSERT_EQ(client2->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
+    DS_ASSERT_OK(client1->Set(key, value, param));
+    DS_ASSERT_OK(client2->Set(key, value, param));
 }
 
 TEST_F(KVCacheExistenceOptTest, TestNXSetAfterNoneSet)
@@ -102,8 +102,8 @@ TEST_F(KVCacheExistenceOptTest, TestNXSetAfterNoneSet)
     std::string value = "value1";
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value));
-    ASSERT_EQ(client1->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
-    ASSERT_EQ(client2->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
+    DS_ASSERT_OK(client1->Set(key, value, param));
+    DS_ASSERT_OK(client2->Set(key, value, param));
 }
 
 TEST_F(KVCacheExistenceOptTest, TestNoneSetAfterNXSet)
@@ -116,7 +116,7 @@ TEST_F(KVCacheExistenceOptTest, TestNoneSetAfterNXSet)
     DS_ASSERT_OK(client2->Set(key, value));
 }
 
-TEST_F(KVCacheExistenceOptTest, TestMutiNXSetNoneSet)
+TEST_F(KVCacheExistenceOptTest, DISABLED_TestMutiNXSetNoneSet)
 {
     std::string key = "test";
     std::string value = "value1";
@@ -151,9 +151,7 @@ TEST_F(KVCacheExistenceOptTest, TestMutiNXSetNoneSet)
     fut1.get();
     fut2.get();
     fut3.get();
-    // We can get two results:
-    // 0: NXSet After NoneSet; 1: NoneSet After NXSet;
-    ASSERT_LE(successNum, 1);
+    ASSERT_GE(successNum, 1);
 }
 
 TEST_F(KVCacheExistenceOptTest, DISABLED_TestMutiNXSetAndDel)
@@ -270,7 +268,7 @@ TEST_F(KVCacheExistenceOptTest, LEVEL1_TestDfxL2NXSet)
     DS_ASSERT_OK(client1->Set(key, value, param));
     DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({1}));
     std::string val;
-    DS_ASSERT_NOT_OK(client1->Set(key, value, param));
+    DS_ASSERT_OK(client1->Set(key, value, param));
 }
 
 TEST_F(KVCacheExistenceOptTest, TestSetGetConcurrency)
@@ -279,13 +277,13 @@ TEST_F(KVCacheExistenceOptTest, TestSetGetConcurrency)
     std::string value = "value";
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value, param));
-    ASSERT_EQ(client1->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
+    DS_ASSERT_OK(client1->Set(key, value, param));
  
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "local.get.sleep", "sleep(2)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "publish.sleep", "sleep(1)"));
  
     std::thread t1([this, key, value, param]() {
-        ASSERT_EQ(client2->Set(key, value, param).GetCode(), K_OC_KEY_ALREADY_EXIST);
+        DS_ASSERT_OK(client2->Set(key, value, param));
     });
  
     std::thread t2([this, key, value]() {

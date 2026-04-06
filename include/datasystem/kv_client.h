@@ -43,7 +43,7 @@ class ObjectClientImpl;
 namespace datasystem {
 enum class ExistenceOpt : int {
     NONE = 0,  // Does not check for existence.
-    NX = 1,    // Only set the key if it does not already exist.
+    NX = 1,    // Set if key does not exist; if key exists, return success and keep existing value unchanged.
 };
 struct SetParam {
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;  // The default value of writeMode is WriteMode::NONE_L2_CACHE.
@@ -110,6 +110,7 @@ public:
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: the key or val is empty.
+    ///         For ExistenceOpt::NX, if key already exists, returns K_OK and keeps existing value unchanged.
     Status Set(const std::string &key, const StringView &val, const SetParam &param = {});
 
     /// \brief Invoke worker client to set the value of a key.
@@ -191,6 +192,7 @@ public:
     /// \param[in] param The set parameters.
     ///
     /// \return K_OK on any key success; the error code otherwise.
+    ///         For ExistenceOpt::NX, existing keys are treated as success and are not added to outFailedKeys.
     Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                 std::vector<std::string> &outFailedKeys, const MSetParam &param = {});
 

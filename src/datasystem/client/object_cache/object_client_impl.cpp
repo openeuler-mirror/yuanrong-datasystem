@@ -2838,7 +2838,8 @@ Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std
     }
     LOG(INFO) << "Begin to create multiput object." << VectorToString(keys);
     std::vector<bool> exist;
-    return MultiCreate(keys, sizes, param, true, buffers, exist);
+    bool skipCheckExistence = param.existence != ExistenceOpt::NX;
+    return MultiCreate(keys, sizes, param, skipCheckExistence, buffers, exist);
 }
 
 Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,

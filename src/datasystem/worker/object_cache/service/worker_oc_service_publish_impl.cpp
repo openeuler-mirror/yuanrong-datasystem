@@ -292,8 +292,11 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     std::shared_ptr<SafeObjType> entry;
     bool isInsert;
     Timer timer;
-    RETURN_IF_NOT_OK(
-        objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, req.existence() == ExistenceOptPb::NX));
+    Status status = objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, req.existence() == ExistenceOptPb::NX);
+    if (req.existence() == ExistenceOptPb::NX && status.GetCode() == K_OC_KEY_ALREADY_EXIST) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(status);
     CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack({ objectKey }), K_OC_KEY_ALREADY_EXIST,
                              "The object is being rolled back.");
     int64_t elapsed = timer.ElapsedMilliSecond();
