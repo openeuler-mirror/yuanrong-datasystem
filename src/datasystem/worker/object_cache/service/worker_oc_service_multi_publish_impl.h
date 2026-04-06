@@ -293,14 +293,14 @@ private:
                                             master::RollbackMultiMetaRspPb &rsp);
 
     /**
-     * @brief Retry create multimeta request when meta moving.
+     * @brief Create multimeta with Worker→Master RPC retry on transient errors, and loop while meta is moving.
      * @param[in] api The worker master api.
      * @param[in] req The CreateMultiMeta request.
      * @param[out] rsp The responese info of CreateMultiMeta.
      * @return Status of the call.
      */
-    Status RetryCreateMultiMetaWhenMoving(std::shared_ptr<worker::WorkerMasterOCApi> api,
-                                          master::CreateMultiMetaReqPb &req, master::CreateMultiMetaRspPb &rsp);
+    Status RetryCreateMultiMeta(std::shared_ptr<worker::WorkerMasterOCApi> api, master::CreateMultiMetaReqPb &req,
+                                master::CreateMultiMetaRspPb &rsp);
 
     /**
      * @brief Retry create multimeta phase two request when meta moving.

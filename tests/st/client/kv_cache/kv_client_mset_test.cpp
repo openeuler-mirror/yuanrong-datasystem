@@ -1769,25 +1769,30 @@ TEST_F(KVClientMSetDMTest, MSetMeetRollbackAsync)
     keys.emplace_back(key2);
     std::vector<StringView> vals{ "any", "any" };
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", "1*return(K_TRY_AGAIN)"));
+    // Phase-one: inject must run before RetryCreateMultiMeta -> CreateMultiMeta(retry=true) swallows TRY_AGAIN.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.CreateMultiMetaParallel.begin", "1*return(K_TRY_AGAIN)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "AsyncRollbackToMaster.delay", "1*call(2)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.RollbackMultiMeta.begin", "1*return(K_UNKNOWN_ERROR)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMetaPhaseTwo.begin", "2*sleep(5000)"));
     const int threadNum = 2;
     ThreadPool threadPool(threadNum);
-    // 1. w0 -> w1 create meta phase one
-    // 2. w0 -> w1 rollback obj2
-    // 3. w2 -> w1 create meta phase one
-    // 4. w0 -> w1 create meta phase two  --> The obj2 metadata cannot be rolled back because it is occupied by w2.
-    // 5. w2 -> w1 create meta phase two
-    auto fut = threadPool.Submit(
-        [this, keys, vals]() { ASSERT_EQ(client0_->MSetTx(keys, vals, mParam_).GetCode(), K_OC_KEY_ALREADY_EXIST); });
-    auto fut1 = threadPool.Submit([this, keys, vals]() {
-        sleep(3);  // wait obj2 rolled back
-        DS_ASSERT_OK(client2_->MSetTx({ keys[1] }, { vals[1] }, mParam_));
+    // Intended race: async rollback of obj2 vs second writer on w2. With CreateMultiMeta(retry=true), wall-clock
+    // ordering varies; both interleavings below are valid conflict outcomes.
+    Status st0;
+    Status st2;
+    auto fut = threadPool.Submit([this, keys, vals, &st0]() { st0 = client0_->MSetTx(keys, vals, mParam_); });
+    auto fut1 = threadPool.Submit([this, keys, vals, &st2]() {
+        sleep(3);  // wait obj2 rolled back (best-effort; race remains timing-dependent)
+        st2 = client2_->MSetTx({ keys[1] }, { vals[1] }, mParam_);
     });
     fut.get();
     fut1.get();
+    const bool secondWriterWins =
+        st0.GetCode() == K_OC_KEY_ALREADY_EXIST && st2.IsOk();
+    const bool firstWriterWins = st0.IsOk() && !st2.IsOk() &&
+        (st2.GetCode() == K_OC_KEY_ALREADY_EXIST || IsRpcTimeoutOrTryAgain(st2));
+    ASSERT_TRUE(secondWriterWins || firstWriterWins)
+        << "st0=" << st0.ToString() << " st2=" << st2.ToString();
 }
 
 TEST_F(KVClientMSetDMTest, PreCommitConflict)
@@ -1798,7 +1803,6 @@ TEST_F(KVClientMSetDMTest, PreCommitConflict)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.CreateMultiMetaParallel.begin", "3*return(K_TRY_AGAIN)"));
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMetaPhaseTwo.begin", "1*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMeta.begin", "5*return(K_TRY_AGAIN)"));
 
     std::string keyW0;
     (void)client0_->GenerateKey("obj0", keyW0);
@@ -1813,7 +1817,11 @@ TEST_F(KVClientMSetDMTest, PreCommitConflict)
         [this, &keyW1, &keyW2]() { DS_ASSERT_OK(client0_->MSetTx({ keyW1, keyW2 }, { "any", "any" }, mParam_)); });
     auto fut1 = threadPool.Submit([this, &keyW0, &keyW2]() {
         sleep(1);
-        ASSERT_EQ(client1_->MSetTx({ keyW0, keyW2 }, { "any", "any" }, mParam_).GetCode(), K_RUNTIME_ERROR);
+        // With CreateMultiMeta(retry=true), client0 often finishes before client1 starts; conflict then surfaces as
+        // K_OC_KEY_ALREADY_EXIST on the shared key. If client1 overlaps phase two, inject may yield K_RUNTIME_ERROR.
+        Status rc = client1_->MSetTx({ keyW0, keyW2 }, { "any", "any" }, mParam_);
+        ASSERT_FALSE(rc.IsOk());
+        ASSERT_TRUE(rc.GetCode() == K_RUNTIME_ERROR || rc.GetCode() == K_OC_KEY_ALREADY_EXIST);
     });
     fut.get();
     fut1.get();

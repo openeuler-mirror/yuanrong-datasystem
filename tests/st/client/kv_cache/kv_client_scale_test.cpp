@@ -2747,5 +2747,53 @@ TEST_F(STCScaleUpRedirectTest, ScaleUpDelayRedirect)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));  // wait interval is 10 ms
     }
 }
+
+TEST_F(STCScaleUpTest, MSetNtx_RequestTimeoutMs_WorkerToMasterUnavailable)
+{
+    DS_ASSERT_OK(cluster_->StartOBS());
+    StartWorkerAndWaitReady({ 0, 1, 2 });
+
+    const int32_t requestTimeoutMs = 10 * 1000;
+    const int32_t connectTimeoutMs = 20 * 1000;
+    InitTestKVClient(0, client_, [&requestTimeoutMs](ConnectOptions &opts) {
+        opts.connectTimeoutMs = connectTimeoutMs;
+        opts.requestTimeoutMs = requestTimeoutMs;
+        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+    });
+    InitTestKVClient(1, client1_, [&requestTimeoutMs](ConnectOptions &opts) {
+        opts.connectTimeoutMs = connectTimeoutMs;
+        opts.requestTimeoutMs = requestTimeoutMs;
+        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+    });
+
+    constexpr size_t kBatchSize = 32;
+    constexpr int kValSize = 10 * 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> vals;
+    std::vector<StringView> values;
+    vals.reserve(kBatchSize);
+    for (size_t i = 0; i < kBatchSize; ++i) {
+        vals.emplace_back(GenRandomString(kValSize));
+        values.emplace_back(vals[i]);
+        keys.emplace_back(client_->GenerateKey());
+    }
+
+    const std::string injectAction = "3000*return(K_RPC_UNAVAILABLE)";
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", injectAction));
+
+    MSetParam msetParam{ .writeMode = WriteMode::NONE_L2_CACHE };
+    std::vector<std::string> outFailedKeys;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    Status setRc = client1_->MSet(keys, values, outFailedKeys, msetParam);
+    auto end = std::chrono::high_resolution_clock::now();
+    const auto durationSec = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
+    ASSERT_NE(setRc.ToString().find("RPC unavailable"), std::string::npos);
+    ASSERT_GE(durationSec, 8);
+    ASSERT_LE(durationSec, 11);
+}
 }  // namespace st
 }  // namespace datasystem

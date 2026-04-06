@@ -27,6 +27,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -533,12 +534,11 @@ void WorkerOcServiceMultiPublishImpl::RollbackMultiMetaReq(std::vector<MetaAddrI
     }
 }
 
-Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMetaWhenMoving(std::shared_ptr<WorkerMasterOCApi> api,
-                                                                       CreateMultiMetaReqPb &req,
-                                                                       CreateMultiMetaRspPb &rsp)
+Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMeta(std::shared_ptr<WorkerMasterOCApi> api,
+                                                             CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
 {
     while (true) {
-        RETURN_IF_NOT_OK(api->CreateMultiMeta(req, rsp, false));
+        RETURN_IF_NOT_OK(api->CreateMultiMeta(req, rsp, true));
         if (rsp.info().empty()) {
             return Status::OK();
         }
@@ -603,7 +603,7 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
             reqTimeoutDuration.Init(std::min(timeout - elapsed, MSET_TRANSACTION_TIMEOUT_MS));
             CreateMultiMetaRspPb rsp;
             PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
-            rc = RetryCreateMultiMetaWhenMoving(api, req, rsp);
+            rc = RetryCreateMultiMeta(api, req, rsp);
             if (rc.GetCode() == K_RPC_UNAVAILABLE) {
                 rsp.mutable_last_rc()->set_error_code(rc.GetCode());
                 rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
@@ -669,7 +669,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaSerial(const ObjGroupMap 
                     RollbackMultiMetaReq(preCommitted, objGroup);
                     return rc;
                 }
-                rc = RetryCreateMultiMetaWhenMoving(api, reqs[i], rsp);
+                rc = RetryCreateMultiMeta(api, reqs[i], rsp);
                 point.Record();
                 if (rc.IsError()) {
                     RollbackMultiMetaReq(preCommitted, objGroup);
@@ -1005,7 +1005,9 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
         }
     }
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_ASYNC_NOTIFY);
-    threadPool_->Execute([this, keys]() {
+    auto traceId = Trace::Instance().GetTraceID();
+    threadPool_->Execute([this, keys, traceId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         Status rc;
         for (const auto &key : keys) {
             evictionManager_->Add(key);
