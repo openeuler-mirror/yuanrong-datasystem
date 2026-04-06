@@ -24,6 +24,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "datasystem/common/util/thread_local.h"
 #include "datasystem/utils/status.h"
 #include "tbb/blocked_range.h"
 #include "tbb/parallel_for.h"
@@ -582,7 +583,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     LOG(INFO) << "BatchGetObjectRemote request (objectKey, requestId, readOffset, readSize): "
-              << VectorToString(req.requests());
+              << VectorToString(req.requests()) << " remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
+              << "ms";
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
@@ -592,7 +594,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
-    VLOG(1) << "pull success with payload size: " << payload.size();
+    auto vlogLevel = payload.empty() ? 1 : 0;
+    VLOG(vlogLevel) << "pull success with payload size: " << payload.size();
     point.Record();
     return Status::OK();
 }
@@ -678,7 +681,7 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
     ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
     BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum)
 {
-    auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+    auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
     auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum](Status &status) {
         const bool waitFailed = status.IsError();
         if (waitFailed) {
@@ -698,6 +701,7 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
             }
 
             if (FLAGS_enable_transport_fallback) {
+                LOG(WARNING) << FormatString("fallback to tcp, rc = %s", status.ToString());
                 return Status::OK();
             }
         }

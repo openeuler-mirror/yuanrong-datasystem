@@ -21,8 +21,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <mutex>
 #include <sys/types.h>
 #include <arpa/inet.h>
@@ -232,14 +234,17 @@ ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcC
 {
     recvPageThread_ = Thread(&ClientWorkerRemoteCommonApi::RecvPageFd, this);
     clientAccessToken_ = std::make_unique<ClientAccessToken>(std::move(token));
+    urmaHandshakeRetryPool_ = std::make_unique<ThreadPool>(0, 1, "urma_handshake_retry");
 }
 
 ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
 {
+    stopUrmaHandshakeRetry_ = true;
     recvClientFdState_.stopRecvPageFd = true;
     recvClientFdState_.recvPageWaitPost->Set();
     recvClientFdState_.recvPageNotify->Set();
     CloseSocketFd();
+    urmaHandshakeRetryPool_.reset();
     if (recvPageThread_.joinable()) {
         recvPageThread_.join();
     }
@@ -833,32 +838,80 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientR
 
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        PerfPoint perfPoint(PerfKey::CLIENT_URMA_HANDSHAKE);
-        // Perform handshake to set up jfr and segments.
-        using TbbTransportStubTable =
-            tbb::concurrent_hash_map<std::string,
-                                     std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi>>;
-        static TbbTransportStubTable tarnsportApiTable_;
-        std::string endPoint = hostPort_.ToString();
-        TbbTransportStubTable::const_accessor constAccApi;
-        while (!tarnsportApiTable_.find(constAccApi, endPoint)) {
-            TbbTransportStubTable::accessor acc;
-            if (tarnsportApiTable_.insert(acc, endPoint)) {
-                std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi> transportApi =
-                    std::make_shared<datasystem::object_cache::WorkerRemoteWorkerTransApi>(hostPort_, clientId_);
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
-                acc->second = std::move(transportApi);
-            }
-        }
-        UrmaHandshakeRspPb handshakeRsp;
-        UrmaHandshakeRspPb dummyRsp;
-        RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(handshakeRsp));
-        if (handshakeRsp.has_hand_shake()) {
-            RETURN_IF_NOT_OK(ExchangeJfr(handshakeRsp.hand_shake(), dummyRsp));
+        Status status = TryUrmaHandshake();
+        if (status.IsError()) {
+            LOG(WARNING) << "URMA handshake failed in register path, schedule async retry. Detail: "
+                         << status.ToString();
+            ScheduleUrmaHandshakeRetry();
         }
     }
 #endif
     return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
+{
+    PerfPoint perfPoint(PerfKey::CLIENT_URMA_HANDSHAKE);
+    // Perform handshake to set up jfr and segments.
+    using TbbTransportStubTable =
+        tbb::concurrent_hash_map<std::string, std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi>>;
+    static TbbTransportStubTable tarnsportApiTable;
+    std::string endPoint = hostPort_.ToString();
+    TbbTransportStubTable::const_accessor constAccApi;
+    while (!tarnsportApiTable.find(constAccApi, endPoint)) {
+        TbbTransportStubTable::accessor acc;
+        if (tarnsportApiTable.insert(acc, endPoint)) {
+            std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi> transportApi =
+                std::make_shared<datasystem::object_cache::WorkerRemoteWorkerTransApi>(hostPort_, clientId_);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
+            acc->second = std::move(transportApi);
+        }
+    }
+    UrmaHandshakeRspPb handshakeRsp;
+    UrmaHandshakeRspPb dummyRsp;
+    RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(handshakeRsp));
+    if (handshakeRsp.has_hand_shake()) {
+        RETURN_IF_NOT_OK(ExchangeJfr(handshakeRsp.hand_shake(), dummyRsp));
+    }
+    return Status::OK();
+}
+
+void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry()
+{
+    urmaHandshakeRetryPool_->Execute([this]() {
+        constexpr int maxRetryIntervalMs = 8000;
+        constexpr int retryCheckIntervalMs = 100;
+        constexpr int64_t rpcTimeout = 15000;
+        int nextRetryTimeMs = retryCheckIntervalMs;
+        Timer timer;
+        while (!stopUrmaHandshakeRetry_.load(std::memory_order_relaxed)) {
+            INJECT_POINT_NO_RETURN("client.urma_handshake_retry");
+            if (timer.ElapsedMilliSecond() < nextRetryTimeMs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(retryCheckIntervalMs));
+                continue;
+            }
+            timer.Reset();
+
+            reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
+            Status status = TryUrmaHandshake();
+            if (IsRpcTimeoutOrTryAgain(status) || status.GetCode() == StatusCode::K_URMA_CONNECT_FAILED) {
+                nextRetryTimeMs = std::min<int>(nextRetryTimeMs << 1, maxRetryIntervalMs);
+                LOG(WARNING) << "URMA handshake async retry failed for worker " << hostPort_.ToString()
+                             << ", clientId: " << clientId_ << ", retry after " << nextRetryTimeMs
+                             << "ms. Detail: " << status.ToString();
+                continue;
+            }
+
+            if (status.IsOk()) {
+                LOG(INFO) << "URMA handshake retry succeeded for worker " << hostPort_.ToString()
+                          << ", clientId: " << clientId_;
+            } else {
+                LOG(WARNING) << "URMA handshake retry failed for worker " << hostPort_.ToString()
+                             << ", clientId: " << clientId_ << ". Detail: " << status.ToString();
+            }
+            break;
+        }
+    });
 }
 }  // namespace client
 }  // namespace datasystem

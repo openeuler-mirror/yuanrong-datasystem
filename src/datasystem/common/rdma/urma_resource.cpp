@@ -251,11 +251,12 @@ UrmaTargetJfr::~UrmaTargetJfr()
 Status UrmaTargetJfr::Import(urma_context_t *context, urma_rjfr_t *remoteJfr, urma_token_t urmaToken,
                              std::unique_ptr<UrmaTargetJfr> &tjfr)
 {
+    INJECT_POINT("urma.import_jfr");
     PerfPoint point(PerfKey::URMA_IMPORT_JFR);
     auto *rawTjfr = ds_urma_import_jfr(context, remoteJfr, &urmaToken);
     point.Record();
     if (rawTjfr == nullptr) {
-        RETURN_STATUS(K_RUNTIME_ERROR, "Failed to import jfr");
+        RETURN_STATUS(K_URMA_CONNECT_FAILED, "Failed to import jfr");
     }
     tjfr = std::make_unique<UrmaTargetJfr>(rawTjfr);
     return Status::OK();
@@ -288,7 +289,7 @@ Status UrmaLocalSegment::Register(urma_context_t *context, uint64_t segAddress, 
     auto *rawSegment = ds_urma_register_seg(context, &segmentConfig);
     point.Record();
     if (rawSegment == nullptr) {
-        RETURN_STATUS(K_RUNTIME_ERROR,
+        RETURN_STATUS(K_URMA_ERROR,
                       FormatString("Failed to register segment, address %llu, size %llu.", segAddress, segSize));
     }
     auto tokenId = rawSegment->token_id != nullptr ? rawSegment->token_id->token_id : 0;
@@ -313,7 +314,7 @@ Status UrmaRemoteSegment::Import(urma_context_t *context, urma_token_t urmaToken
                                  std::unique_ptr<UrmaRemoteSegment> &segment)
 {
     auto *rawSegment = ds_urma_import_seg(context, &remoteSegment, &urmaToken, 0, importSegmentFlag);
-    CHECK_FAIL_RETURN_STATUS(rawSegment != nullptr, K_RUNTIME_ERROR, "Failed to import segment.");
+    CHECK_FAIL_RETURN_STATUS(rawSegment != nullptr, K_URMA_ERROR, "Failed to import segment.");
     segment = std::make_unique<UrmaRemoteSegment>(rawSegment);
     return Status::OK();
 }

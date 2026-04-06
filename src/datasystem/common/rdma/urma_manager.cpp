@@ -999,7 +999,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         args.len = readSize;
         args.serverKey = GenerateReqId();
         args.clientKey = urmaInfo.client_req_id();
-    
+
         eventKeys.emplace_back(args.serverKey);
         return OsXprtPipln::StartPipelineSender(args);
     }
@@ -1265,8 +1265,8 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
                   << ", local address:" << localUrmaInfo_.localAddress;
         // Only import remote jfr or segment for the remote node or client.
         if (localUrmaInfo_.localAddress != urmaInfo.localAddress || !req.client_id().empty() || clientMode_) {
-            LOG_IF_ERROR(mgr.ImportRemoteJfr(urmaInfo), "Error in import incoming jfr");
-            LOG_IF_ERROR(mgr.ImportRemoteInfo(req), "Error in import remote segments");
+            RETURN_IF_NOT_OK_APPEND_MSG(mgr.ImportRemoteJfr(urmaInfo), "Error in import incoming jfr");
+            RETURN_IF_NOT_OK_APPEND_MSG(mgr.ImportRemoteInfo(req), "Error in import remote segments");
         }
         // Only fill response for client->worker handshake.
         if (!req.client_id().empty()) {

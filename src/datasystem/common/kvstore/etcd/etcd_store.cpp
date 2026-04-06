@@ -624,7 +624,8 @@ Status EtcdStore::LaunchKeepAliveThreads()
                 && keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
                 && FLAGS_auto_del_dead_node) {
                 LOG(WARNING) << FormatString(
-                    "local node failed time %ld has been reached %ld, need kill local worker, Scaling down.");
+                    "local node failed time %ld has been reached %ld, need kill local worker, Scaling down.",
+                    keepAliveTimeoutTimer_.ElapsedMilliSecond(), FLAGS_node_dead_timeout_s * MS_PER_SECOND);
                 Provider::Instance().FlushLogs();
                 (void)raise(SIGKILL);
             }

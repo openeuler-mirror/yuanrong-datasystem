@@ -40,6 +40,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/share_memory.stub.rpc.pb.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -444,7 +445,7 @@ protected:
     std::string tenantId_;
     std::unique_ptr<ClientAccessToken> clientAccessToken_;
     int32_t rpcTimeoutMs_{ 0 };
-    uint64_t fastTransportMemSize_ { 0 };
+    uint64_t fastTransportMemSize_{ 0 };
     bool enableExclusiveConnection_{ false };
     struct RecvClientFdState {
         std::unique_ptr<WaitPost> recvPageWaitPost{ nullptr };
@@ -466,6 +467,9 @@ protected:
     std::optional<int32_t> exclusiveId_;
     std::string exclusiveConnSockPath_;
     uint32_t shmWorkerPort_{ 0 };
+    // URMA handshake retry pool and flags.
+    std::unique_ptr<ThreadPool> urmaHandshakeRetryPool_{ nullptr };
+    std::atomic_bool stopUrmaHandshakeRetry_{ false };
 
 private:
     /**
@@ -529,6 +533,17 @@ private:
                            const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
 
     Status FastTransportHandshake(const RegisterClientRspPb &rsp);
+
+    /**
+     * @brief Try to perform URMA handshake.
+     * @return Status of the call.
+     */
+    Status TryUrmaHandshake();
+
+    /**
+     * @brief Schedule URMA handshake retry.
+     */
+    void ScheduleUrmaHandshakeRetry();
 };
 }  // namespace client
 }  // namespace datasystem
