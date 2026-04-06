@@ -167,13 +167,13 @@ spec:
         - -sfs_path=/opt/data/datasystem/sfs-turbo
         {{- end }}
         {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
-        - -distributed_disk_path={{ $.Values.global.l2Cache.distributedDisk.path }}
+        - -distributed_disk_path=/home/yuanrong/datasystem/distributed_disk
         - -distributed_disk_slot_num={{ $.Values.global.l2Cache.distributedDisk.slotNum }}
-        - -distributed_disk_max_data_file_size_mb={{ $.Values.global.l2Cache.distributedDisk.maxDataFileSizeMb }}
-        - -distributed_disk_sync_interval_ms={{ $.Values.global.l2Cache.distributedDisk.syncIntervalMs }}
-        - -distributed_disk_sync_batch_bytes={{ $.Values.global.l2Cache.distributedDisk.syncBatchBytes }}
-        - -distributed_disk_compact_cutover_bytes={{ $.Values.global.l2Cache.distributedDisk.compactCutoverBytes }}
-        - -distributed_disk_compact_cutover_records={{ $.Values.global.l2Cache.distributedDisk.compactCutoverRecords }}
+        - -distributed_disk_max_data_file_size_mb={{ $.Values.global.l2Cache.distributedDisk.maxDataFileSizeMb | int64 }}
+        - -distributed_disk_sync_interval_ms={{ $.Values.global.l2Cache.distributedDisk.syncIntervalMs | int64 }}
+        - -distributed_disk_sync_batch_bytes={{ $.Values.global.l2Cache.distributedDisk.syncBatchBytes | int64 }}
+        - -distributed_disk_compact_cutover_bytes={{ $.Values.global.l2Cache.distributedDisk.compactCutoverBytes | int64 }}
+        - -distributed_disk_compact_cutover_records={{ $.Values.global.l2Cache.distributedDisk.compactCutoverRecords | int64 }}
         {{- end }}
         - -enable_cloud_service_token_rotation={{ $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
         - -l2_cache_type={{ $.Values.global.l2Cache.l2CacheType }}
@@ -473,6 +473,10 @@ spec:
           mountPath: /opt/data/datasystem/sfs-turbo
           subPath: {{ $.Values.global.l2Cache.sfsTurbo.subPath }}
         {{- end }}
+        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
+        - mountPath: /home/yuanrong/datasystem/distributed_disk
+          name: distributed-disk
+        {{- end }}
       restartPolicy: Always
       securityContext:
         fsGroup: {{ $.Values.global.fsGid }}
@@ -491,48 +495,51 @@ spec:
         {{- end }}
         securityContext:
           runAsUser: 0
+        {{- $initCmds := list }}
+        {{- if $.Values.global.rpc.enableCurveZmq }}
+        {{- $initCmds = append $initCmds (printf "cp -rH /home/yuanrong/curve/* %s" $.Values.global.rpc.curveKeyDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 700 %s" $.Values.global.rpc.curveKeyDir) }}
+        {{- $initCmds = append $initCmds (printf "chown -R -h yuanrong:yuanrong %s" $.Values.global.rpc.curveKeyDir) }}
+        {{- end }}
+        {{- if $.Values.global.etcd.enableEtcdAuth }}
+        {{- $initCmds = append $initCmds (printf "cp -rH /home/yuanrong/etcd-cert/* %s" $.Values.global.etcd.etcdCertDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 700 %s" $.Values.global.etcd.etcdCertDir) }}
+        {{- $initCmds = append $initCmds (printf "chown -R -h yuanrong:yuanrong %s" $.Values.global.etcd.etcdCertDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/ca.crt" $.Values.global.etcd.etcdCertDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/client.crt" $.Values.global.etcd.etcdCertDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/client.key" $.Values.global.etcd.etcdCertDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/passphrase" $.Values.global.etcd.etcdCertDir) }}
+        {{- end }}
+        {{- range $.Values.global.mount }}
+        {{- if and .hostPath .mountPath }}
+        {{- $initCmds = append $initCmds (printf "chmod 750 %s" .mountPath) }}
+        {{- $initCmds = append $initCmds (printf "chown -R -h yuanrong:yuanrong %s" .mountPath) }}
+        {{- end }}
+        {{- end }}
+        {{- $initCmds = append $initCmds "chmod 700 /home/yuanrong/datasystem/logs" }}
+        {{- $initCmds = append $initCmds (printf "chmod 750 %s" $.Values.global.ipc.udsDir) }}
+        {{- $initCmds = append $initCmds "chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/logs" }}
+        {{- $initCmds = append $initCmds (printf "chown -R -h yuanrong:yuanrong %s" $.Values.global.ipc.udsDir) }}
+        {{- $initCmds = append $initCmds "chmod 700 /home/yuanrong/datasystem/rocksdb" }}
+        {{- $initCmds = append $initCmds "chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/rocksdb" }}
+        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
+        {{- $initCmds = append $initCmds "chmod 700 /home/yuanrong/datasystem/distributed_disk" }}
+        {{- $initCmds = append $initCmds "chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/distributed_disk" }}
+        {{- end }}
+        {{- if and $.Values.global.tenantAuth.authorizationEnable (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
+        {{- $initCmds = append $initCmds (printf "cp -rH /home/sn/yuanrong_iam/* %s" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 700 %s" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- $initCmds = append $initCmds (printf "chown -R -h sn:sn %s" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/yuanrong_iam_ca.crt" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/yuanrong_iam.crt" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/yuanrong_iam.key" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamPassphrase "") }}
+        {{- $initCmds = append $initCmds (printf "chmod 400 %s/yuanrong_iam.passphrase" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
+        {{- end }}
+        {{- end }}
         command: ["/bin/sh","-c"]
         args:
-          - >
-            {{- if $.Values.global.rpc.enableCurveZmq }}
-            cp -rH /home/yuanrong/curve/* {{ $.Values.global.rpc.curveKeyDir }} &&
-            chmod 700 {{ $.Values.global.rpc.curveKeyDir }} &&
-            chown -R -h yuanrong:yuanrong {{ $.Values.global.rcp.curveKeyDir }} &&
-            {{- end }}
-            {{- if $.Values.global.etcd.enableEtcdAuth }}
-            cp -rH /home/yuanrong/etcd-cert/* {{ $.Values.global.etcd.etcdCertDir }} &&
-            chmod 700 {{ $.Values.global.etcd.etcdCertDir }} &&
-            chown -R -h yuanrong:yuanrong {{ $.Values.global.etcd.etcdCertDir }} &&
-            chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/ca.crt &&
-            chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/client.crt &&
-            chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/client.key &&
-            chmod 400 {{ $.Values.global.etcd.etcdCertDir }}/passphrase &&
-            {{- end }}
-            {{- range $.Values.global.mount }}
-            {{- if and .hostPath .mountPath }}
-            chmod 750 {{ .mountPath }} &&
-            chown -R -h yuanrong:yuanrong {{ .mountPath }} &&
-            {{- end }}
-            {{- end }}
-            chmod 700 /home/yuanrong/datasystem/logs &&
-            chmod 750 {{ $.Values.global.ipc.udsDir }} &&
-            chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/logs &&
-            chown -R -h yuanrong:yuanrong {{ $.Values.global.ipc.udsDir }} &&
-            chmod 700 /home/yuanrong/datasystem/rocksdb &&
-            chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/rocksdb
-            {{- if $.Values.global.tenantAuth.authorizationEnable }}
-            {{- if (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
-            cp -rH /home/sn/yuanrong_iam/* {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }} &&
-            chmod 700 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }} &&
-            chown -R -h sn:sn {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }} &&
-            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam_ca.crt &&
-            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.crt &&
-            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.key &&
-            {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamPassphrase "") }}
-            chmod 400 {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.passphrase &&
-            {{- end }}
-            {{- end }}
-            {{- end }}
+          - {{ join " && " $initCmds | quote }}
         resources:
           limits:
             cpu: 150m
@@ -573,6 +580,10 @@ spec:
         {{- end }}
         - mountPath: /home/yuanrong/datasystem/rocksdb
           name: rocksdb
+        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
+        - mountPath: /home/yuanrong/datasystem/distributed_disk
+          name: distributed-disk
+        {{- end }}
       volumes:
         {{- if $.Values.global.rpc.enableCurveZmq }}
         - emptyDir: {}
@@ -656,6 +667,12 @@ spec:
           hostPath:
             path: {{ $.Values.global.metadata.rocksdbStoreDir }}
             type: DirectoryOrCreate
+        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
+        - name: distributed-disk
+          hostPath:
+            path: {{ $.Values.global.l2Cache.distributedDisk.path }}
+            type: DirectoryOrCreate
+        {{- end }}
         - name: datasystem-config
           configMap:
             name: datasystem-configmap
