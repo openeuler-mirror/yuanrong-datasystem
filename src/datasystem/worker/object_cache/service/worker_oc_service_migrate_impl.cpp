@@ -175,11 +175,11 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
 
     // 5. Fill response.
     FillMigrateDataResponse(req, successIds, failedIds, oom, rsp);
-    // if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
-    //  auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
-    //  LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
-    //  req.slot_id(), merStatus.ToString()));
-    // }
+    if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
+        auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
+        LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
+                                             req.slot_id(), merStatus.ToString()));
+    }
     LOG(INFO) << "[Migrate Data] Migrate finish, success size: " << successIds.size()
               << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
     return successIds.empty() ? status : Status::OK();
@@ -307,11 +307,11 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
                                        needSendMasterIds, status);
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_RSP);
     FillMigrateDataDirectResponse(failedIds, oom, rsp);
-    // if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
-    //  auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
-    //  LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
-    //  req.slot_id(), merStatus.ToString()));
-    // }
+    if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
+        auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
+        LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
+                                             req.slot_id(), merStatus.ToString()));
+    }
     LOG(INFO) << "[Migrate Data] Migrate direct finish, success size: " << successIds.size()
               << ", failed size: " << failedIds.size() << ", last status: " << status.ToString();
     return successIds.empty() ? status : Status::OK();
