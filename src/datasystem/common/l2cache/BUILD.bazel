@@ -10,6 +10,9 @@ ds_cc_library(
         "persistence_api.h",
     ],
     deps = [
+        ":slot_client",
+        "//include/datasystem/object:object_headers",
+        "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/httpclient:http_client",
         "//src/datasystem/common/util:status_helper",
     ],
@@ -51,6 +54,7 @@ ds_cc_library(
         "slot_client/slot_writer.cpp",
     ],
     hdrs = [
+        "storage_client.h",
         "slot_client/slot_compactor.h",
         "slot_client/slot_file_util.h",
         "slot_client/slot_index_codec.h",
@@ -59,6 +63,7 @@ ds_cc_library(
         "slot_client/slot_snapshot.h",
         "slot_client/slot_takeover_planner.h",
         "slot_client/slot_client.h",
+        "slot_client/slot_transfer.h",
         "slot_client/slot_writer.h",
     ],
     deps = [
@@ -78,9 +83,13 @@ ds_cc_library(
 ds_cc_library(
     name = "persistence_api",
     srcs = [
+        "aggregated_persistence_api.cpp",
+        "object_persistence_api.cpp",
         "persistence_api.cpp",
     ],
     hdrs = [
+        "aggregated_persistence_api.h",
+        "object_persistence_api.h",
         "persistence_api.h",
     ],
     deps = [

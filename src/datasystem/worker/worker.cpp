@@ -43,16 +43,9 @@
 #include "datasystem/worker/worker_oc_server.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 
-DS_DEFINE_string(
-    worker_address, "127.0.0.1:31501",
-    "Address of ds worker to accepting connections and the value cannot be empty and must under this format "
-    "<ip>:<port>");
-DS_DEFINE_string(bind_address, "",
-                 "Address of ds worker to bind socket and must under this format <ip>:<port>, the same with "
-                 "worker_address if not provide");
+DS_DECLARE_string(worker_address);
+DS_DECLARE_string(bind_address);
 DS_DECLARE_string(master_address);
-DS_DEFINE_validator(worker_address, &Validator::ValidateHostPortStringWithLog);
-DS_DEFINE_validator(bind_address, &Validator::ValidateHostPortStringWithLog);
 DS_DECLARE_uint64(shared_memory_size_mb);
 DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(log_filename);
