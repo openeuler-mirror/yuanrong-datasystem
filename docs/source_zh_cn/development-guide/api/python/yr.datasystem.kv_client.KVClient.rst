@@ -1,7 +1,7 @@
 yr.datasystem.kv_client.KVClient
 ================================
 
-.. py:class:: yr.datasystem.kv_client.KVClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
+.. py:class:: yr.datasystem.kv_client.KVClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, enable_exclusive_connection=False)
 
     KV缓存客户端。
 

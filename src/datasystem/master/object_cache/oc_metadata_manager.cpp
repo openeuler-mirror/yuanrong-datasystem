@@ -1167,7 +1167,7 @@ Status OCMetadataManager::ProcessCopyMetaHelper(const std::string &address, cons
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty(), StatusCode::K_INVALID, "The objectKey can not be empty.");
     auto found = this->metaTable_.find(accessor, objectKey);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+    CHECK_FAIL_RETURN_STATUS(
         found, StatusCode::K_NOT_FOUND,
         FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(accessor->second.meta.config().data_format() == dataFormat, K_INVALID,

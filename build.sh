@@ -550,7 +550,6 @@ function build_datasystem()
   cmake "${cmake_options[@]}" || go_die "-- build datasystem CMake project failed!"
   cmake --build "${BUILD_DIR}" -j "${BUILD_THREAD_NUM}" || go_die "-- datasystem cmake build failed!"
   cmake --install "${BUILD_DIR}" || go_die "-- datasystem cmake install failed!"
-  cp "${DATASYSTEM_DIR}/LOG_README" "${INSTALL_DIR}/datasystem/service/"
   echo -e "---- [TIMER] Build source: $(($(date +%s)-$baseTime_s)) seconds"
 
   # erase symbol table if need.
