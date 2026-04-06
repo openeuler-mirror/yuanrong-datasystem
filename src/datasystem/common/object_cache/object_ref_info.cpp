@@ -267,7 +267,7 @@ void SharedMemoryRefTable::RecordMaybeExpiredShm(const ClientKey &clientId, cons
     auto expireTimeMs = GetMaybeExpiredDeadlineMs(requestTimeoutMs);
     std::lock_guard<std::shared_mutex> lock(maybeExpiredShmQueueMutex_);
     maybeExpiredShmQueue_.push({ requestTimeoutMs, expireTimeMs, clientId, shmId });
-    VLOG(INFO) << "RecordMaybeExpiredShm: clientId=" << clientId << " shmId=" << shmId
+    VLOG(1) << "RecordMaybeExpiredShm: clientId=" << clientId << " shmId=" << shmId
                << " requestTimeoutMs=" << requestTimeoutMs << " expireTimeMs=" << expireTimeMs;
 }
 

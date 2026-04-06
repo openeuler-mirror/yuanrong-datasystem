@@ -113,8 +113,8 @@ void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaM
         }
         uint64_t maxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
         if (requiredSize > maxGetSize) {
-            LOG(WARNING) << "UB Get buffer size " << requiredSize
-                         << " exceeds max " << maxGetSize << ", fallback to TCP/IP payload.";
+            LOG(WARNING) << "UB Get buffer size " << requiredSize << " exceeds max " << maxGetSize
+                         << ", fallback to TCP/IP payload.";
             return;
         }
         Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubBufferHandle, requiredSize);
@@ -127,8 +127,8 @@ void ClientWorkerBaseApi::PrepareUrmaBuffer(GetReqPb &req, std::shared_ptr<UrmaM
             }
         }
         if (ubRc.IsError()) {
-            LOG(WARNING) << "UB Get buffer allocation failed (size " << requiredSize
-                         << "): " << ubRc.ToString() << ", fallback to TCP/IP payload.";
+            LOG(WARNING) << "UB Get buffer allocation failed (size " << requiredSize << "): " << ubRc.ToString()
+                         << ", fallback to TCP/IP payload.";
             ubBufferHandle.reset();
             ubBufferPtr = nullptr;
             ubBufferSize = 0;
@@ -267,6 +267,7 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
                                          FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
         bufferInfo->ubDataSentByMemoryCopy = true;
+        INJECT_POINT_NO_RETURN("client.set.urma_write_ok", [] {});
         VLOG(DEBUG_LOG_LEVEL) << "[UB Put] UrmaWritePayload done (single buffer), dataSize = " << bufferInfo->dataSize;
         return Status::OK();
     }
@@ -369,8 +370,7 @@ void ClientWorkerBaseApi::PostMultiCreate(bool skipCheckExistence, const MultiCr
     version = workerVersion_.load(std::memory_order_relaxed);
 }
 
-bool ClientWorkerBaseApi::CheckUseTransferForMultiCreateRsp(const MultiCreateRspPb &rsp,
-                                                            bool skipCheckExistence) const
+bool ClientWorkerBaseApi::CheckUseTransferForMultiCreateRsp(const MultiCreateRspPb &rsp, bool skipCheckExistence) const
 {
     if (IsShmEnable()) {
         if (skipCheckExistence) {

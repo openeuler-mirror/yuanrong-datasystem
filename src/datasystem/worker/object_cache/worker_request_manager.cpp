@@ -223,7 +223,7 @@ const std::string &GetRequest::GetClientCommUuid() const
     return clientCommId_;
 }
 
-H2DChunkManager& GetRequest::GetH2DChunkManager()
+H2DChunkManager &GetRequest::GetH2DChunkManager()
 {
     return chunkManager_;
 }
@@ -429,6 +429,7 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
             ubWriteOffset += readSize;
             GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
             SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);
+            INJECT_POINT_NO_RETURN("worker.get.urma_write_ok");
             return Status::OK();
         }
         LOG(WARNING) << "UB get write failed for object " << objectKeyUri
