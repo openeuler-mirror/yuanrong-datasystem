@@ -23,6 +23,8 @@
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 
+DS_DECLARE_uint32(distributed_disk_slot_num);
+
 namespace datasystem {
 namespace object_cache {
 
@@ -219,8 +221,7 @@ Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &object
 std::map<uint32_t, std::vector<std::string>> DataMigrator::GroupL2CacheObjectsBySlot(
     const std::vector<std::string> &objectKeys) const
 {
-    // auto slotNum = FLAGS_distributed_disk_slot_num;
-    auto slotNum = 128;
+    auto slotNum = FLAGS_distributed_disk_slot_num;
     std::map<uint32_t, std::vector<std::string>> objectsBySlot;
     INJECT_POINT("TestGroupL2CacheObjectsBySlot", [&slotNum, &objectsBySlot] {
         slotNum = 1;

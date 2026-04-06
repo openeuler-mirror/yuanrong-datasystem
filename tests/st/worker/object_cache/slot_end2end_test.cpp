@@ -105,6 +105,23 @@ public:
         DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
     }
 
+    void VoluntaryScaleDownInject(int workerIdx)
+    {
+        std::string checkFilePath = FLAGS_log_dir.c_str();
+        std::string client = "client";
+        checkFilePath = checkFilePath.substr(0, checkFilePath.length() - client.length()) + "/worker"
+                        + std::to_string(workerIdx) + "/log/worker-status";
+        std::ofstream ofs(checkFilePath);
+        if (!ofs.is_open()) {
+            LOG(ERROR) << "Can not open worker status file in " << checkFilePath
+                       << ", voluntary scale in will not start, errno: " << errno;
+        } else {
+            ofs << "voluntary scale in\n";
+        }
+        ofs.close();
+        kill(cluster_->GetWorkerPid(workerIdx), SIGTERM);
+    }
+
     void TearDown() override
     {
         db_.reset();
@@ -521,6 +538,113 @@ TEST_F(SlotEndToEndTest, BackgroundCompactSurvivesConcurrentMutations)
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "slotstore.Slot.Compact.BeforeCommit"));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "slotstore.SlotClient.BackgroundCompact.WaitMs"));
+}
+
+TEST_F(SlotEndToEndTest, VoluntaryScaleDownMovesSlotAndMetadata)
+{
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+
+    std::vector<std::string> keys;
+    std::string value = "value_" + GenRandomString(1024);
+    for (int i = 0; i < 10; ++i) {
+        std::string key = "tenant_slot_voluntary_scale_down_" + std::to_string(i);
+        keys.push_back(key);
+        SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+        DS_ASSERT_OK(client0->Set(key, value, param));
+    }
+    client0.reset();
+    VoluntaryScaleDownInject(0);
+    WaitAllNodesJoinIntoHashRing(1, 20);
+
+    for(const auto &key: keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value);
+    }
+
+    client1.reset();
+    kill(cluster_->GetWorkerPid(0), SIGTERM);  // worker index 0
+    const int interval = 2000;                 // wait 10000ms for clean map;
+    std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(1, client1);
+    for(const auto &key: keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value);
+    }
+}
+
+class SlotEndToEndScaleTest : public SlotEndToEndTest {
+public:
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        opts.waitWorkerReady = false;
+        opts.addNodeTime = SCALE_DOWN_ADD_TIME;
+        distributedDiskPath_ = testCasePath_ + "/distributed_disk";
+        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
+        std::stringstream ss;
+        ss << "-l2_cache_type=distributed_disk "
+           << "-distributed_disk_path=" << distributedDiskPath_ << " "
+           << "-cluster_name=" << CLUSTER_NAME << " "
+           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
+           << "-distributed_disk_sync_interval_ms=0 "
+           << "-distributed_disk_sync_batch_bytes=1 "
+           << "-enable_metadata_recovery=true "
+           << "-auto_del_dead_node=true "
+           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
+           << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
+           << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
+           << "-v=1 "
+           << "-enable_metadata_recovery=true ";
+        opts.workerGflagParams = ss.str();
+    }
+};
+
+TEST_F(SlotEndToEndScaleTest, VoluntaryScaleDownAndScaleDown)
+{
+    WaitAllNodesJoinIntoHashRing(3, 20);
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+
+    std::vector<std::string> keys;
+    std::string value = "value_" + GenRandomString(1024);
+    for (int i = 0; i < 10; ++i) {
+        std::string key = "tenant_slot_voluntary_scale_down_" + std::to_string(i);
+        keys.push_back(key);
+        SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+        DS_ASSERT_OK(client0->Set(key, value, param));
+    }
+    client0.reset();
+    VoluntaryScaleDownInject(0);
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    for(const auto &key: keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value);
+    }
+
+    kill(cluster_->GetWorkerPid(2), SIGTERM);  // worker index 0
+    WaitAllNodesJoinIntoHashRing(1, 20);
+    for(const auto &key: keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value);
+    }
 }
 }  // namespace st
 }  // namespace datasystem
