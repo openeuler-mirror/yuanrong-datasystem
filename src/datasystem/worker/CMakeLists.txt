@@ -13,6 +13,7 @@ set(WORKER_SRCS
         worker_liveness_check.cpp
         worker_update_flag_check.cpp
         worker_cli.cpp
+        worker_flags.cpp
         worker.cpp
         worker_api_c_wrapper.cpp
         )

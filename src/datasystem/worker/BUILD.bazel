@@ -104,6 +104,7 @@ ds_cc_library(
         "//src/datasystem/common/kvstore/etcd:etcd_health",
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/l2cache:slot_client",
+        "//src/datasystem/worker:worker_flags",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:object_base",
@@ -260,6 +261,17 @@ ds_cc_library(
     ],
 )
 
+ds_cc_library(
+    name = "worker_flags",
+    srcs = [
+        "worker_flags.cpp",
+    ],
+    deps = [
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+    ],
+)
+
 # TODO:git hash && git branch
 ds_cc_library(
     name = "worker",
@@ -290,6 +302,7 @@ ds_cc_library(
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
         "//src/datasystem/worker:worker_cli",
+        "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:worker_oc_server",
         "//src/datasystem/worker:worker_service_impl",
         "//src/datasystem/worker:worker_update_flag_check",
