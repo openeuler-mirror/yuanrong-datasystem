@@ -41,7 +41,9 @@ Status Context::SetTraceId(const std::string &traceId)
 
 void Context::SetTenantId(const std::string &tenantId)
 {
-    g_ContextTenantId = tenantId;
-    LOG(INFO) << "Set tenant id: " << g_ContextTenantId;
+    if (g_ContextTenantId != tenantId) {
+        g_ContextTenantId = tenantId;
+        LOG(INFO) << "Set tenant id: " << g_ContextTenantId;
+    }
 }
 }  // namespace datasystem
