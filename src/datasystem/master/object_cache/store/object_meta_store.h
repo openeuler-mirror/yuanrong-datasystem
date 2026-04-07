@@ -450,7 +450,7 @@ private:
      */
     bool EtcdEnable() const
     {
-        return (etcdStore_ != nullptr) && ioFromL2CacheNeedMeta_;
+        return (etcdStore_ != nullptr) && enableEtcdMetaStore_;
     }
 
     /**
@@ -625,7 +625,7 @@ private:
     Timer timer_;
 
     // Should data read and write from the L2CacheDaemon depend on metadata.
-    bool ioFromL2CacheNeedMeta_{ true };
+    bool enableEtcdMetaStore_{ true };
 };
 }  // namespace master
 }  // namespace datasystem
