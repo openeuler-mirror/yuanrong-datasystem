@@ -149,7 +149,7 @@ class KVClient:
         self,
         host: str = "",
         port: int = 0,
-        timeout_ms=60000,
+        connect_timeout_ms=60000,
         token: str = '',
         client_public_key: str = "",
         client_private_key: str = "",
@@ -167,7 +167,7 @@ class KVClient:
             host(str): The host of the worker. If the host is not filled in, we will initialize it from the environment
                        variable, and the initialization of other parameters (such as port, token, etc) is also similar.
             port(int): The port of the worker.
-            timeout_ms(int): The timeout interval for the connection between the client and worker.
+            connect_timeout_ms(int): The timeout interval for the connection between the client and worker.
             token(str): A string used for authentication.
             client_public_key(str): The client's public key, for curve authentication.
             client_private_key(str): The client's private key, for curve authentication.
@@ -177,7 +177,7 @@ class KVClient:
             tenant_id(str): The tenant ID.
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same
-            with timeout_ms.
+            with connect_timeout_ms.
             enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
             datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
             `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
@@ -188,7 +188,7 @@ class KVClient:
             TypeError: Raise a type error if the input parameter is invalid.
         """
         args = [
-            ["host", host, str], ["port", port, int], ["timeout_ms", timeout_ms, int],
+            ["host", host, str], ["port", port, int], ["connect_timeout_ms", connect_timeout_ms, int],
             ["client_public_key", client_public_key, str], ["client_private_key", client_private_key, str],
             ["server_public_key", server_public_key, str], ["access_key", access_key, str],
             ["secret_key", secret_key, str],
@@ -196,11 +196,11 @@ class KVClient:
             ["enable_exclusive_connection", enable_exclusive_connection, bool]
         ]
         validator.check_args_types(args)
-        validator.check_param_range("timeout_ms", timeout_ms, 0, validator.INT32_MAX_SIZE)
+        validator.check_param_range("connect_timeout_ms", connect_timeout_ms, 0, validator.INT32_MAX_SIZE)
         self._client = ds.KVClient(
             host,
             port,
-            timeout_ms,
+            connect_timeout_ms,
             token,
             client_public_key,
             client_private_key,

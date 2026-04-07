@@ -189,7 +189,7 @@ class TestKVClientMethods(unittest.TestCase):
         Context.set_trace_id("test_state_init_by_env")
         os.environ['DATASYSTEM_HOST'] = self.host
         os.environ['DATASYSTEM_PORT'] = str(self.port)
-        client = KVClient(host="", port=0, timeout_ms=5000)
+        client = KVClient(host="", port=0, connect_timeout_ms=5000)
         client.init()
 
     def test_state_set_succeed(self):
