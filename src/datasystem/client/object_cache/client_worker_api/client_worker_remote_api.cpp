@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
 
@@ -534,8 +535,14 @@ Status ClientWorkerRemoteApi::DecreaseShmRef(const ShmKey &shmId, const std::fun
         decreaseRPCQ_->NotifyNotEmpty();
         break;
     } while (true);
-    timeoutStruct.tv_sec =
-        requestTimeoutMs_ / ONE_THOUSAND;  // Time for wait rsp , it can wake up by worker rsp or disconnect.
+    
+    // Time for wait rsp , it can wake up by worker rsp or disconnect.
+    // requestTimeoutMs_ is milliseconds; timespec expects seconds + nanoseconds.
+    // Avoid intermediate overflow by taking modulo before scaling.
+    timeoutStruct.tv_sec = static_cast<time_t>(requestTimeoutMs_ / ONE_THOUSAND);
+    timeoutStruct.tv_nsec =
+        static_cast<long>((static_cast<int64_t>(requestTimeoutMs_ % ONE_THOUSAND) * ONE_THOUSAND) * ONE_THOUSAND);
+    
     auto rc = CheckShmFutexResult((uint32_t *)waitFlag, waitNum, timeoutStruct);
     std::lock_guard<std::mutex> lock(mtx_);  // protect the circular queue.
     waitRespMap_.erase(slotIndex);
