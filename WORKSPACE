@@ -18,54 +18,55 @@ switched_rules_by_language(
 
 setup_grpc()
 
+load("@com_github_grpc_grpc//third_party/py:python_configure.bzl", "python_configure")
+
+python_configure(name = "local_config_python")
+
+load("@rules_python//python:repositories.bzl", "py_repositories", "python_register_toolchains")
 load("//bazel:glibc_detect.bzl", "glibc_detect")
 load("//bazel:python_detect.bzl", "python_detect")
+
+py_repositories()
 
 glibc_detect(name = "local_glibc_info")
 
 python_detect(name = "local_python_info")
 
-load("@com_github_grpc_grpc//third_party/py:python_configure.bzl", "python_configure")
+load("@local_python_info//:version.bzl", "PYTHON_VERSION")
 
-python_configure(name = "local_config_python")
-
-load("@rules_python//python:repositories.bzl", "py_repositories")
-
-py_repositories()
-
-load("@rules_python//python:repositories.bzl", "python_register_toolchains")
+# Use system python version default
+python_register_toolchains(
+    name = "python_system_detected",
+    ignore_root_user_error = True,
+    python_version = PYTHON_VERSION,
+)
 
 python_register_toolchains(
     name = "python_3_9",
+    ignore_root_user_error = True,
     python_version = "3.9",
-    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_10",
+    ignore_root_user_error = True,
     python_version = "3.10",
-    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_11",
+    ignore_root_user_error = True,
     python_version = "3.11",
-    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_12",
+    ignore_root_user_error = True,
     python_version = "3.12",
-    ignore_root_user_error= True
 )
 
 python_register_toolchains(
     name = "python_3_13",
+    ignore_root_user_error = True,
     python_version = "3.13",
-    ignore_root_user_error= True
 )
-load("@python_3_9//:defs.bzl", "interpreter")
-load("@python_3_10//:defs.bzl", "interpreter")
-load("@python_3_11//:defs.bzl", "interpreter")
-load("@python_3_12//:defs.bzl", "interpreter")
-load("@python_3_13//:defs.bzl", "interpreter")

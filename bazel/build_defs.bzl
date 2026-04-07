@@ -14,12 +14,18 @@ def ds_cc_library(name, srcs = None, hdrs = None, copts = [], deps = None, **kwa
 def _jemalloc_dynamic_transition_impl(settings, attr):
     return {
         "//:jemalloc_dynamic_internal": attr.jemalloc_dynamic,
+        "@rules_python//python/config_settings:python_version": settings["@rules_python//python/config_settings:python_version"],
     }
 
 jemalloc_dynamic_transition = transition(
     implementation = _jemalloc_dynamic_transition_impl,
-    inputs = [],
-    outputs = ["//:jemalloc_dynamic_internal"],
+    inputs = [
+        "@rules_python//python/config_settings:python_version",
+    ],
+    outputs = [
+        "//:jemalloc_dynamic_internal",
+        "@rules_python//python/config_settings:python_version",
+    ],
 )
 
 def _jemalloc_pybind_extension_impl(ctx):

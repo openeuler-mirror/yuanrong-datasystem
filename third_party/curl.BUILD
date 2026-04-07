@@ -244,7 +244,6 @@ cc_library(
         "-DOS=os",
         "-DCURL_OS=\"Linux\"",
         "-DHAVE_CONFIG_H",
-        "-I$(GENDIR)/external/curl",
     ],
     defines = ["CURL_STATICLIB"],
     includes = [
