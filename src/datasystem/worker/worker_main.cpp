@@ -81,6 +81,14 @@ int main(int argc, char **argv)
     if (perfManager != nullptr) {
         perfManager->PrintPerfLog();
     }
+
+    rc = Worker::GetInstance()->PreShutDown();
+    if (rc.IsError()) {
+        LOG(ERROR) << "Worker preShutDown error:" << rc.ToString();
+        LOG_IF_ERROR(Worker::GetInstance()->ShutDown(), "worker preshutdown failed");
+        return -1;
+    }
+
     rc = Worker::GetInstance()->ShutDown();
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
