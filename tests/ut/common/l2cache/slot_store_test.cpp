@@ -71,6 +71,11 @@ std::string ReadAll(const std::shared_ptr<std::stringstream> &content)
     return content->str();
 }
 
+std::string MakeSizedPayload(size_t size, char ch = 'x')
+{
+    return std::string(size, ch);
+}
+
 std::string MakeTempDir()
 {
     std::string pattern = "/tmp/slot_store_ut_XXXXXX";
@@ -891,11 +896,11 @@ TEST_F(SlotStoreTest, SlotRollsDataFileWhenCurrentFileFull)
     auto slotPath = MakeTempDir() + "/slot_roll";
     Slot manager(1, slotPath, 4);
     auto body1 = std::make_shared<std::stringstream>();
-    *body1 << "abcd";
+    *body1 << "abc";
     ASSERT_TRUE(manager.Save("tenant/keyD", 1, body1).IsOk());
 
     auto body2 = std::make_shared<std::stringstream>();
-    *body2 << "ef";
+    *body2 << "de";
     ASSERT_TRUE(manager.Save("tenant/keyE", 2, body2).IsOk());
 
     SlotManifestData manifest;
@@ -905,8 +910,30 @@ TEST_F(SlotStoreTest, SlotRollsDataFileWhenCurrentFileFull)
 
     auto content = std::make_shared<std::stringstream>();
     ASSERT_TRUE(manager.Get("tenant/keyE", 2, content).IsOk());
-    ASSERT_EQ(ReadAll(content), "ef");
+    ASSERT_EQ(ReadAll(content), "de");
     (void)RemoveAll(slotPath.substr(0, slotPath.find("/slot_roll")));
+}
+
+TEST_F(SlotStoreTest, SlotSaveUsesExclusiveDataFileForLargeObject)
+{
+    auto slotPath = MakeTempDir() + "/slot_large_object";
+    constexpr uint64_t maxDataFileBytes = 256 * 1024;
+    const auto payload = MakeSizedPayload(1024 * 1024, 'L');
+    Slot manager(14, slotPath, maxDataFileBytes);
+
+    ASSERT_TRUE(manager.Save("tenant/keyLarge", 1, MakeBody(payload)).IsOk());
+
+    SlotManifestData manifest;
+    ASSERT_TRUE(SlotManifest::Load(slotPath, manifest).IsOk());
+    ASSERT_EQ(manifest.activeData.size(), 2u);
+    ASSERT_EQ(FileSize(JoinPath(slotPath, manifest.activeData.back())), 0);
+    const auto exclusivePath = JoinPath(slotPath, manifest.activeData.front());
+    ASSERT_EQ(FileSize(exclusivePath), static_cast<off_t>(payload.size()));
+
+    auto content = std::make_shared<std::stringstream>();
+    ASSERT_TRUE(manager.Get("tenant/keyLarge", 1, content).IsOk());
+    ASSERT_EQ(ReadAll(content), payload);
+    (void)RemoveAll(slotPath.substr(0, slotPath.find("/slot_large_object")));
 }
 
 TEST_F(SlotStoreTest, SlotSaveRejectsNullBody)
@@ -1180,6 +1207,38 @@ TEST_F(SlotStoreTest, SlotClientBackgroundCompactAbsorbsConcurrentMutations)
 
     ASSERT_TRUE(inject::Clear("slotstore.Slot.Compact.BeforeCommit").IsOk());
     ASSERT_TRUE(inject::Clear("slotstore.SlotClient.BackgroundCompact.WaitMs").IsOk());
+}
+
+TEST_F(SlotStoreTest, SlotCompactKeepsLargeObjectReadableWithExclusiveDataFile)
+{
+    auto slotPath = MakeTempDir() + "/slot_large_object_compact";
+    constexpr uint64_t maxDataFileBytes = 256 * 1024;
+    const auto largePayload = MakeSizedPayload(1024 * 1024, 'C');
+    Slot manager(15, slotPath, maxDataFileBytes);
+
+    ASSERT_TRUE(manager.Save("tenant/keyCompactLarge", 1, MakeBody(largePayload)).IsOk());
+    ASSERT_TRUE(manager.Save("tenant/keyCompactSmall", 2, MakeBody("small")).IsOk());
+    ASSERT_TRUE(manager.Compact().IsOk());
+
+    auto largeContent = std::make_shared<std::stringstream>();
+    ASSERT_TRUE(manager.Get("tenant/keyCompactLarge", 1, largeContent).IsOk());
+    ASSERT_EQ(ReadAll(largeContent), largePayload);
+    auto smallContent = std::make_shared<std::stringstream>();
+    ASSERT_TRUE(manager.Get("tenant/keyCompactSmall", 2, smallContent).IsOk());
+    ASSERT_EQ(ReadAll(smallContent), "small");
+
+    SlotManifestData manifest;
+    ASSERT_TRUE(SlotManifest::Load(slotPath, manifest).IsOk());
+    ASSERT_GE(manifest.activeData.size(), 2u);
+    bool foundExclusiveFile = false;
+    for (const auto &dataFile : manifest.activeData) {
+        if (FileSize(JoinPath(slotPath, dataFile)) == static_cast<off_t>(largePayload.size())) {
+            foundExclusiveFile = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(foundExclusiveFile);
+    (void)RemoveAll(slotPath.substr(0, slotPath.find("/slot_large_object_compact")));
 }
 
 TEST_F(SlotStoreTest, SlotCompactorBuildArtifactsCleansResidualFilesOnFailure)
@@ -1876,7 +1935,7 @@ TEST_F(SlotStoreTest, SlotTakeoverPlannerBuildsAndLoadsPlan)
                                                "txn_planner", plan)
                     .IsOk());
     ASSERT_EQ(plan.txnId, "txn_planner");
-    ASSERT_EQ(plan.dataMappings.size(), 2u);
+    ASSERT_EQ(plan.dataMappings.size(), sourceManifest.activeData.size());
     ASSERT_TRUE(FileExist(JoinPath(targetPath, plan.importIndexFile)));
 
     ASSERT_TRUE(SlotTakeoverPlanner::DumpPlan(targetPath, plan).IsOk());

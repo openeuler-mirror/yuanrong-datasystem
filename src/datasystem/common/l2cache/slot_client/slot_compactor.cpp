@@ -35,6 +35,8 @@
 
 namespace datasystem {
 namespace {
+constexpr size_t SLOT_IO_CHUNK_BYTES = 4UL * 1024UL * 1024UL;
+
 std::string BaseName(const std::string &path)
 {
     auto pos = path.find_last_of('/');
@@ -45,6 +47,25 @@ std::string BaseName(const std::string &path)
 SlotCompactor::SlotCompactor(std::string slotPath, uint64_t maxDataFileBytes)
     : slotPath_(std::move(slotPath)), maxDataFileBytes_(maxDataFileBytes)
 {
+}
+
+Status SlotCompactor::CopyRecordToTargetFile(int sourceFd, uint64_t sourceOffset, uint64_t size, int targetFd,
+                                             uint64_t targetOffset) const
+{
+    CHECK_FAIL_RETURN_STATUS(sourceFd >= 0 && targetFd >= 0, StatusCode::K_INVALID, "invalid compact file fd");
+    std::vector<char> buffer(std::min<uint64_t>(size, SLOT_IO_CHUNK_BYTES));
+    uint64_t readOffset = sourceOffset;
+    uint64_t writeOffset = targetOffset;
+    uint64_t remaining = size;
+    while (remaining > 0) {
+        auto bytesToCopy = static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
+        RETURN_IF_NOT_OK(ReadFile(sourceFd, buffer.data(), bytesToCopy, static_cast<off_t>(readOffset)));
+        RETURN_IF_NOT_OK(WriteFile(targetFd, buffer.data(), bytesToCopy, static_cast<off_t>(writeOffset)));
+        readOffset += bytesToCopy;
+        writeOffset += bytesToCopy;
+        remaining -= bytesToCopy;
+    }
+    return Status::OK();
 }
 
 Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const SlotSnapshot &snapshot,
@@ -139,16 +160,22 @@ Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const Slo
             RETURN_IF_NOT_OK(OpenFile(JoinPath(slotPath_, FormatDataFileName(record.fileId)), O_RDONLY, &sourceFd));
             fdIt = sourceDataFds.emplace(record.fileId, sourceFd).first;
         }
-        std::string payload(record.size, '\0');
-        RETURN_IF_NOT_OK(ReadFile(fdIt->second, payload.data(), record.size, static_cast<off_t>(record.offset)));
-        if (currentTargetFileSize + payload.size() > maxDataFileBytes_ && currentTargetFileSize > 0) {
+        bool dedicateFile = record.size >= maxDataFileBytes_;
+        if (!dedicateFile && currentTargetFileSize + record.size > maxDataFileBytes_ && currentTargetFileSize > 0) {
             ++nextFileId;
             RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
         }
         auto offset = currentTargetFileSize;
-        RETURN_IF_NOT_OK(WriteFile(currentTargetDataFd, payload.data(), payload.size(), static_cast<off_t>(offset)));
+        uint32_t targetFileId = nextFileId;
+        if (dedicateFile && currentTargetFileSize > 0) {
+            ++nextFileId;
+            RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
+            offset = 0;
+            targetFileId = nextFileId;
+        }
+        RETURN_IF_NOT_OK(CopyRecordToTargetFile(fdIt->second, record.offset, record.size, currentTargetDataFd, offset));
         SlotPutRecord compacted = record;
-        compacted.fileId = nextFileId;
+        compacted.fileId = targetFileId;
         compacted.offset = offset;
         std::string encoded;
         RETURN_IF_NOT_OK(SlotIndexCodec::EncodePut(compacted, encoded));
@@ -157,7 +184,11 @@ Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const Slo
             RETURN_IF_NOT_OK(SlotIndexCodec::AppendEncodedRecords(indexFd, indexOffset, indexBuffer));
             indexBuffer.clear();
         }
-        currentTargetFileSize = offset + payload.size();
+        currentTargetFileSize = offset + record.size;
+        if (dedicateFile) {
+            ++nextFileId;
+            RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
+        }
     }
     RETURN_IF_NOT_OK(SlotIndexCodec::AppendEncodedRecords(indexFd, indexOffset, indexBuffer));
     RETURN_IF_NOT_OK(FsyncFd(indexFd));
@@ -244,27 +275,37 @@ Status SlotCompactor::ApplyDeltaRecords(const std::vector<SlotRecord> &records, 
                         OpenFile(JoinPath(slotPath_, FormatDataFileName(record.put.fileId)), O_RDONLY, &sourceFd));
                     fdIt = sourceDataFds.emplace(record.put.fileId, sourceFd).first;
                 }
-                std::string payload(record.put.size, '\0');
-                RETURN_IF_NOT_OK(
-                    ReadFile(fdIt->second, payload.data(), record.put.size, static_cast<off_t>(record.put.offset)));
                 if (currentTargetDataFd < 0) {
                     nextFileId = nextFileId == 0 ? 1 : nextFileId;
                     RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
                 }
-                if (currentTargetFileSize + payload.size() > maxDataFileBytes_ && currentTargetFileSize > 0) {
+                bool dedicateFile = record.put.size >= maxDataFileBytes_;
+                if (!dedicateFile && currentTargetFileSize + record.put.size > maxDataFileBytes_
+                    && currentTargetFileSize > 0) {
                     ++nextFileId;
                     RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
                 }
                 auto offset = currentTargetFileSize;
-                RETURN_IF_NOT_OK(
-                    WriteFile(currentTargetDataFd, payload.data(), payload.size(), static_cast<off_t>(offset)));
+                uint32_t targetFileId = nextFileId;
+                if (dedicateFile && currentTargetFileSize > 0) {
+                    ++nextFileId;
+                    RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
+                    offset = 0;
+                    targetFileId = nextFileId;
+                }
+                RETURN_IF_NOT_OK(CopyRecordToTargetFile(fdIt->second, record.put.offset, record.put.size,
+                                                        currentTargetDataFd, offset));
                 SlotPutRecord compacted = record.put;
-                compacted.fileId = nextFileId;
+                compacted.fileId = targetFileId;
                 compacted.offset = offset;
                 std::string encoded;
                 RETURN_IF_NOT_OK(SlotIndexCodec::EncodePut(compacted, encoded));
                 indexBuffer.append(encoded);
-                currentTargetFileSize = offset + payload.size();
+                currentTargetFileSize = offset + record.put.size;
+                if (dedicateFile) {
+                    ++nextFileId;
+                    RETURN_IF_NOT_OK(openTargetDataFile(nextFileId, currentTargetDataFd, currentTargetFileSize));
+                }
                 break;
             }
             case SlotRecordType::DELETE: {

@@ -183,7 +183,16 @@ private:
     bool IsRuntimeStaleLocked() const;
     Status FlushRuntimeLocked(bool force);
     void ResetRuntimeLocked();
+    Status AllocateNextDataFileIdLocked(uint32_t &fileId) const;
     Status RotateWritableDataFileLocked(uint64_t payloadSize, uint32_t &fileId);
+    Status AllocateExclusiveDataFileLocked(uint32_t &fileId);
+    Status GetPayloadSize(const std::shared_ptr<std::iostream> &body, uint64_t &payloadSize) const;
+    Status WriteStreamToFd(const std::shared_ptr<std::iostream> &body, int fd, uint64_t startOffset,
+                           uint64_t &writtenBytes) const;
+    Status AppendPayloadToActiveFileLocked(const std::shared_ptr<std::iostream> &body, uint64_t payloadSize,
+                                           uint64_t &offset);
+    Status WriteExclusivePayloadLocked(const std::shared_ptr<std::iostream> &body, uint32_t fileId,
+                                       uint64_t payloadSize) const;
     Status BuildBootstrapManifestFromDisk(SlotManifestData &manifest);
     Status RecoverManifestIfNeeded(SlotManifestData &manifest);
     Status RecoverCompactCommitting(SlotManifestData &manifest);
@@ -196,7 +205,6 @@ private:
     Status LoadManifest(SlotManifestData &manifest);
     Status EnsureActiveFiles(const SlotManifestData &manifest);
     Status PersistManifest(const SlotManifestData &manifest);
-    Status ReadPayload(const std::shared_ptr<std::iostream> &body, std::string &payload);
     Status ReadRecordData(const SlotSnapshotValue &value, std::shared_ptr<std::stringstream> &content) const;
     Status EnsureWritable(const SlotManifestData &manifest) const;
     Status SyncActiveFiles(const SlotManifestData &manifest) const;
