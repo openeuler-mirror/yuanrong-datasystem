@@ -615,16 +615,13 @@ TEST_F(SlotRecoveryTest, LocalFailureCompletes)
     DS_ASSERT_OK(manager.InitForTest());
     DS_ASSERT_OK(manager.HandleFailedWorkers({ HostPort("127.0.0.1", 4001) }));
 
-    // Even after execution failure, the incident must converge through COMPLETED and stay retained for restart.
-    ASSERT_TRUE(WaitUntil([&store, &failedWorker]() {
-        auto current = store->GetCurrentIncident(failedWorker);
-        return current.completed_slots() == 4 && current.failed_slots() == 0;
-    }));
-    auto current = store->GetCurrentIncident(failedWorker);
-    ASSERT_EQ(current.total_slots(), 4);
-    ASSERT_EQ(current.completed_slots(), 4);
-    ASSERT_EQ(current.failed_slots(), 0);
-    for (const auto &task : current.recovery_tasks()) {
+    // Even after execution failure, the incident must converge through COMPLETED and then be cleaned up.
+    ASSERT_TRUE(WaitUntil([&store, &failedWorker]() { return store->HasDeletedSnapshot(failedWorker); }));
+    auto deleted = store->GetDeletedSnapshot(failedWorker);
+    ASSERT_EQ(deleted.total_slots(), 4);
+    ASSERT_EQ(deleted.completed_slots(), 4);
+    ASSERT_EQ(deleted.failed_slots(), 0);
+    for (const auto &task : deleted.recovery_tasks()) {
         EXPECT_EQ(task.owner_worker(), localWorker);
         EXPECT_EQ(task.source_worker(), localWorker);
         EXPECT_EQ(task.task_status(), RecoveryTaskPb::COMPLETED);
@@ -648,20 +645,20 @@ TEST_F(SlotRecoveryTest, MultiFailureIsolation)
     DS_ASSERT_OK(manager.InitForTest());
     DS_ASSERT_OK(manager.HandleFailedWorkers({ HostPort("127.0.0.1", 5001), HostPort("127.0.0.1", 5002) }));
 
-    // Both incidents must converge independently without cross-mixing failed_worker identities.
-    ASSERT_TRUE(WaitUntil(
-        [&store, &failedWorker1]() { return store->GetCurrentIncident(failedWorker1).completed_slots() == 4; }));
-    ASSERT_TRUE(WaitUntil(
-        [&store, &failedWorker2]() { return store->GetCurrentIncident(failedWorker2).completed_slots() == 4; }));
+    // Incidents are deleted once terminal; validate isolation from deleted snapshots.
+    ASSERT_TRUE(WaitUntil([&store, &failedWorker1]() { return store->HasDeletedSnapshot(failedWorker1); }));
+    ASSERT_TRUE(WaitUntil([&store, &failedWorker2]() { return store->HasDeletedSnapshot(failedWorker2); }));
 
-    auto current1 = store->GetCurrentIncident(failedWorker1);
-    auto current2 = store->GetCurrentIncident(failedWorker2);
-    for (const auto &task : current1.recovery_tasks()) {
+    auto deleted1 = store->GetDeletedSnapshot(failedWorker1);
+    auto deleted2 = store->GetDeletedSnapshot(failedWorker2);
+    ASSERT_EQ(deleted1.completed_slots(), 4);
+    ASSERT_EQ(deleted2.completed_slots(), 4);
+    for (const auto &task : deleted1.recovery_tasks()) {
         EXPECT_EQ(task.failed_worker(), failedWorker1);
         EXPECT_EQ(task.owner_worker(), localWorker);
         EXPECT_EQ(task.source_worker(), localWorker);
     }
-    for (const auto &task : current2.recovery_tasks()) {
+    for (const auto &task : deleted2.recovery_tasks()) {
         EXPECT_EQ(task.failed_worker(), failedWorker2);
         EXPECT_EQ(task.owner_worker(), localWorker);
         EXPECT_EQ(task.source_worker(), localWorker);

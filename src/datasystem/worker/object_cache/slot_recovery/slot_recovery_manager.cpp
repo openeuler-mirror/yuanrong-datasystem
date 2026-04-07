@@ -133,19 +133,6 @@ void AddPlannedSlots(std::unordered_map<std::string, std::set<uint32_t>> &planne
     plannedSlots.insert(slots.begin(), slots.end());
 }
 
-bool ShouldRetainTerminalIncidentForRestart(const std::string &incidentKey, const SlotRecoveryInfoPb &info)
-{
-    for (const auto &task : info.recovery_tasks()) {
-        if (task.failed_worker() != incidentKey) {
-            continue;
-        }
-        if (task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED && task.owner_worker() != incidentKey) {
-            return true;
-        }
-    }
-    return false;
-}
-
 ObjectMetaPb BuildRecoveredMetadata(const SlotPreloadMeta &meta, const std::string &localWorker)
 {
     ObjectMetaPb objectMeta;
@@ -661,8 +648,7 @@ Status SlotRecoveryManager::CompleteLocalTask(const std::string &incidentKey, co
             current.set_task_status(RecoveryTaskPb_TaskStatus_COMPLETED);
             current.set_source_worker(current.owner_worker());
             SlotRecoveryIncidentState::RefreshCounters(info);
-            shouldDelete = SlotRecoveryIncidentState::IsFullyTerminal(info)
-                           && !ShouldRetainTerminalIncidentForRestart(incidentKey, info);
+            shouldDelete = SlotRecoveryIncidentState::IsFullyTerminal(info);
             taskCompleted = true;
             writeBack = true;
             return Status::OK();
@@ -829,8 +815,7 @@ Status SlotRecoveryManager::TakeOverPendingFromSourceIncident(
             if (writeBack) {
                 SlotRecoveryIncidentState::RefreshCounters(info);
             }
-            shouldDeleteSource = SlotRecoveryIncidentState::IsFullyTerminal(info)
-                                 && !ShouldRetainTerminalIncidentForRestart(sourceIncidentKey, info);
+            shouldDeleteSource = SlotRecoveryIncidentState::IsFullyTerminal(info);
             VLOG(1) << FormatString(
                 "action=restart_source_takeover_cas incident_key=%s local_worker=%s cas_result=%s summary={%s}",
                 sourceIncidentKey, localWorker, writeBack ? "updated" : "unchanged", IncidentSummary(info));

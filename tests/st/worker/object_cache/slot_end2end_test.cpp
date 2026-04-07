@@ -28,6 +28,7 @@
 #include "common.h"
 #include "client/kv_cache/kv_client_scale_common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
@@ -110,6 +111,8 @@ public:
         ASSERT_TRUE(cluster_ != nullptr);
         DS_ASSERT_OK(cluster_->StartEtcdCluster());
         InitTestEtcdInstance();
+        auto createRc = db_->CreateTable(ETCD_SLOT_RECOVERY_TABLE, ETCD_SLOT_RECOVERY_TABLE);
+        ASSERT_TRUE(createRc.IsOk() || createRc.GetCode() == K_DUPLICATED) << createRc.ToString();
         DS_ASSERT_OK(cluster_->StartWorkers());
         DS_ASSERT_OK(cluster_->WaitUntilClusterReadyOrTimeout(30));
         DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
@@ -287,6 +290,48 @@ protected:
     std::string MakeLargeObjectValue(char ch) const
     {
         return std::string(LARGE_OBJECT_BYTES, ch);
+    }
+
+    bool WaitUntilSlotRecoveryIncidentsCleared() const
+    {
+        std::vector<std::pair<std::string, std::string>> keyValues;
+        Status status;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_GET_TIMEOUT_MS);
+        while (std::chrono::steady_clock::now() < deadline) {
+            keyValues.clear();
+            status = db_->GetAll(ETCD_SLOT_RECOVERY_TABLE, keyValues);
+            if (status.GetCode() == K_NOT_FOUND) {
+                return true;
+            }
+            if (status.IsOk() && keyValues.empty()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_GET_INTERVAL_MS));
+        }
+        keyValues.clear();
+        status = db_->GetAll(ETCD_SLOT_RECOVERY_TABLE, keyValues);
+        return status.GetCode() == K_NOT_FOUND || (status.IsOk() && keyValues.empty());
+    }
+
+    std::string DumpSlotRecoveryState() const
+    {
+        std::vector<std::pair<std::string, std::string>> keyValues;
+        auto rc = db_->GetAll(ETCD_SLOT_RECOVERY_TABLE, keyValues);
+        std::ostringstream oss;
+        oss << "slot_recovery_state: ";
+        if (rc.GetCode() == K_NOT_FOUND) {
+            oss << "empty";
+            return oss.str();
+        }
+        if (rc.IsError()) {
+            oss << rc.ToString();
+            return oss.str();
+        }
+        oss << "incident_count=" << keyValues.size();
+        for (const auto &keyValue : keyValues) {
+            oss << " key=" << keyValue.first;
+        }
+        return oss.str();
     }
 
     void AppendBrokenTail(const std::string &filePath) const
@@ -516,6 +561,8 @@ TEST_F(SlotEndToEndTest, PassiveScaleDownRecoversSlotAndMetadata)
     ASSERT_TRUE(WaitUntilPathExists(targetSlotPath)) << targetSlotPath;
     ASSERT_TRUE(WaitUntilSlotContainsPut(targetSlotPath, key)) << targetSlotPath;
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, key, value));
+
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
 }
 
 TEST_F(SlotEndToEndTest, WorkerRestartRecoversLargeObjectInDedicatedDataFile)
