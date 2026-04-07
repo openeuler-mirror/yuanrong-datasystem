@@ -126,7 +126,7 @@ Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<Safe
             return rc;
         }
     }
-    return { K_WORKER_DEADLOCK, "Worker may deadlock" };
+    return { K_WORKER_TIMEOUT, "Worker timeout" };
 }
 
 }

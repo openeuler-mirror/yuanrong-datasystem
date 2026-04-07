@@ -195,7 +195,7 @@ Status WorkerRemoteMasterOCApi::CreateMultiMetaPhaseTwo(master::CreateMultiMetaP
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_WORKER_DEADLOCK });
+          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_WORKER_TIMEOUT });
 }
 
 Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &request,
@@ -983,7 +983,7 @@ Status WorkerLocalMasterOCApi::CreateMultiMetaPhaseTwo(master::CreateMultiMetaPh
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
             return masterOC_->CreateMultiMetaPhaseTwo(request, response);
         },
-        []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN, StatusCode::K_WORKER_DEADLOCK });
+        []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN, StatusCode::K_WORKER_TIMEOUT });
 }
 
 Status WorkerLocalMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &request,

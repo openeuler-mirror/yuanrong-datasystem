@@ -522,7 +522,7 @@ TEST_F(UrmaObjectClientTest, TestDeadLock)
     InitTestKVClient(0, client);
 
     DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMetadataToMaster", "1*return(K_WORKER_DEADLOCK)"));
+        cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMetadataToMaster", "1*return(K_WORKER_TIMEOUT)"));
     const size_t dataSize = 1024UL * 1024UL;
     std::string key = "key";
     std::string value(dataSize, 'a');

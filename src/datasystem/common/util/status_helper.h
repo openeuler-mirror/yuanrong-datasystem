@@ -194,14 +194,14 @@
 #define RETRY_WHEN_DEADLOCK(statement_, rc_)                                                                   \
     do {                                                                                                       \
         rc_ = (statement_);                                                                                    \
-        if (rc_.GetCode() == K_WORKER_DEADLOCK) {                                                              \
+        if ((rc_).GetCode() == K_WORKER_TIMEOUT) {                                                    \
             const static int MAX_LOOP = 10;                                                                    \
             for (int i = 0; i < MAX_LOOP; i++) {                                                               \
-                LOG(ERROR) << "Remote worker may deadlock, try again.";                                        \
+                LOG(INFO) << "Remote worker timeout, try again.";               \
                 const uint64_t delayMs = RandomData().GetRandomUint64(RETRY_DELAY_MIN_MS, RETRY_DELAY_MAX_MS); \
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));                               \
                 rc_ = (statement_);                                                                            \
-                if (rc_.GetCode() != K_WORKER_DEADLOCK) {                                                      \
+                if ((rc_).GetCode() != K_WORKER_TIMEOUT) {                                            \
                     break;                                                                                     \
                 }                                                                                              \
             }                                                                                                  \

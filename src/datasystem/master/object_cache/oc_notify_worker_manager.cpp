@@ -697,7 +697,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
         if (status.IsError()) {
             LOG(ERROR) << FormatString("DeleteNotificationReceive failed from worker %s, error: %s", address,
                                        status.ToString());
-            lastErr = lastErr.GetCode() == K_WORKER_DEADLOCK ? lastErr : status;
+            lastErr = lastErr.GetCode() == K_WORKER_TIMEOUT ? lastErr : status;
             continue;
         }
 
@@ -705,7 +705,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
         if (recvRc.IsError()) {
             LOG(ERROR) << FormatString("DeleteNotificationReceive failed from worker %s, response %s, error: %s",
                                        address, LogHelper::IgnoreSensitive(response), recvRc.ToString());
-            lastErr = lastErr.GetCode() == K_WORKER_DEADLOCK ? lastErr : recvRc;
+            lastErr = lastErr.GetCode() == K_WORKER_TIMEOUT ? lastErr : recvRc;
             failedObjects.insert(response.failed_object_keys().begin(), response.failed_object_keys().end());
             for (const auto &id : response.failed_object_keys()) {
                 successIds.erase(id);
@@ -856,7 +856,7 @@ Status OCNotifyWorkerManager::SyncNotifyWorkerDelete(
         if (recvRc.IsError()) {
             LOG(ERROR) << FormatString("DeleteNotificationReceive failed from worker %s, response %s, error: %s",
                                        address, LogHelper::IgnoreSensitive(response), recvRc.ToString());
-            lastErr = lastErr.GetCode() == K_WORKER_DEADLOCK ? lastErr : recvRc;
+            lastErr = lastErr.GetCode() == K_WORKER_TIMEOUT ? lastErr : recvRc;
             failedObjects.insert(response.failed_object_keys().begin(), response.failed_object_keys().end());
         }
 
