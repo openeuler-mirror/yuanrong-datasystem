@@ -446,7 +446,7 @@ Status SafeTable<KeyType, ObjType>::ReserveGetAndLock(const KeyType &key, std::s
     } while (rc.GetCode() == K_NOT_FOUND && numRetries++ < maxRetries);
 
     if (rc.GetCode() == K_NOT_FOUND && numRetries >= maxRetries) {
-        rc = Status(K_WORKER_DEADLOCK, "Max retries hit while trying to reserve " + std::string(key) + " in SafeTable");
+        rc = Status(K_WORKER_TIMEOUT, "Max retries hit while trying to reserve " + std::string(key) + " in SafeTable");
         LOG(ERROR) << rc.ToString();
     }
 

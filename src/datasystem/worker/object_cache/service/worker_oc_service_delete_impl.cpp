@@ -84,8 +84,8 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
         }
         LOG(ERROR) << FormatString("[ObjectKey %s] Delete failed, %s", objectKey, rc.ToString());
         rsp.add_failed_object_keys(objectKey);
-        // if dead lock happened, the last error should return K_WORKER_DEADLOCK.
-        lastErr = lastErr.GetCode() == K_WORKER_DEADLOCK ? lastErr : rc;
+        // if dead lock happened, the last error should return K_WORKER_TIMEOUT.
+        lastErr = lastErr.GetCode() == K_WORKER_TIMEOUT ? lastErr : rc;
     }
     rsp.mutable_last_rc()->set_error_code(lastErr.GetCode());
     rsp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());

@@ -823,7 +823,7 @@ TEST_F(KVCacheClientTest, DeleteDeadLock)
     ASSERT_TRUE(dataList.size() == 2 && !dataList[0].empty() && !dataList[1].empty());
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.DeleteObjectWithTryLock.before",
-                                           "1*return(K_WORKER_DEADLOCK)"));
+                                           "1*return(K_WORKER_TIMEOUT)"));
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->Del({ objectKey1, objectKey2 }, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());

@@ -72,7 +72,7 @@ Status MasterWorkerOCServiceImpl::UpdateNotification(const UpdateObjectReqPb &re
     std::vector<std::string> updateFailIds;
     for (const UpdateObjectInfoPb &req : reqs.object_infos()) {
         Status rc = UpdateSingleNotification(req, reqs.sync());
-        if (rc.GetCode() == StatusCode::K_WORKER_DEADLOCK) {
+        if (rc.GetCode() == StatusCode::K_WORKER_TIMEOUT) {
             LOG(ERROR) << FormatString("[ObjectKey %s] Cache invalidation meet a deadlock, rollback.",
                                        req.object_key());
             return rc;

@@ -581,7 +581,7 @@ Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const s
 
     if (newMeta.config().consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL)
         && !AddHeavyOp(objectKey)) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_DEADLOCK, "retry");
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
     }
     Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
     INJECT_POINT("master.CreateMeta.delay");
@@ -961,7 +961,7 @@ Status OCMetadataManager::CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTwoR
     RETURN_OK_IF_TRUE(!rsp.info().empty());
 
     if (req.consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL) && !AddHeavyOp(objectKeys)) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_DEADLOCK, "retry");
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
     }
     Raii raii([this, &objectKeys]() { RemoveHeavyOp(objectKeys); });
 
@@ -1069,7 +1069,7 @@ Status OCMetadataManager::CreateMeta(const ObjectMetaPb &newMeta, const std::str
 
     if (newMeta.config().consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL)
         && !AddHeavyOp(objectKey)) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_DEADLOCK, "retry");
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
     }
     Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
 
@@ -1814,7 +1814,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
     auto ids = deleteMediator.GetObjKeys();
     if (!AddHeavyOp(ids)) {
         std::unordered_set<std::string> failedIds{ ids.begin(), ids.end() };
-        SetDeleteAllCopyMetaRspPb(Status(StatusCode::K_WORKER_DEADLOCK, "retry"), failedIds, response);
+        SetDeleteAllCopyMetaRspPb(Status(StatusCode::K_WORKER_TIMEOUT, "retry"), failedIds, response);
         LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
         return;
     }
@@ -2093,8 +2093,8 @@ void OCMetadataManager::NotifyDeleteAndClearMeta(DeleteObjectMediator &delMediat
     INJECT_POINT("master.before_delete_metadata", []() { return; });
     INJECT_POINT_NO_RETURN("OCMetadataManager.NotifyDeleteAndClearMeta.ProcessSlowly");
     Status status = ClearMetaInfo(sendAllDelObjs, isExpired, failedNotifyObjects, delMediator);
-    // Don't overwrite the previous error: K_WORKER_DEADLOCK
-    if (status.IsError() && lastErr.GetCode() != K_WORKER_DEADLOCK) {
+    // Don't overwrite the previous error: K_WORKER_TIMEOUT
+    if (status.IsError() && lastErr.GetCode() != K_WORKER_TIMEOUT) {
         LOG(ERROR) << "Notify worker delete failed. " << status.ToString();
         delMediator.SetStatus(status);
     }
@@ -2449,7 +2449,7 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
         objectMeta.multiSetState != PENDING, K_TRY_AGAIN,
         FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
     if (objectMeta.IsCausal() && !AddHeavyOp(objectKey)) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_DEADLOCK, "retry");
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
     }
     Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
 

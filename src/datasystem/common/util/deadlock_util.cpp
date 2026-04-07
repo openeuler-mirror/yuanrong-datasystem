@@ -33,16 +33,16 @@ static constexpr int RETRY_DELAY_MAX_MS = 30;
 Status RetryWhenDeadlock(const std::function<Status()> &fn)
 {
     Status rc = fn();
-    if (rc.GetCode() == K_WORKER_DEADLOCK) {
+    if (rc.GetCode() == K_WORKER_TIMEOUT) {
         int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
         while (remainingTimeMs > 0) {
-            LOG(ERROR) << FormatString("Remote worker may deadlock, try again.");
+            LOG(INFO) << FormatString("Remote worker timeout, try again.");
             uint64_t min = std::min<uint64_t>(remainingTimeMs, RETRY_DELAY_MIN_MS);
             uint64_t max = std::min<uint64_t>(remainingTimeMs, RETRY_DELAY_MAX_MS);
             uint64_t delayMs = RandomData().GetRandomUint64(min, max);
             std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             rc = fn();
-            if (rc.GetCode() != K_WORKER_DEADLOCK) {
+            if (rc.GetCode() != K_WORKER_TIMEOUT) {
                 break;
             }
             remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();

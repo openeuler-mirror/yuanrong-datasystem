@@ -40,7 +40,7 @@ StatusCode
 ``StatusCode::K_SHUTTING_DOWN``                      21         表示正在关闭
 ``StatusCode::K_WORKER_ABNORMAL``                    22         表示Worker异常
 ``StatusCode::K_CLIENT_WORKER_DISCONNECT``            23         表示客户端Worker断开连接
-``StatusCode::K_WORKER_DEADLOCK``                    24         表示Worker死锁
+``StatusCode::K_WORKER_TIMEOUT``                     24         表示Worker超时
 ``StatusCode::K_MASTER_TIMEOUT``                     25         表示Master超时
 ``StatusCode::K_NOT_FOUND_IN_L2CACHE``               26         表示在L2缓存中未找到
 ``StatusCode::K_REPLICA_NOT_READY``                  27         表示副本未就绪
@@ -49,7 +49,7 @@ StatusCode
 ``StatusCode::K_RETRY_IF_LEAVING``                   30         表示如果正在离开则重试
 ``StatusCode::K_SCALE_DOWN``                         31         表示缩容
 ``StatusCode::K_SCALING``                            32         表示正在扩缩容
-``StatusCode::K_CLIENT_DEADLOCK``                    33         表示客户端死锁
+``StatusCode::K_CLIENT_DEADLOCK``                    33         表示客户端请求冲突，处理超时
 ``StatusCode::K_LRU_HARD_LIMIT``                     34         表示LRU硬限制
 ``StatusCode::K_LRU_SOFT_LIMIT``                     35         表示LRU软限制
 ==================================================  =========  ==================================================================

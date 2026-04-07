@@ -681,7 +681,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaSerial(const ObjGroupMap 
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_WORKER_DEADLOCK });
+          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_WORKER_TIMEOUT });
 }
 
 Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseOne(
@@ -702,7 +702,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaPhaseOne(
     int conflictCnt = 0;
     const int conflictTolerance = 2;
     auto isConflictFunc = [&conflictCnt](const Status &rc) {
-        if (rc.GetCode() == K_TRY_AGAIN || rc.GetCode() == K_WORKER_DEADLOCK) {
+        if (rc.GetCode() == K_TRY_AGAIN || rc.GetCode() == K_WORKER_TIMEOUT) {
             conflictCnt++;
             return true;
         }

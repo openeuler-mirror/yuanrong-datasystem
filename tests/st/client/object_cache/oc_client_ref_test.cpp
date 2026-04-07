@@ -1772,7 +1772,7 @@ TEST_F(OCClientRefTest, GDecreaseRefDeadLock)
     ASSERT_TRUE(dataList.size() == 2 && dataList[0] && dataList[1]);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.DeleteObjectWithTryLock.before",
-                                           "1*return(K_WORKER_DEADLOCK)"));
+                                           "1*return(K_WORKER_TIMEOUT)"));
     DS_ASSERT_OK(client1->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
