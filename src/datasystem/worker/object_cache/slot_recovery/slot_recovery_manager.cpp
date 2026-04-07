@@ -952,32 +952,25 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(persistenceApi_ != nullptr, K_RUNTIME_ERROR, "PersistenceApi is null");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR,
                                          "MetaDataRecoveryManager is null");
-    std::unordered_map<std::string, ObjectMetaPb> latestMetaByKey;
-    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> latestContentByKey;
+    std::vector<ObjectMetaPb> recoveredMetas;
     const auto sourceWorker = task.source_worker().empty() ? task.failed_worker() : task.source_worker();
-    SlotPreloadCallback callback = [this, &latestMetaByKey, &latestContentByKey](
+    SlotPreloadCallback callback = [this, &recoveredMetas](
                                        const SlotPreloadMeta &meta, const std::shared_ptr<std::stringstream> &content) {
         auto recoveredMeta = BuildRecoveredMetadata(meta, localAddress_.ToString());
-        auto found = latestMetaByKey.find(meta.objectKey);
-        if (found == latestMetaByKey.end() || recoveredMeta.version() >= found->second.version()) {
-            latestMetaByKey[meta.objectKey] = std::move(recoveredMeta);
-            latestContentByKey[meta.objectKey] = content;
+        recoveredMetas.emplace_back(recoveredMeta);
+
+        std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents;
+        if (content != nullptr) {
+            recoveredContents.emplace(meta.objectKey, content);
         }
-        return Status::OK();
+        std::vector<std::string> recoveredObjectKeys;
+        return metadataRecoveryManager_->RecoverLocalEntries({ std::move(recoveredMeta) }, recoveredContents,
+                                                             recoveredObjectKeys);
     };
     for (const auto slotId : task.slots()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(persistenceApi_->PreloadSlot(sourceWorker, slotId, callback),
                                          FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
     }
-    std::vector<ObjectMetaPb> recoveredMetas;
-    recoveredMetas.reserve(latestMetaByKey.size());
-    for (auto &it : latestMetaByKey) {
-        recoveredMetas.emplace_back(std::move(it.second));
-    }
-    std::vector<std::string> recoveredObjectKeys;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        metadataRecoveryManager_->RecoverLocalEntries(recoveredMetas, latestContentByKey, recoveredObjectKeys),
-        "Recover local entries failed");
     std::vector<std::string> failedIds;
     auto recoverRc = metadataRecoveryManager_->RecoverMetadata(recoveredMetas, failedIds);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(recoverRc.IsOk() && failedIds.empty(),
