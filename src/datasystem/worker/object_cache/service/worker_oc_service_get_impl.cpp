@@ -2185,7 +2185,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
             ClearObjectsByObjectKeys({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
         }
     } else if (rc.IsError()) {
-        LOG(ERROR) << "Update location info failed, the object key is " << task.GetParams().front().objectKey;
+        LOG(INFO) << "Update location info failed, the object key is " << task.GetParams().front().objectKey;
         DeleteObjectsMetaUnacked({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
         ClearObjectsByObjectKeys({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
     }

@@ -165,43 +165,6 @@ Status DisableTHP()
     return Status::OK();
 }
 
-void GenerateLogReadMe()
-{
-    char filePath[PATH_MAX];
-    int ret = memset_s(filePath, PATH_MAX, 0, sizeof(filePath));
-    if (ret != EOK) {
-        LOG(WARNING) << FormatString("GenerateLogReadMe failed, the memset_s return: %d", ret);
-        return;
-    }
-    std::string path("");
-    if (readlink("/proc/self/exe", filePath, PATH_MAX) > 0) {
-        path = dirname(filePath);
-    } else {
-        LOG(WARNING) << FormatString("Readlink Error: %s", StrErr(errno));
-        return;
-    }
-    std::string targetPath(FLAGS_log_dir + "/" + "README.txt");
-    std::ifstream infile(path + "/LOG_README");
-    if (!infile.is_open()) {
-        LOG(WARNING) << FormatString("Cannot open file LOG_README in path %s/LOG_README", path);
-        return;
-    }
-    std::stringstream buffer;
-    buffer << infile.rdbuf();
-    infile.close();
-    std::ofstream outfile(targetPath);
-    if (!outfile.is_open()) {
-        LOG(WARNING) << FormatString("Cannot open file README.txt in path %s", targetPath);
-        return;
-    }
-    outfile << buffer.str();
-    outfile.close();
-    const mode_t permission = static_cast<mode_t>(FLAGS_logfile_mode) & ~0222;  // remove write permission
-    if (chmod(targetPath.c_str(), permission) != 0) {
-        LOG(WARNING) << "Change mode for README.txt file failed.";
-    }
-}
-
 /**
  * @brief After the rocksdb version is upgraded, it need to initialize the rocksdb database in advance to avoid abort.
  */
@@ -278,7 +241,6 @@ Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const 
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
 
     Logging::GetInstance()->Start(FLAGS_log_filename, false, LOG_ROLLING_COMPRESS_SECS, isEmbeddedClient);
-    GenerateLogReadMe();
 
 #ifdef SUPPORT_JEPROF
     LOG(WARNING) << "Worker support jeprof.";
