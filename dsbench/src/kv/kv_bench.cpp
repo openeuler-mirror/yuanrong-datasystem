@@ -86,6 +86,7 @@ Status KVBench::Prepare()
     RETURN_IF_NOT_OK(bench::StrToHostPort(args_.workerAddress, connectOptions.host, connectOptions.port));
     connectOptions.accessKey = args_.accessKey;
     connectOptions.secretKey = args_.secretKey;
+    connectOptions.enableExclusiveConnection = true;
     clients_.clear();
     clients_.reserve(args_.clientNum);
     for (size_t i = 0; i < args_.clientNum; ++i) {
