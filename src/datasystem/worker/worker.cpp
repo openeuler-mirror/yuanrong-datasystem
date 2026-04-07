@@ -75,8 +75,9 @@ void *CreateWorker()
 
 void WorkerDestroy(void *w)
 {
-    auto status = static_cast<datasystem::worker::Worker *>(w)->ShutDown();
-    LOG_IF_ERROR(status, "worker shut down failed");
+    auto *worker = static_cast<datasystem::worker::Worker *>(w);
+    LOG_IF_ERROR(worker->PreShutDown(), "worker pre-shutdown failed");
+    LOG_IF_ERROR(worker->ShutDown(), "worker shut down failed");
 }
 
 Status InitEmbeddedWorker(const EmbeddedConfig &config, void *w)
@@ -213,15 +214,23 @@ Worker *Worker::GetInstance()
 Status Worker::ShutDown()
 {
     if (worker_) {
-        SHUTDOWN_IF_NOT_OK(worker_->PreShutDown());
         RETURN_IF_NOT_OK(worker_->Shutdown());
         worker_.reset();
     }
     return Status::OK();
 }
 
+Status Worker::PreShutDown()
+{
+    if (worker_) {
+        RETURN_IF_NOT_OK(worker_->PreShutDown());
+    }
+    return Status::OK();
+}
+
 Worker::~Worker()
 {
+    LOG_IF_ERROR(PreShutDown(), "worker pre-shutdown failed");
     LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
 }
 

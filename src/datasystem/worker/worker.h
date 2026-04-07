@@ -65,6 +65,11 @@ public:
     Status ShutDown();
 
     /**
+     * @brief Worker pre-shutdown.
+     */
+    Status PreShutDown();
+
+    /**
      * @brief GetWorkerService ptr
      */
     WorkerServiceImpl *GetWorkerService();
