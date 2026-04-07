@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <chrono>
 #include <unordered_map>
+#include <vector>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -72,6 +73,7 @@ DS_DEFINE_validator(distributed_disk_compact_cutover_records, [](const char *fla
 
 namespace datasystem {
 namespace {
+constexpr size_t SLOT_IO_CHUNK_BYTES = 4UL * 1024UL * 1024UL;
 
 std::string BaseName(const std::string &path)
 {
@@ -287,6 +289,19 @@ void Slot::ResetRuntimeLocked()
     runtime_.Reset();
 }
 
+Status Slot::AllocateNextDataFileIdLocked(uint32_t &fileId) const
+{
+    CHECK_FAIL_RETURN_STATUS(runtime_.initialized, StatusCode::K_RUNTIME_ERROR, "Slot runtime is not initialized");
+    uint32_t maxFileId = 0;
+    for (const auto &dataFile : runtime_.manifest.activeData) {
+        uint32_t candidate = 0;
+        RETURN_IF_NOT_OK(ParseDataFileId(dataFile, candidate));
+        maxFileId = std::max(maxFileId, candidate);
+    }
+    fileId = maxFileId + 1;
+    return Status::OK();
+}
+
 Status Slot::RotateWritableDataFileLocked(uint64_t payloadSize, uint32_t &fileId)
 {
     CHECK_FAIL_RETURN_STATUS(runtime_.initialized, StatusCode::K_RUNTIME_ERROR, "Slot runtime is not initialized");
@@ -300,10 +315,118 @@ Status Slot::RotateWritableDataFileLocked(uint64_t payloadSize, uint32_t &fileId
         return Status::OK();
     }
     RETURN_IF_NOT_OK(FlushRuntimeLocked(true));
-    ++fileId;
+    RETURN_IF_NOT_OK(AllocateNextDataFileIdLocked(fileId));
     runtime_.manifest.activeData.emplace_back(FormatDataFileName(fileId));
     RETURN_IF_NOT_OK(PersistManifest(runtime_.manifest));
     RETURN_IF_NOT_OK(writer_.Init(slotPath_, runtime_.manifest));
+    return Status::OK();
+}
+
+Status Slot::AllocateExclusiveDataFileLocked(uint32_t &fileId)
+{
+    CHECK_FAIL_RETURN_STATUS(runtime_.initialized, StatusCode::K_RUNTIME_ERROR, "Slot runtime is not initialized");
+    CHECK_FAIL_RETURN_STATUS(!runtime_.manifest.activeData.empty(), StatusCode::K_RUNTIME_ERROR,
+                             "Slot active data file list is empty");
+    RETURN_IF_NOT_OK(AllocateNextDataFileIdLocked(fileId));
+    runtime_.manifest.activeData.insert(runtime_.manifest.activeData.end() - 1, FormatDataFileName(fileId));
+    RETURN_IF_NOT_OK(PersistManifest(runtime_.manifest));
+    return Status::OK();
+}
+
+Status Slot::GetPayloadSize(const std::shared_ptr<std::iostream> &body, uint64_t &payloadSize) const
+{
+    CHECK_FAIL_RETURN_STATUS(body != nullptr, StatusCode::K_INVALID, "body is nullptr");
+    body->clear();
+    auto currentPos = body->tellg();
+    CHECK_FAIL_RETURN_STATUS(currentPos != static_cast<std::streampos>(-1), StatusCode::K_INVALID,
+                             "body stream is not seekable");
+    (void)body->seekg(0, std::ios::end);
+    auto endPos = body->tellg();
+    CHECK_FAIL_RETURN_STATUS(endPos != static_cast<std::streampos>(-1), StatusCode::K_INVALID,
+                             "body stream failed to determine payload size");
+    payloadSize = static_cast<uint64_t>(endPos);
+    body->clear();
+    (void)body->seekg(0, std::ios::beg);
+    return Status::OK();
+}
+
+Status Slot::WriteStreamToFd(const std::shared_ptr<std::iostream> &body, int fd, uint64_t startOffset,
+                             uint64_t &writtenBytes) const
+{
+    CHECK_FAIL_RETURN_STATUS(body != nullptr, StatusCode::K_INVALID, "body is nullptr");
+    CHECK_FAIL_RETURN_STATUS(fd >= 0, StatusCode::K_INVALID, "fd is invalid");
+    body->clear();
+    (void)body->seekg(0, std::ios::beg);
+    std::vector<char> buffer(SLOT_IO_CHUNK_BYTES);
+    uint64_t offset = startOffset;
+    while (true) {
+        body->read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        auto bytesRead = body->gcount();
+        if (bytesRead > 0) {
+            RETURN_IF_NOT_OK(WriteFile(fd, buffer.data(), static_cast<size_t>(bytesRead), static_cast<off_t>(offset)));
+            offset += static_cast<uint64_t>(bytesRead);
+        }
+        if (body->eof()) {
+            break;
+        }
+        CHECK_FAIL_RETURN_STATUS(!body->fail(), StatusCode::K_RUNTIME_ERROR, "Failed to read payload stream");
+    }
+    writtenBytes = offset - startOffset;
+    body->clear();
+    (void)body->seekg(0, std::ios::beg);
+    return Status::OK();
+}
+
+Status Slot::AppendPayloadToActiveFileLocked(const std::shared_ptr<std::iostream> &body, uint64_t payloadSize,
+                                             uint64_t &offset)
+{
+    body->clear();
+    (void)body->seekg(0, std::ios::beg);
+    std::vector<char> buffer(SLOT_IO_CHUNK_BYTES);
+    uint64_t writtenBytes = 0;
+    bool firstChunk = true;
+    while (true) {
+        body->read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        auto bytesRead = body->gcount();
+        if (bytesRead > 0) {
+            uint64_t chunkOffset = 0;
+            RETURN_IF_NOT_OK(writer_.AppendData(buffer.data(), static_cast<size_t>(bytesRead), chunkOffset));
+            if (firstChunk) {
+                offset = chunkOffset;
+                firstChunk = false;
+            }
+            writtenBytes += static_cast<uint64_t>(bytesRead);
+        }
+        if (body->eof()) {
+            break;
+        }
+        CHECK_FAIL_RETURN_STATUS(!body->fail(), StatusCode::K_RUNTIME_ERROR, "Failed to read payload stream");
+    }
+    body->clear();
+    (void)body->seekg(0, std::ios::beg);
+    CHECK_FAIL_RETURN_STATUS(writtenBytes == payloadSize, StatusCode::K_RUNTIME_ERROR,
+                             "Active data file payload size mismatch");
+    return Status::OK();
+}
+
+Status Slot::WriteExclusivePayloadLocked(const std::shared_ptr<std::iostream> &body, uint32_t fileId,
+                                         uint64_t payloadSize) const
+{
+    auto dataPath = JoinPath(slotPath_, FormatDataFileName(fileId));
+    RETURN_IF_NOT_OK(EnsureFile(dataPath));
+    int dataFd = -1;
+    RETURN_IF_NOT_OK(OpenFile(dataPath, O_RDWR, &dataFd));
+    Raii closeDataFd([&dataFd]() {
+        if (dataFd >= 0) {
+            close(dataFd);
+            dataFd = -1;
+        }
+    });
+    uint64_t writtenBytes = 0;
+    RETURN_IF_NOT_OK(WriteStreamToFd(body, dataFd, 0, writtenBytes));
+    CHECK_FAIL_RETURN_STATUS(writtenBytes == payloadSize, StatusCode::K_RUNTIME_ERROR,
+                             "Exclusive data file payload size mismatch");
+    RETURN_IF_NOT_OK(FsyncFd(dataFd));
     return Status::OK();
 }
 
@@ -314,23 +437,32 @@ Status Slot::Save(const std::string &key, uint64_t version, const std::shared_pt
     std::lock_guard<std::mutex> lock(mu_);
     RETURN_IF_NOT_OK(EnsureRuntimeReadyLocked());
     RETURN_IF_NOT_OK(EnsureWritable(runtime_.manifest));
-    std::string payload;
-    RETURN_IF_NOT_OK(ReadPayload(body, payload));
+    uint64_t payloadSize = 0;
+    RETURN_IF_NOT_OK(GetPayloadSize(body, payloadSize));
     uint32_t fileId = 0;
-    RETURN_IF_NOT_OK(RotateWritableDataFileLocked(payload.size(), fileId));
+    bool useExclusiveFile = payloadSize >= maxDataFileBytes_;
+    if (useExclusiveFile) {
+        RETURN_IF_NOT_OK(AllocateExclusiveDataFileLocked(fileId));
+    } else {
+        RETURN_IF_NOT_OK(RotateWritableDataFileLocked(payloadSize, fileId));
+    }
     uint64_t offset = 0;
-    RETURN_IF_NOT_OK(writer_.AppendData(payload, offset));
+    if (useExclusiveFile) {
+        RETURN_IF_NOT_OK(WriteExclusivePayloadLocked(body, fileId, payloadSize));
+    } else {
+        RETURN_IF_NOT_OK(AppendPayloadToActiveFileLocked(body, payloadSize, offset));
+    }
     SlotPutRecord record;
     record.key = key;
     record.fileId = fileId;
     record.offset = offset;
-    record.size = payload.size();
+    record.size = payloadSize;
     record.version = version;
     record.writeMode = writeMode;
     std::string encoded;
     RETURN_IF_NOT_OK(SlotIndexCodec::EncodePut(record, encoded));
     RETURN_IF_NOT_OK(writer_.AppendIndexPayload(encoded));
-    writer_.RecordOperation(payload.size() + encoded.size());
+    writer_.RecordOperation(payloadSize + encoded.size());
     runtime_.snapshot.ApplyPut(record);
     RETURN_IF_NOT_OK(FlushRuntimeLocked(false));
     return Status::OK();
@@ -1018,17 +1150,6 @@ Status Slot::PersistManifest(const SlotManifestData &manifest)
     return Status::OK();
 }
 
-Status Slot::ReadPayload(const std::shared_ptr<std::iostream> &body, std::string &payload)
-{
-    CHECK_FAIL_RETURN_STATUS(body != nullptr, StatusCode::K_INVALID, "body is nullptr");
-    body->clear();
-    (void)body->seekg(0, std::ios::beg);
-    std::istreambuf_iterator<char> begin(*body);
-    std::istreambuf_iterator<char> end;
-    payload.assign(begin, end);
-    return Status::OK();
-}
-
 Status Slot::ReadRecordData(const SlotSnapshotValue &value, std::shared_ptr<std::stringstream> &content) const
 {
     CHECK_FAIL_RETURN_STATUS(content != nullptr, StatusCode::K_INVALID, "content is nullptr");
@@ -1040,11 +1161,18 @@ Status Slot::ReadRecordData(const SlotSnapshotValue &value, std::shared_ptr<std:
             close(fd);
         }
     });
-    std::string buffer(value.size, '\0');
-    RETURN_IF_NOT_OK(ReadFile(fd, buffer.data(), value.size, static_cast<off_t>(value.offset)));
     content->str("");
     content->clear();
-    *content << buffer;
+    std::vector<char> buffer(std::min<uint64_t>(value.size, SLOT_IO_CHUNK_BYTES));
+    uint64_t remaining = value.size;
+    uint64_t offset = value.offset;
+    while (remaining > 0) {
+        auto bytesToRead = static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
+        RETURN_IF_NOT_OK(ReadFile(fd, buffer.data(), bytesToRead, static_cast<off_t>(offset)));
+        content->write(buffer.data(), static_cast<std::streamsize>(bytesToRead));
+        offset += bytesToRead;
+        remaining -= bytesToRead;
+    }
     return Status::OK();
 }
 

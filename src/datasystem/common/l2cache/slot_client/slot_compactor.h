@@ -51,6 +51,8 @@ public:
     Status CleanupArtifacts(const SlotCompactBuildResult &result);
 
 private:
+    Status CopyRecordToTargetFile(int sourceFd, uint64_t sourceOffset, uint64_t size, int targetFd,
+                                  uint64_t targetOffset) const;
     Status AllocateCompactIndexFile(const SlotManifestData &manifest, uint64_t compactEpochMs,
                                     std::string &indexFile) const;
     Status GetNextDataFileId(const SlotManifestData &manifest, uint32_t &nextFileId) const;

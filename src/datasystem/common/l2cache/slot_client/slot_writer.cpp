@@ -81,10 +81,15 @@ void SlotWriter::Close()
 
 Status SlotWriter::AppendData(const std::string &payload, uint64_t &offset)
 {
+    return AppendData(payload.data(), payload.size(), offset);
+}
+
+Status SlotWriter::AppendData(const char *buffer, size_t len, uint64_t &offset)
+{
     CHECK_FAIL_RETURN_STATUS(activeDataFd_ >= 0, StatusCode::K_RUNTIME_ERROR, "Active data fd is not initialized");
     offset = activeDataSize_;
-    RETURN_IF_NOT_OK(WriteFile(activeDataFd_, payload.data(), payload.size(), static_cast<off_t>(offset)));
-    activeDataSize_ += payload.size();
+    RETURN_IF_NOT_OK(WriteFile(activeDataFd_, buffer, len, static_cast<off_t>(offset)));
+    activeDataSize_ += len;
     return Status::OK();
 }
 

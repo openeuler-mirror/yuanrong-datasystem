@@ -59,6 +59,15 @@ public:
     Status AppendData(const std::string &payload, uint64_t &offset);
 
     /**
+     * @brief Append one payload buffer to the active data file.
+     * @param[in] buffer The object payload bytes.
+     * @param[in] len The payload length.
+     * @param[out] offset The written offset inside the active data file.
+     * @return Status of the call.
+     */
+    Status AppendData(const char *buffer, size_t len, uint64_t &offset);
+
+    /**
      * @brief Append one pre-encoded index payload to the active index file.
      * @param[in] payload The encoded index bytes to append.
      * @return Status of the call.

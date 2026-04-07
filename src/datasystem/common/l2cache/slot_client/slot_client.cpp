@@ -38,7 +38,8 @@
 #include "datasystem/common/util/validator.h"
 
 DS_DEFINE_uint32(distributed_disk_slot_num, 128, "The number of slot partitions used by distributed disk.");
-DS_DEFINE_uint32(distributed_disk_max_data_file_size_mb, 1024, "The max size in MB of a single slot data file.");
+DS_DEFINE_uint32(distributed_disk_max_data_file_size_mb, 1024,
+                 "The target max size in MB of a rolling slot data file. Large objects may use a dedicated file.");
 DS_DEFINE_validator(distributed_disk_slot_num, [](const char *flagName, uint32_t value) {
     (void)flagName;
     return value > 0;

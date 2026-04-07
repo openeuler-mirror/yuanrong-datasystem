@@ -47,6 +47,7 @@ constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t PASSIVE_NODE_DEAD_TIMEOUT_S = 3;
 constexpr uint64_t RESTART_NODE_DEAD_TIMEOUT_S = 30;
 constexpr uint64_t HEARTBEAT_INTERVAL_MS = 500;
+constexpr uint64_t LARGE_OBJECT_BYTES = 1024UL * 1024UL;
 constexpr char CLUSTER_NAME[] = "slot_e2e_cluster";
 }  // namespace
 
@@ -60,7 +61,16 @@ public:
 
     bool IsPassiveScaleDownCase() const
     {
-        return CurrentTestName() == "PassiveScaleDownRecoversSlotAndMetadata";
+        const auto testName = CurrentTestName();
+        return testName == "PassiveScaleDownRecoversSlotAndMetadata"
+               || testName == "PassiveScaleDownRecoversLargeObjectInDedicatedDataFile";
+    }
+
+    bool IsLargeObjectCase() const
+    {
+        const auto testName = CurrentTestName();
+        return testName == "WorkerRestartRecoversLargeObjectInDedicatedDataFile"
+               || testName == "PassiveScaleDownRecoversLargeObjectInDedicatedDataFile";
     }
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -80,6 +90,7 @@ public:
            << "-distributed_disk_path=" << distributedDiskPath_ << " "
            << "-cluster_name=" << CLUSTER_NAME << " "
            << "-distributed_disk_slot_num=" << SLOT_NUM << " "
+           << "-distributed_disk_max_data_file_size_mb=" << (IsLargeObjectCase() ? 1 : 1024) << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
            << "-enable_metadata_recovery=true "
@@ -254,6 +265,28 @@ protected:
             std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_GET_INTERVAL_MS));
         }
         return false;
+    }
+
+    bool WaitUntilSlotContainsDataFileOfSize(const std::string &slotPath, size_t expectedSize) const
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_GET_TIMEOUT_MS);
+        while (std::chrono::steady_clock::now() < deadline) {
+            SlotManifestData manifest;
+            if (SlotManifest::Load(slotPath, manifest).IsOk()) {
+                for (const auto &dataFile : manifest.activeData) {
+                    if (FileSize(JoinPath(slotPath, dataFile), false) == static_cast<off_t>(expectedSize)) {
+                        return true;
+                    }
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_GET_INTERVAL_MS));
+        }
+        return false;
+    }
+
+    std::string MakeLargeObjectValue(char ch) const
+    {
+        return std::string(LARGE_OBJECT_BYTES, ch);
     }
 
     void AppendBrokenTail(const std::string &filePath) const
@@ -482,6 +515,66 @@ TEST_F(SlotEndToEndTest, PassiveScaleDownRecoversSlotAndMetadata)
     const auto targetSlotPath = SlotPathForWorkerAndKey(1, key);
     ASSERT_TRUE(WaitUntilPathExists(targetSlotPath)) << targetSlotPath;
     ASSERT_TRUE(WaitUntilSlotContainsPut(targetSlotPath, key)) << targetSlotPath;
+    ASSERT_TRUE(WaitUntilGetSucceeds(client1, key, value));
+}
+
+TEST_F(SlotEndToEndTest, WorkerRestartRecoversLargeObjectInDedicatedDataFile)
+{
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+
+    const std::string key = "tenant_slot_restart_large_object";
+    const std::string value = MakeLargeObjectValue('R');
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    DS_ASSERT_OK(client0->Set(key, value, param));
+    ASSERT_TRUE(WaitUntilGetSucceeds(client0, key, value));
+
+    const auto sourceSlotPath = SlotPathForWorkerAndKey(0, key);
+    ASSERT_TRUE(WaitUntilPathExists(sourceSlotPath)) << sourceSlotPath;
+    ASSERT_TRUE(WaitUntilSlotContainsPut(sourceSlotPath, key)) << sourceSlotPath;
+    ASSERT_TRUE(WaitUntilSlotContainsDataFileOfSize(sourceSlotPath, value.size())) << sourceSlotPath;
+
+    client0.reset();
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(0), SIGTERM), 0);
+
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    ASSERT_TRUE(WaitUntilGetSucceeds(client1, key, value));
+}
+
+TEST_F(SlotEndToEndTest, PassiveScaleDownRecoversLargeObjectInDedicatedDataFile)
+{
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+
+    const std::string key = "tenant_slot_passive_scale_down_large_object";
+    const std::string value = MakeLargeObjectValue('P');
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    DS_ASSERT_OK(client0->Set(key, value, param));
+    ASSERT_TRUE(WaitUntilGetSucceeds(client0, key, value));
+
+    const auto sourceSlotPath = SlotPathForWorkerAndKey(0, key);
+    ASSERT_TRUE(WaitUntilPathExists(sourceSlotPath)) << sourceSlotPath;
+    ASSERT_TRUE(WaitUntilSlotContainsPut(sourceSlotPath, key)) << sourceSlotPath;
+    ASSERT_TRUE(WaitUntilSlotContainsDataFileOfSize(sourceSlotPath, value.size())) << sourceSlotPath;
+
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(0), SIGKILL), 0);
+    WaitAllNodesJoinIntoHashRing(1, PASSIVE_NODE_DEAD_TIMEOUT_S + 10);
+
+    const auto targetSlotPath = SlotPathForWorkerAndKey(1, key);
+    ASSERT_TRUE(WaitUntilPathExists(targetSlotPath)) << targetSlotPath;
+    ASSERT_TRUE(WaitUntilSlotContainsPut(targetSlotPath, key)) << targetSlotPath;
+    ASSERT_TRUE(WaitUntilSlotContainsDataFileOfSize(targetSlotPath, value.size())) << targetSlotPath;
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, key, value));
 }
 
