@@ -680,6 +680,27 @@ TEST_F(SlotStoreTest, DistributedDiskUsesDistributedDiskPathInsteadOfSfsPath)
     ASSERT_TRUE(RemoveAll(legacySfsPath.substr(0, legacySfsPath.find("/legacy_sfs"))).IsOk());
 }
 
+TEST_F(SlotStoreTest, DistributedDiskRejectsEmptyRootPath)
+{
+    FLAGS_l2_cache_type = "distributed_disk";
+    FLAGS_distributed_disk_path.clear();
+
+    SlotClient client("");
+    auto rc = client.Init();
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_INVALID);
+    ASSERT_NE(rc.ToString().find("distributed_disk_path must not be empty"), std::string::npos);
+}
+
+TEST_F(SlotStoreTest, DistributedDiskRejectsInvalidRootPath)
+{
+    FLAGS_l2_cache_type = "distributed_disk";
+
+    SlotClient client("invalid//path");
+    auto rc = client.Init();
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_INVALID);
+    ASSERT_NE(rc.ToString().find("distributed_disk_path is invalid"), std::string::npos);
+}
+
 TEST_F(SlotStoreTest, PersistenceApiNonAggregateModeKeepsOriginalSfsBehavior)
 {
     FLAGS_l2_cache_type = "sfs";
