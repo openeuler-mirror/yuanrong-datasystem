@@ -216,6 +216,11 @@ TEST_F(StatusTest, TestStatusLogForMat)
 
     Status status5(StatusCode::K_RUNTIME_ERROR, "This is a msg");
     ASSERT_TRUE(status5.GetMsg().find("This is a msg, traceId: ") != std::string::npos);
+
+    Status status6(StatusCode::K_RUNTIME_ERROR, status5.GetMsg());
+    auto traceIdTagPos = status6.GetMsg().find(", traceId: ");
+    ASSERT_NE(traceIdTagPos, std::string::npos);
+    ASSERT_EQ(status6.GetMsg().find(", traceId: ", traceIdTagPos + 1), std::string::npos);
 }
 }  // namespace ut
 }  // namespace datasystem
