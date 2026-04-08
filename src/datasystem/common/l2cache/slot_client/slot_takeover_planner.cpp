@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
@@ -119,10 +120,20 @@ Status SlotTakeoverPlanner::BuildPlan(const std::string &sourceHomeSlotPath, con
     uint32_t nextTargetFileId = 0;
     RETURN_IF_NOT_OK(GetNextTargetFileId(targetSlotPath, targetManifest, nextTargetFileId));
 
+    std::vector<SlotPutRecord> visiblePuts;
+    RETURN_IF_NOT_OK(sourceSnapshot.CollectVisiblePuts(visiblePuts));
+    std::unordered_set<uint32_t> visibleSourceFileIds;
+    for (const auto &record : visiblePuts) {
+        visibleSourceFileIds.insert(record.fileId);
+    }
+
     std::unordered_map<uint32_t, uint32_t> fileIdMapping;
     for (const auto &sourceDataFile : sourceManifest.activeData) {
         uint32_t sourceFileId = 0;
         RETURN_IF_NOT_OK(ParseDataFileId(sourceDataFile, sourceFileId));
+        if (visibleSourceFileIds.find(sourceFileId) == visibleSourceFileIds.end()) {
+            continue;
+        }
         SlotTakeoverDataFileMapping mapping;
         mapping.sourceFileId = sourceFileId;
         mapping.sourceDataFile = sourceDataFile;
@@ -136,8 +147,6 @@ Status SlotTakeoverPlanner::BuildPlan(const std::string &sourceHomeSlotPath, con
     RETURN_IF_NOT_OK(SlotIndexCodec::EnsureIndexFile(importIndexPath));
     RETURN_IF_NOT_OK(SlotIndexCodec::TruncateTail(importIndexPath, SlotIndexCodec::HEADER_SIZE));
 
-    std::vector<SlotPutRecord> visiblePuts;
-    RETURN_IF_NOT_OK(sourceSnapshot.CollectVisiblePuts(visiblePuts));
     std::string importPayload;
     importPayload.reserve(visiblePuts.size() * 64);
     for (const auto &record : visiblePuts) {
