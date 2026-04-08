@@ -23,7 +23,6 @@
 
 #include <memory>
 #include <unordered_map>
-#include <vector>
 #include <tbb/concurrent_hash_map.h>
 
 #include <ub/umdk/urma/urma_api.h>
@@ -42,6 +41,7 @@
 
 namespace datasystem {
 class UrmaConnection;
+class UrmaJfs;
 class UrmaEvent : public Event {
 public:
     /**
@@ -50,9 +50,9 @@ public:
      * @param[in] connection Connection associated with the request.
      * @param[in] waiter Optional waiter used for notification.
      */
-    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaConnection> connection,
+    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaConnection> connection, std::weak_ptr<UrmaJfs> jfs,
               std::shared_ptr<EventWaiter> waiter = nullptr)
-        : Event(requestId, std::move(waiter)), connection_(std::move(connection))
+        : Event(requestId, std::move(waiter)), connection_(std::move(connection)), jfs_(std::move(jfs))
     {
     }
 
@@ -78,6 +78,15 @@ public:
     }
 
     /**
+     * @brief Get the JFS associated with this request when it was submitted.
+     * @return Weak pointer to the request JFS.
+     */
+    std::weak_ptr<UrmaJfs> GetJfs() const
+    {
+        return jfs_;
+    }
+
+    /**
      * @brief Get the recorded Urma status code.
      * @return Urma completion status code.
      */
@@ -89,6 +98,7 @@ public:
 private:
     int statusCode_{ 0 };
     std::weak_ptr<UrmaConnection> connection_;
+    std::weak_ptr<UrmaJfs> jfs_;
 };
 
 class UrmaContext {
@@ -193,8 +203,9 @@ private:
 
 class UrmaJfs {
 public:
-    explicit UrmaJfs(urma_jfs_t *raw, size_t index) : raw_(raw), valid_(true), index_(index)
+    explicit UrmaJfs(urma_jfs_t *raw) : raw_(raw), valid_(true)
     {
+        counter_.fetch_add(1);
     }
     ~UrmaJfs();
 
@@ -205,12 +216,10 @@ public:
      * @param[in] context Local Urma context.
      * @param[in] jfc Completion queue bound to this JFS.
      * @param[in] priority Service priority used for this JFS.
-     * @param[in] index Logical index of this JFS in the resource pool.
      * @param[out] jfs Created JFS wrapper.
      * @return Status of the call.
      */
-    static Status Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, size_t index,
-                         std::shared_ptr<UrmaJfs> &jfs);
+    static Status Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, std::shared_ptr<UrmaJfs> &jfs);
 
     /**
      * @brief Get the underlying JFS handle.
@@ -255,25 +264,17 @@ public:
         return raw_->jfs_id.id;
     }
 
-    /**
-     * @brief Get the logical index of this JFS in the pool.
-     * @return JFS index.
-     */
-    size_t GetJfsIndex() const
-    {
-        return index_;
-    }
-
 private:
+    static std::atomic<uint32_t> counter_;
     urma_jfs_t *raw_ = nullptr;
     std::atomic<bool> valid_ = false;
-    size_t index_;
 };
 
 class UrmaJfr {
 public:
     explicit UrmaJfr(urma_jfr_t *raw) : raw_(raw)
     {
+        counter_.fetch_add(1);
     }
     ~UrmaJfr();
 
@@ -300,6 +301,7 @@ public:
     }
 
 private:
+    static std::atomic<uint32_t> counter_;
     urma_jfr_t *raw_ = nullptr;
 };
 
@@ -408,17 +410,21 @@ private:
 using UrmaLocalSegmentMap = tbb::concurrent_hash_map<uint64_t, std::unique_ptr<UrmaLocalSegment>>;
 using UrmaRemoteSegmentMap = tbb::concurrent_hash_map<uint64_t, std::unique_ptr<UrmaRemoteSegment>>;
 
+class UrmaResource;
+
 class UrmaConnection {
 public:
     /**
-     * @brief Construct a connection with local send resources and imported remote JFR.
-     * @param[in] jfs Local JFS bound to this connection.
-     * @param[in] tjfr Imported remote target JFR.
+     * @brief Construct a connection with a local JFS and an imported remote target JFR.
+     *        Local JFR is managed separately in UrmaManager::localJfrMap_.
+     * @param[in] jfs Local JFS exclusively owned by this connection.
+     * @param[in] tjfr Imported remote target JFR for writing to the remote side's JFR.
      * @param[in] urmaJfrInfo Remote JFR metadata.
      */
     UrmaConnection(std::shared_ptr<UrmaJfs> jfs, std::unique_ptr<UrmaTargetJfr> tjfr, const UrmaJfrInfo &urmaJfrInfo)
         : jfs_(std::move(jfs)), tjfr_(std::move(tjfr)), urmaJfrInfo_(urmaJfrInfo)
     {
+        LOG(INFO) << "Created connection with JFS " << jfs_->GetJfsId() << " and remote JFR " << urmaJfrInfo_.jfrId;
     }
 
     ~UrmaConnection() = default;
@@ -432,16 +438,20 @@ public:
     const UrmaJfrInfo &GetUrmaJfrInfo() const;
 
     /**
-     * @brief Get the current local JFS to this connection.
+     * @brief Get the current local JFS exclusively owned by this connection.
      * @return Shared pointer to the bound JFS.
      */
     std::shared_ptr<UrmaJfs> GetJfs() const;
 
     /**
-     * @brief Replace the local JFS used by this connection.
-     * @param[in] jfs New JFS to bind.
+     * @brief Recreate the connection JFS for a failed request JFS.
+     *        The failure marker and replacement are both performed while holding the
+     *        connection lock so only one thread handles a given failed JFS.
+     * @param[in] resource Urma resource used to create and retire JFS handles.
+     * @param[in] failedJfs The JFS that observed the CQE failure.
+     * @return Status of the call.
      */
-    void SetJfs(std::shared_ptr<UrmaJfs> jfs);
+    Status ReCreateJfs(UrmaResource &resource, const std::shared_ptr<UrmaJfs> &failedJfs);
 
     /**
      * @brief Get the imported remote target JFR handle.
@@ -476,13 +486,13 @@ public:
     Status UnimportRemoteSeg(uint64_t segmentAddress);
 
     /**
-     * @brief Release all imported remote segments owned by this connection.
+     * @brief Release all resources owned by this connection.
      */
     void Clear();
 
 private:
     mutable std::mutex jfsMutex_;
-    std::weak_ptr<UrmaJfs> jfs_;
+    std::shared_ptr<UrmaJfs> jfs_;
     std::unique_ptr<UrmaTargetJfr> tjfr_;
     UrmaJfrInfo urmaJfrInfo_;
     UrmaRemoteSegmentMap tsegs_;
@@ -497,10 +507,9 @@ public:
      * @brief Initialize core Urma resources for the local device.
      * @param[in] device Local Urma device.
      * @param[in] eidIndex EID index used to create the context.
-     * @param[in] connectionSize Number of connection resources to prepare.
      * @return Status of the call.
      */
-    Status Init(urma_device_t *device, uint32_t eidIndex, uint32_t connectionSize);
+    Status Init(urma_device_t *device, uint32_t eidIndex);
 
     /**
      * @brief Release all owned Urma resources.
@@ -543,15 +552,6 @@ public:
     bool GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const;
 
     /**
-     * @brief Get the list of local JFR resources.
-     * @return Reference to the JFR list.
-     */
-    const std::vector<std::unique_ptr<UrmaJfr>> &GetJfrList() const
-    {
-        return jfrLists_;
-    }
-
-    /**
      * @brief Get the maximum supported Urma write size.
      * @return Maximum write size in bytes.
      */
@@ -570,22 +570,22 @@ public:
     }
 
     /**
-     * @brief Get the next available JFS from the local pool.
-     * @param[out] jfs Selected JFS.
+     * @brief Create a new JFS for exclusive use by a single connection.
+     * @param[out] jfs Created JFS wrapper.
      * @return Status of the call.
      */
-    Status GetNextJfs(std::shared_ptr<UrmaJfs> &jfs);
+    Status CreateJfs(std::shared_ptr<UrmaJfs> &jfs);
 
     /**
-     * @brief Get a local JFR by index.
-     * @param[in] index Index in the JFR list.
-     * @return Pointer to the JFR, or nullptr if index is invalid.
+     * @brief Create a new local JFR managed outside UrmaConnection.
+     * @param[out] jfr Created JFR wrapper.
+     * @return Status of the call.
      */
-    UrmaJfr *GetJfr(size_t index) const;
+    Status CreateJfr(std::unique_ptr<UrmaJfr> &jfr);
 
     /**
-     * @brief Asynchronously move a JFS to error state and recreate it if needed.
-     * @param[in] jfs JFS to update.
+     * @brief Asynchronously move a JFS to error state for later cleanup.
+     * @param[in] jfs JFS to retire.
      * @return Status of the call.
      */
     Status AsyncModifyJfsToError(std::shared_ptr<UrmaJfs> jfs);
@@ -603,23 +603,18 @@ private:
     };
 
     /**
-     * @brief Recreate a replacement JFS after the original one enters error state.
+     * @brief Retire a JFS to error state and store it for later deletion.
      * @param[in] jfs Failed JFS instance.
      * @return Status of the call.
      */
-    Status RecreateJfsAfterError(const std::shared_ptr<UrmaJfs> &jfs);
+    Status RetireJfsToError(const std::shared_ptr<UrmaJfs> &jfs);
 
-    size_t connectionSize_ = 0;
     const urma_token_t urmaToken_ = { 0xACFE };  // default token
     uint8_t jfsPriority_ = 0;
     urma_device_attr_t urmaDeviceAttribute_ = {};
     std::unique_ptr<UrmaContext> context_;
     std::unique_ptr<UrmaJfce> jfce_;
     std::unique_ptr<UrmaJfc> jfc_;
-    std::mutex jfsListMutex_;
-    std::vector<std::shared_ptr<UrmaJfs>> jfsLists_;
-    std::vector<std::unique_ptr<UrmaJfr>> jfrLists_;
-    std::atomic<size_t> localJfsIndex_{ 0 };
     std::unique_ptr<ThreadPool> deleteJfsThread_;
     std::mutex pendingDeleteMutex_;
     // jfs id to pending delete jfs object with trace context

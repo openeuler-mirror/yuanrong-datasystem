@@ -115,6 +115,13 @@ public:
             return ABNORMAL_EXIT_CODE;
         }
     }
+
+    void RestartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes)
+    {
+        auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+        ASSERT_NE(externalCluster, nullptr);
+        DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne(indexes));
+    }
 };
 
 class UrmaObjectClientAuthorizationTest : public UrmaObjectClientTest {
@@ -1248,7 +1255,7 @@ TEST_F(UrmaCqeErrorTest, RemoteWorkerPollCqeErrorBaseCase)
     ASSERT_EQ(value, getValue);
 }
 
-TEST_F(UrmaCqeErrorTest, RemoteWorkerGetShareJfs)
+TEST_F(UrmaCqeErrorTest, RemoteWorkerGetCqeError)
 {
     std::shared_ptr<KVClient> client1;
     std::shared_ptr<KVClient> client2;
@@ -1266,16 +1273,14 @@ TEST_F(UrmaCqeErrorTest, RemoteWorkerGetShareJfs)
     }
 
     std::string getValue;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.VerifyExclusiveJfs", "1000*call()"));
     DS_ASSERT_OK(client2->Get("key-1", getValue));
     ASSERT_EQ(value, getValue);
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
     DS_ASSERT_OK(client3->Get("key-100", getValue));
     ASSERT_EQ(value, getValue);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus",
                                            "100*call(0, 0)->1*call(0, 9)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetJfsFromConnection", "1*return()"));
     std::vector<std::thread> threads;
     threads.emplace_back([&client2, &value] {
         for (int i = 0; i < keyCount / 2; i++) {
@@ -1300,7 +1305,7 @@ TEST_F(UrmaCqeErrorTest, RemoteWorkerGetShareJfs)
     }
 }
 
-TEST_F(UrmaCqeErrorTest, RemoteWorkerMultiGetShareJfs)
+TEST_F(UrmaCqeErrorTest, RemoteWorkerMultiGetCqeError)
 {
     std::shared_ptr<KVClient> client1;
     std::shared_ptr<KVClient> client2;
@@ -1318,16 +1323,14 @@ TEST_F(UrmaCqeErrorTest, RemoteWorkerMultiGetShareJfs)
     }
 
     std::string getValue;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.VerifyExclusiveJfs", "1000*call()"));
     DS_ASSERT_OK(client2->Get("key-1", getValue));
     ASSERT_EQ(value, getValue);
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetNextJfs", "1*call(0)"));
     DS_ASSERT_OK(client3->Get("key-100", getValue));
     ASSERT_EQ(value, getValue);
 
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus", "10*call(0, 0)->1*call(0, 9)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.GetJfsFromConnection", "1*return()"));
     std::vector<std::thread> threads;
     const int batchSize = 10;
     threads.emplace_back([&client2, &value, batchSize] {
@@ -1541,6 +1544,33 @@ TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetFailed)
 
     std::vector<std::string> getValues;
     DS_ASSERT_NOT_OK(client2->Get({ key1, key2 }, getValues));
+}
+
+TEST_F(UrmaDisableFallbackTest, UrmaRemoteGetReconnectAfterWorkerRestart)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    std::string firstKey = "urma-reconnect-before-restart";
+    std::string firstValue = GenRandomString(256 * 1024);
+    DS_ASSERT_OK(client2->Set(firstKey, firstValue));
+
+    std::string getValue;
+    DS_ASSERT_OK(client1->Get(firstKey, getValue));
+    ASSERT_EQ(firstValue, getValue);
+
+    RestartWorkerAndWaitReady({ 1 });
+
+    std::shared_ptr<KVClient> restartedClient2;
+    InitTestKVClient(1, restartedClient2);
+    std::string secondKey = "urma-reconnect-after-restart";
+    std::string secondValue = GenRandomString(256 * 1024);
+    DS_ASSERT_OK(restartedClient2->Set(secondKey, secondValue));
+
+    DS_ASSERT_OK(client1->Get(secondKey, getValue));
+    ASSERT_EQ(secondValue, getValue);
 }
 
 #endif

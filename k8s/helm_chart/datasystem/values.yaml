@@ -161,7 +161,7 @@ global:
     # Config the l2 cache type support obs, sfs, distributed_disk, none by default.
     l2CacheType: "none"
 
-    # l2 cache delete threads number, it affects the parallelism of L2 data deletion. 
+    # l2 cache delete threads number, it affects the parallelism of L2 data deletion.
     # Increasing it will also cause CPU usage to increase.
     l2CacheDeleteThreadNum: 32
 
@@ -274,7 +274,7 @@ global:
       # Worker's public key in the curve encryption environment.
       workerPublicKey: ""
       # Worker's private key in the curve encryption environment.
-      workerSecretKey: ""               
+      workerSecretKey: ""
       # Client's public key in the curve encryption environment.
       clientPublicKey: ""
 
@@ -324,7 +324,7 @@ global:
     masterScThreadNum: 128
     # The num of threads used to send elements to remote worker.
     remoteSendThreadNum: 8
-    
+
     # Memory resource clean up interval in milliseconds
     scGcIntervalMs: 50
     # Remote send interval in milliseconds
@@ -403,7 +403,7 @@ global:
     arenaPerTenant: 16
     # The memory reclamation time after free, default is 600 seconds.
     memoryReclamationTimeSecond: 600
-    # The memory alignment size used by jemalloc for all memory allocations (in bytes). 
+    # The memory alignment size used by jemalloc for all memory allocations (in bytes).
     # Larger alignment can improve performance but may increase memory consumption due to fragmentation.
     memoryAlignment: 64
     # Set whether to delete object asynchronously. If set to true, master will notify workers to delete objects asynchronously.
@@ -424,8 +424,9 @@ global:
     urmaPollSize: 8
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     urmaRegisterWholeArena: true
-    # Number of jfs and jfr pair.
-    urmaConnectionSize: 16
+    # [DEPRECATED] Retained for compatibility only and ignored internally.
+    # JFS/JFR are now created per connection.
+    urmaConnectionSize: 0
     # Uses interrupt mode to poll completion events.
     urmaEventMode: false
     # Enable fast transport fallback to tcp transport.
@@ -504,7 +505,7 @@ global:
       yuanrongIamPassphrase: ""
       # The path that mounts yuanrong cert ciphertext. Must be specified when enable kmc yuanrong token auth.
       yuanrongIamDir: "/home/sn/datasystem/yuanrong_iam"
-    
+
   # fsGroup configuration
   # All processes of the container are also part of the supplementary group ID.
   fsGid: "1002"
@@ -608,8 +609,8 @@ global:
   # If the value is true, a priorityClass with preemptionPolicy Never is created.
   enableNonPreemptive: false
 
-  # Used to define how long Kubernetes will give a Pod a grace period before it is terminated. 
-  # This grace period is intended to allow the Pod sufficient time to gracefully shut down its running processes and services. 
+  # Used to define how long Kubernetes will give a Pod a grace period before it is terminated.
+  # This grace period is intended to allow the Pod sufficient time to gracefully shut down its running processes and services.
   terminationGracePeriodSeconds: 1800
 
   # Used to control how many Pods can be in an unavailable state during a rolling update.

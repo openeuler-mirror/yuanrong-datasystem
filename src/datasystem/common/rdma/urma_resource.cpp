@@ -40,6 +40,9 @@
 DS_DECLARE_bool(urma_event_mode);
 
 namespace datasystem {
+std::atomic<uint32_t> UrmaJfs::counter_{ 0 };
+std::atomic<uint32_t> UrmaJfr::counter_{ 0 };
+
 const uint32_t JETTY_SIZE = 256;
 
 UrmaContext::~UrmaContext()
@@ -147,7 +150,6 @@ UrmaJfs::~UrmaJfs()
     }
     std::stringstream oss;
     oss << "delete jfs id " << raw_->jfs_id.id;
-    oss << " with index " << index_;
     oss << ", valid: " << (valid_.load() ? "true" : "false") << " ";
     const auto ret = ds_urma_delete_jfs(raw_);
     if (ret == URMA_SUCCESS) {
@@ -155,11 +157,12 @@ UrmaJfs::~UrmaJfs()
     } else {
         oss << FormatString("failed. ret = %d", ret);
     }
+    counter_.fetch_sub(1);
+    oss << ". jfs count: " << counter_.load();
     LOG(INFO) << oss.str();
 }
 
-Status UrmaJfs::Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, size_t index,
-                       std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaJfs::Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, std::shared_ptr<UrmaJfs> &jfs)
 {
     urma_jfs_cfg_t jfsConfig;
     jfsConfig.depth = JETTY_SIZE;
@@ -181,8 +184,8 @@ Status UrmaJfs::Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priorit
     if (raw == nullptr) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfs, errno = %d", errno));
     }
-    jfs = std::make_shared<UrmaJfs>(raw, index);
-    LOG(INFO) << "urma create jfs id " << jfs->GetJfsId() << " with index " << jfs->GetJfsIndex() << " success";
+    jfs = std::make_shared<UrmaJfs>(raw);
+    LOG(INFO) << "urma create jfs id " << jfs->GetJfsId() << " success. jfs count: " << counter_.load();
     return Status::OK();
 }
 
@@ -211,6 +214,8 @@ UrmaJfr::~UrmaJfr()
     } else {
         oss << FormatString("failed. ret = %d", ret);
     }
+    counter_.fetch_sub(1);
+    oss << ". jfr count: " << counter_.load();
     LOG(INFO) << oss.str();
     raw_ = nullptr;
 }
@@ -234,7 +239,7 @@ Status UrmaJfr::Create(urma_context_t *context, urma_jfc_t *jfc, urma_token_t ur
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfr, errno = %d", errno));
     }
     jfr = std::make_unique<UrmaJfr>(raw);
-    LOG(INFO) << "urma create jfr id " << jfr->Raw()->jfr_id.id << " success";
+    LOG(INFO) << "urma create jfr id " << jfr->Raw()->jfr_id.id << " success. jfr count: " << counter_.load();
     return Status::OK();
 }
 
@@ -327,13 +332,42 @@ const UrmaJfrInfo &UrmaConnection::GetUrmaJfrInfo() const
 std::shared_ptr<UrmaJfs> UrmaConnection::GetJfs() const
 {
     std::lock_guard<std::mutex> lock(jfsMutex_);
-    return jfs_.lock();
+    return jfs_;
 }
 
-void UrmaConnection::SetJfs(std::shared_ptr<UrmaJfs> jfs)
+Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr<UrmaJfs> &failedJfs)
 {
-    std::lock_guard<std::mutex> lock(jfsMutex_);
-    jfs_ = std::move(jfs);
+    if (failedJfs == nullptr) {
+        LOG(INFO) << "Failed JFS is null, skipping recreate";
+        return Status::OK();
+    }
+    // failedJfs must come from the UrmaEvent that reported the failure.
+    // connection->jfs_ may already have been swapped to a newly recreated JFS
+    // by another thread. If we read jfs_ here and call MarkInvalid() on it,
+    // we may incorrectly invalidate the new healthy JFS instead of the failed one.
+    {
+        std::lock_guard<std::mutex> lock(jfsMutex_);
+        // Keep MarkInvalid() and the recreate decision under jfsMutex_.
+        // The same JFS may concurrently receive multiple CQE error-9 events:
+        // only one thread is allowed to mark it invalid and recreate jfs_,
+        // while other threads must wait here and observe the recreated state.
+        if (!failedJfs->MarkInvalid()) {
+            LOG(INFO) << "JFS " << failedJfs->GetJfsId() << " is already invalid, skipping recreate";
+            return Status::OK();
+        }
+        LOG(INFO) << "Mark JFS " << failedJfs->GetJfsId() << " to invalid, recreating";
+        CHECK_FAIL_RETURN_STATUS(jfs_ != nullptr, K_RUNTIME_ERROR, "JFS already cleared for connection");
+        if (jfs_.get() != failedJfs.get()) {
+            LOG(WARNING) << "Already mark JFS " << failedJfs->GetJfsId()
+                         << " to invalid, but jfs_ is not pointing to it, skipping recreate";
+            return Status::OK();
+        }
+        std::shared_ptr<UrmaJfs> newJfs;
+        RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJfs(newJfs), "Failed to recreate JFS");
+        jfs_ = std::move(newJfs);
+        LOG(INFO) << "the connection using new jfs id " << jfs_->GetJfsId();
+    }
+    return resource.AsyncModifyJfsToError(failedJfs);
 }
 
 urma_target_jetty_t *UrmaConnection::GetTargetJfr() const
@@ -401,7 +435,7 @@ void UrmaConnection::Clear()
     urmaJfrInfo_ = UrmaJfrInfo();
 }
 
-Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, uint32_t connectionSize)
+Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex)
 {
     Clear();
     CHECK_FAIL_RETURN_STATUS(device != nullptr, K_INVALID, "URMA device is null");
@@ -425,22 +459,9 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, uint32_t con
         RETURN_IF_NOT_OK(jfc_->Rearm());
     }
 
-    auto *context = context_->Raw();
-    auto *jfc = jfc_->Raw();
-    connectionSize_ = connectionSize;
-    jfsLists_.reserve(connectionSize);
-    jfrLists_.reserve(connectionSize);
-    for (uint32_t i = 0; i < connectionSize; ++i) {
-        std::shared_ptr<UrmaJfs> jfs;
-        std::unique_ptr<UrmaJfr> jfr;
-        RETURN_IF_NOT_OK(UrmaJfs::Create(context, jfc, priority, i, jfs));
-        RETURN_IF_NOT_OK(UrmaJfr::Create(context, jfc, urmaToken_, jfr));
-        jfsLists_.emplace_back(std::move(jfs));
-        jfrLists_.emplace_back(std::move(jfr));
-    }
     constexpr uint32_t threadCount = 1;
-    deleteJfsThread_ = std::make_unique<ThreadPool>(0, threadCount, "RecreateJfs");
-    RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnH2DEnv(context, jfc, jfce_->Raw()));
+    deleteJfsThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
+    RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw()));
     return Status::OK();
 }
 
@@ -488,106 +509,55 @@ void UrmaResource::Clear()
 {
     OsXprtPipln::UnInitOsPiplnH2DEnv();
     {
-        std::lock_guard<std::mutex> jfsLock(jfsListMutex_);
-        jfsLists_.clear();
-    }
-    {
         std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
         pendingDeleteJfs_.clear();
     }
-    jfrLists_.clear();
-    localJfsIndex_ = 0;
-    connectionSize_ = 0;
     jfsPriority_ = 0;
     jfc_.reset();
     jfce_.reset();
     context_.reset();
 }
 
-Status UrmaResource::GetNextJfs(std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::CreateJfs(std::shared_ptr<UrmaJfs> &jfs)
 {
-    INJECT_POINT("worker.GetNextJfs", [this](size_t index) {
-        localJfsIndex_ = index;
-        return Status::OK();
-    });
-    std::lock_guard<std::mutex> lock(jfsListMutex_);
-    CHECK_FAIL_RETURN_STATUS(connectionSize_ > 0, K_RUNTIME_ERROR, "No JFS is available because connectionSize is 0");
-
-    for (size_t i = 0; i < connectionSize_; ++i) {
-        const auto index = localJfsIndex_.fetch_add(1) % connectionSize_;
-        const auto &candidate = jfsLists_[index];
-        if (candidate != nullptr && candidate->IsValid()) {
-            jfs = candidate;
-            return Status::OK();
-        }
-    }
-
-    RETURN_STATUS(K_RUNTIME_ERROR, "No valid JFS is available");
+    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating JFS");
+    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating JFS");
+    return UrmaJfs::Create(context_->Raw(), jfc_->Raw(), jfsPriority_, jfs);
 }
 
-UrmaJfr *UrmaResource::GetJfr(size_t index) const
+Status UrmaResource::CreateJfr(std::unique_ptr<UrmaJfr> &jfr)
 {
-    if (index >= jfrLists_.size() || jfrLists_[index] == nullptr) {
-        return nullptr;
-    }
-    return jfrLists_[index].get();
+    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating JFR");
+    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating JFR");
+    return UrmaJfr::Create(context_->Raw(), jfc_->Raw(), urmaToken_, jfr);
 }
 
 Status UrmaResource::AsyncModifyJfsToError(std::shared_ptr<UrmaJfs> jfs)
 {
     CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "Failed to modify JFS to error because JFS is null");
-    const auto index = jfs->GetJfsIndex();
-    const auto jfsId = jfs->GetJfsId();
-    CHECK_FAIL_RETURN_STATUS(index < connectionSize_, K_RUNTIME_ERROR,
-                             FormatString("Index out of range for marking JFS to recreate: %u", index));
-    {
-        std::lock_guard<std::mutex> lock(jfsListMutex_);
-        CHECK_FAIL_RETURN_STATUS(jfsLists_[index] == jfs, K_RUNTIME_ERROR,
-                                 FormatString("Skip modifying stale JFS at index %u with id %u", index, jfsId));
-    }
-    if (!jfs->MarkInvalid()) {
-        LOG(INFO) << "JFS at index " << index << " with id " << jfsId << " is already invalid";
-        return Status::OK();
-    }
-    LOG(INFO) << "Mark JFS id " << jfsId << " at index " << index << " to invalid";
     auto traceId = Trace::Instance().GetTraceID();
     deleteJfsThread_->Execute([this, jfs, traceId]() {
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        LOG_IF_ERROR(RecreateJfsAfterError(jfs), "RecreateJfsAfterError failed");
+        LOG_IF_ERROR(RetireJfsToError(jfs), "RetireJfsToError failed");
     });
     return Status::OK();
 }
 
-Status UrmaResource::RecreateJfsAfterError(const std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::RetireJfsToError(const std::shared_ptr<UrmaJfs> &jfs)
 {
-    CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "JFS is null when recreating after error");
+    CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "JFS is null when retiring to error");
 
-    const auto index = jfs->GetJfsIndex();
     const auto jfsId = jfs->GetJfsId();
-    LOG(INFO) << "Try modify jfs id " << jfsId << " at index " << index << " to state URMA_JETTY_STATE_ERROR";
+    LOG(INFO) << "Try modify jfs id " << jfsId << " to state URMA_JETTY_STATE_ERROR";
 
-    auto rc = jfs->ModifyToError();
-    CHECK_FAIL_RETURN_STATUS(rc.IsOk(), K_RUNTIME_ERROR,
-                             FormatString("Failed to modify jfs index %u with id %u to error state: %s", index, jfsId,
-                                          rc.ToString().c_str()));
+    RETURN_IF_NOT_OK_APPEND_MSG(jfs->ModifyToError(),
+                                FormatString("Failed to modify jfs with id %u to error state", jfsId));
     auto traceId = Trace::Instance().GetTraceID();
     {
         std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
         pendingDeleteJfs_[jfsId] = { jfs, traceId };
     }
-
-    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when recreating jfs");
-    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when recreating jfs");
-    std::shared_ptr<UrmaJfs> newJfs;
-    RETURN_IF_NOT_OK(UrmaJfs::Create(context_->Raw(), jfc_->Raw(), jfsPriority_, index, newJfs));
-    auto newJfsId = newJfs->GetJfsId();
-    {
-        std::lock_guard<std::mutex> jfsLock(jfsListMutex_);
-        CHECK_FAIL_RETURN_STATUS(jfsLists_[index] == jfs, K_RUNTIME_ERROR,
-                                 FormatString("Skip replacing stale JFS at index %u with id %u", index, jfsId));
-        jfsLists_[index] = std::move(newJfs);
-    }
-    LOG(INFO) << "Recreated jfs at index " << index << ", old id " << jfsId << ", new id " << newJfsId;
+    LOG(INFO) << "Retired jfs id " << jfsId << " to pending delete";
     return Status::OK();
 }
 

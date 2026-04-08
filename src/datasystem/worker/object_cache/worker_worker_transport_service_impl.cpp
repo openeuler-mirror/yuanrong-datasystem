@@ -53,7 +53,7 @@ Status WorkerWorkerTransportServiceImpl::Init()
 Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req,
                                                                              UrmaHandshakeRspPb &rsp)
 {
-    return DoExchangeUrmaConnectInfo(req, rsp);
+    return ExchangeJfr(req, rsp);
 }
 }  // namespace object_cache
 }  // namespace datasystem

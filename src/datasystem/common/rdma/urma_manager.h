@@ -20,7 +20,6 @@
 #ifndef DATASYSTEM_COMMON_RPC_URMA_MANAGER_H
 #define DATASYSTEM_COMMON_RPC_URMA_MANAGER_H
 
-#include <csignal>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -31,7 +30,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
-//#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_resource.h"
 #include "datasystem/common/rpc/rpc_channel.h"
@@ -39,9 +37,7 @@
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
-#include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/common/util/queue/queue.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
@@ -59,11 +55,10 @@ const std::string UB_MAX_GET_DATA_SIZE = "UB_MAX_GET_DATA_SIZE";
 const std::string UB_MAX_SET_BUFFER_SIZE = "UB_MAX_SET_BUFFER_SIZE";
 
 #define MAX_POLL_JFC_TRY_CNT 10
-using TbbUrmaConnectionMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<UrmaConnection>>;
 
-using EventMap = LockMap<uint64_t, std::shared_ptr<UrmaEvent>>;
+using TbbUrmaConnectionMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<UrmaConnection>>;
 using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<UrmaEvent>>;
-using TbbJfrMap = tbb::concurrent_hash_map<std::string, uint32_t>;
+using TbbJfrMap = tbb::concurrent_hash_map<std::string, std::unique_ptr<UrmaJfr>>;
 
 class UrmaManager {
 public:
@@ -220,10 +215,13 @@ public:
     uint64_t GetUasid();
 
     /**
-     * @brief Get ids of all JFRs
-     * @return list of JFR ids
+     * @brief Get or create the local JFR used for a given connection key.
+     *        Reuses existing JFR when reconnecting to the same target.
+     * @param[in] key Connection key (remote address or client id).
+     * @param[out] jfrId The JFR ID to publish in the handshake.
+     * @return Status of the call.
      */
-    std::vector<uint32_t> GetJfrIds();
+    Status GetOrCreateLocalJfr(const std::string &key, uint32_t &jfrId);
 
     /**
      * @brief Register segment
@@ -241,21 +239,16 @@ public:
     Status GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq);
 
     /**
-     * @brief Fill segment info into handshake response (for callee to expose JFR to caller).
+     * @brief Fill local segment info into handshake response.
      */
     Status GetSegmentInfo(UrmaHandshakeRspPb &handshakeRsp);
 
     /**
-     * @brief Import segment info from request
-     * @param[in] handshakeReq The protobuf to import segment info from
+     * @brief Import segment info from request (responder imports initiator's segments).
+     * @param[in] req The handshake request containing segment info.
      * @return Status of the call.
      */
     Status ImportRemoteInfo(const UrmaHandshakeReqPb &req);
-
-    /**
-     * @brief Import segment info from handshake response (caller imports callee's segments).
-     */
-    Status ImportRemoteInfo(const UrmaHandshakeRspPb &rsp);
 
     /**
      * @brief Does a RDMA write to remote worker memory location
@@ -312,18 +305,21 @@ public:
                            std::vector<uint64_t> &eventKeys);
 
     /**
-     * @brief Remove Remote Device and all associated segments.
+     * @brief Remove the connection-side state for a remote device.
+     *        The local JFR is intentionally retained for worker reconnect/false-positive recovery.
      * @param[in] deviceId The device id to remove.
      * @return Status of the call.
      */
     Status RemoveRemoteDevice(const std::string &deviceId);
 
     /**
-     * @brief Register remote jfr
-     * @param[in] urmaInfo local urma device info
-     * @return Status of the call
+     * @brief Import a remote JFR as target JFR and create a per-connection JFS (responder side).
+     *        Also creates or reuses the local JFR managed separately for this remote key.
+     * @param[in] urmaInfo Remote JFR metadata from handshake.
+     * @param[out] localJfrId The local JFR ID to include in the handshake response.
+     * @return Status of the call.
      */
-    Status ImportRemoteJfr(const UrmaJfrInfo &urmaInfo);
+    Status ImportRemoteJfr(const UrmaJfrInfo &urmaInfo, uint32_t &localJfrId);
 
     /**
      * @brief Urma write operation waits on the CV to check completion status
@@ -359,6 +355,10 @@ public:
      */
     Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
 
+    /**
+     * @brief Get local URMA JFR info
+     * @return local UrmaJfrInfo
+     */
     const UrmaJfrInfo &GetLocalUrmaInfo()
     {
         return localUrmaInfo_;
@@ -382,13 +382,19 @@ public:
     }
 
     /**
-     * @brief Retrieve the index of the jfrs to be given to urma sender form local info.
-     * @param[in] senderAddr Urma sender address.
-     * @return Index of local jfrs.
+     * @brief Finalize initiator-side connection from handshake response.
+     * @param[in] rsp Urma handshake response containing remote JFR and segment info.
+     * @return Status of the call.
      */
-    uint32_t GetJfrIndex(const std::string &senderAddr);
+    Status FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp);
 
-    std::string GetRemoteDevicesByClientId(ClientKey clientEntityId);
+    /**
+     * @brief Remove all URMA state associated with a client entity.
+     *        Unlike RemoveRemoteDevice, this also removes the retained local JFR.
+     * @param[in] clientEntityId Client entity id used for cleanup.
+     * @return Status of the call.
+     */
+    Status RemoveRemoteClient(ClientKey clientEntityId);
 
     /**
      * @brief Retrieve local segment and jfr for receiving remote sender cqe.
@@ -401,7 +407,7 @@ public:
      */
     Status GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
                         urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr);
-    
+
     /**
      * @return urma request id, start from 0.
      */
@@ -516,12 +522,20 @@ private:
     Status HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event);
 
     /**
-     * @brief Get a valid JFS from the connection, and rotate to the next one if needed.
+     * @brief Get the valid JFS currently owned by a connection.
      * @param[in] connection URMA connection.
      * @param[out] jfs Valid JFS bound to the connection.
      * @return Status of the call.
      */
     Status GetJfsFromConnection(const std::shared_ptr<UrmaConnection> &connection, std::shared_ptr<UrmaJfs> &jfs);
+
+    /**
+     * @brief Import a remote JFR as a target jetty (used by both initiator and responder).
+     * @param[in] remoteInfo Remote JFR metadata containing the JFR ID to import.
+     * @param[out] targetJfr Imported target JFR handle.
+     * @return Status of the call.
+     */
+    Status ImportTargetJfr(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJfr> &targetJfr);
 
     /**
      * @brief Register segment
@@ -532,14 +546,6 @@ private:
      */
     Status GetOrRegisterSegment(const uint64_t &segAddress, const uint64_t &segSize,
                                 UrmaLocalSegmentMap::const_accessor &constAccessor);
-
-    /**
-     * @brief UnImport segment
-     * @param[in] remoteAddress Remote worker address
-     * @param[in] segmentAddress Segment start address
-     * @return Status of the call
-     */
-    Status UnimportSegment(const HostPort &remoteAddress, uint64_t segmentAddress);
 
     /**
      * @brief Stops the polling thread
@@ -578,13 +584,8 @@ private:
      */
     void DeleteEvent(uint64_t requestId);
 
-    /**
-     * @brief Get ub transport size from environment
-     * @return Status of the call.
-     */
-    void GetTransportSizeFromEnv();
-
     Status InitLocalUrmaInfo(const HostPort &hostport);
+    Status RemoveRemoteResources(const std::string &connectionKey, bool removeLocalJfr);
 
     // Polling thread
     std::unique_ptr<std::thread> serverEventThread_{ nullptr };
@@ -594,8 +595,9 @@ private:
     urma_reg_seg_flag_t registerSegmentFlag_;
     urma_import_seg_flag_t importSegmentFlag_;
     UrmaJfrInfo localUrmaInfo_;
-    std::atomic<uint32_t> localJfrIndex_{ 0 };
-    TbbJfrMap urmaSenderRelationtable_;
+    // Local JFRs keyed by remote connection ID. JFRs are created/reused per target node
+    // and persist across reconnections. Not owned by UrmaConnection.
+    TbbJfrMap localJfrMap_;
 
     // protect for segment maps.
     mutable std::shared_timed_mutex localMapMutex_;
@@ -616,7 +618,6 @@ private:
     std::string clientId_;
     static bool clientMode_;
     void *memoryBuffer_ = nullptr;
-    std::unique_ptr<Queue<uint32_t>> memoryBufferPool_;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
     static std::atomic<uint64_t> ubTransportMemSize_;   // 128 MB

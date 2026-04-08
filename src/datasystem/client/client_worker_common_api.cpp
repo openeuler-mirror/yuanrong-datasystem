@@ -868,11 +868,7 @@ Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
         }
     }
     UrmaHandshakeRspPb handshakeRsp;
-    UrmaHandshakeRspPb dummyRsp;
     RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(handshakeRsp));
-    if (handshakeRsp.has_hand_shake()) {
-        RETURN_IF_NOT_OK(ExchangeJfr(handshakeRsp.hand_shake(), dummyRsp));
-    }
     return Status::OK();
 }
 

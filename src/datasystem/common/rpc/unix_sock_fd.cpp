@@ -354,7 +354,15 @@ Status UnixSockFd::BindTcp(struct addrinfo *servInfo, HostPort &outHostPort)
             continue;
         }
 
-        auto err = bind(fd_, currServInfo->ai_addr, currServInfo->ai_addrlen);
+        int reuse = 1;
+        auto err = setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        if (err < 0) {
+            // non-fatal error
+            errMsg = FormatString("setsockopt(SO_REUSEADDR) failed: errno = %d", errno);
+            VLOG(RPC_LOG_LEVEL) << errMsg;
+        }
+
+        err = bind(fd_, currServInfo->ai_addr, currServInfo->ai_addrlen);
         if (err < 0) {
             errMsg = FormatString("Socket bind failed: errno = %d", errno);
             VLOG(RPC_LOG_LEVEL) << errMsg;

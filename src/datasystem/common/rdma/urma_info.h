@@ -18,7 +18,6 @@
 #define DATASYSTEM_COMMON_RDMA_URMA_INFO_H
 
 #include <string>
-#include <vector>
 
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 
@@ -31,7 +30,7 @@ namespace datasystem {
 struct UrmaJfrInfo {
     std::string eid;
     uint32_t uasid{ 0 };
-    std::vector<uint32_t> jfrIds;
+    uint32_t jfrId{ 0 };
     HostPort localAddress;
     std::string uniqueInstanceId;
     std::string clientId;
@@ -41,13 +40,11 @@ struct UrmaJfrInfo {
     static std::string EidToFmtStr(const urma_eid_t &eid);
 
     template <class Proto>
-    void ToProto(Proto &proto, std::uint32_t jfrIndex = 0) const
+    void ToProto(Proto &proto) const
     {
         proto.set_eid(eid);
         proto.set_uasid(uasid);
-        if (jfrIndex < jfrIds.size()) {
-            proto.add_jfr_ids(jfrIds[jfrIndex]);
-        }
+        proto.add_jfr_ids(jfrId);
         proto.mutable_address()->set_host(localAddress.Host());
         proto.mutable_address()->set_port(localAddress.Port());
         proto.set_urma_instance_id(uniqueInstanceId);
@@ -58,9 +55,11 @@ struct UrmaJfrInfo {
     {
         eid = proto.eid();
         uasid = proto.uasid();
-        for (auto jfrId : proto.jfr_ids()) {
-            jfrIds.emplace_back(jfrId);
+        if (proto.jfr_ids_size() != 1) {
+            return Status(K_RUNTIME_ERROR,
+                          FormatString("Expected exactly 1 jfr_id in handshake, got %d", proto.jfr_ids_size()));
         }
+        jfrId = proto.jfr_ids(0);
         localAddress = HostPort(proto.address().host(), proto.address().port());
         uniqueInstanceId = proto.urma_instance_id();
         clientId = proto.client_id();

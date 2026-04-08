@@ -30,14 +30,12 @@
 
 namespace datasystem {
 namespace object_cache {
-class WorkerWorkerTransportServiceImpl;
-
 class WorkerWorkerTransportApi {
 public:
     virtual ~WorkerWorkerTransportApi() = default;
 
     /**
-     * @brief Initialize the WorkerWorkerTransportServiceImpl Object.
+     * @brief Initialize the transport API implementation.
      * @return Status of the call.
      */
     virtual Status Init() = 0;
@@ -62,21 +60,6 @@ private:
 
     std::atomic<bool> isExecuting_{ false };
     std::atomic<bool> globalStopFlag_{ false };
-};
-
-class WorkerLocalWorkerTransApi : public WorkerWorkerTransportApi {
-public:
-    WorkerLocalWorkerTransApi(HostPort localHost, WorkerWorkerTransportServiceImpl *service);
-
-    ~WorkerLocalWorkerTransApi() override = default;
-
-    Status Init() override;
-
-    Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp) override;
-
-private:
-    HostPort localHost_;
-    WorkerWorkerTransportServiceImpl *service_;
 };
 
 class WorkerRemoteWorkerTransApi : public WorkerWorkerTransportApi {
