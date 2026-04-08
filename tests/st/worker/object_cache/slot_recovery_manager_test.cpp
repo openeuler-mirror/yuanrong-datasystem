@@ -615,7 +615,9 @@ TEST_F(SlotRecoveryEtcdTest, ContinuesRecoveryAfterConsecutiveFailures)
         bool hasInheritedChain = false;
         bool hasOwnRecovery = false;
         for (const auto &task : info.recovery_tasks()) {
-            if (task.failed_worker() == worker1 && task.source_worker() == worker2) {
+            // Inherited tasks should still read from the original failed source (worker1),
+            // while worker2's own recovery keeps worker2 as source.
+            if (task.failed_worker() == worker1 && task.source_worker() == worker1) {
                 hasInheritedChain = true;
             }
             if (task.failed_worker() == worker2 && task.source_worker() == worker2) {

@@ -291,7 +291,8 @@ TEST(SlotRecoveryPlannerTest, ReassignsFailedOwnerTasks)
     ASSERT_EQ(inheritedTasks.size(), 1);
     EXPECT_EQ(inheritedTasks[0].failed_worker(), "worker1");
     EXPECT_EQ(inheritedTasks[0].owner_worker(), "worker3");
-    EXPECT_EQ(inheritedTasks[0].source_worker(), "worker2");
+    // Source worker keeps the original failed source instead of the transient owner.
+    EXPECT_EQ(inheritedTasks[0].source_worker(), "worker1");
     EXPECT_EQ(inheritedTasks[0].task_status(), RecoveryTaskPb::PENDING);
     ASSERT_EQ(inheritedTasks[0].slots_size(), 2);
     EXPECT_EQ(inheritedTasks[0].slots(0), 0);

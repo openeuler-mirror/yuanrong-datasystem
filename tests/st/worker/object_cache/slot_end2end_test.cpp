@@ -100,7 +100,8 @@ public:
            << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << nodeDeadTimeoutS << " "
-           << "-v=1";
+           << "-v=1 "
+           << "-enable_l2_cache_fallback=false";
         opts.workerGflagParams = ss.str();
     }
 
@@ -153,6 +154,17 @@ protected:
         for (uint32_t i = 0; i < 1024; ++i) {
             auto candidate = seedKey + "_peer_" + std::to_string(i);
             if (candidate != seedKey && SlotIdForKey(candidate) == slotId) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    std::string FindKeyForSlot(uint32_t slotId, const std::string &prefix) const
+    {
+        for (uint32_t i = 0; i < 4096; ++i) {
+            auto candidate = prefix + "_" + std::to_string(i);
+            if (SlotIdForKey(candidate) == slotId) {
                 return candidate;
             }
         }
@@ -725,7 +737,7 @@ public:
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "
-           << "-enable_metadata_recovery=true ";
+           << "-enable_l2_cache_fallback=false";
         opts.workerGflagParams = ss.str();
     }
 };
@@ -763,6 +775,55 @@ TEST_F(SlotEndToEndScaleTest, VoluntaryScaleDownAndScaleDown)
         std::string getValue;
         DS_ASSERT_OK(client1->Get(key, getValue));
         ASSERT_EQ(getValue, value);
+    }
+}
+
+TEST_F(SlotEndToEndScaleTest, SameSlotDualFailure)
+{
+    LOG(INFO) << "Scenario: worker0 and worker1 each own data in every slot, then both workers fail and worker2 "
+                 "must recover same-slot data from both failed workers.";
+    WaitAllNodesJoinIntoHashRing(3, 20);
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);
+
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    std::vector<std::pair<std::string, std::string>> worker0Keys;
+    std::vector<std::pair<std::string, std::string>> worker1Keys;
+    worker0Keys.reserve(SLOT_NUM);
+    worker1Keys.reserve(SLOT_NUM);
+    for (uint32_t slotId = 0; slotId < SLOT_NUM; ++slotId) {
+        const std::string worker0Key = FindKeyForSlot(slotId, "tenant_slot_recovery_chain_worker0");
+        const std::string worker1Key = FindKeyForSlot(slotId, "tenant_slot_recovery_chain_worker1");
+        ASSERT_FALSE(worker0Key.empty()) << "worker0 slotId=" << slotId;
+        ASSERT_FALSE(worker1Key.empty()) << "worker1 slotId=" << slotId;
+        ASSERT_EQ(SlotIdForKey(worker0Key), slotId);
+        ASSERT_EQ(SlotIdForKey(worker1Key), slotId);
+
+        worker0Keys.emplace_back(worker0Key, "value_worker0_slot_" + std::to_string(slotId));
+        worker1Keys.emplace_back(worker1Key, "value_worker1_slot_" + std::to_string(slotId));
+    }
+
+    for (const auto &keyValue : worker0Keys) {
+        DS_ASSERT_OK(client0->Set(keyValue.first, keyValue.second, param));
+    }
+    for (const auto &keyValue : worker1Keys) {
+        DS_ASSERT_OK(client1->Set(keyValue.first, keyValue.second, param));
+    }
+
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(0), SIGKILL), 0);
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(1), SIGKILL), 0);
+    WaitAllNodesJoinIntoHashRing(1, PASSIVE_NODE_DEAD_TIMEOUT_S + 10);
+
+    for (const auto &keyValue : worker0Keys) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
+    }
+    for (const auto &keyValue : worker1Keys) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
     }
 }
 }  // namespace st
