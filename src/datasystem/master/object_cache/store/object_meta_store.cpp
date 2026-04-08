@@ -53,6 +53,7 @@
 DS_DEFINE_uint32(etcd_meta_pool_size, 8, "ETCD metadata async pool size");
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_string(rocksdb_write_mode);
+DS_DECLARE_string(l2_cache_type);
 
 static bool ValidateEtcdPoolSize(const char *flagName, uint32_t value)
 {
@@ -99,7 +100,7 @@ ObjectMetaStore::~ObjectMetaStore()
 Status ObjectMetaStore::Init()
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
-    ioFromL2CacheNeedMeta_ = FLAGS_oc_io_from_l2cache_need_metadata;
+    enableEtcdMetaStore_ = FLAGS_oc_io_from_l2cache_need_metadata && FLAGS_l2_cache_type != "distributed_disk";
     RETURN_IF_NOT_OK(InitEtcdStore());
     RETURN_IF_NOT_OK(InitRocksStore());
     return Status::OK();
