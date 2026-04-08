@@ -467,6 +467,8 @@ protected:
     std::optional<int32_t> exclusiveId_;
     std::string exclusiveConnSockPath_;
     uint32_t shmWorkerPort_{ 0 };
+    // First URMA handshake pool and retry pool are separated to avoid mixing responsibilities.
+    std::unique_ptr<ThreadPool> urmaHandshakePool_{ nullptr };
     // URMA handshake retry pool and flags.
     std::unique_ptr<ThreadPool> urmaHandshakeRetryPool_{ nullptr };
     std::atomic_bool stopUrmaHandshakeRetry_{ false };
@@ -532,7 +534,13 @@ private:
     void SaveStandbyWorker(const std::string standbyWorker,
                            const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
 
-    Status FastTransportHandshake(const RegisterClientRspPb &rsp);
+    Status FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion, const RegisterClientRspPb &rsp);
+
+    /**
+     * @brief Execute the first URMA handshake in background and schedule retry on failure.
+     * @return Status of the first handshake task.
+     */
+    Status AsyncFirstUrmaHandshake(uint32_t workerVersion);
 
     /**
      * @brief Try to perform URMA handshake.
@@ -543,7 +551,7 @@ private:
     /**
      * @brief Schedule URMA handshake retry.
      */
-    void ScheduleUrmaHandshakeRetry();
+    void ScheduleUrmaHandshakeRetry(uint32_t workerVersion);
 };
 }  // namespace client
 }  // namespace datasystem

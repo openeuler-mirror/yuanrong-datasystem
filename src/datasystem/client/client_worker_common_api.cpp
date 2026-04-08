@@ -62,6 +62,10 @@
 
 namespace datasystem {
 namespace {
+static constexpr int64_t MIN_WAIT_MS = 1;
+static constexpr int64_t WAIT_PERCENT = 80;
+static constexpr int64_t PERCENT_BASE = 100;
+
 const char *ShmEnableTypeName(ShmEnableType type)
 {
     switch (type) {
@@ -74,6 +78,7 @@ const char *ShmEnableTypeName(ShmEnableType type)
             return "TCP";
     }
 }
+
 }  // namespace
 
 namespace client {
@@ -234,6 +239,7 @@ ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcC
 {
     recvPageThread_ = Thread(&ClientWorkerRemoteCommonApi::RecvPageFd, this);
     clientAccessToken_ = std::make_unique<ClientAccessToken>(std::move(token));
+    urmaHandshakePool_ = std::make_unique<ThreadPool>(0, 1, "urma_handshake");
     urmaHandshakeRetryPool_ = std::make_unique<ThreadPool>(0, 1, "urma_handshake_retry");
 }
 
@@ -244,6 +250,7 @@ ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
     recvClientFdState_.recvPageWaitPost->Set();
     recvClientFdState_.recvPageNotify->Set();
     CloseSocketFd();
+    urmaHandshakePool_.reset();
     urmaHandshakeRetryPool_.reset();
     if (recvPageThread_.joinable()) {
         recvPageThread_.join();
@@ -807,7 +814,7 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     clientId_ = rsp.client_id();
     workerStartId_ = rsp.worker_start_id();
     lockId_ = rsp.lock_id();
-    (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
+    uint32_t workerVersion = workerVersion_.fetch_add(1, std::memory_order_relaxed) + 1;
     shmThreshold_ = rsp.shm_threshold();
     workerId_ = rsp.worker_uuid();
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
@@ -821,11 +828,15 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     SetHeartbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
-    LOG_IF_ERROR(FastTransportHandshake(rsp), "Fast transport handshake failed, fall back to TCP/IP communication.");
+    LOG_IF_ERROR(FastTransportHandshake(timeoutMs, workerVersion, rsp),
+                 "Fast transport handshake failed, fall back to TCP/IP communication.");
 }
 
-Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientRspPb &rsp)
+Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion,
+                                                           const RegisterClientRspPb &rsp)
 {
+    (void)timeoutMs;
+    (void)workerVersion;
     // Initialize UrmaManager regardless of shmEnabled_ to avoid switch overhead standby worker.
     SetClientFastTransportMode(rsp.fast_transport_mode(), fastTransportMemSize_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_), "Fast transport init failed");
@@ -838,15 +849,50 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(const RegisterClientR
 
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        Status status = TryUrmaHandshake();
-        if (status.IsError()) {
-            LOG(WARNING) << "URMA handshake failed in register path, schedule async retry. Detail: "
-                         << status.ToString();
-            ScheduleUrmaHandshakeRetry();
+        auto future =
+            urmaHandshakePool_->Submit([this, workerVersion]() { return AsyncFirstUrmaHandshake(workerVersion); });
+
+        int64_t waitMs = timeoutMs;
+        int64_t clientDeadTimeoutMs = static_cast<int64_t>(rsp.client_dead_timeout_s()) * TO_MILLISECOND;
+        if (clientDeadTimeoutMs > 0) {
+            waitMs = std::min(waitMs, clientDeadTimeoutMs * WAIT_PERCENT / PERCENT_BASE);
+        }
+        waitMs = std::max<int64_t>(waitMs, MIN_WAIT_MS);
+
+        if (future.wait_for(std::chrono::milliseconds(waitMs)) == std::future_status::ready) {
+            Status status = future.get();
+            if (status.IsError()) {
+                LOG(WARNING) << "URMA handshake failed in register path within wait time " << waitMs
+                             << "ms, fall back to TCP/IP communication. Detail: " << status.ToString();
+            }
+        } else {
+            LOG(WARNING) << "URMA handshake exceeded register wait time " << waitMs
+                         << "ms and will continue in background. Heartbeat will start first for worker "
+                         << hostPort_.ToString() << ", clientId: " << clientId_;
         }
     }
 #endif
     return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::AsyncFirstUrmaHandshake(uint32_t workerVersion)
+{
+#ifdef WITH_TESTS
+    INJECT_POINT("client.urma_first_handshake_delay");
+#endif
+    reqTimeoutDuration.InitWithPositiveTime(ClientGetRequestTimeout(requestTimeoutMs_));
+    Status status = TryUrmaHandshake();
+    uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+    if (workerVersion != currentWorkerVersion) {
+        LOG(INFO) << "Ignore stale URMA first handshake result for worker " << hostPort_.ToString()
+                  << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                  << ", current version: " << currentWorkerVersion;
+        return Status::OK();
+    }
+    if (status.IsError()) {
+        ScheduleUrmaHandshakeRetry(workerVersion);
+    }
+    return status;
 }
 
 Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
@@ -876,15 +922,22 @@ Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
     return Status::OK();
 }
 
-void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry()
+void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVersion)
 {
-    urmaHandshakeRetryPool_->Execute([this]() {
+    urmaHandshakeRetryPool_->Execute([this, workerVersion]() {
         constexpr int maxRetryIntervalMs = 8000;
         constexpr int retryCheckIntervalMs = 100;
         constexpr int64_t rpcTimeout = 15000;
         int nextRetryTimeMs = retryCheckIntervalMs;
         Timer timer;
         while (!stopUrmaHandshakeRetry_.load(std::memory_order_relaxed)) {
+            uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+            if (workerVersion != currentWorkerVersion) {
+                LOG(INFO) << "Stop stale URMA handshake retry for worker " << hostPort_.ToString()
+                          << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                          << ", current version: " << currentWorkerVersion;
+                break;
+            }
             INJECT_POINT_NO_RETURN("client.urma_handshake_retry");
             if (timer.ElapsedMilliSecond() < nextRetryTimeMs) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(retryCheckIntervalMs));
@@ -894,6 +947,13 @@ void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry()
 
             reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
             Status status = TryUrmaHandshake();
+            currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+            if (workerVersion != currentWorkerVersion) {
+                LOG(INFO) << "Ignore stale URMA handshake retry result for worker " << hostPort_.ToString()
+                          << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                          << ", current version: " << currentWorkerVersion;
+                break;
+            }
             if (IsRpcTimeoutOrTryAgain(status) || status.GetCode() == StatusCode::K_URMA_CONNECT_FAILED) {
                 nextRetryTimeMs = std::min<int>(nextRetryTimeMs << 1, maxRetryIntervalMs);
                 LOG(WARNING) << "URMA handshake async retry failed for worker " << hostPort_.ToString()
