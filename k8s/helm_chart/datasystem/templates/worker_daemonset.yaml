@@ -179,6 +179,7 @@ spec:
         - -l2_cache_type={{ $.Values.global.l2Cache.l2CacheType }}
         - -l2_cache_delete_thread_num={{ $.Values.global.l2Cache.l2CacheDeleteThreadNum }}
         - -l2_cache_async_write_queue_size={{ $.Values.global.l2Cache.l2CacheAsyncWriteQueueSize }}
+        - -enable_l2_cache_fallback={{ $.Values.global.l2Cache.enableL2CacheFallback }}
         - -l2_cache_async_write_rate_limit_mb={{ $.Values.global.l2Cache.l2CacheAsyncWriteRateLimitMb }}
         - -object_del_retry_delay_sec={{ $.Values.global.l2Cache.objectDelRetryDelaySec }}
         - -max_rpc_session_num={{ $.Values.global.rpc.maxRpcSessionNum }}
