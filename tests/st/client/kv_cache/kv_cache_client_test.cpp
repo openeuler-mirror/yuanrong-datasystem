@@ -2634,6 +2634,5 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestPreferSameNode)
         func("host_id_env_n", -1);
     }
 }
-
 }  // namespace st
 }  // namespace datasystem
