@@ -613,7 +613,10 @@ Status UrmaManager::CheckAndNotify()
             // we dont need lock for finishedRequests_ as its accessed only by single thread
             it = finishedRequests_.erase(it);
         } else {
-            ++it;
+            VLOG(1) << "[UrmaEventHandler] Event is missing, dropping request id: " << requestId;
+            // The event may already be removed by waiter cleanup; drop this finished request id.
+            failedRequests_.erase(requestId);
+            it = finishedRequests_.erase(it);
         }
     }
 
@@ -1015,18 +1018,19 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         PerfPoint pointWrite(PerfKey::URMA_WRITE);
         INJECT_POINT("UrmaManager.UrmaWriteError",
                      []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, waiter));
         urma_status_t ret =
             ds_urma_write(jfs->Raw(), tjfr, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
                           segVa + urmaInfo.seg_data_offset() + readOffset + writtenSize,
                           localObjectAddress + readOffset + metaDataSize + writtenSize, writeSize, flag, key);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            ret == URMA_SUCCESS, K_RUNTIME_ERROR,
-            FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
+        if (ret != URMA_SUCCESS) {
+            DeleteEvent(key);
+            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
+                                    FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
+        }
         pointWrite.Record();
         remainSize -= writeSize;
         writtenSize += writeSize;
-
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, waiter));
         eventKeys.emplace_back(key);
     }
     workerOperationTimeCost.Append("Urma total write.", timer.ElapsedMilliSecond());
@@ -1083,18 +1087,20 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t key = requestId_.fetch_add(1);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
                                              "Local segment is null");
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs));
         urma_status_t ret =
             ds_urma_read(jfs->Raw(), importJfr, localSegAccessor->second->Raw(), remoteSegAccessor->second->Raw(),
                          localObjectAddress + metaDataSize + readOffset,
                          segVa + urmaInfo.seg_data_offset() + readOffset, readSize, flag, key);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            ret == URMA_SUCCESS, K_RUNTIME_ERROR,
-            FormatString("Failed to urma read object with key = %zu, ret = %d", key, ret));
+        if (ret != URMA_SUCCESS) {
+            DeleteEvent(key);
+            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
+                                    FormatString("Failed to urma read object with key = %zu, ret = %d", key, ret));
+        }
 
         remainSize -= readSize;
         readOffset += readSize;
 
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs));
         keys.emplace_back(key);
     }
     return Status::OK();
@@ -1177,8 +1183,12 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     Timer timer;
     auto ret = ds_urma_post_jfs_wr(jfs->Raw(), &wrList[0], &bad_wr);
     workerOperationTimeCost.Append("Urma gather write.", timer.ElapsedMilliSecond());
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(ret == URMA_SUCCESS, K_RUNTIME_ERROR,
-                                         FormatString("Failed to urma write object, ret = %d", ret));
+    if (ret != URMA_SUCCESS) {
+        for (auto key : eventKeys) {
+            DeleteEvent(key);
+        }
+        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma write object, ret = %d", ret));
+    }
     if (blocking) {
         auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
