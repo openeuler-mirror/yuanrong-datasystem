@@ -30,6 +30,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
@@ -41,6 +42,7 @@ namespace datasystem {
 namespace object_cache {
 namespace {
 constexpr size_t SLOT_PREVIEW_LIMIT = 6;
+constexpr int32_t SLOT_PRELOAD_RETRY_TIMEOUT_MS = 30 * 60 * 1000;
 
 const char *TaskStatusName(RecoveryTaskPb_TaskStatus status)
 {
@@ -118,10 +120,6 @@ std::string GetTaskSourceWorker(const RecoveryTaskPb &task)
 {
     if (!task.source_worker().empty()) {
         return task.source_worker();
-    }
-    if (task.task_status() == RecoveryTaskPb_TaskStatus_COMPLETED
-        || task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
-        return task.owner_worker();
     }
     return task.failed_worker();
 }
@@ -296,7 +294,7 @@ Status SlotRecoveryPlanner::ReassignInheritedTasks(const std::vector<RecoveryTas
             inheritedTask = &tasks.back();
             inheritedTask->set_failed_worker(rawTask.failed_worker());
             inheritedTask->set_owner_worker(owner);
-            inheritedTask->set_source_worker(rawTask.owner_worker());
+            inheritedTask->set_source_worker(GetTaskSourceWorker(rawTask));
             inheritedTask->set_task_status(RecoveryTaskPb_TaskStatus_PENDING);
         }
         for (const auto slot : rawTask.slots()) {
@@ -335,6 +333,7 @@ Status SlotRecoveryManager::Init(
     workerMasterApiManager_ = std::move(apiManager);
     metadataRecoveryManager_ = metadataRecoveryManager;
     store_ = CreateStore(etcdStore);
+    shuttingDown_.store(false);
     if (!IsFeatureEnabled()) {
         return Status::OK();
     }
@@ -350,6 +349,9 @@ Status SlotRecoveryManager::Init(
 
 void SlotRecoveryManager::Shutdown()
 {
+    if (shuttingDown_.exchange(true)) {
+        return;
+    }
     SlotRecoveryFailedWorkersEvent::GetInstance().RemoveSubscriber("SLOT_RECOVERY_MANAGER");
     recoveryTaskThreadPool_ = nullptr;
 }
@@ -967,9 +969,20 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
         return metadataRecoveryManager_->RecoverLocalEntries({ std::move(recoveredMeta) }, recoveredContents,
                                                              recoveredObjectKeys);
     };
-    for (const auto slotId : task.slots()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(persistenceApi_->PreloadSlot(sourceWorker, slotId, callback),
-                                         FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
+    std::vector<uint32_t> shuffledSlots(task.slots().begin(), task.slots().end());
+    static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
+    std::shuffle(shuffledSlots.begin(), shuffledSlots.end(), gen);
+    for (const auto slotId : shuffledSlots) {
+        auto rc = RetryOnError(
+            SLOT_PRELOAD_RETRY_TIMEOUT_MS,
+            [this, &sourceWorker, slotId, &callback](int32_t) {
+                if (shuttingDown_.load()) {
+                    return Status(K_SHUTTING_DOWN, "SlotRecoveryManager is shutting down");
+                }
+                return persistenceApi_->PreloadSlot(sourceWorker, slotId, callback);
+            },
+            []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
     }
     std::vector<std::string> failedIds;
     auto recoverRc = metadataRecoveryManager_->RecoverMetadata(recoveredMetas, failedIds);

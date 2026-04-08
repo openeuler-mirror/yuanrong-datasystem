@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_SLOT_RECOVERY_MANAGER_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_SLOT_RECOVERY_MANAGER_H
 
+#include <atomic>
 #include <memory>
 #include <set>
 #include <string>
@@ -329,6 +330,7 @@ private:
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };
     std::shared_ptr<SlotRecoveryStore> store_;
     std::shared_ptr<ThreadPool> recoveryTaskThreadPool_{ nullptr };
+    std::atomic<bool> shuttingDown_{ false };
 };
 
 }  // namespace object_cache
