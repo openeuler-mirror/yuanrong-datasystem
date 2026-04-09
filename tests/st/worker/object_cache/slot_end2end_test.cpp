@@ -21,7 +21,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <sstream>
 #include <thread>
 
@@ -35,6 +37,7 @@
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
+#include "datasystem/protos/slot_recovery.pb.h"
 
 DS_DECLARE_string(cluster_name);
 
@@ -333,6 +336,75 @@ protected:
         keyValues.clear();
         status = db_->GetAll(ETCD_SLOT_RECOVERY_TABLE, keyValues);
         return status.GetCode() == K_NOT_FOUND || (status.IsOk() && keyValues.empty());
+    }
+
+    void WaitAllNodesJoinIntoHashRingFast(int num, uint64_t timeoutSec = 60, std::string azName = "")
+    {
+        int S2Ms = 1000;
+        WaitHashRingChange(
+            [&](const HashRingPb &hashRing) {
+                if (hashRing.workers_size() != num || hashRing.add_node_info_size() != 0
+                    || hashRing.del_node_info_size() != 0) {
+                    return false;
+                }
+                for (auto &worker : hashRing.workers()) {
+                    if (worker.second.state() != WorkerPb::ACTIVE) {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            timeoutSec * S2Ms, azName);
+    }
+
+    std::string WorkerAddress(uint32_t workerIndex) const
+    {
+        HostPort workerAddr;
+        auto rc = cluster_->GetWorkerAddr(workerIndex, workerAddr);
+        EXPECT_TRUE(rc.IsOk()) << rc.ToString() << ".";
+        return workerAddr.ToString();
+    }
+
+    bool LoadSlotRecoveryIncident(const std::string &incidentKey, SlotRecoveryInfoPb &info) const
+    {
+        std::vector<std::pair<std::string, std::string>> keyValues;
+        auto rc = db_->GetAll(ETCD_SLOT_RECOVERY_TABLE, keyValues);
+        if (rc.GetCode() == K_NOT_FOUND) {
+            return false;
+        }
+        EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+        for (const auto &keyValue : keyValues) {
+            if (keyValue.first != incidentKey) {
+                continue;
+            }
+            if (!info.ParseFromString(keyValue.second)) {
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    bool WaitUntilIncidentSatisfies(const std::string &incidentKey,
+                                    const std::function<bool(const SlotRecoveryInfoPb &)> &predicate,
+                                    SlotRecoveryInfoPb *latest = nullptr) const
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_GET_TIMEOUT_MS);
+        while (std::chrono::steady_clock::now() < deadline) {
+            SlotRecoveryInfoPb current;
+            if (LoadSlotRecoveryIncident(incidentKey, current) && predicate(current)) {
+                if (latest != nullptr) {
+                    *latest = current;
+                }
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_GET_INTERVAL_MS));
+        }
+        if (latest != nullptr) {
+            latest->Clear();
+            (void)LoadSlotRecoveryIncident(incidentKey, *latest);
+        }
+        return false;
     }
 
     std::string DumpSlotRecoveryState() const
@@ -870,6 +942,140 @@ TEST_F(SlotEndToEndScaleTest, SameSlotDualFailure)
         ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
     }
     for (const auto &keyValue : worker1Keys) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
+    }
+}
+
+class SlotEndToEndPassiveScaleDownTest : public SlotEndToEndTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        opts.waitWorkerReady = true;
+        opts.addNodeTime = 1;
+        distributedDiskPath_ = testCasePath_ + "/distributed_disk";
+        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
+        std::stringstream ss;
+        ss << "-l2_cache_type=distributed_disk "
+           << "-distributed_disk_path=" << distributedDiskPath_ << " "
+           << "-cluster_name=" << CLUSTER_NAME << " "
+           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
+           << "-distributed_disk_sync_interval_ms=0 "
+           << "-distributed_disk_sync_batch_bytes=1 "
+           << "-enable_metadata_recovery=true "
+           << "-auto_del_dead_node=true "
+           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
+           << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
+           << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
+           << "-v=1 "
+           << "-enable_l2_cache_fallback=false "
+           << "-enable_reconciliation=false";
+        opts.workerGflagParams = ss.str();
+    }
+};
+
+TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryTakeoverOwnerFailsAgainDataIntact)
+{
+    LOG(INFO) << "Scenario: worker0 fails, worker1 starts recovering worker0, then worker1 fails and worker2 "
+                 "takes over via successor incident.";
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);
+
+    std::vector<std::pair<std::string, std::string>> keyValues;
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    for (uint32_t slotId = 0; slotId < SLOT_NUM; ++slotId) {
+        const std::string worker0Key = FindKeyForSlot(slotId, "tenant_slot_owner_fails_again_worker0");
+        const std::string worker1Key = FindKeyForSlot(slotId, "tenant_slot_owner_fails_again_worker1");
+        ASSERT_FALSE(worker0Key.empty());
+        ASSERT_FALSE(worker1Key.empty());
+        const std::string worker0Value = "value_owner_fails_again_worker0_" + std::to_string(slotId);
+        const std::string worker1Value = "value_owner_fails_again_worker1_" + std::to_string(slotId);
+        keyValues.emplace_back(worker0Key, worker0Value);
+        keyValues.emplace_back(worker1Key, worker1Value);
+        DS_ASSERT_OK(client0->Set(worker0Key, worker0Value, param));
+        DS_ASSERT_OK(client1->Set(worker1Key, worker1Value, param));
+    }
+
+    const std::string worker0 = WorkerAddress(0);
+    const std::string worker1 = WorkerAddress(1);
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 1, "SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "1*sleep(1500)"));
+
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(0), SIGKILL), 0);
+    WaitAllNodesJoinIntoHashRingFast(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+    // Wait until worker1 has already claimed worker0's task, then inject the second failure.
+    ASSERT_TRUE(WaitUntilIncidentSatisfies(worker0, [&](const SlotRecoveryInfoPb &info) {
+        return std::any_of(info.recovery_tasks().begin(), info.recovery_tasks().end(), [&](const auto &task) {
+            return task.owner_worker() == worker1 && task.task_status() == RecoveryTaskPb::IN_PROGRESS;
+        });
+    })) << DumpSlotRecoveryState();
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+    WaitAllNodesJoinIntoHashRingFast(1, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+
+    // E2E focus: incident chain converges and all data remains readable after consecutive failures.
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    for (const auto &keyValue : keyValues) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
+    }
+}
+
+TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryTakeoverOwnerRestartDataIntact)
+{
+    LOG(INFO) << "Scenario: worker0 fails, worker1 is recovering worker0 and then crashes/restarts; worker2 stays "
+                 "alive and data should stay intact.";
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);
+
+    std::vector<std::pair<std::string, std::string>> keyValues;
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    for (uint32_t slotId = 0; slotId < SLOT_NUM; ++slotId) {
+        const std::string worker0Key = FindKeyForSlot(slotId, "tenant_slot_successor_order_worker0");
+        const std::string worker1Key = FindKeyForSlot(slotId, "tenant_slot_successor_order_worker1");
+        ASSERT_FALSE(worker0Key.empty());
+        ASSERT_FALSE(worker1Key.empty());
+        const std::string worker0Value = "value_successor_order_worker0_" + std::to_string(slotId);
+        const std::string worker1Value = "value_successor_order_worker1_" + std::to_string(slotId);
+        keyValues.emplace_back(worker0Key, worker0Value);
+        keyValues.emplace_back(worker1Key, worker1Value);
+        DS_ASSERT_OK(client0->Set(worker0Key, worker0Value, param));
+        DS_ASSERT_OK(client1->Set(worker1Key, worker1Value, param));
+    }
+
+    const std::string worker0 = WorkerAddress(0);
+    const std::string worker1 = WorkerAddress(1);
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 1, "SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover", "1*sleep(1500)"));
+
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+
+    ASSERT_TRUE(WaitUntilIncidentSatisfies(worker0, [&](const SlotRecoveryInfoPb &info) {
+        return std::any_of(info.recovery_tasks().begin(), info.recovery_tasks().end(), [&](const auto &task) {
+            return task.owner_worker() == worker1 && task.task_status() == RecoveryTaskPb::IN_PROGRESS;
+        });
+    })) << DumpSlotRecoveryState();
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+
+    // Restart worker1 after it fails during in-progress recovery.
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
+
+    // E2E focus: incident chain converges and all data remains readable after consecutive failures.
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    for (const auto &keyValue : keyValues) {
         ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
     }
 }

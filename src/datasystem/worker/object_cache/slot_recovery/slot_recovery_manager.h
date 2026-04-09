@@ -303,6 +303,19 @@ protected:
     Status ScheduleLocalRestartTasks(const std::string &localWorker);
 
     /**
+     * @brief On local restart, resume stale cross-incident local tasks that were left IN_PROGRESS by the previous
+     *        process instance.
+     *
+     * These tasks belong to incidents keyed by other failed workers and may never be rescheduled if no new
+     * failed-worker event arrives after restart. We downgrade such stale local IN_PROGRESS tasks back to PENDING and
+     * immediately re-run local scheduling.
+     *
+     * @param[in] localWorker The local restarted worker.
+     * @return Status of the call.
+     */
+    Status ResumeStaleCrossIncidentLocalTasksOnRestart(const std::string &localWorker);
+
+    /**
      * @brief Execute the recovery task by preloading slot data locally and pushing recovered metadata to master.
      * @param[in] task The task being executed.
      * @return Status of the call.
