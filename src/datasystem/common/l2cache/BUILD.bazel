@@ -92,6 +92,9 @@ ds_cc_library(
         "object_persistence_api.h",
         "persistence_api.h",
     ],
+    defines = [
+        "DISABLE_OBS",
+    ],
     deps = [
         ":l2cache_client",
         ":l2cache_object_info_header",
@@ -128,6 +131,9 @@ ds_cc_library(
     ],
     hdrs = [
         "get_object_info_list_resp.h",
+    ],
+    defines = [
+        "DISABLE_OBS",
     ],
     deps = [
         "//src/datasystem/common/l2cache:l2cache_object_info_header",

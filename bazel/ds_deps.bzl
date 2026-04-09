@@ -145,7 +145,7 @@ def setup_jemalloc():
     """Setup Jemalloc library for Bazel builds."""
     maybe(
         http_archive,
-        name = "jemalloc",
+        name = "jemalloc_kvc",
         sha256 = "ef6f74fd45e95ee4ef7f9e19ebe5b075ca6b7fbe0140612b2a161abafb7ee179",
         strip_prefix = "jemalloc-5.3.0",
         urls = [
@@ -266,15 +266,6 @@ def setup_absl():
             "https://github.com/abseil/abseil-cpp/releases/download/20250127.1/abseil-cpp-20250127.1.tar.gz",
         ],
     )
-    maybe(
-        http_archive,
-        name = "abseil-cpp",
-        sha256 = "b396401fd29e2e679cace77867481d388c807671dc2acc602a0259eeb79b7811",
-        strip_prefix = "abseil-cpp-20250127.1",
-        urls = [
-            "https://github.com/abseil/abseil-cpp/releases/download/20250127.1/abseil-cpp-20250127.1.tar.gz",
-        ],
-    )
 
 def setup_re2():
     maybe(
@@ -285,6 +276,10 @@ def setup_re2():
         urls = [
             "https://github.com/google/re2/releases/download/2024-07-02/re2-2024-07-02.zip",
         ],
+        patches = [
+            "@yuanrong-datasystem//third_party/patches/re2:modify_deps_absl_namespace.patch",
+        ],
+        patch_args = ["-p1"],
     )
 
 def setup_rocksdb():

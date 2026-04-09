@@ -138,7 +138,7 @@ copy_file(
 
 copy_file(
     name = "libjemalloc_shared_file",
-    src = "@jemalloc//:libjemalloc.so.2",
+    src = "@jemalloc_kvc//:libjemalloc.so.2",
     out = "yr/datasystem/lib/libjemalloc.so.2",
     visibility = [
         "//bazel:__pkg__",

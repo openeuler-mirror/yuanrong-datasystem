@@ -14,7 +14,7 @@ genrule(
     cmd = " && ".join([
         "BASE_DIR=`pwd`",
         "mkdir -p jemalloc_output",
-        "cp -rL external/jemalloc/* jemalloc_output",
+        "cp -rL external/jemalloc_kvc/* jemalloc_output",
         "cd jemalloc_output",
         "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./autogen.sh &>/dev/null",
         "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./configure --with-pic --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
