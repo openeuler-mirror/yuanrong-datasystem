@@ -5,7 +5,6 @@ build --cxxopt=-fno-common
 build --cxxopt=-rdynamic
 build --cxxopt=-fPIC
 build --cxxopt=-g3
-build --cxxopt=-DDISABLE_OBS
 build --cxxopt=-Wno-redundant-move
 
 build --copt=-Wno-float-equal

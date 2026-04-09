@@ -9,6 +9,9 @@ ds_cc_library(
         "metrics_obs_code_vector.h",
         "metrics_sc_remote_vector.h",
     ],
+    defines = [
+        "DISABLE_OBS",
+    ],
     deps = [
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
