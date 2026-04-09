@@ -201,8 +201,12 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     // Call MetadataManager to create the object meta.
     Status status = ocMetadataManager->CreateCopyMeta(req, rsp);
     if (!status.IsOk()) {
-        LOG(ERROR) << FormatString("[ObjectKey %s] Create copy meta failed with error: %s", req.object_key(),
-                                   status.ToString());
+        if (status.GetCode() == K_NOT_FOUND) {
+            LOG(INFO) << FormatString("[ObjectKey %s] meta already deleted", req.object_key());
+        } else {
+            LOG(ERROR) << FormatString("[ObjectKey %s] Create copy meta failed with error: %s", req.object_key(),
+                                       status.ToString());
+        }
     } else {
         LOG(INFO) << FormatString("[ObjectKey %s] Create copy meta success", req.object_key());
         INJECT_POINT("MasterOCServiceImpl.CreateCopyMeta.idempotence");
