@@ -24,6 +24,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <fcntl.h>
 #include <unistd.h>
@@ -1947,6 +1948,12 @@ TEST_F(SlotStoreTest, SlotTakeoverPlannerBuildsAndLoadsPlan)
     ASSERT_TRUE(SlotManifest::Load(targetPath, targetManifest).IsOk());
     SlotSnapshot sourceSnapshot;
     ASSERT_TRUE(sourceManager.ReplayIndex(sourceSnapshot).IsOk());
+    std::vector<SlotPutRecord> visiblePuts;
+    ASSERT_TRUE(sourceSnapshot.CollectVisiblePuts(visiblePuts).IsOk());
+    std::unordered_set<uint32_t> visibleFileIds;
+    for (const auto &record : visiblePuts) {
+        visibleFileIds.insert(record.fileId);
+    }
 
     SlotTakeoverPlan plan;
     SlotTakeoverRequest request;
@@ -1956,7 +1963,7 @@ TEST_F(SlotStoreTest, SlotTakeoverPlannerBuildsAndLoadsPlan)
                                                "txn_planner", plan)
                     .IsOk());
     ASSERT_EQ(plan.txnId, "txn_planner");
-    ASSERT_EQ(plan.dataMappings.size(), sourceManifest.activeData.size());
+    ASSERT_EQ(plan.dataMappings.size(), visibleFileIds.size());
     ASSERT_TRUE(FileExist(JoinPath(targetPath, plan.importIndexFile)));
 
     ASSERT_TRUE(SlotTakeoverPlanner::DumpPlan(targetPath, plan).IsOk());
@@ -2025,6 +2032,32 @@ TEST_F(SlotStoreTest, MergeAndPreloadMoveFiles)
     auto preloaded = std::make_shared<std::stringstream>();
     ASSERT_TRUE(targetManager2.Get("tenant/preloadA", 3, preloaded).IsOk());
     ASSERT_EQ(ReadAll(preloaded), "preload");
+}
+
+TEST_F(SlotStoreTest, SlotClientMergeEmptySlotNoExtraDataFiles)
+{
+    SlotClient client(baseDir_);
+    ASSERT_TRUE(client.Init().IsOk());
+    GTEST_LOG_(INFO) << "Scenario: passive scale-down style merge of an empty source slot should not create extra "
+                        "empty data files on target.";
+
+    const uint32_t slotId = 0;
+    auto sourceSlotPath = GetSlotPath(baseDir_, slotId, SOURCE_WORKER_ADDRESS_A);
+    auto targetSlotPath = GetSlotPath(baseDir_, slotId, TARGET_WORKER_ADDRESS);
+    Slot sourceManager(slotId, sourceSlotPath, 1024);
+
+    // Simulate passive scale-down migration on an empty slot:
+    // slot exists, but contains no visible PUT record.
+    ASSERT_TRUE(sourceManager.BootstrapManifestIfNeed().IsOk());
+    ASSERT_TRUE(sourceManager.Seal("empty_source_slot").IsOk());
+    ASSERT_TRUE(client.MergeSlot(SOURCE_WORKER_ADDRESS_A, slotId).IsOk());
+
+    SlotManifestData manifest;
+    ASSERT_TRUE(SlotManifest::Load(targetSlotPath, manifest).IsOk());
+    // Expected behavior: takeover of an empty source slot should not introduce extra active data files.
+    ASSERT_EQ(manifest.activeData.size(), 1u);
+    ASSERT_EQ(manifest.activeData[0], FormatDataFileName(1));
+    ASSERT_EQ(FileSize(JoinPath(targetSlotPath, manifest.activeData[0])), 0);
 }
 
 TEST_F(SlotStoreTest, TakeoverPlanPrecedesImportManifest)
