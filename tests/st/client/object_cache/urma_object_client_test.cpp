@@ -1514,6 +1514,42 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitFallback)
     }
 }
 
+TEST_F(UrmaFallbackTest, UrmaHandshakeTimeoutReturnEarlyAndContinueInBackground)
+{
+    FLAGS_v = 1;
+    std::shared_ptr<KVClient> client;
+    const int timeoutMs = 1'000;
+    const int firstHandshakeSleepMs = 3'000;
+    const int initReturnUpperBoundMs = 2'500;
+
+    DS_ASSERT_OK(inject::Set("client.urma_first_handshake_delay", "sleep(3000)"));
+
+    auto start = std::chrono::steady_clock::now();
+    InitTestKVClient(0, client, timeoutMs);
+    auto initElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    ASSERT_LT(initElapsedMs, initReturnUpperBoundMs);
+
+    const int testSize = 1024 * 1024;
+    std::string key1 = NewObjectKey();
+    std::string value1(testSize, 'a');
+    std::string getValue1;
+    DS_ASSERT_OK(client->Set(key1, value1));
+    DS_ASSERT_OK(client->Get(key1, getValue1));
+    ASSERT_EQ(getValue1, value1);
+
+    usleep((firstHandshakeSleepMs + timeoutMs) * 1000);
+
+    std::string key2 = NewObjectKey();
+    std::string value2(testSize, 'b');
+    std::string getValue2;
+    DS_ASSERT_OK(client->Set(key2, value2));
+    DS_ASSERT_OK(client->Get(key2, getValue2));
+    ASSERT_EQ(getValue2, value2);
+
+    DS_ASSERT_OK(inject::Clear("client.urma_first_handshake_delay"));
+}
+
 class UrmaDisableFallbackTest : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
