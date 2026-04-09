@@ -81,7 +81,7 @@ global:
     enableUrma: true
     # Number of complete record to poll at a time, 16 is the max this device can poll.
     urmaPollSize: 8
-    # Number of jfs and jfr pair.
-    urmaConnectionSize: 16
+    # [DEPRECATED] Retained for compatibility only and ignored internally. JFS/JFR are now created per connection.
+    urmaConnectionSize: 0
     # The reserved memory (MB) is determined by min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400.
     evictionReserveMemThresholdMB: 10240

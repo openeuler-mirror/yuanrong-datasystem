@@ -181,13 +181,6 @@ Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize, const
 Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
 
 /**
- * @brief Shared logic for Urma handshake: ExchangeJfr then fill rsp if not already filled (Client–Worker or
- * Worker–Worker). Used by WorkerOCService::ExchangeUrmaConnectInfo and
- * WorkerWorkerTransportService::WorkerWorkerExchangeUrmaConnectInfo.
- */
-Status DoExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp);
-
-/**
  * @brief Check if the connection is stable.
  * @param[in] hostAddress The dst port address.
  * @param[in] instanceId The unqiue instance uuid from dst port.
@@ -211,6 +204,13 @@ Status GetLocalTransportInstanceId(std::string &instanceId);
  */
 Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &req,
                             const std::string &clientEntityId = "");
+
+/**
+ * @brief Finalize the initiator-side connection after receiving a handshake response.
+ * @param[in] rsp The handshake response from the remote side.
+ * @return Status of the call.
+ */
+Status FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp);
 
 uint64_t GenerateReqId();
 }  // namespace datasystem

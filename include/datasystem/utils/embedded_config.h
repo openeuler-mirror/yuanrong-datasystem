@@ -111,13 +111,6 @@ public:
     EmbeddedConfig &UrmaRegisterWholeArena(bool whole);
 
     /**
-     * @brief Set etcd endpoint list.
-     * @param[in] size Equivalent to flag etcd_address.
-     * @return Reference to self for chaining.
-     */
-    EmbeddedConfig &UrmaConnectionSize(bool size);
-
-    /**
      * @brief Use URMA event-driven mode.
      * @param[in] enable Equivalent to flag urma_event_mode.
      * @return Reference to self for chaining.

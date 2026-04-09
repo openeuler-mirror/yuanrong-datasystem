@@ -89,12 +89,6 @@ EmbeddedConfig &EmbeddedConfig::UrmaRegisterWholeArena(bool whole)
     return *this;
 }
 
-EmbeddedConfig &EmbeddedConfig::UrmaConnectionSize(bool size)
-{
-    extraArgs["urma_connection_size"] = size ? "true" : "false";
-    return *this;
-}
-
 EmbeddedConfig &EmbeddedConfig::UrmaEventMode(bool enable)
 {
     extraArgs["urma_event_mode"] = enable ? "true" : "false";

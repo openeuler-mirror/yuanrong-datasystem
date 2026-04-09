@@ -53,7 +53,7 @@ DS_DEFINE_bool(rdma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(enable_rdma, false, "Option to turn on rdma for OC worker to worker data transfer, default false.");
 DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time, 16 is the max this device can poll");
-DS_DEFINE_uint32(urma_connection_size, 16, "Number of jfs and jfr pair");
+DS_DEFINE_uint32(urma_connection_size, 0, "[DEPRECATED] No longer used. JFS/JFR are created per-connection.");
 DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(urma_event_mode, false, "Uses interrupt mode to poll completion events.");

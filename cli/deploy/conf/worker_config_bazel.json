@@ -516,8 +516,8 @@
         "description": "Option to turn on urma for OC worker to worker data transfer, default false."
     },
     "urma_connection_size": {
-        "value": "16",
-        "description": "Number of jfs and jfr pair"
+        "value": "0",
+        "description": "[DEPRECATED] Retained for compatibility only and ignored internally. JFS/JFR are now created per connection."
     },
     "urma_event_mode": {
         "value": "false",

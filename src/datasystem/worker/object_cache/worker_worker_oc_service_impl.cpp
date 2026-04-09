@@ -464,9 +464,9 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
         auto markFastTransferResult = [&rsp, &objectKey](const Status &status, const char *transportName) {
             if (status.IsError()) {
-                LOG(WARNING) << FormatString("%s[%s] fallback to tcp, rc =: %s", transportName, objectKey,
-                                             status.ToString());
                 CHECK_FAIL_RETURN_STATUS(FLAGS_enable_transport_fallback, status.GetCode(), status.GetMsg());
+                LOG(WARNING) << FormatString("%s[%s] fallback to tcp, rc = %s", transportName, objectKey,
+                                             status.ToString());
                 return Status::OK();
             }
             rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);

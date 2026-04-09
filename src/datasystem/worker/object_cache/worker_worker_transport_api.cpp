@@ -20,14 +20,11 @@
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
 #include "datasystem/protos/meta_transport.pb.h"
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/log/log.h"
-#include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -71,25 +68,6 @@ Status WorkerWorkerTransportApi::ExecOnceParrallelExchange(UrmaHandshakeRspPb &r
     return result;
 }
 
-WorkerLocalWorkerTransApi::WorkerLocalWorkerTransApi(HostPort localHost, WorkerWorkerTransportServiceImpl *service)
-    : localHost_(localHost), service_(service)
-{
-}
-
-Status WorkerLocalWorkerTransApi::Init()
-{
-    RETURN_RUNTIME_ERROR_IF_NULL(service_);
-    return Status::OK();
-}
-
-Status WorkerLocalWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &rsp)
-{
-    UrmaHandshakeReqPb req;
-    std::string localHost = localHost_.ToString();
-    RETURN_IF_NOT_OK(ConstructHandshakePb(localHost, req));
-    return service_->WorkerWorkerExchangeUrmaConnectInfo(req, rsp);
-}
-
 WorkerRemoteWorkerTransApi::WorkerRemoteWorkerTransApi(HostPort hostPort, const std::string &firstClientEntityId)
     : hostPort_(std::move(hostPort)), firstClientEntityId_(firstClientEntityId)
 {
@@ -119,6 +97,7 @@ Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &r
     std::string senderAddStr = hostPort_.ToString();
     RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req, firstClientEntityId_));
     RETURN_IF_NOT_OK(rpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
+    RETURN_IF_NOT_OK(FinalizeOutboundConnection(rsp));
     return Status::OK();
 }
 }  // namespace object_cache

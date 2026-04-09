@@ -98,10 +98,7 @@ Status RemoveRemoteFastTransportClient(const ClientKey &clientId)
     (void)clientId;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        const std::string &urmaClientId = UrmaManager::Instance().GetRemoteDevicesByClientId(clientId);
-        if (!urmaClientId.empty()) {
-            RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteDevice(urmaClientId));
-        }
+        RETURN_IF_NOT_OK(UrmaManager::Instance().RemoveRemoteClient(clientId));
     }
 #endif
     return Status::OK();
@@ -228,18 +225,6 @@ Status ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
     return Status::OK();
 }
 
-Status DoExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req, UrmaHandshakeRspPb &rsp)
-{
-    RETURN_IF_NOT_OK(ExchangeJfr(req, rsp));
-#ifdef USE_URMA
-    if (UrmaManager::IsUrmaEnabled() && !rsp.has_hand_shake()) {
-        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(*rsp.mutable_hand_shake());
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(rsp));
-    }
-#endif
-    return Status::OK();
-}
-
 Status UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDataSize, const std::vector<LocalSgeInfo> &objInfos,
                     bool blocking, std::vector<uint64_t> &eventKeys)
 {
@@ -295,15 +280,31 @@ Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &r
     (void)clientEntityId;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        uint32_t jfrIndex = UrmaManager::Instance().GetJfrIndex(senderAddr);
-        UrmaManager::Instance().GetLocalUrmaInfo().ToProto(req, jfrIndex);
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetSegmentInfo(req));
-        if (!UrmaManager::Instance().GetClientId().empty()) {
-            req.set_client_id(UrmaManager::Instance().GetClientId());
+        auto &mgr = UrmaManager::Instance();
+        // Get or create a local JFR for this target node (reused across reconnections)
+        uint32_t jfrId = 0;
+        RETURN_IF_NOT_OK(mgr.GetOrCreateLocalJfr(senderAddr, jfrId));
+        auto localInfo = mgr.GetLocalUrmaInfo();
+        localInfo.jfrId = jfrId;
+        localInfo.ToProto(req);
+        if (!mgr.GetClientId().empty()) {
+            req.set_client_id(mgr.GetClientId());
         }
         if (!clientEntityId.empty()) {
             req.set_client_entity_id(clientEntityId);
         }
+        RETURN_IF_NOT_OK(mgr.GetSegmentInfo(req));
+    }
+#endif
+    return Status::OK();
+}
+
+Status FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
+{
+    (void)rsp;
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(UrmaManager::Instance().FinalizeOutboundConnection(rsp));
     }
 #endif
     return Status::OK();

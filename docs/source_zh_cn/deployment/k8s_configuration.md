@@ -48,7 +48,7 @@ global:
 
   images:
     datasystem: "openyuanrong-datasystem:0.5.0"
-  
+
   etcd:
     etcdAddress: "127.0.0.1:2379"
 ```
@@ -68,7 +68,7 @@ global:
 
   images:
     datasystem: "openyuanrong-datasystem:0.5.0"
-  
+
   etcd:
     etcdAddress: "127.0.0.1:2379"
 
@@ -450,7 +450,7 @@ global:
 | global.performance.urmaMode | string | `UB` | 是否开用Urma通过IB或UB运行，默认情况下，UB将与URMA一起运行 |
 | global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| global.performance.urmaConnectionSize | int | `16` | jfs和jfr对的数量 |
+| global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | global.performance.enableTransportFallback | bool | `true` | 是否开启快速传输回退到tcp传输的功能，默认值为true |
 | global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
