@@ -65,6 +65,10 @@ ConnectOptions
         
         如果为 true，开启 RH2D 功能，该功能需要服务端同步开启 ``enable_remote_h2d`` 能力。默认值：false
 
+    .. cpp:member:: uint64_t fastTransportMemSize = 128 * 1024 * 1024;
+
+        client侧 fast transport（urma）内存池大小，单位为字节。默认值：128MB，取值范围为 ``(0, 2GB]`` 。仅在 fast transport 场景下生效。
+
     **公共函数**
  
     .. cpp:function:: void SetAkSkAuth(const std::string &accessKey, const SensitiveValue &secretKey, const std::string &tenantId)

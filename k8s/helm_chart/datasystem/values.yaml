@@ -429,7 +429,7 @@ global:
     urmaConnectionSize: 0
     # Uses interrupt mode to poll completion events.
     urmaEventMode: false
-    # Enable fast transport fallback to tcp transport.
+    # Enable fast transport (urma/rdma) fallback to tcp transport.
     enableTransportFallback: true
     # Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.
     sharedDiskDirectory: ""

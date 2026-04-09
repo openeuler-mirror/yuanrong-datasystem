@@ -24,6 +24,9 @@ from yr.datasystem.lib import libds_client_py as ds
 from yr.datasystem.object_client import WriteMode, CacheType
 from yr.datasystem.util import Validator as validator
 
+DEFAULT_FAST_TRANSPORT_MEM_SIZE = 128 * 1024 * 1024
+MAX_FAST_TRANSPORT_MEM_SIZE = 2 * 1024 * 1024 * 1024
+
 
 ReadParam = namedtuple(
     "ReadParam",
@@ -159,7 +162,8 @@ class KVClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
-        enable_exclusive_connection=False
+        enable_exclusive_connection=False,
+        fast_transport_mem_size=DEFAULT_FAST_TRANSPORT_MEM_SIZE
     ):
         """Constructor of the KVClient class
 
@@ -182,6 +186,8 @@ class KVClient:
             datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
             `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
             the system will throw a request exception.
+            fast_transport_mem_size(int): The memory pool size in bytes used by client fast transport. Default is
+            128MB. The valid range is [1, 2GB].
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
@@ -193,10 +199,14 @@ class KVClient:
             ["server_public_key", server_public_key, str], ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str], ["enable_cross_node_connection", enable_cross_node_connection, bool],
-            ["enable_exclusive_connection", enable_exclusive_connection, bool]
+            ["enable_exclusive_connection", enable_exclusive_connection, bool],
+            ["fast_transport_mem_size", fast_transport_mem_size, int]
         ]
         validator.check_args_types(args)
         validator.check_param_range("connect_timeout_ms", connect_timeout_ms, 0, validator.INT32_MAX_SIZE)
+        validator.check_param_range(
+            "fast_transport_mem_size", fast_transport_mem_size, 1, MAX_FAST_TRANSPORT_MEM_SIZE
+        )
         self._client = ds.KVClient(
             host,
             port,
@@ -210,7 +220,8 @@ class KVClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
-            enable_exclusive_connection
+            enable_exclusive_connection,
+            fast_transport_mem_size
         )
 
     def init(self):

@@ -197,7 +197,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
-                         bool enableExclusiveConnection) {
+                         bool enableExclusiveConnection, uint64_t fastTransportMemSize) {
             ConnectOptions connectOpts{ .host = host,
                                         .port = port,
                                         .connectTimeoutMs = connectTimeoutMs,
@@ -211,7 +211,8 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                                         .secretKey = secretKey,
                                         .tenantId = tenantId,
                                         .enableCrossNodeConnection = enableCrossNodeConnection,
-                                        .enableExclusiveConnection = enableExclusiveConnection };
+                                        .enableExclusiveConnection = enableExclusiveConnection,
+                                        .fastTransportMemSize = fastTransportMemSize };
             return std::make_unique<ObjectClientImpl>(connectOpts);
         }))
         .def("Init",

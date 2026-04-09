@@ -50,7 +50,6 @@ using AllocateType = datasystem::memory::CacheType;
 using ArenaGroup = datasystem::memory::ArenaGroup;
 
 const std::string DEFAULT_TENANTID = "";
-const std::string UB_TRANSPORT_MEM_SIZE = "UB_TRANSPORT_MEM_SIZE";
 const std::string UB_MAX_GET_DATA_SIZE = "UB_MAX_GET_DATA_SIZE";
 const std::string UB_MAX_SET_BUFFER_SIZE = "UB_MAX_SET_BUFFER_SIZE";
 
