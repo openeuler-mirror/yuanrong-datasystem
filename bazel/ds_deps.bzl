@@ -145,7 +145,7 @@ def setup_jemalloc():
     """Setup Jemalloc library for Bazel builds."""
     maybe(
         http_archive,
-        name = "jemalloc",
+        name = "jemalloc_kvc",
         sha256 = "ef6f74fd45e95ee4ef7f9e19ebe5b075ca6b7fbe0140612b2a161abafb7ee179",
         strip_prefix = "jemalloc-5.3.0",
         urls = [

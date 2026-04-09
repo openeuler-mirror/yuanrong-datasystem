@@ -1,5 +1,5 @@
 load("@pybind11_bazel//:build_defs.bzl", "pybind_library")
-load("//bazel:build_defs.bzl", "pybind_extension_jemalloc")
+load("//bazel:build_python.bzl", "pybind_extension_jemalloc")
 
 package(default_visibility = ["//visibility:public"])
 
