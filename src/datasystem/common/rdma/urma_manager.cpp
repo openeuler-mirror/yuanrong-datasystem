@@ -224,13 +224,6 @@ Status UrmaManager::InitMemoryBufferPool()
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_GET_DATA_SIZE, ubMaxGetDataSize_));
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_SET_BUFFER_SIZE, ubMaxSetBufferSize_));
 
-    // If transport size is not set by connection, try to get from environment
-    if (ubTransportMemSize_.load() == 0) {
-        uint64_t envSize = 0;
-        RETURN_IF_NOT_OK(ParseEnvUint64(UB_TRANSPORT_MEM_SIZE, envSize));
-        ubTransportMemSize_.store(envSize);
-    }
-
     if (ubTransportMemSize_.load() > MAX_TRANSPORT_MEM_SIZE || ubTransportMemSize_.load() <= 0) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID,
                                 FormatString("ubTransportMemSize %lu is invalid, must be between %lu and %lu",
