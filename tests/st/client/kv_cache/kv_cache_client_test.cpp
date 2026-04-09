@@ -2634,5 +2634,61 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestPreferSameNode)
         func("host_id_env_n", -1);
     }
 }
+class KVCacheClientL2FallBackTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numOBS = 1;
+        opts.numWorkers = 2;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
+        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -enable_l2_cache_fallback=false ";
+
+        std::string hostIp = "127.0.0.1";
+        for (size_t i = 0; i < opts.numWorkers; i++) {
+            HostPort hostPort(hostIp, GetFreePort());
+            opts.workerConfigs.emplace_back(hostPort);
+            workerAddress_.emplace_back(hostPort);
+
+            std::string envName = "host_id_env" + std::to_string(i);
+            std::string envVal = "host_id" + std::to_string(i);
+            ASSERT_EQ(setenv(envName.c_str(), envVal.c_str(), 1), 0);
+            opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
+        }
+        ASSERT_EQ(setenv("host_id_env_n", "host_id_n", 1), 0);
+    }
+
+    void SetUp() override
+    {
+        ExternalClusterTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        ExternalClusterTest::TearDown();
+    }
+
+std::vector<HostPort> workerAddress_;
+};
+
+TEST_F(KVCacheClientL2FallBackTest, TestL2CacheFallBack)
+{
+    std::shared_ptr<KVClient> client, client1;
+    InitTestKVClient(0, client);
+    InitTestKVClient(1, client1);
+    auto key = client1->GenerateKey("");
+    std::string value = "sssss";
+    SetParam param;
+    param.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
+    DS_ASSERT_OK(client->Set(key, value));
+    client.reset();
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    InitTestKVClient(0, client);
+    std::string valueGet;
+    auto status = client->Get(key, valueGet);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_NOT_FOUND);
+}
 }  // namespace st
 }  // namespace datasystem

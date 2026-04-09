@@ -2001,6 +2001,7 @@ void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectM
                                                                    Status &status)
 {
     if (!FLAGS_enable_l2_cache_fallback) {
+        status = Status(K_NOT_FOUND_IN_L2CACHE, status.GetMsg());
         return;
     }
     const ConfigPb &configPb = meta.config();

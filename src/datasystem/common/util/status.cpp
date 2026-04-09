@@ -27,6 +27,14 @@
 #include "datasystem/common/log/trace.h"
 
 namespace datasystem {
+bool HasCurrentTraceId(const std::string &msg, const std::string &traceId)
+{
+    if (msg.empty() || traceId.empty()) {
+        return false;
+    }
+    return msg.find(traceId) != std::string::npos;
+}
+
 Status::Status() noexcept : state_(nullptr)
 {
 }
@@ -59,7 +67,7 @@ Status::Status(StatusCode code, std::string msg) noexcept
         return;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    if (code != K_OK && !traceId.empty()) {
+    if (code != K_OK && !traceId.empty() && !HasCurrentTraceId(msg, traceId)) {
         if (!msg.empty() && msg.back() == '.') {
             msg.pop_back();
         }
@@ -87,7 +95,7 @@ Status::Status(StatusCode code, int lineOfCode, const std::string &fileName, con
         ss << "File         : " << fileName.substr(position, fileName.length() - position) << std::endl;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    if (code != K_OK && !traceId.empty()) {
+    if (code != K_OK && !traceId.empty() && !HasCurrentTraceId(ss.str(), traceId)) {
         ss << "traceId      : " << traceId;
     }
     state_ = std::make_unique<State>();
