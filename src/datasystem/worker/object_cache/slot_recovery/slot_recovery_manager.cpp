@@ -124,6 +124,32 @@ std::string GetTaskSourceWorker(const RecoveryTaskPb &task)
     return task.failed_worker();
 }
 
+bool IsCrossIncidentLocalTask(const RecoveryTaskPb &task, const std::string &localWorker)
+{
+    return task.owner_worker() == localWorker && task.failed_worker() != localWorker;
+}
+
+bool HasRestartResumeCandidate(const SlotRecoveryInfoPb &info, const std::string &localWorker, size_t &staleTaskCount,
+                               size_t &pendingTaskCount)
+{
+    bool hasCandidate = false;
+    for (const auto &task : info.recovery_tasks()) {
+        if (!IsCrossIncidentLocalTask(task, localWorker)) {
+            continue;
+        }
+        if (task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
+            hasCandidate = true;
+            ++staleTaskCount;
+            continue;
+        }
+        if (task.task_status() == RecoveryTaskPb_TaskStatus_PENDING) {
+            hasCandidate = true;
+            ++pendingTaskCount;
+        }
+    }
+    return hasCandidate;
+}
+
 void AddPlannedSlots(std::unordered_map<std::string, std::set<uint32_t>> &plannedSlotsBySource,
                      const std::string &sourceWorker, const google::protobuf::RepeatedField<uint32_t> &slots)
 {
@@ -679,6 +705,7 @@ Status SlotRecoveryManager::HandleLocalRestart()
 {
     RETURN_OK_IF_TRUE(!IsFeatureEnabled());
     const std::string localWorker = localAddress_.ToString();
+    RETURN_IF_NOT_OK(ResumeStaleCrossIncidentLocalTasksOnRestart(localWorker));
     LocalRestartPlan restartPlan;
     RETURN_IF_NOT_OK(CollectLocalRestartPlan(localWorker, restartPlan));
     LOG(INFO) << FormatString(
@@ -732,6 +759,51 @@ Status SlotRecoveryManager::HandleLocalRestart()
 
     // Stage 4: schedule the canonical local task through the normal claim/execute/complete flow.
     return ScheduleLocalRestartTasks(localWorker);
+}
+
+Status SlotRecoveryManager::ResumeStaleCrossIncidentLocalTasksOnRestart(const std::string &localWorker)
+{
+    std::vector<std::pair<std::string, SlotRecoveryInfoPb>> incidents;
+    RETURN_IF_NOT_OK(store_->ListIncidents(incidents));
+    size_t staleTaskCount = 0;
+    size_t pendingTaskCount = 0;
+    for (const auto &incident : incidents) {
+        if (incident.first == localWorker) {
+            continue;
+        }
+        if (!HasRestartResumeCandidate(incident.second, localWorker, staleTaskCount, pendingTaskCount)) {
+            continue;
+        }
+        RETURN_IF_NOT_OK(store_->CASIncident(
+            incident.first, [&localWorker](SlotRecoveryInfoPb &info, bool &exists, bool &writeBack) {
+                if (!exists) {
+                    writeBack = false;
+                    return Status::OK();
+                }
+                for (auto &task : *info.mutable_recovery_tasks()) {
+                    if (IsCrossIncidentLocalTask(task, localWorker)
+                        && task.task_status() == RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
+                        task.set_task_status(RecoveryTaskPb_TaskStatus_PENDING);
+                        writeBack = true;
+                    }
+                }
+                return Status::OK();
+            }));
+        SlotRecoveryInfoPb latest;
+        auto getRc = store_->GetIncident(incident.first, latest);
+        if (getRc.GetCode() == K_NOT_FOUND) {
+            continue;
+        }
+        RETURN_IF_NOT_OK(getRc);
+        LOG(INFO) << FormatString(
+            "action=restart_resume_stale_local_tasks incident_key=%s local_worker=%s summary={%s}", incident.first,
+            localWorker, IncidentSummary(latest));
+        RETURN_IF_NOT_OK(ScheduleLocalTasks(incident.first, latest));
+    }
+    LOG(INFO) << FormatString(
+        "action=restart_resume_scan local_worker=%s incidents=%zu stale_tasks=%zu pending_tasks=%zu", localWorker,
+        incidents.size(), staleTaskCount, pendingTaskCount);
+    return Status::OK();
 }
 
 Status SlotRecoveryManager::CollectLocalRestartPlan(const std::string &localWorker, LocalRestartPlan &restartPlan)
