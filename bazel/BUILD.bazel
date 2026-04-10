@@ -15,6 +15,8 @@ load("//:version.bzl", "DATASYSTEM_VERSION")
 
 licenses(["notice"])
 
+exports_files(["generate_commit_id.sh"])
+
 config_setting(
     name = "linux_x86_64",
     constraint_values = [
@@ -160,6 +162,7 @@ py_wheel(
     deps = [
         ":datasystem_client",
         "//:cluster_config_file",
+        "//:commit_id_file",
         "//:cpp_template_files",
         "//:datasystem_worker_file",
         "//:dockerentry_files",

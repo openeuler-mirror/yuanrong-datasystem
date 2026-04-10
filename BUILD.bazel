@@ -216,6 +216,17 @@ copy_file(
     out = "yr/datasystem/VERSION",
 )
 
+genrule(
+    name = "commit_id_file",
+    srcs = [
+        "VERSION",
+        "//bazel:generate_commit_id.sh",
+    ],
+    outs = ["yr/datasystem/.commit_id"],
+    cmd = "bash $(location //bazel:generate_commit_id.sh) $(location VERSION) $@",
+    tags = ["no-sandbox"],
+)
+
 copy_file(
     name = "cluster_config_file",
     src = "cli/deploy/conf/cluster_config.json",
