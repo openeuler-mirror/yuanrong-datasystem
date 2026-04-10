@@ -627,6 +627,8 @@ TEST_F(SlotEndToEndTest, WorkerRestartRecoversSlotAndMetadata)
     WaitAllNodesJoinIntoHashRing(2, 20);
 
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, key, value));
+    InitTestKVClient(0, client0);
+    DS_ASSERT_OK(client0->Set(key, value, param));
 }
 
 TEST_F(SlotEndToEndTest, DistributedDiskDoesNotWriteMetadataToEtcd)

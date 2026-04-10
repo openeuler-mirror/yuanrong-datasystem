@@ -169,6 +169,7 @@ ObjectMetaPb BuildRecoveredMetadata(const SlotPreloadMeta &meta, const std::stri
     auto *config = objectMeta.mutable_config();
     config->set_write_mode(static_cast<uint32_t>(meta.writeMode));
     config->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
+    config->set_consistency_type(static_cast<uint32_t>(ConsistencyType::CAUSAL));
     return objectMeta;
 }
 }  // namespace
