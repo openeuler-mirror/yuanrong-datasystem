@@ -79,6 +79,11 @@ public:
                || testName == "PassiveScaleDownRecoversLargeObjectInDedicatedDataFile";
     }
 
+    bool IsBackgroundCompactMutationCase() const
+    {
+        return CurrentTestName() == "BackgroundCompactSurvivesConcurrentMutations";
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
@@ -97,6 +102,7 @@ public:
            << "-cluster_name=" << CLUSTER_NAME << " "
            << "-distributed_disk_slot_num=" << SLOT_NUM << " "
            << "-distributed_disk_max_data_file_size_mb=" << (IsLargeObjectCase() ? 1 : 1024) << " "
+           << "-distributed_disk_compact_interval_s=" << (IsBackgroundCompactMutationCase() ? 1 : 3600) << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
            << "-enable_metadata_recovery=true "
@@ -742,7 +748,6 @@ TEST_F(SlotEndToEndTest, BackgroundCompactSurvivesConcurrentMutations)
     std::shared_ptr<KVClient> client0;
     InitTestKVClient(0, client0);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "slotstore.SlotClient.BackgroundCompact.WaitMs", "100*call(50)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "slotstore.Slot.Compact.BeforeCommit", "1*sleep(1000)"));
 
     SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
@@ -774,7 +779,6 @@ TEST_F(SlotEndToEndTest, BackgroundCompactSurvivesConcurrentMutations)
         return false;
     };
 
-    ASSERT_TRUE(waitUntilInjectExecuted("slotstore.SlotClient.BackgroundCompact.WaitMs"));
     ASSERT_TRUE(waitUntilInjectExecuted("slotstore.Slot.Compact.BeforeCommit"));
 
     DS_ASSERT_OK(client0->Set(keepKey, updatedValue, param));
@@ -789,7 +793,6 @@ TEST_F(SlotEndToEndTest, BackgroundCompactSurvivesConcurrentMutations)
     ASSERT_TRUE(!client0->Get(deleteKey, deletedValue).IsOk());
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "slotstore.Slot.Compact.BeforeCommit"));
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "slotstore.SlotClient.BackgroundCompact.WaitMs"));
 }
 
 TEST_F(SlotEndToEndTest, VoluntaryScaleDownMovesSlotAndMetadata)

@@ -187,6 +187,8 @@ global:
       syncIntervalMs: 5000
       # Group commit batch threshold in bytes.
       syncBatchBytes: 4194304
+      # Fixed interval in seconds between background compact runs.
+      compactIntervalS: 3600
       # Maximum delta bytes allowed during compact final cutover.
       compactCutoverBytes: 4194304
       # Maximum delta record count allowed during compact final cutover.

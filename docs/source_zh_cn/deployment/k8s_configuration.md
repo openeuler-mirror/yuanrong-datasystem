@@ -364,6 +364,7 @@ global:
 | global.l2Cache.distributedDisk.maxDataFileSizeMb | int | `1024` | 单个 distributed_disk data 文件的最大大小，单位 MB |
 | global.l2Cache.distributedDisk.syncIntervalMs | int | `5000` | distributed_disk group commit 的最长刷盘间隔，单位毫秒 |
 | global.l2Cache.distributedDisk.syncBatchBytes | int | `4194304` | distributed_disk group commit 的批量刷盘阈值，单位字节 |
+| global.l2Cache.distributedDisk.compactIntervalS | int | `3600` | distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 `WITH_TESTS` 下最小值为 1 |
 | global.l2Cache.distributedDisk.compactCutoverBytes | int | `4194304` | distributed_disk compact 最终切换阶段允许的最大增量字节数 |
 | global.l2Cache.distributedDisk.compactCutoverRecords | int | `4096` | distributed_disk compact 最终切换阶段允许的最大增量记录数 |
 

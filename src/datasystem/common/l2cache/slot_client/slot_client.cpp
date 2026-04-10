@@ -22,7 +22,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <ctime>
 #include <functional>
 #include <set>
 #include <shared_mutex>
@@ -52,7 +51,23 @@ DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace {
-constexpr int BACKGROUND_COMPACT_HOUR = 2;
+constexpr uint32_t DEFAULT_DISTRIBUTED_DISK_COMPACT_INTERVAL_S = 3600;
+#ifdef WITH_TESTS
+constexpr uint32_t MIN_DISTRIBUTED_DISK_COMPACT_INTERVAL_S = 1;
+#else
+constexpr uint32_t MIN_DISTRIBUTED_DISK_COMPACT_INTERVAL_S = 60;
+#endif
+
+DS_DEFINE_uint32(distributed_disk_compact_interval_s, DEFAULT_DISTRIBUTED_DISK_COMPACT_INTERVAL_S,
+                 "Fixed interval in seconds between distributed disk background compact runs.");
+DS_DEFINE_validator(distributed_disk_compact_interval_s, [](const char *flagName, uint32_t value) {
+    if (value < MIN_DISTRIBUTED_DISK_COMPACT_INTERVAL_S) {
+        LOG(ERROR) << FormatString("The value of %s flag is %u, which must be greater than or equal to %u.",
+                                   flagName, value, MIN_DISTRIBUTED_DISK_COMPACT_INTERVAL_S);
+        return false;
+    }
+    return true;
+});
 
 bool ParseSlotIdFromPath(const std::string &path, uint32_t &slotId)
 {
@@ -205,8 +220,13 @@ bool SlotClient::ShouldStopBackgroundCompactThread()
 
 void SlotClient::BackgroundCompactLoop()
 {
+    auto nextCompactDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(ComputeNextCompactDelayMs());
     while (!ShouldStopBackgroundCompactThread()) {
-        auto waitMs = ComputeNextCompactDelayMs();
+        auto waitMs = std::max<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(nextCompactDeadline - std::chrono::steady_clock::now())
+                .count(),
+            0);
         INJECT_POINT_NO_RETURN("slotstore.SlotClient.BackgroundCompact.WaitMs",
                                [&waitMs](int64_t overrideWaitMs) { waitMs = std::max<int64_t>(overrideWaitMs, 0); });
         {
@@ -236,25 +256,14 @@ void SlotClient::BackgroundCompactLoop()
             LOG(WARNING) << FormatString("action=background_compact_failed slot_id=%u status=%s", slotId,
                                          rc.ToString());
         }
+        nextCompactDeadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(ComputeNextCompactDelayMs());
     }
 }
 
 int64_t SlotClient::ComputeNextCompactDelayMs() const
 {
-    auto now = std::chrono::system_clock::now();
-    auto nowTimeT = std::chrono::system_clock::to_time_t(now);
-    tm localTm{};
-    localtime_r(&nowTimeT, &localTm);
-    localTm.tm_hour = BACKGROUND_COMPACT_HOUR;
-    localTm.tm_min = 0;
-    localTm.tm_sec = 0;
-    auto nextTimeT = mktime(&localTm);
-    if (nextTimeT <= nowTimeT) {
-        localTm.tm_mday += 1;
-        nextTimeT = mktime(&localTm);
-    }
-    auto nextRun = std::chrono::system_clock::from_time_t(nextTimeT);
-    return std::max<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(nextRun - now).count(), 0);
+    return static_cast<int64_t>(FLAGS_distributed_disk_compact_interval_s) * 1000;
 }
 
 std::vector<uint32_t> SlotClient::CollectCompactionCandidates() const
