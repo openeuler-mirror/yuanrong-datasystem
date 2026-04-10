@@ -458,7 +458,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         HandleBatchSubResponsePart2(subRc, address, metaIter, objectKV, checkConnectStatus, tryGetFromElsewhere,
                                     needEvictObjs);
-        if (subRc.IsError() && tryGetFromElsewhere) {
+        if (subRc.IsError() && tryGetFromElsewhere && !address.empty()) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_OTHER_AZ);
             HostPort hostAddr;
             hostAddr.ParseString(address);
