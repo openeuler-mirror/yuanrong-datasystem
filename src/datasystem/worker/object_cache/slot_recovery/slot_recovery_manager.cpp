@@ -969,6 +969,7 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
             []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
     }
+    INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecoverMeta");
     std::vector<std::string> failedIds;
     auto recoverRc = metadataRecoveryManager_->RecoverMetadata(recoveredMetas, failedIds);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(recoverRc.IsOk() && failedIds.empty(),

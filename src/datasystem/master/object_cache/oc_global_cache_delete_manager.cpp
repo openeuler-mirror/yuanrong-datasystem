@@ -141,8 +141,11 @@ Status OCGlobalCacheDeleteManager::InsertDeletedObject(const std::string &object
                                                        uint64_t delVersion, const std::string &targetWorkerAddress,
                                                        bool needPersist, ObjectMetaStore::WriteType type)
 {
-    CHECK_FAIL_RETURN_STATUS(!UseWorkerDeleteRpc() || !targetWorkerAddress.empty(), StatusCode::K_INVALID,
-                             "Slot-backed delete task requires target worker address");
+    if (UseWorkerDeleteRpc() && targetWorkerAddress.empty()) {
+        constexpr int times = 10;
+        LOG_EVERY_T(WARNING, times) << objectKey << " may be rebuilding, ignore delete from distributed disk now";
+        return Status::OK();
+    }
     if (needPersist) {
         VLOG(2) << "Insert global cache delete to etcd, obejct: " << objectKey
                 << ", type: " << static_cast<uint32_t>(type);
