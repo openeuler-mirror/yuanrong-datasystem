@@ -30,7 +30,6 @@
 #include <vector>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include <tbb/concurrent_hash_map.h>
 #include <tbb/concurrent_unordered_set.h>

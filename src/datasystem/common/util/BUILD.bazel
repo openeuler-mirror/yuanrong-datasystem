@@ -326,6 +326,7 @@ ds_cc_library(
         ":strings_util",
         ":thread_pool",
         "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/perf:common_perf",
         "@securec",
     ],
 )

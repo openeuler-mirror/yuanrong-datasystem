@@ -198,9 +198,7 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
-#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
-#endif
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     uint64_t dataSize = GetSize();

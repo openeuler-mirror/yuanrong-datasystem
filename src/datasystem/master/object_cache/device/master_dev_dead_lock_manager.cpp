@@ -16,6 +16,8 @@
 
 #include "datasystem/master/object_cache/device/master_dev_dead_lock_manager.h"
 
+#include "datasystem/common/perf/perf_manager.h"
+
 namespace datasystem {
 namespace master {
 bool MasterDevDeadLockManager::HasCycle(const std::string &node, const std::string &parent,

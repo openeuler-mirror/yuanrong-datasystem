@@ -22,6 +22,7 @@
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/constants.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rdma/ucp_manager.h"
 #include "datasystem/common/rdma/ucp_segment.h"

@@ -13,6 +13,7 @@ ds_cc_library(
     deps = [
     #     "//src/datasystem/common/log:common_log",
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/perf:common_perf",
     #     "//include/datasystem/object:object_headers",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
     #     "//src/datasystem/common/util:common_util",

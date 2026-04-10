@@ -45,6 +45,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:buffer_composer",
         "//src/datasystem/common/parallel:common_parallel",
+        "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:dlutils",
         "//src/datasystem/common/util:fd_pass",

@@ -26,9 +26,7 @@
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
-#ifdef ENABLE_PERF
 #include "datasystem/common/perf/perf_manager.h"
-#endif
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/status.h"
@@ -169,9 +167,7 @@ Status MemoryCopy(uint8_t *dst, uint64_t dstMaxSize, const uint8_t *src, uint64_
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(dst != nullptr && src != nullptr, K_INVALID,
                                          "dst or src pointer cannot be null.");
-#ifdef ENABLE_PERF
     PerfPoint point(PerfKey::COMMON_UTIL_MEMORY_COPY);
-#endif
     if (dstMaxSize < srcSize) {
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       FormatString("dst size: %d smaller than src size: %d", dstMaxSize, srcSize));
