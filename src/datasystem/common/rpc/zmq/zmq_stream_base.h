@@ -23,7 +23,6 @@
 #ifndef DATASYSTEM_COMMON_RPC_ZMQ_STREAM_BASE_H
 #define DATASYSTEM_COMMON_RPC_ZMQ_STREAM_BASE_H
 
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_common.h"
 #include "datasystem/common/rpc/zmq/zmq_msg_queue.h"
 #include "datasystem/common/rpc/zmq/zmq_payload.h"

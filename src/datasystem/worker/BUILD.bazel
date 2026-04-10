@@ -109,6 +109,7 @@ ds_cc_library(
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",

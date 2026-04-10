@@ -62,6 +62,7 @@ cc_library(
     deps = [
         ":args_base",
         "//src/datasystem/client/perf_client",
+        "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:uri",

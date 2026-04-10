@@ -27,7 +27,6 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/util/lock_map.h"

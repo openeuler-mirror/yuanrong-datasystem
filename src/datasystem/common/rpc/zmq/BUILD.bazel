@@ -307,6 +307,7 @@ ds_cc_library(
         "zmq_stub.h",
     ],
     deps = [
+        "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/rpc:rpc_options",
         "//src/datasystem/common/rpc:rpc_stub",
@@ -358,6 +359,7 @@ ds_cc_library(
         ":zmq_socket_ref",
         ":zmq_stub",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
