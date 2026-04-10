@@ -122,6 +122,7 @@ Buffer::Buffer(Buffer &&other) noexcept
       clientImpl_(std::move(other.clientImpl_)),
       latch_(std::move(other.latch_)),
       isShm_(other.isShm_),
+      isReleased_(other.isReleased_),
       clientId_(std::move(other.clientId_))
 {
     other.Reset();
@@ -131,12 +132,13 @@ Buffer &Buffer::operator=(Buffer &&other) noexcept
 {
     if (this != &other) {
         Release();
-        bufferInfo_ = other.bufferInfo_;
-        latch_ = other.latch_;
-        clientImpl_ = other.clientImpl_;
+        bufferInfo_ = std::move(other.bufferInfo_);
+        latch_ = std::move(other.latch_);
+        clientImpl_ = std::move(other.clientImpl_);
         isShm_ = other.isShm_;
+        isReleased_ = other.isReleased_;
+        clientId_ = std::move(other.clientId_);
         other.Reset();
-        clientId_ = other.clientId_;
     }
     return *this;
 }
@@ -147,6 +149,7 @@ void Buffer::Reset()
     clientImpl_.reset();
     latch_ = nullptr;
     isShm_ = false;
+    isReleased_ = false;
     clientId_ = "";
 }
 
