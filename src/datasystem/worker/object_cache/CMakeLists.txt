@@ -38,6 +38,7 @@ set(WORKER_OC_SRCS
         service/worker_oc_service_multi_publish_impl.cpp
         service/worker_oc_service_get_impl.cpp
         service/worker_oc_service_delete_impl.cpp
+        service/worker_oc_service_clear_data_flow.cpp
         service/worker_oc_service_global_reference_impl.cpp
         service/worker_oc_service_migrate_impl.cpp
         service/worker_oc_service_batch_get_impl.cpp

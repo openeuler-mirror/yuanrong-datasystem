@@ -48,6 +48,8 @@ class HashRingEvent : public EventNotifier {
         OTHER_AZ_NODE_DEAD,
         DATA_MIGRATION_READY,
         NEED_REDIRECT,
+        LOCAL_CLEAR_DATA_WITHOUT_META,
+        LOCAL_CLEAR_DATA_WITHOUT_META_FINISH,
     };
 
 public:
@@ -68,6 +70,13 @@ public:
         CLEAR_DATA_WITHOUT_META,
         std::function<Status(const worker::HashRange &ranges, const std::string &workerAddr,
                              const worker::HashRange &halfCompletedRanges, const std::vector<std::string> &uuids)>>;
+    using LocalClearDataWithoutMeta =
+        EventSubscribers<LOCAL_CLEAR_DATA_WITHOUT_META,
+                         std::function<Status(const worker::HashRange &ranges,
+                                              const std::vector<std::string> &uuids)>>;
+    using LocalClearDataWithoutMetaFinish =
+        EventSubscribers<LOCAL_CLEAR_DATA_WITHOUT_META_FINISH,
+                         std::function<Status(const worker::HashRange &clearRanges)>>;
     using ClearDevClientMetaForScaledInWorker =
         EventSubscribers<CLEAR_DEV_META, std::function<Status(const std::vector<std::string> &removeNodes)>>;
     using GetFailedWorkers =

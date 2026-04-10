@@ -355,6 +355,9 @@ public:
 
     virtual Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) = 0;
 
+    virtual Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
+                                           master::CheckObjectDataLocationRspPb &rsp) = 0;
+
     /**
      * @brief Rollback metadata in directory.
      * @param[in] req The rpc req protobuf.
@@ -453,6 +456,8 @@ public:
     Status ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp) override;
     Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override;
     Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override;
+    Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
+                                   master::CheckObjectDataLocationRspPb &rsp) override;
     Status RollbackMultiMeta(master::RollbackMultiMetaReqPb &req, master::RollbackMultiMetaRspPb &rsp) override;
     Status Expire(master::ExpireReqPb &req, master::ExpireRspPb &rsp) override;
     Status GetMetaInfo(GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp) override;
@@ -533,6 +538,8 @@ public:
     Status ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp) override;
     Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override;
     Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override;
+    Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
+                                   master::CheckObjectDataLocationRspPb &rsp) override;
     Status RollbackMultiMeta(master::RollbackMultiMetaReqPb &req, master::RollbackMultiMetaRspPb &rsp) override;
     template <typename W, typename R>
     Status ReplyToClient(const std::shared_future<std::pair<W, Status>> future,

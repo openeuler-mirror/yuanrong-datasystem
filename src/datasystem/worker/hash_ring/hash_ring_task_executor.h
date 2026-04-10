@@ -291,12 +291,9 @@ private:
     /**
      * @brief Clear data without meta.
      * @param[in] ranges Hash rranges.
-     * @param[in] lostAllRange If all meta lost in ranges
-     * @param[in] currRing Current hash ring info.
      * @param[in] uuids Remove node uuids.
      */
-    void ClearDataWithoutMeta(const HashRange &ranges, const std::vector<bool> &lostAllRange,
-                              const HashRingPb &currRing, const std::vector<std::string> &uuids);
+    void ClearDataWithoutMeta(const HashRange &ranges, const std::vector<std::string> &uuids);
 
     /**
      * @brief Clear device client metadata for scaled-in worker nodes if current node is the metadata master
@@ -338,11 +335,19 @@ private:
      */
     bool InsertClearDataTask(const datasystem::ChangeNodePb_RangePb &range);
 
+    bool InsertClearDataSubmitTask(const datasystem::ChangeNodePb_RangePb &range);
+
     /**
-     * @brief Remove scale down task
+     * @brief Remove in-progress clear ranges after local clear flow finishes.
      * @param[in] ranges clear data without meta ranges
      */
     void RemoveClearDataTask(const HashRange &ranges);
+
+    /**
+     * @brief Remove submitted clear ranges after local clear flow finishes.
+     * @param[in] ranges clear ranges of the finished clear task
+     */
+    void RemoveClearDataSubmitTask(const HashRange &ranges);
 
     /**
      * @brief Clear the finished hash_tokens of the scale-down node.
@@ -373,6 +378,7 @@ private:
     std::vector<std::string> voluntaryTaskIds_;
     std::shared_timed_mutex clearDataTaskmutex_;
     std::unordered_set<Range, SimplePairHash, RangeEqual> clearDataWithoutMetaTask_;
+    std::unordered_set<Range, SimplePairHash, RangeEqual> clearDataWithoutMetaSubmitTasks_;
     std::unique_ptr<ThreadPool> scaleThreadPool_{ nullptr };
 };
 }  // namespace worker

@@ -317,10 +317,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
                                                               std::vector<std::string> &failIncIds)
 {
     const std::string &remoteClientId = req.remote_client_id();
-    // Group ObjectKeys by master
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(firstIncIds);
     Status lastErr;
-    // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> &currentIncIds = item.second;
@@ -330,44 +328,63 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
                                        VectorToString(currentIncIds), res.ToString());
             lastErr = Status(K_RUNTIME_ERROR, "Cannot connect to master.");
             (void)failIncIds.insert(failIncIds.end(), currentIncIds.begin(), currentIncIds.end());
-        } else {
-            std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-                workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-            if (workerMasterApi == nullptr) {
-                LOG(WARNING) << "get master api failed. masterAddr=" << masterAddr.ToString();
-                continue;
-            }
-            master::GIncreaseReqPb newReq;
-            *newReq.mutable_object_keys() = { currentIncIds.begin(), currentIncIds.end() };
-            newReq.set_address(localAddress_.ToString());
-            newReq.set_remote_client_id(remoteClientId);
-            newReq.set_redirect(true);
-            master::GIncreaseRspPb rsp;
-            std::function<Status(master::GIncreaseReqPb &, master::GIncreaseRspPb &)> func =
-                [&workerMasterApi](master::GIncreaseReqPb &req, master::GIncreaseRspPb &rsp) {
-                    return workerMasterApi->GIncreaseMasterRef(req, rsp);
-                };
-            std::function<void(master::GIncreaseRspPb &, master::GIncreaseRspPb &)> mergeFunc =
-                [](master::GIncreaseRspPb &srcRsp, master::GIncreaseRspPb &desRsp) {
-                    desRsp.mutable_failed_object_keys()->MergeFrom(srcRsp.failed_object_keys());
-                };
-            Status masterResult = WaitForRedirectWhenRefMoving(newReq, rsp, workerMasterApi, func, mergeFunc);
-            if (masterResult.IsError()) {
-                LOG(ERROR) << FormatString("[Ref] GIncreaseRef to master %s failed, err: %s", masterAddr.ToString(),
-                                           masterResult.ToString());
-                (void)failIncIds.insert(failIncIds.end(), currentIncIds.begin(), currentIncIds.end());
-                lastErr = masterResult;
-                continue;
-            }
-            Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-            (void)failIncIds.insert(failIncIds.end(), rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
-            if (recvRc.IsError()) {
-                LOG(ERROR) << "GIncreaseMasterRef response " << LogHelper::IgnoreSensitive(rsp);
-                lastErr = recvRc;
-            }
+            continue;
+        }
+        Status masterResult = SendGIncreaseMasterRefToMaster(masterAddr, remoteClientId, currentIncIds, failIncIds);
+        if (masterResult.IsError()) {
+            lastErr = masterResult;
         }
     }
     return lastErr;
+}
+
+void WorkerOcServiceGlobalReferenceImpl::BuildGIncreaseMasterReq(const std::vector<std::string> &objectKeys,
+                                                                 const std::string &remoteClientId,
+                                                                 master::GIncreaseReqPb &req) const
+{
+    *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
+    req.set_address(localAddress_.ToString());
+    req.set_remote_client_id(remoteClientId);
+    req.set_redirect(true);
+}
+
+Status WorkerOcServiceGlobalReferenceImpl::SendGIncreaseMasterRefToMaster(const HostPort &masterAddr,
+                                                                          const std::string &remoteClientId,
+                                                                          const std::vector<std::string> &currentIncIds,
+                                                                          std::vector<std::string> &failIncIds)
+{
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    if (workerMasterApi == nullptr) {
+        LOG(WARNING) << "get master api failed. masterAddr=" << masterAddr.ToString();
+        (void)failIncIds.insert(failIncIds.end(), currentIncIds.begin(), currentIncIds.end());
+        return Status(K_RUNTIME_ERROR, "GetWorkerMasterApi failed");
+    }
+
+    master::GIncreaseReqPb newReq;
+    BuildGIncreaseMasterReq(currentIncIds, remoteClientId, newReq);
+    master::GIncreaseRspPb rsp;
+    std::function<Status(master::GIncreaseReqPb &, master::GIncreaseRspPb &)> func =
+        [&workerMasterApi](master::GIncreaseReqPb &req, master::GIncreaseRspPb &rsp) {
+            return workerMasterApi->GIncreaseMasterRef(req, rsp);
+        };
+    std::function<void(master::GIncreaseRspPb &, master::GIncreaseRspPb &)> mergeFunc =
+        [](master::GIncreaseRspPb &srcRsp, master::GIncreaseRspPb &desRsp) {
+            desRsp.mutable_failed_object_keys()->MergeFrom(srcRsp.failed_object_keys());
+        };
+    Status masterResult = WaitForRedirectWhenRefMoving(newReq, rsp, workerMasterApi, func, mergeFunc);
+    if (masterResult.IsError()) {
+        LOG(ERROR) << FormatString("[Ref] GIncreaseRef to master %s failed, err: %s", masterAddr.ToString(),
+                                   masterResult.ToString());
+        (void)failIncIds.insert(failIncIds.end(), currentIncIds.begin(), currentIncIds.end());
+        return masterResult;
+    }
+
+    Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    (void)failIncIds.insert(failIncIds.end(), rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
+    if (recvRc.IsError()) {
+        LOG(ERROR) << "GIncreaseMasterRef response " << LogHelper::IgnoreSensitive(rsp);
+    }
+    return recvRc;
 }
 
 Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string &remoteClientId,
@@ -424,7 +441,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
 }
 
 Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRefWithLock(
-    std::function<bool(const std::string &)> matchFunc, std::string masterAddr)
+    std::function<bool(const std::string &)> matchFunc,
+    std::vector<std::string> &increaseFailedIds)
 {
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     std::vector<std::string> increaseMasterObjs;
@@ -436,42 +454,22 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRefWithLock(
     }
     RETURN_OK_IF_TRUE(increaseMasterObjs.empty());
 
-    LOG(INFO) << "Gincrease master ref with lock, master addr: " << masterAddr
-              << " , object size: " << increaseMasterObjs.size();
+    LOG(INFO) << "Gincrease master ref with lock, object size: " << increaseMasterObjs.size();
     std::map<std::string, std::shared_ptr<SafeObjType>> lockedEntries;
     BatchGRefLock(increaseMasterObjs, true, lockedEntries);
     Raii unlockAll([&lockedEntries]() { BatchGRefUnlock(lockedEntries); });
-    HostPort masterAddress;
+    RETURN_OK_IF_TRUE(increaseMasterObjs.empty());
 
-    RETURN_IF_NOT_OK(masterAddress.ParseString(masterAddr));
-    master::GIncreaseReqPb req;
-    *req.mutable_object_keys() = { increaseMasterObjs.begin(), increaseMasterObjs.end() };
-    req.set_address(localAddress_.ToString());
-    req.set_redirect(false);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    master::GIncreaseRspPb rsp;
-    HostPort destAddr;
-    RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(masterAddr, destAddr));
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(destAddr);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "workerMasterApi get failed");
-    const int maxRetryCount = 3;
-    int retryCount = 0;
-    Status res;
-    do {
-        RETURN_IF_NOT_OK(etcdCM_->CheckConnection(masterAddress));
-        res = workerMasterApi->GIncreaseMasterRef(req, rsp);
-        if (res.IsOk() && !rsp.failed_object_keys().empty()) {
-            retryCount++;
-            LOG(INFO) << "retry for gincrease master ref failed object, objectSize: " << rsp.failed_object_keys_size();
-            req.clear_object_keys();
-            *req.mutable_object_keys() = { rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
-            res = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-        } else {
-            break;
-        }
-    } while (retryCount < maxRetryCount);
-    LOG_IF_ERROR(res, FormatString("GIncrease Ref fail masterAddr:%s, status:%s", masterAddr, res.ToString()));
-    return res;
+    GIncreaseReqPb req;
+    Status rc = GIncreaseMasterRef(req, increaseMasterObjs, increaseFailedIds);
+    if (rc.IsError() && increaseFailedIds.empty()) {
+        increaseFailedIds.insert(increaseFailedIds.end(), increaseMasterObjs.begin(), increaseMasterObjs.end());
+    }
+    CHECK_FAIL_RETURN_STATUS(
+        rc.IsOk() && increaseFailedIds.empty(), rc.IsError() ? rc.GetCode() : K_RUNTIME_ERROR,
+        rc.IsError() ? rc.GetMsg()
+                     : "GIncreaseMasterRef failed object size: " + std::to_string(increaseFailedIds.size()));
+    return rc;
 }
 
 Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncreaseReqPb &req,

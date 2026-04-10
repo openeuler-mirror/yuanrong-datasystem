@@ -292,6 +292,44 @@ ds_cc_library(
     alwayslink = True,
 )
 
+ds_cc_library(
+    name = "worker_oc_service_clear_data_flow",
+    srcs = [
+        "worker_oc_service_clear_data_flow.cpp",
+    ],
+    hdrs = [
+        "worker_oc_service_clear_data_flow.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_ref_info",
+        "//src/datasystem/common/object_cache:safe_object",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/master:meta_addr_info",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:cluster_event_type",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/hash_ring:hash_ring_allocator",
+        "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "//src/datasystem/worker/object_cache:metadata_recovery_manager",
+        "//src/datasystem/worker/object_cache:metadata_recovery_selector",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_delete_impl_header",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_global_reference_impl",
+    ],
+    alwayslink = True,
+)
+
 # success
 ds_cc_library(
     name = "worker_oc_service_migrate_impl",

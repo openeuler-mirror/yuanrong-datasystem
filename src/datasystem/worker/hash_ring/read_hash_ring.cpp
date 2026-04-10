@@ -118,8 +118,8 @@ Status ReadHashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_
         if (!HashRing::isMultiReplicaEnable_) {
             std::vector<std::string> delNodeIdsVec(std::make_move_iterator(delNodeIds.begin()),
                                                    std::make_move_iterator(delNodeIds.end()));
-            LOG_IF_ERROR(HashRingEvent::ClearDataWithoutMeta::GetInstance().NotifyAll(
-                worker::HashRange{}, workerAddr_, worker::HashRange{}, delNodeIdsVec),
+            LOG_IF_ERROR(
+                HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(worker::HashRange{}, delNodeIdsVec),
                 FormatString("Clear AZ %s data failed.", azName_));
         }
     }

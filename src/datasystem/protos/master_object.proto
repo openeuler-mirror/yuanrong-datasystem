@@ -648,6 +648,28 @@ message PureQueryMetaRspPb {
   bool meta_is_moving = 3;
 }
 
+message CheckObjectDataLocationReqPb {
+  message ObjectVersionPb {
+    string object_key = 1;
+    uint64 version = 2;
+  }
+  repeated ObjectVersionPb object_versions = 1;
+  string address = 2;
+  bool redirect = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message CheckObjectDataLocationRspPb {
+  repeated string need_clear_object_keys = 1;
+  repeated string no_need_clear_object_keys = 2;
+  repeated RedirectMetaInfo info = 3;
+  bool meta_is_moving = 4;
+}
+
 message ExpireReqPb {
   repeated string object_keys = 1;
   uint32 ttl_second = 2;
@@ -756,4 +778,5 @@ service MasterOCService {
   rpc CreateMultiMetaPhaseTwo(CreateMultiMetaPhaseTwoReqPb) returns (CreateMultiMetaRspPb) {}
   rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
   rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
+  rpc CheckObjectDataLocation(CheckObjectDataLocationReqPb) returns (CheckObjectDataLocationRspPb) {}
 }

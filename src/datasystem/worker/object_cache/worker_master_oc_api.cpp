@@ -883,6 +883,22 @@ Status WorkerRemoteMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, m
     return rpcSession_->PureQueryMeta(opts, req, rsp);
 }
 
+Status WorkerRemoteMasterOCApi::CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
+                                                        master::CheckObjectDataLocationRspPb &rsp)
+{
+    RpcOptions opts;
+    return RetryOnErrorRepent(
+        RPC_TIMEOUT,
+        [this, &opts, &req, &rsp](int32_t rpcTimeout) {
+            opts.SetTimeout(rpcTimeout);
+            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+            return rpcSession_->CheckObjectDataLocation(opts, req, rsp);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE });
+}
+
 Status WorkerRemoteMasterOCApi::RollbackMultiMeta(master::RollbackMultiMetaReqPb &req,
                                                   master::RollbackMultiMetaRspPb &rsp)
 {
@@ -1397,6 +1413,13 @@ Status WorkerLocalMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, ma
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterOC_->PureQueryMeta(req, rsp);
+}
+
+Status WorkerLocalMasterOCApi::CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
+                                                       master::CheckObjectDataLocationRspPb &rsp)
+{
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    return masterOC_->CheckObjectDataLocation(req, rsp);
 }
 
 Status WorkerLocalMasterOCApi::RollbackMultiMeta(master::RollbackMultiMetaReqPb &req,
