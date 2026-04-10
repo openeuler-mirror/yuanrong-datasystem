@@ -1078,6 +1078,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     }
 
     bool dataSizeChange;
+    const int32_t minRetryOnceRpcMs = 5; // The second level of retryIntervalsMs
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> clientApi;
     do {
         dataSizeChange = false;
@@ -1100,7 +1101,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             },
             []() { return Status::OK(); },
             { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-              StatusCode::K_RPC_UNAVAILABLE });
+              StatusCode::K_RPC_UNAVAILABLE }, minRetryOnceRpcMs);
         // In case of changed size, error will be returned as part of response PB and urma wont be written any data
         if (rspPb.error().error_code() == K_OC_REMOTE_GET_NOT_ENOUGH) {
             // If this error happens, remote worker should also sent the changed data size

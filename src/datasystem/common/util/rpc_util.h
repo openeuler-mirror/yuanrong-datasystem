@@ -127,7 +127,8 @@ inline void HandleRetryTime(int32_t &retryInterval, int32_t &remainTime, uint64_
 template <class Function, class Handler>
 Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
                     const std::unordered_set<StatusCode> &retryCode, int32_t maxRpcTimeoutMs = MAX_RPC_TIMEOUT_MS,
-                    const std::unordered_set<StatusCode> &exceptionCode = {}, bool logError = false)
+                    const std::unordered_set<StatusCode> &exceptionCode = {}, bool logError = false,
+                    int32_t minOnceRpcTimeoutMs = 50)
 {
     if (timeoutMs < 0) {
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
@@ -140,7 +141,6 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
     Status status;
     std::unordered_map<StatusCode, uint32_t> errorMap;
     int32_t remainTimeMs = timeoutMs;
-    int32_t minOnceRpcTimeoutMs = 50;
     do {
         auto f = [&func](int32_t rpcTimeoutMs) {
             INJECT_POINT("rpc_util.retry_on_error_before_func");
@@ -193,6 +193,14 @@ Status RetryOnErrorRepent(int64_t timeoutMs, Function &&func, Handler &&errorHan
                           const std::unordered_set<StatusCode> &errCode)
 {
     return RetryOnError(timeoutMs, func, errorHandler, errCode, MAX_RPC_TIMEOUT_MS, {}, true);
+}
+
+template <class Function, class Handler>
+Status RetryOnErrorRepent(int64_t timeoutMs, Function &&func, Handler &&errorHandler,
+                          const std::unordered_set<StatusCode> &errCode, int32_t minOnceRpcTimeoutMs)
+{
+    return RetryOnError(timeoutMs, std::forward<Function>(func), std::forward<Handler>(errorHandler), errCode,
+                        MAX_RPC_TIMEOUT_MS, {}, true, minOnceRpcTimeoutMs);
 }
 
 template <class Function>
