@@ -1037,9 +1037,10 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
                 if (shuttingDown_.load()) {
                     return Status(K_SHUTTING_DOWN, "SlotRecoveryManager is shutting down");
                 }
+                INJECT_POINT("SlotRecoveryManager.ExecuteRecoveryTask.PreloadSlot");
                 return persistenceApi_->PreloadSlot(sourceWorker, slotId, callback);
             },
-            []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+            []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN, StatusCode::K_IO_ERROR });
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
     }
     INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecoverMeta");

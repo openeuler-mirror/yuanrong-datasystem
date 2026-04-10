@@ -35,6 +35,7 @@
 
 #include "../../../common/binmock/binmock.h"
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
@@ -595,6 +596,7 @@ public:
 
     void TearDown() override
     {
+        datasystem::inject::ClearAll();
         RELEASE_STUBS
     }
 };
@@ -985,6 +987,75 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldRecoverEntriesObjectByObjectDu
     EXPECT_EQ(finalRecoveredMetas[1].version(), 2U);
     EXPECT_EQ(finalRecoveredMetas[2].object_key(), "tenant/object_b");
     EXPECT_EQ(finalRecoveredMetas[2].version(), 3U);
+}
+
+TEST_F(SlotRecoveryTest, RestartShouldRecoverAfterTransientIoFailure)
+{
+    LOG(INFO) << "Scenario: restart recovery should survive a transient preload I/O failure.";
+    using RecoverLocalEntriesMethod = Status (MetaDataRecoveryManager::*)(
+        const std::vector<ObjectMetaPb> &,
+        const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
+        std::vector<std::string> &) const;
+    using RecoverMetadataMethod =
+        Status (MetaDataRecoveryManager::*)(const std::vector<ObjectMetaPb> &, std::vector<std::string> &,
+                                            std::string);
+
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    auto persistApi = std::make_shared<FakePersistenceApi>(
+        [](const std::string &sourceWorkerAddress, uint32_t slotId, const SlotPreloadCallback &callback) {
+            EXPECT_EQ(sourceWorkerAddress, "127.0.0.1:7201");
+            SlotPreloadMeta meta{ FormatString("tenant/restart_slot_%u", slotId), slotId + 1,
+                                  WriteMode::WRITE_THROUGH_L2_CACHE, slotId + 11 };
+            auto content = std::make_shared<std::stringstream>();
+            (*content) << "payload_" << slotId;
+            return callback(meta, content);
+        });
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr, nullptr, nullptr);
+
+    std::mutex recoveredMutex;
+    std::vector<std::string> recoveredObjectKeys;
+    std::vector<ObjectMetaPb> finalRecoveredMetas;
+    BINEXPECT_CALL((RecoverLocalEntriesMethod) & MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
+        .WillRepeatedly(Invoke([&recoveredMutex, &recoveredObjectKeys](
+                                   const std::vector<ObjectMetaPb> &recoverMetas,
+                                   const std::unordered_map<std::string, std::shared_ptr<std::stringstream>>
+                                       &recoveredContents,
+                                   std::vector<std::string> &recoveredKeys) {
+            EXPECT_EQ(recoverMetas.size(), 1U);
+            EXPECT_EQ(recoveredContents.size(), 1U);
+            recoveredKeys.emplace_back(recoverMetas.front().object_key());
+            std::lock_guard<std::mutex> lock(recoveredMutex);
+            recoveredObjectKeys.emplace_back(recoverMetas.front().object_key());
+            return Status::OK();
+        }));
+    BINEXPECT_CALL((RecoverMetadataMethod) & MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([&finalRecoveredMetas](const std::vector<ObjectMetaPb> &metas,
+                                                      std::vector<std::string> &failedIds, std::string standbyAddr) {
+            EXPECT_TRUE(failedIds.empty());
+            EXPECT_TRUE(standbyAddr.empty());
+            finalRecoveredMetas = metas;
+            return Status::OK();
+        }));
+
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
+    manager.SetActiveWorkers({ "127.0.0.1:7201" });
+    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7201), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.PreloadSlot", "1*return(K_IO_ERROR)"));
+
+    DS_ASSERT_OK(manager.HandleLocalRestart());
+
+    ASSERT_TRUE(WaitUntil([&recoveredMutex, &recoveredObjectKeys]() {
+        std::lock_guard<std::mutex> lock(recoveredMutex);
+        return recoveredObjectKeys.size() == FLAGS_distributed_disk_slot_num;
+    }));
+    ASSERT_TRUE(WaitUntil([&store]() { return store->HasDeletedSnapshot("127.0.0.1:7201"); }));
+
+    auto deleted = store->GetDeletedSnapshot("127.0.0.1:7201");
+    EXPECT_EQ(deleted.completed_slots(), FLAGS_distributed_disk_slot_num);
+    EXPECT_EQ(deleted.failed_slots(), 0);
+    EXPECT_EQ(finalRecoveredMetas.size(), FLAGS_distributed_disk_slot_num);
+
+    manager.Shutdown();
 }
 
 }  // namespace ut
