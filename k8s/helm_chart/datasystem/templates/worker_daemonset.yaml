@@ -172,6 +172,7 @@ spec:
         - -distributed_disk_max_data_file_size_mb={{ $.Values.global.l2Cache.distributedDisk.maxDataFileSizeMb | int64 }}
         - -distributed_disk_sync_interval_ms={{ $.Values.global.l2Cache.distributedDisk.syncIntervalMs | int64 }}
         - -distributed_disk_sync_batch_bytes={{ $.Values.global.l2Cache.distributedDisk.syncBatchBytes | int64 }}
+        - -distributed_disk_compact_interval_s={{ $.Values.global.l2Cache.distributedDisk.compactIntervalS | int64 }}
         - -distributed_disk_compact_cutover_bytes={{ $.Values.global.l2Cache.distributedDisk.compactCutoverBytes | int64 }}
         - -distributed_disk_compact_cutover_records={{ $.Values.global.l2Cache.distributedDisk.compactCutoverRecords | int64 }}
         {{- end }}

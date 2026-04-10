@@ -379,6 +379,10 @@
         "value": "4194304",
         "description": "The batch size threshold in bytes that triggers distributed disk group commit flush."
     },
+    "distributed_disk_compact_interval_s": {
+        "value": "3600",
+        "description": "The fixed interval in seconds between distributed disk background compact runs. The minimum value is 60 in production builds."
+    },
     "distributed_disk_compact_cutover_bytes": {
         "value": "4194304",
         "description": "The maximum delta bytes allowed during distributed disk compact final cutover."
