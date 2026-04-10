@@ -49,8 +49,6 @@ DS_DEFINE_validator(distributed_disk_max_data_file_size_mb, [](const char *flagN
 });
 DS_DECLARE_string(cluster_name);
 
-namespace datasystem {
-namespace {
 constexpr uint32_t DEFAULT_DISTRIBUTED_DISK_COMPACT_INTERVAL_S = 3600;
 #ifdef WITH_TESTS
 constexpr uint32_t MIN_DISTRIBUTED_DISK_COMPACT_INTERVAL_S = 1;
@@ -69,6 +67,8 @@ DS_DEFINE_validator(distributed_disk_compact_interval_s, [](const char *flagName
     return true;
 });
 
+namespace datasystem {
+namespace {
 bool ParseSlotIdFromPath(const std::string &path, uint32_t &slotId)
 {
     auto pos = path.find_last_of('/');
@@ -223,10 +223,10 @@ void SlotClient::BackgroundCompactLoop()
     auto nextCompactDeadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(ComputeNextCompactDelayMs());
     while (!ShouldStopBackgroundCompactThread()) {
-        auto waitMs = std::max<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(nextCompactDeadline - std::chrono::steady_clock::now())
-                .count(),
-            0);
+        auto waitMs = std::max<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            nextCompactDeadline - std::chrono::steady_clock::now())
+                                            .count(),
+                                        0);
         INJECT_POINT_NO_RETURN("slotstore.SlotClient.BackgroundCompact.WaitMs",
                                [&waitMs](int64_t overrideWaitMs) { waitMs = std::max<int64_t>(overrideWaitMs, 0); });
         {
@@ -263,7 +263,8 @@ void SlotClient::BackgroundCompactLoop()
 
 int64_t SlotClient::ComputeNextCompactDelayMs() const
 {
-    return static_cast<int64_t>(FLAGS_distributed_disk_compact_interval_s) * 1000;
+    constexpr int64_t s2ms = 1000;
+    return static_cast<int64_t>(FLAGS_distributed_disk_compact_interval_s) * s2ms;
 }
 
 std::vector<uint32_t> SlotClient::CollectCompactionCandidates() const
