@@ -1,4 +1,4 @@
-load("//:version.bzl", "DATASYSTEM_VERSION")
+load("@datasystem_version//:version.bzl", "DATASYSTEM_VERSION")
 
 package(default_visibility = ["//dsbench:__subpackages__"])
 
