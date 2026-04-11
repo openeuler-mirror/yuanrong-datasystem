@@ -29,6 +29,7 @@
 
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -71,6 +72,8 @@ Status SlotCompactor::CopyRecordToTargetFile(int sourceFd, uint64_t sourceOffset
 Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const SlotSnapshot &snapshot,
                                      uint64_t compactEpochMs, SlotCompactBuildResult &result)
 {
+    VLOG(1) << "Building slot compact artifacts, slotPath=" << slotPath_ << ", compactEpochMs=" << compactEpochMs
+            << ", activeIndex=" << manifest.activeIndex << ", activeDataCount=" << manifest.activeData.size();
     result = SlotCompactBuildResult{};
     SlotCompactBuildResult buildResult;
     bool keepArtifacts = false;
@@ -95,6 +98,8 @@ Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const Slo
 
     std::vector<SlotPutRecord> visiblePuts;
     RETURN_IF_NOT_OK(snapshot.CollectVisiblePuts(visiblePuts));
+    VLOG(1) << "Collected visible puts for slot compact, slotPath=" << slotPath_
+            << ", visiblePutCount=" << visiblePuts.size();
     std::sort(visiblePuts.begin(), visiblePuts.end(), [](const SlotPutRecord &lhs, const SlotPutRecord &rhs) {
         if (lhs.fileId != rhs.fileId) {
             return lhs.fileId < rhs.fileId;
@@ -140,6 +145,9 @@ Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const Slo
         RETURN_IF_NOT_OK(FsyncDir(slotPath_));
         keepArtifacts = true;
         result = buildResult;
+        VLOG(1) << "Built empty slot compact artifacts, slotPath=" << slotPath_
+                << ", pendingIndex=" << buildResult.indexFile
+                << ", pendingDataCount=" << buildResult.dataFiles.size();
         return Status::OK();
     }
 
@@ -196,11 +204,16 @@ Status SlotCompactor::BuildArtifacts(const SlotManifestData &manifest, const Slo
     RETURN_IF_NOT_OK(FsyncDir(slotPath_));
     keepArtifacts = true;
     result = buildResult;
+    VLOG(1) << "Built slot compact artifacts successfully, slotPath=" << slotPath_
+            << ", pendingIndex=" << buildResult.indexFile
+            << ", pendingDataCount=" << buildResult.dataFiles.size();
     return Status::OK();
 }
 
 Status SlotCompactor::ApplyDeltaRecords(const std::vector<SlotRecord> &records, SlotCompactBuildResult &result)
 {
+    VLOG(1) << "Applying slot compact delta records, slotPath=" << slotPath_ << ", recordCount=" << records.size()
+            << ", pendingIndex=" << result.indexFile << ", pendingDataCount=" << result.dataFiles.size();
     CHECK_FAIL_RETURN_STATUS(!result.indexFile.empty(), StatusCode::K_INVALID,
                              "Compact build result missing pending index file");
     if (records.empty()) {
@@ -330,11 +343,15 @@ Status SlotCompactor::ApplyDeltaRecords(const std::vector<SlotRecord> &records, 
         RETURN_IF_NOT_OK(FsyncFd(currentTargetDataFd));
     }
     RETURN_IF_NOT_OK(FsyncDir(slotPath_));
+    VLOG(1) << "Applied slot compact delta records successfully, slotPath=" << slotPath_
+            << ", recordCount=" << records.size() << ", pendingDataCount=" << result.dataFiles.size();
     return Status::OK();
 }
 
 Status SlotCompactor::CleanupArtifacts(const SlotCompactBuildResult &result)
 {
+    VLOG(1) << "Cleaning slot compact artifacts, slotPath=" << slotPath_ << ", indexFile=" << result.indexFile
+            << ", dataFileCount=" << result.dataFiles.size();
     if (!result.indexFile.empty() && FileExist(JoinPath(slotPath_, result.indexFile))) {
         (void)DeleteFile(JoinPath(slotPath_, result.indexFile));
     }

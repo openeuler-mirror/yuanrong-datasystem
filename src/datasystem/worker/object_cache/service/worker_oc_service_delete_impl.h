@@ -61,6 +61,13 @@ public:
 
 private:
     /**
+     * @brief Execute persistence-only delete on the async delete thread pool.
+     * @param[in] req The rpc request protobuf.
+     * @return Status of the call.
+     */
+    Status DeletePersistenceObjectImpl(const DeletePersistenceObjectReqPb &req);
+
+    /**
      * @brief The implementation of DeleteAllCopy.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
@@ -135,6 +142,8 @@ private:
     HostPort &localAddress_;
 
     std::shared_ptr<WorkerOcServiceGetImpl> getProc_{ nullptr };  // shared pointer to the workerocservicegetimpl
+
+    std::unique_ptr<ThreadPool> persistenceDeleteThreadPool_{ nullptr };
 };
 
 }  // namespace object_cache

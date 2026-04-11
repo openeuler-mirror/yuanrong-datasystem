@@ -108,8 +108,11 @@ Status SlotClient::Init()
     rootPath_ = BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name);
     slotNum_ = FLAGS_distributed_disk_slot_num;
     maxDataFileBytes_ = static_cast<uint64_t>(FLAGS_distributed_disk_max_data_file_size_mb) * 1024ul * 1024ul;
+    VLOG(1) << "Initializing slot client, sfsPath=" << sfsPath_ << ", rootPath=" << rootPath_
+            << ", slotNum=" << slotNum_ << ", maxDataFileBytes=" << maxDataFileBytes_;
     RETURN_IF_NOT_OK(CreateDir(rootPath_, true));
     StartBackgroundCompactThread();
+    VLOG(1) << "Initialized slot client successfully, rootPath=" << rootPath_;
     return Status::OK();
 }
 
@@ -290,6 +293,8 @@ std::vector<uint32_t> SlotClient::CollectCompactionCandidates() const
             slotIds.insert(slotId);
         }
     }
+    VLOG(1) << "Collected slot compact candidates, rootPath=" << rootPath_
+            << ", candidateCount=" << slotIds.size();
     return std::vector<uint32_t>(slotIds.begin(), slotIds.end());
 }
 
@@ -326,6 +331,8 @@ Slot &SlotClient::GetSlot(uint32_t slotId)
         return *it->second;
     }
     auto slot = std::make_unique<Slot>(slotId, GetSlotPath(slotId), maxDataFileBytes_);
+    VLOG(1) << "Creating slot instance, slotId=" << slotId << ", slotPath=" << GetSlotPath(slotId)
+            << ", maxDataFileBytes=" << maxDataFileBytes_;
     auto &slotRef = *slot;
     slots_.emplace(slotId, std::move(slot));
     return slotRef;

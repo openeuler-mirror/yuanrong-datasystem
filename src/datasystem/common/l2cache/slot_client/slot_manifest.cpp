@@ -23,7 +23,9 @@
 #include <sstream>
 
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 
 namespace datasystem {
@@ -86,6 +88,16 @@ std::string JoinVector(const std::vector<std::string> &values)
         ss << values[i];
     }
     return ss.str();
+}
+
+std::string ManifestDebugString(const SlotManifestData &manifest)
+{
+    return FormatString("state=%s, opType=%s, opPhase=%s, role=%s, txnId=%s, activeIndex=%s, activeDataCount=%zu, "
+                        "pendingIndex=%s, pendingDataCount=%zu, obsoleteIndex=%s, obsoleteDataCount=%zu, gcPending=%d",
+                        ToString(manifest.state), ToString(manifest.opType), ToString(manifest.opPhase),
+                        ToString(manifest.role), manifest.txnId, manifest.activeIndex, manifest.activeData.size(),
+                        manifest.pendingIndex, manifest.pendingData.size(), manifest.obsoleteIndex,
+                        manifest.obsoleteData.size(), manifest.gcPending);
 }
 }  // namespace
 
@@ -221,6 +233,7 @@ SlotManifestData SlotManifest::Bootstrap()
 Status SlotManifest::Load(const std::string &slotPath, SlotManifestData &manifest)
 {
     auto manifestPath = JoinPath(slotPath, MANIFEST_FILE);
+    VLOG(1) << "Loading slot manifest, path=" << manifestPath;
     bool exists = false;
     RETURN_IF_NOT_OK(CheckFileExists(&exists, manifestPath));
     CHECK_FAIL_RETURN_STATUS(exists, StatusCode::K_NOT_FOUND, "Manifest not found: " + manifestPath);
@@ -231,6 +244,7 @@ Status SlotManifest::Load(const std::string &slotPath, SlotManifestData &manifes
     if (FileExist(tmpPath)) {
         (void)DeleteFile(tmpPath);
     }
+    VLOG(1) << "Loaded slot manifest, path=" << manifestPath << ", " << ManifestDebugString(manifest);
     return Status::OK();
 }
 
@@ -238,7 +252,9 @@ Status SlotManifest::StoreAtomic(const std::string &slotPath, const SlotManifest
 {
     RETURN_IF_NOT_OK(CreateDir(slotPath, true));
     auto manifestPath = JoinPath(slotPath, MANIFEST_FILE);
+    VLOG(1) << "Persisting slot manifest, path=" << manifestPath << ", " << ManifestDebugString(manifest);
     RETURN_IF_NOT_OK(AtomicWriteTextFile(manifestPath, Encode(manifest)));
+    VLOG(1) << "Persisted slot manifest, path=" << manifestPath;
     return Status::OK();
 }
 
