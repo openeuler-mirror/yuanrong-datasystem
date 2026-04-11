@@ -908,6 +908,25 @@ std::set<std::string> EtcdClusterManager::GetValidWorkersInHashRing() const
     return validWorkersInHashRing;
 }
 
+std::set<std::string> EtcdClusterManager::GetActiveWorkersInHashRing() const
+{
+    std::set<std::string> activeWorkers;
+    const auto &activeWorkersInLocalAz = hashRing_->GetActiveWorkersInHashRing();
+    for (const auto &worker : activeWorkersInLocalAz) {
+        HostPort workerAddr;
+        if (workerAddr.ParseString(worker).IsError()) {
+            continue;
+        }
+        TbbNodeTable::const_accessor accessor;
+        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        if (clusterNodeTable_.find(accessor, workerAddr) && accessor->second->IsActive()
+            && accessor->second->NodeWasReady()) {
+            activeWorkers.emplace(worker);
+        }
+    }
+    return activeWorkers;
+}
+
 bool EtcdClusterManager::CheckIfOtherAzNodeConnected(const HostPort &nodeAddr)
 {
     std::shared_lock<std::shared_timed_mutex> lock(otherClusterNodeMutex_);

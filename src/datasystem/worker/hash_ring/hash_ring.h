@@ -235,6 +235,12 @@ public:
     std::set<std::string> GetValidWorkersInHashRing() const;
 
     /**
+     * @brief Get active workers in hashring, excluding joining/leaving/initial workers and scale-down workers.
+     * @return The addresses of active workers.
+     */
+    std::set<std::string> GetActiveWorkersInHashRing() const;
+
+    /**
      * @brief Get the workers in del_node_info.
      * @return The addresses of workers.
      */

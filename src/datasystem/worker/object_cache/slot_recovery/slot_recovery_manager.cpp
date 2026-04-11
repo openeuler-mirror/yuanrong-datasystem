@@ -372,20 +372,40 @@ void SlotRecoveryManager::Shutdown()
 
 std::vector<std::string> SlotRecoveryManager::GetStableActiveWorkers() const
 {
-    std::vector<std::string> activeWorkers;
     if (etcdCM_ == nullptr) {
-        return activeWorkers;
+        return {};
     }
-    auto excludedWorkers = etcdCM_->GetFailedWorkers();
-    const auto workers = etcdCM_->GetValidWorkersInHashRing();
-    for (const auto &worker : workers) {
-        if (excludedWorkers.find(worker) != excludedWorkers.end()) {
+    const auto &workers = etcdCM_->GetActiveWorkersInHashRing();
+    return { workers.begin(), workers.end() };
+}
+
+Status SlotRecoveryManager::ScheduleLocalPendingTasksFromStore()
+{
+    RETURN_OK_IF_TRUE(!IsFeatureEnabled());
+    std::vector<std::pair<std::string, SlotRecoveryInfoPb>> incidents;
+    RETURN_IF_NOT_OK(store_->ListIncidents(incidents));
+    size_t scheduledIncidents = 0;
+    size_t localPendingTasks = 0;
+    const std::string localWorker = localAddress_.ToString();
+    for (const auto &incident : incidents) {
+        bool hasLocalPendingTask = false;
+        for (const auto &task : incident.second.recovery_tasks()) {
+            if (task.owner_worker() == localWorker && task.task_status() == RecoveryTaskPb_TaskStatus_PENDING) {
+                hasLocalPendingTask = true;
+                ++localPendingTasks;
+            }
+        }
+        if (!hasLocalPendingTask) {
             continue;
         }
-        activeWorkers.emplace_back(worker);
+        ++scheduledIncidents;
+        RETURN_IF_NOT_OK(ScheduleLocalTasks(incident.first, incident.second));
     }
-    std::sort(activeWorkers.begin(), activeWorkers.end());
-    return activeWorkers;
+    LOG(INFO) << FormatString(
+        "action=schedule_local_pending_tasks local_worker=%s incidents=%zu scheduled_incidents=%zu "
+        "local_pending_tasks=%zu",
+        localWorker, incidents.size(), scheduledIncidents, localPendingTasks);
+    return Status::OK();
 }
 
 std::vector<std::string> SlotRecoveryManager::PickProcessWorkers(const std::vector<std::string> &failedWorkers,
