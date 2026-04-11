@@ -29,12 +29,12 @@
 #include "../../../common/binmock/binmock.h"
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
-DS_DECLARE_uint32(distributed_disk_slot_num);
 DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
@@ -64,6 +64,15 @@ bool WaitUntil(const std::function<bool()> &predicate, int timeoutMs = WAIT_TIME
 std::set<uint32_t> CollectSlots(const RecoveryTaskPb &task)
 {
     return std::set<uint32_t>(task.slots().begin(), task.slots().end());
+}
+
+std::set<uint32_t> CollectAllDistributedDiskSlots()
+{
+    std::set<uint32_t> slots;
+    for (uint32_t slot = 0; slot < DISTRIBUTED_DISK_SLOT_NUM; ++slot) {
+        slots.insert(slot);
+    }
+    return slots;
 }
 
 RecoveryTaskPb *FindTaskByOwner(SlotRecoveryInfoPb &info, const std::string &ownerWorker)
@@ -152,7 +161,6 @@ public:
     {
         ExternalClusterTest::SetUp();
         FLAGS_l2_cache_type = "distributed_disk";
-        FLAGS_distributed_disk_slot_num = 4;
 
         FLAGS_etcd_address = cluster_->GetEtcdAddrs();
         LOG(INFO) << "Real ETCD test uses endpoint: " << FLAGS_etcd_address;
@@ -232,7 +240,7 @@ TEST_F(SlotRecoveryEtcdTest, HandlesSingleFailure)
     // be claimed as IN_PROGRESS.
     auto info = LoadIncidentOrFail(failedWorker);
     ASSERT_EQ(info.recovery_tasks_size(), 2);
-    EXPECT_EQ(info.total_slots(), 4);
+    EXPECT_EQ(info.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     EXPECT_EQ(info.completed_slots(), 0);
     EXPECT_EQ(info.failed_slots(), 0);
     size_t inProgressTasks = 0;
@@ -250,7 +258,8 @@ TEST_F(SlotRecoveryEtcdTest, HandlesSingleFailure)
         SlotRecoveryInfoPb current;
         auto rc = store_->GetIncident(failedWorker, current);
         if (rc.IsOk()) {
-            return current.total_slots() == 4 && current.completed_slots() == 4 && current.failed_slots() == 0;
+            return current.total_slots() == DISTRIBUTED_DISK_SLOT_NUM
+                   && current.completed_slots() == DISTRIBUTED_DISK_SLOT_NUM && current.failed_slots() == 0;
         }
         return rc.GetCode() == K_NOT_FOUND;
     }));
@@ -286,6 +295,7 @@ TEST_F(SlotRecoveryEtcdTest, PreservesOwnerFailoverOrder)
     oldIncident.set_completed_slots(2);
     oldIncident.set_failed_slots(0);
     DS_ASSERT_OK(store_->UpdateIncident(worker1, oldIncident));
+    const uint32_t expectedSuccessorTotalSlots = DISTRIBUTED_DISK_SLOT_NUM + ownerTask->slots_size();
 
     SlotRecoveryManagerTestHelper manager3(HostPort("127.0.0.1", 8003), store_);
     manager3.SetActiveWorkers({ worker3 });
@@ -300,7 +310,7 @@ TEST_F(SlotRecoveryEtcdTest, PreservesOwnerFailoverOrder)
     // At this point the successor incident has been published, but the old incident has not yet been failed.
     auto successorIncident = LoadIncidentOrFail(worker2);
     ASSERT_EQ(successorIncident.recovery_tasks_size(), 2);
-    EXPECT_EQ(successorIncident.total_slots(), 6);
+    EXPECT_EQ(successorIncident.total_slots(), expectedSuccessorTotalSlots);
     EXPECT_EQ(successorIncident.completed_slots(), 0);
     EXPECT_EQ(successorIncident.failed_slots(), 0);
 
@@ -330,7 +340,8 @@ TEST_F(SlotRecoveryEtcdTest, PreservesOwnerFailoverOrder)
         SlotRecoveryInfoPb current;
         auto rc = store_->GetIncident(worker2, current);
         if (rc.IsOk()) {
-            return current.total_slots() == 6 && current.completed_slots() == 6 && current.failed_slots() == 0;
+            return current.total_slots() == expectedSuccessorTotalSlots
+                   && current.completed_slots() == expectedSuccessorTotalSlots && current.failed_slots() == 0;
         }
         return rc.GetCode() == K_NOT_FOUND;
     }));
@@ -475,6 +486,7 @@ TEST_F(SlotRecoveryEtcdTest, RebuildsLocalIncidentFirst)
     manager.SetActiveWorkers({ localWorker, "127.0.0.1:8002" });
     DS_ASSERT_OK(manager.InitForTest());
     DS_ASSERT_OK(manager.HandleLocalRestart());
+    const auto expectedLocalSlots = CollectAllDistributedDiskSlots();
 
     // Restart rebuilds the local incident first, then claims the canonical task asynchronously.
     ASSERT_TRUE(WaitUntil([&]() {
@@ -489,7 +501,7 @@ TEST_F(SlotRecoveryEtcdTest, RebuildsLocalIncidentFirst)
         const auto &task = localCurrent.recovery_tasks(0);
         return task.failed_worker() == localWorker && task.owner_worker() == localWorker
                && task.task_status() == RecoveryTaskPb::IN_PROGRESS
-               && CollectSlots(task) == (std::set<uint32_t>{ 0, 1, 2, 3 });
+               && CollectSlots(task) == expectedLocalSlots;
     }));
 
     // Source incident may already be deleted once terminal.
@@ -680,8 +692,8 @@ TEST_F(SlotRecoveryEtcdTest, HandlesMultipleWorkersFailingTogether)
 
     auto incident1 = LoadIncidentOrFail(worker1);
     auto incident2 = LoadIncidentOrFail(worker2);
-    EXPECT_EQ(incident1.total_slots(), 4);
-    EXPECT_EQ(incident2.total_slots(), 4);
+    EXPECT_EQ(incident1.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
+    EXPECT_EQ(incident2.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
 
     t1.join();
     t2.join();

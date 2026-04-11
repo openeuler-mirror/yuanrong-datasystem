@@ -154,19 +154,38 @@ spillToRemoteWorker: false
 ### 数据可靠性
 
 数据系统 KV 接口提供可靠性语义，在数据写入时，通过 **writeMode** 参数配置数据可靠性级别。仅当 **writeMode** 配置为 ***WRITE_THROUGH_L2_CACHE*** 或 ***WRITE_BACK_L2_CACHE*** 时才保证数据可靠性，否则当出现故障或空间不足时，数据可能丢失。  
-数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：OBS/SFS。  
+数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：
+distributed_disk / OBS / SFS。
 在集群部署时，需要在数据系统的部署参数中配置二级缓存相关参数，若未配置，则在 KV 写入时 **writeMode** 参数指定为 ***WRITE_THROUGH_L2_CACHE*** 或 ***WRITE_BACK_L2_CACHE*** 时会写入失败。
 
 集群部署时通过以下参数指定二级缓存类型。
 
 ```yaml
-# 指定二级缓存的类型。可选值为：'obs', 'sfs'.
+# 指定二级缓存的类型。可选值为：'distributed_disk', 'obs', 'sfs'.
 # 默认值为'none'，表示不支持二级缓存。
 l2CacheType: "none"
 ```
 
 对接各类外部组件的配置参数如下：
 ::::{tab-set}
+
+:::{tab-item} distributed_disk
+
+```yaml
+distributedDisk:
+  # The root path used by distributed disk storage.
+  path: ""
+  # The maximum size in MB of a single distributed disk data file.
+  maxDataFileSizeMb: 1024
+  # The maximum time interval in milliseconds before distributed disk group commit flushes pending writes.
+  syncIntervalMs: 1000
+  # The batch size threshold in bytes that triggers distributed disk group commit flush.
+  syncBatchBytes: 33554432
+  # The fixed interval in seconds between distributed disk background compact runs.
+  compactIntervalS: 3600
+```
+
+:::
 
 :::{tab-item} obs
 

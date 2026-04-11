@@ -1,5 +1,6 @@
 sphinx>=7.3.7
 breathe
+furo
 sphinx-book-theme
 sphinx-autodoc2
 myst-parser

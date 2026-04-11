@@ -26,6 +26,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
@@ -36,7 +37,6 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
-DS_DECLARE_uint32(distributed_disk_slot_num);
 
 namespace datasystem {
 namespace object_cache {
@@ -496,8 +496,8 @@ Status SlotRecoveryManager::PlanIncident(const std::string &failedWorker, const 
     std::vector<RecoveryTaskPb> inheritedTasks;
     RETURN_IF_NOT_OK(CollectInheritedTasks(failedWorker, activeWorkers, incidents, inheritedTasks));
     SlotRecoveryInfoPb plannedInfo;
-    RETURN_IF_NOT_OK(SlotRecoveryPlanner::BuildInitialTasks(failedWorker, FLAGS_distributed_disk_slot_num,
-                                                            activeWorkers, plannedInfo));
+    RETURN_IF_NOT_OK(
+        SlotRecoveryPlanner::BuildInitialTasks(failedWorker, DISTRIBUTED_DISK_SLOT_NUM, activeWorkers, plannedInfo));
     const auto initialTaskCount = plannedInfo.recovery_tasks_size();
     RETURN_IF_NOT_OK(SlotRecoveryPlanner::AppendRecoveryTasks(std::move(inheritedTasks), plannedInfo));
     RETURN_IF_NOT_OK(store_->CASIncident(failedWorker, [failedWorker, &plannedInfo](SlotRecoveryInfoPb &info,
@@ -936,7 +936,7 @@ Status SlotRecoveryManager::BuildPlannedLocalRestartTasks(
             assignedSlots.insert(it.second.begin(), it.second.end());
         }
         auto &selfSlots = plannedSlotsBySource[localWorker];
-        for (uint32_t slot = 0; slot < FLAGS_distributed_disk_slot_num; ++slot) {
+        for (uint32_t slot = 0; slot < DISTRIBUTED_DISK_SLOT_NUM; ++slot) {
             if (blockedSlots.find(slot) == blockedSlots.end() && assignedSlots.find(slot) == assignedSlots.end()) {
                 selfSlots.insert(slot);
             }

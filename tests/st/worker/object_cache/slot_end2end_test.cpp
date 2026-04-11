@@ -32,6 +32,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
@@ -44,8 +45,8 @@ DS_DECLARE_string(cluster_name);
 namespace datasystem {
 namespace st {
 namespace {
-constexpr uint32_t SLOT_NUM = 8;
-constexpr int WAIT_PATH_TIMEOUT_MS = 3000;
+constexpr uint32_t SLOT_NUM = DISTRIBUTED_DISK_SLOT_NUM;
+constexpr int WAIT_PATH_TIMEOUT_MS = 15000;
 constexpr int WAIT_PATH_INTERVAL_MS = 50;
 constexpr int WAIT_GET_TIMEOUT_MS = 15000;
 constexpr int WAIT_GET_INTERVAL_MS = 200;
@@ -101,7 +102,6 @@ public:
         ss << "-l2_cache_type=distributed_disk "
            << "-distributed_disk_path=" << distributedDiskPath_ << " "
            << "-cluster_name=" << CLUSTER_NAME << " "
-           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
            << "-distributed_disk_max_data_file_size_mb=" << (IsLargeObjectCase() ? 1 : 1024) << " "
            << "-distributed_disk_compact_interval_s=" << (IsBackgroundCompactMutationCase() ? 1 : 3600) << " "
            << "-distributed_disk_sync_interval_ms=0 "
@@ -853,7 +853,6 @@ public:
         ss << "-l2_cache_type=distributed_disk "
            << "-distributed_disk_path=" << distributedDiskPath_ << " "
            << "-cluster_name=" << CLUSTER_NAME << " "
-           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
            << "-enable_metadata_recovery=true "
@@ -967,7 +966,6 @@ public:
         ss << "-l2_cache_type=distributed_disk "
            << "-distributed_disk_path=" << distributedDiskPath_ << " "
            << "-cluster_name=" << CLUSTER_NAME << " "
-           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
            << "-enable_metadata_recovery=true "
@@ -1101,7 +1099,6 @@ public:
         ss << "-l2_cache_type=distributed_disk "
            << "-distributed_disk_path=" << distributedDiskPath_ << " "
            << "-cluster_name=" << CLUSTER_NAME << " "
-           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
            << "-enable_metadata_recovery=true "

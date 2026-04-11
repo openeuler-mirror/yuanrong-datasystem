@@ -32,6 +32,7 @@
 #include "common.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
 #include "datasystem/common/l2cache/slot_client/slot.h"
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
@@ -42,7 +43,6 @@ DS_DECLARE_string(sfs_path);
 DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(worker_address);
-DS_DECLARE_uint32(distributed_disk_slot_num);
 DS_DECLARE_uint32(distributed_disk_sync_interval_ms);
 DS_DECLARE_uint64(distributed_disk_sync_batch_bytes);
 
@@ -85,7 +85,6 @@ public:
         FLAGS_distributed_disk_path = distributedDiskPath_;
         FLAGS_sfs_path = distributedDiskPath_;
         FLAGS_cluster_name = "slot_worker_cluster";
-        FLAGS_distributed_disk_slot_num = 8;
         oldSyncIntervalMs_ = FLAGS_distributed_disk_sync_interval_ms;
         oldSyncBatchBytes_ = FLAGS_distributed_disk_sync_batch_bytes;
         FLAGS_distributed_disk_sync_interval_ms = 0;
@@ -123,7 +122,7 @@ protected:
 
     std::string SlotPathForKey(const std::string &objectKey) const
     {
-        uint32_t slotId = static_cast<uint32_t>(std::hash<std::string>{}(objectKey) % FLAGS_distributed_disk_slot_num);
+        uint32_t slotId = static_cast<uint32_t>(std::hash<std::string>{}(objectKey) % DISTRIBUTED_DISK_SLOT_NUM);
         return JoinPath(CurrentSlotRoot(), FormatSlotDir(slotId));
     }
 

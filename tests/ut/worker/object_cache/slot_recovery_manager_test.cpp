@@ -36,11 +36,11 @@
 #include "../../../common/binmock/binmock.h"
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
-DS_DECLARE_uint32(distributed_disk_slot_num);
 
 namespace datasystem {
 namespace ut {
@@ -356,6 +356,24 @@ std::set<uint32_t> CollectAllSlots(const SlotRecoveryInfoPb &info)
     return slots;
 }
 
+std::set<uint32_t> BuildSlotSet()
+{
+    std::set<uint32_t> slots;
+    for (uint32_t slot = 0; slot < DISTRIBUTED_DISK_SLOT_NUM; ++slot) {
+        slots.insert(slot);
+    }
+    return slots;
+}
+
+std::set<uint32_t> BuildSlotSetExcluding(std::initializer_list<uint32_t> excludedSlots)
+{
+    auto slots = BuildSlotSet();
+    for (auto slot : excludedSlots) {
+        slots.erase(slot);
+    }
+    return slots;
+}
+
 bool WaitUntil(const std::function<bool()> &predicate, int timeoutMs = WAIT_TIMEOUT_MS)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -592,7 +610,6 @@ public:
     void SetUp() override
     {
         FLAGS_l2_cache_type = "distributed_disk";
-        FLAGS_distributed_disk_slot_num = 4;
     }
 
     void TearDown() override
@@ -622,8 +639,8 @@ TEST_F(SlotRecoveryTest, LocalFailureCompletes)
     // Even after execution failure, the incident must converge through COMPLETED and then be cleaned up.
     ASSERT_TRUE(WaitUntil([&store, &failedWorker]() { return store->HasDeletedSnapshot(failedWorker); }));
     auto deleted = store->GetDeletedSnapshot(failedWorker);
-    ASSERT_EQ(deleted.total_slots(), 4);
-    ASSERT_EQ(deleted.completed_slots(), 4);
+    ASSERT_EQ(deleted.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
+    ASSERT_EQ(deleted.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     ASSERT_EQ(deleted.failed_slots(), 0);
     for (const auto &task : deleted.recovery_tasks()) {
         EXPECT_EQ(task.owner_worker(), localWorker);
@@ -655,8 +672,8 @@ TEST_F(SlotRecoveryTest, MultiFailureIsolation)
 
     auto deleted1 = store->GetDeletedSnapshot(failedWorker1);
     auto deleted2 = store->GetDeletedSnapshot(failedWorker2);
-    ASSERT_EQ(deleted1.completed_slots(), 4);
-    ASSERT_EQ(deleted2.completed_slots(), 4);
+    ASSERT_EQ(deleted1.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
+    ASSERT_EQ(deleted2.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     for (const auto &task : deleted1.recovery_tasks()) {
         EXPECT_EQ(task.failed_worker(), failedWorker1);
         EXPECT_EQ(task.owner_worker(), localWorker);
@@ -698,9 +715,9 @@ TEST_F(SlotRecoveryTest, CreateIdempotent)
     // The resulting incident must contain exactly one stable plan with no duplicated slot coverage.
     auto planned = store->GetCurrentIncident(failedWorker);
     ASSERT_EQ(store->GetCreateCount(failedWorker), 1);
-    ASSERT_EQ(planned.total_slots(), 4);
+    ASSERT_EQ(planned.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     ASSERT_EQ(planned.recovery_tasks_size(), 2);
-    EXPECT_EQ(CollectAllSlots(planned), (std::set<uint32_t>{ 0, 1, 2, 3 }));
+    EXPECT_EQ(CollectAllSlots(planned), BuildSlotSet());
 }
 
 TEST_F(SlotRecoveryTest, SchedulesLocalPendingTasksFromStore)
@@ -759,14 +776,14 @@ TEST_F(SlotRecoveryTest, CreatesLocalIncidentOnRestart)
 
     ASSERT_TRUE(WaitUntil([&store]() { return store->HasDeletedSnapshot("127.0.0.1:7001"); }));
     auto deleted = store->GetDeletedSnapshot("127.0.0.1:7001");
-    ASSERT_EQ(deleted.total_slots(), 4);
+    ASSERT_EQ(deleted.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     ASSERT_EQ(deleted.failed_slots(), 0);
-    ASSERT_EQ(deleted.completed_slots(), 4);
+    ASSERT_EQ(deleted.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     ASSERT_EQ(deleted.recovery_tasks_size(), 1);
     EXPECT_EQ(deleted.recovery_tasks(0).failed_worker(), "127.0.0.1:7001");
     EXPECT_EQ(deleted.recovery_tasks(0).owner_worker(), "127.0.0.1:7001");
     EXPECT_EQ(deleted.recovery_tasks(0).task_status(), RecoveryTaskPb::COMPLETED);
-    EXPECT_EQ(CollectSlots(deleted.recovery_tasks(0)), (std::set<uint32_t>{ 0, 1, 2, 3 }));
+    EXPECT_EQ(CollectSlots(deleted.recovery_tasks(0)), BuildSlotSet());
 }
 
 TEST_F(SlotRecoveryTest, ExcludesBlockedSlotsOnRestart)
@@ -798,7 +815,8 @@ TEST_F(SlotRecoveryTest, ExcludesBlockedSlotsOnRestart)
         for (const auto &task : snapshot.recovery_tasks()) {
             if (task.failed_worker() == "127.0.0.1:7451" && task.owner_worker() == "127.0.0.1:7451"
                 && task.task_status() == RecoveryTaskPb::PENDING) {
-                if (task.source_worker() == "127.0.0.1:7451" && CollectSlots(task) == (std::set<uint32_t>{ 0, 3 })) {
+                if (task.source_worker() == "127.0.0.1:7451"
+                    && CollectSlots(task) == BuildSlotSetExcluding({ 1, 2 })) {
                     sawSelfFillTask = true;
                 } else if (task.source_worker() == "127.0.0.1:7455"
                            && CollectSlots(task) == (std::set<uint32_t>{ 2 })) {
@@ -861,7 +879,7 @@ TEST_F(SlotRecoveryTest, ExcludesNewlyBlockedSlotsOnRestart)
                                                        plannedLocalTasks));
     ASSERT_EQ(plannedLocalTasks.size(), 1u);
     EXPECT_EQ(plannedLocalTasks[0].source_worker(), "127.0.0.1:7461");
-    EXPECT_EQ(CollectSlots(plannedLocalTasks[0]), (std::set<uint32_t>{ 0, 3 }));
+    EXPECT_EQ(CollectSlots(plannedLocalTasks[0]), BuildSlotSetExcluding({ 1, 2 }));
 }
 
 TEST_F(SlotRecoveryTest, PreservesTakenSourceOnRestart)
@@ -895,7 +913,7 @@ TEST_F(SlotRecoveryTest, PreservesTakenSourceOnRestart)
                                                        plannedLocalTasks));
     ASSERT_EQ(plannedLocalTasks.size(), 2u);
     EXPECT_EQ(plannedLocalTasks[0].source_worker(), "127.0.0.1:7469");
-    EXPECT_EQ(CollectSlots(plannedLocalTasks[0]), (std::set<uint32_t>{ 0, 3 }));
+    EXPECT_EQ(CollectSlots(plannedLocalTasks[0]), BuildSlotSetExcluding({ 1, 2 }));
     EXPECT_EQ(plannedLocalTasks[1].source_worker(), "127.0.0.1:7472");
     EXPECT_EQ(CollectSlots(plannedLocalTasks[1]), (std::set<uint32_t>{ 1, 2 }));
 }
@@ -938,7 +956,7 @@ TEST_F(SlotRecoveryTest, ExcludesSourceBlockedSlotsOnRestart)
                                                        plannedLocalTasks));
     ASSERT_EQ(plannedLocalTasks.size(), 2u);
     EXPECT_EQ(plannedLocalTasks[0].source_worker(), "127.0.0.1:7465");
-    EXPECT_EQ(CollectSlots(plannedLocalTasks[0]), (std::set<uint32_t>{ 0 }));
+    EXPECT_EQ(CollectSlots(plannedLocalTasks[0]), BuildSlotSetExcluding({ 1, 2, 3 }));
     EXPECT_EQ(plannedLocalTasks[1].source_worker(), "127.0.0.1:7468");
     EXPECT_EQ(CollectSlots(plannedLocalTasks[1]), (std::set<uint32_t>{ 3 }));
 }
@@ -1090,14 +1108,14 @@ TEST_F(SlotRecoveryTest, RestartShouldRecoverAfterTransientIoFailure)
 
     ASSERT_TRUE(WaitUntil([&recoveredMutex, &recoveredObjectKeys]() {
         std::lock_guard<std::mutex> lock(recoveredMutex);
-        return recoveredObjectKeys.size() == FLAGS_distributed_disk_slot_num;
+        return recoveredObjectKeys.size() == DISTRIBUTED_DISK_SLOT_NUM;
     }));
     ASSERT_TRUE(WaitUntil([&store]() { return store->HasDeletedSnapshot("127.0.0.1:7201"); }));
 
     auto deleted = store->GetDeletedSnapshot("127.0.0.1:7201");
-    EXPECT_EQ(deleted.completed_slots(), FLAGS_distributed_disk_slot_num);
+    EXPECT_EQ(deleted.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     EXPECT_EQ(deleted.failed_slots(), 0);
-    EXPECT_EQ(finalRecoveredMetas.size(), FLAGS_distributed_disk_slot_num);
+    EXPECT_EQ(finalRecoveredMetas.size(), DISTRIBUTED_DISK_SLOT_NUM);
 
     manager.Shutdown();
 }

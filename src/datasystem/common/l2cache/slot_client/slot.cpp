@@ -31,6 +31,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/l2cache/slot_client/slot_compactor.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
 #include "datasystem/common/l2cache/slot_client/slot_takeover_planner.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -41,32 +42,18 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 
-constexpr uint32_t DEFAULT_SLOT_SYNC_INTERVAL_MS = 10;
-constexpr uint64_t DEFAULT_SLOT_SYNC_BATCH_BYTES = 1024UL * 1024UL;
-constexpr uint64_t DEFAULT_SLOT_COMPACT_CUTOVER_BYTES = 64UL * 1024UL;
-constexpr uint32_t DEFAULT_SLOT_COMPACT_CUTOVER_RECORDS = 128;
+constexpr uint32_t DEFAULT_SLOT_SYNC_INTERVAL_MS = 1000;
+constexpr uint64_t DEFAULT_SLOT_SYNC_BATCH_BYTES = 32UL * 1024UL * 1024UL;
 
 DS_DEFINE_uint32(distributed_disk_sync_interval_ms, DEFAULT_SLOT_SYNC_INTERVAL_MS,
                  "Max buffered write interval in millisecond before one slot group commit.");
 DS_DEFINE_uint64(distributed_disk_sync_batch_bytes, DEFAULT_SLOT_SYNC_BATCH_BYTES,
                  "Max buffered write bytes before one slot group commit.");
-DS_DEFINE_uint64(distributed_disk_compact_cutover_bytes, DEFAULT_SLOT_COMPACT_CUTOVER_BYTES,
-                 "Max compact delta bytes allowed before entering the final compact cutover window.");
-DS_DEFINE_uint32(distributed_disk_compact_cutover_records, DEFAULT_SLOT_COMPACT_CUTOVER_RECORDS,
-                 "Max compact delta record count allowed before entering the final compact cutover window.");
 DS_DEFINE_validator(distributed_disk_sync_interval_ms, [](const char *flagName, uint32_t value) {
     (void)flagName;
     return value <= 60000;
 });
 DS_DEFINE_validator(distributed_disk_sync_batch_bytes, [](const char *flagName, uint64_t value) {
-    (void)flagName;
-    return value > 0;
-});
-DS_DEFINE_validator(distributed_disk_compact_cutover_bytes, [](const char *flagName, uint64_t value) {
-    (void)flagName;
-    return value > 0;
-});
-DS_DEFINE_validator(distributed_disk_compact_cutover_records, [](const char *flagName, uint32_t value) {
     (void)flagName;
     return value > 0;
 });
@@ -221,12 +208,12 @@ uint64_t GetCurrentSlotSyncBatchBytes()
 
 uint64_t GetCurrentSlotCompactCutoverBytes()
 {
-    return FLAGS_distributed_disk_compact_cutover_bytes;
+    return DISTRIBUTED_DISK_COMPACT_CUTOVER_BYTES;
 }
 
 uint32_t GetCurrentSlotCompactCutoverRecords()
 {
-    return FLAGS_distributed_disk_compact_cutover_records;
+    return DISTRIBUTED_DISK_COMPACT_CUTOVER_RECORDS;
 }
 }  // namespace
 
