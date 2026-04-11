@@ -115,7 +115,7 @@ KVClient
         当 ``param.existence=ExistenceOpt::NX`` 时：key 不存在则创建；key 已存在视为成功，不覆盖已有值，且不会写入 ``outFailedKeys``。
 
         参数：
-            - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。
+            - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。出于性能考虑，只校验第一个key的有效性。
             - **vals** - 需要设置的一组key对应的value. 该数组长度需要与 ``keys`` 的长度相等。
             - **outFailedKeys** - 传出参数，代表设置失败的key。
             - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
