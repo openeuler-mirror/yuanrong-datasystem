@@ -149,7 +149,6 @@ protected:
     {
         std::string newMetaAddr;
         if (!redirect || !FLAGS_enable_redirect) {
-            VLOG(1) << "receive redirect object: " << id;
             redirect = false;
             return;
         }

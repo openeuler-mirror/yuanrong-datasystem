@@ -111,6 +111,7 @@ Status MasterOCServiceImpl::GDecNestedRef(const GDecNestedRefReqPb &req, GDecNes
 
 Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRspPb &rsp)
 {
+    constexpr uint64_t logMinTimeMs = 1;
     INJECT_POINT("master.CreateMeta.begin");
     masterOperationTimeCost.Clear();
     Timer timer;
@@ -132,11 +133,11 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     } else {
         INJECT_POINT("MasterOCServiceImpl.CreateMeta.idempotence");
     }
-    LOG(INFO) << "CreateMeta finished";
-    VLOG(1) << FormatString("Master %s CreateMeta rsp: %s", GetLocalAddr().ToString(), LogHelper::IgnoreSensitive(rsp));
     point.Record();
     masterOperationTimeCost.Append("Total CreateMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master CreateMeta %s", masterOperationTimeCost.GetInfo());
+    if (timer.ElapsedMilliSecond() > logMinTimeMs) {
+        LOG(INFO) << FormatString("The operations of master CreateMeta %s", masterOperationTimeCost.GetInfo());
+    }
     return status;
 }
 

@@ -1065,7 +1065,6 @@ Status OCMetadataManager::CreateMeta(const ObjectMetaPb &newMeta, const std::str
     RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
 
     INJECT_POINT("master.create_meta_failure");
-    VLOG(1) << FormatString("[ObjectKey %s] CreateMeta begin: worker address: %s", objectKey, address);
 
     if (newMeta.config().consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL)
         && !AddHeavyOp(objectKey)) {
