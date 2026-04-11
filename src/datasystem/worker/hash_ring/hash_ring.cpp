@@ -1602,6 +1602,22 @@ std::set<std::string> HashRing::GetValidWorkersInHashRing() const
     return workers;
 }
 
+std::set<std::string> HashRing::GetActiveWorkersInHashRing() const
+{
+    std::set<std::string> workers;
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    for (const auto &worker : ringInfo_.workers()) {
+        if (ringInfo_.del_node_info().find(worker.first) != ringInfo_.del_node_info().end()) {
+            continue;
+        }
+        if (worker.second.state() != WorkerPb::ACTIVE || worker.second.need_scale_down()) {
+            continue;
+        }
+        workers.emplace(worker.first);
+    }
+    return workers;
+}
+
 std::set<std::string> HashRing::GetWorkersInDelNodeInfo() const
 {
     std::set<std::string> workers;

@@ -153,6 +153,12 @@ public:
      */
     Status HandleLocalRestart();
 
+    /**
+     * @brief Schedule local pending tasks from persisted slot-recovery incidents.
+     * @return Status of the call.
+     */
+    Status ScheduleLocalPendingTasksFromStore();
+
 protected:
     /**
      * @brief Plan the incident of one failed worker with its own tasks and inherited tasks in one CAS.

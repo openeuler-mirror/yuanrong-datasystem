@@ -443,6 +443,12 @@ public:
     std::set<std::string> GetValidWorkersInHashRing() const;
 
     /**
+     * @brief Get stable active workers that can execute new recovery work.
+     * @return The addresses of active and ready workers.
+     */
+    std::set<std::string> GetActiveWorkersInHashRing() const;
+
+    /**
      * @brief Get the workers in del_node_info.
      * @return The addresses of workers.
      */

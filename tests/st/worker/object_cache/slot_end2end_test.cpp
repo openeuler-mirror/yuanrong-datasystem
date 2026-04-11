@@ -53,6 +53,7 @@ constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t PASSIVE_NODE_DEAD_TIMEOUT_S = 3;
 constexpr uint64_t RESTART_NODE_DEAD_TIMEOUT_S = 30;
 constexpr uint64_t HEARTBEAT_INTERVAL_MS = 500;
+constexpr int S2MS = 1000;
 constexpr uint64_t LARGE_OBJECT_BYTES = 1024UL * 1024UL;
 constexpr char CLUSTER_NAME[] = "slot_e2e_cluster";
 }  // namespace
@@ -1082,6 +1083,134 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryTakeoverOwnerRestartDataIntact)
     ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
     for (const auto &keyValue : keyValues) {
         ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
+    }
+}
+
+class SlotEndToEndScaleUpTest : public SlotEndToEndTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        opts.waitWorkerReady = false;
+        opts.addNodeTime = 0;
+        distributedDiskPath_ = testCasePath_ + "/distributed_disk";
+        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
+        std::stringstream ss;
+        ss << "-l2_cache_type=distributed_disk "
+           << "-distributed_disk_path=" << distributedDiskPath_ << " "
+           << "-cluster_name=" << CLUSTER_NAME << " "
+           << "-distributed_disk_slot_num=" << SLOT_NUM << " "
+           << "-distributed_disk_sync_interval_ms=0 "
+           << "-distributed_disk_sync_batch_bytes=1 "
+           << "-enable_metadata_recovery=true "
+           << "-auto_del_dead_node=true "
+           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
+           << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
+           << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
+           << "-v=1 "
+            << "-enable_l2_cache_fallback=false "
+            << "-enable_reconciliation=false";
+        opts.workerGflagParams = ss.str();
+    }
+
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        FLAGS_cluster_name = CLUSTER_NAME;
+        DS_ASSERT_OK(Init());
+        ASSERT_TRUE(cluster_ != nullptr);
+        externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
+        ASSERT_TRUE(externalCluster_ != nullptr);
+        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        KVClientCommon::InitTestEtcdInstance();
+        auto createRc = db_->CreateTable(ETCD_SLOT_RECOVERY_TABLE, ETCD_SLOT_RECOVERY_TABLE);
+        ASSERT_TRUE(createRc.IsOk() || createRc.GetCode() == K_DUPLICATED) << createRc.ToString();
+    }
+
+protected:
+    void StartWorkersAndWaitReady(const std::initializer_list<uint32_t> &workers, int waitReadySec = 20)
+    {
+        for (auto worker : workers) {
+            ASSERT_TRUE(externalCluster_->StartWorker(worker, HostPort(), "").IsOk()) << worker;
+        }
+        for (auto worker : workers) {
+            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, worker, waitReadySec));
+        }
+    }
+
+    void FillAllSlotsFromWorker(uint32_t clientWorkerIdx, const std::string &prefix,
+                                std::vector<std::pair<std::string, std::string>> &keyValues)
+    {
+        std::shared_ptr<KVClient> writer;
+        InitTestKVClient(clientWorkerIdx, writer);
+        SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+        keyValues.clear();
+        for (uint32_t slotId = 0; slotId < SLOT_NUM; ++slotId) {
+            const auto key = FindKeyForSlot(slotId, prefix);
+            ASSERT_FALSE(key.empty()) << "slotId=" << slotId;
+            const auto value = "value_slot_" + std::to_string(slotId) + "_" + GenRandomString(128);
+            DS_ASSERT_OK(writer->Set(key, value, param));
+            keyValues.emplace_back(std::make_pair(key, value));
+        }
+    }
+
+    ExternalCluster *externalCluster_ = nullptr;
+};
+
+TEST_F(SlotEndToEndScaleUpTest, PlannerAssignsToRestartNode)
+{
+    // 1. Start w0,w1,w2
+    StartWorkersAndWaitReady({ 0, 1, 2 });
+    WaitAllNodesJoinIntoHashRing(3, 20);
+
+    // 2. w1 set keys that cover all slots.
+    std::vector<std::pair<std::string, std::string>> keyValues;
+    FillAllSlotsFromWorker(1, "value_worker1_slot", keyValues);
+
+    // 3. Concurrent restart w0 and passive scale-down w1.
+    std::thread passiveDownW1([&]() { DS_ASSERT_OK(cluster_->KillWorker(1)); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    std::this_thread::sleep_for(std::chrono::milliseconds(PASSIVE_NODE_DEAD_TIMEOUT_S * S2MS));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0, 20));
+    passiveDownW1.join();
+
+    WaitAllNodesJoinIntoHashRing(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 10);
+    // 4. Planner sees restarted w0 and assigns tasks to w0, but w0 does not enter DemoteTimedOutNodes window in time.
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    std::shared_ptr<KVClient> client0;
+    InitTestKVClient(0, client0);
+    for (const auto &keyValue : keyValues) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client0, keyValue.first, keyValue.second));
+    }
+}
+
+TEST_F(SlotEndToEndScaleUpTest, PlannerAssignsToScaleUpNode)
+{
+    // 1. Start w0,w1
+    StartWorkersAndWaitReady({ 0, 1 });
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    // 2. w1 set keys that cover all slots.
+    std::vector<std::pair<std::string, std::string>> keyValues;
+    FillAllSlotsFromWorker(1, "value_worker1_slot", keyValues);
+
+    // 3. Concurrent passive scale-down w1 and scale-up w2.
+    std::thread passiveDownW1([&]() { DS_ASSERT_OK(cluster_->KillWorker(1)); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(PASSIVE_NODE_DEAD_TIMEOUT_S * 1000));
+    StartWorkersAndWaitReady({ 2 });
+    passiveDownW1.join();
+
+    WaitAllNodesJoinIntoHashRing(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 10);
+    // 4. Planner sees scale-up w2 and assigns tasks to w2, but w2 does not enter DemoteTimedOutNodes window in time.
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    std::shared_ptr<KVClient> client0;
+    InitTestKVClient(0, client0);
+    for (const auto &keyValue : keyValues) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client0, keyValue.first, keyValue.second));
     }
 }
 }  // namespace st

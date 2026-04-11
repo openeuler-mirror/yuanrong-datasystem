@@ -1822,6 +1822,7 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
             RETURN_IF_NOT_OK(IfNeedTriggerReconciliation());
         }
     }
+    RETURN_IF_NOT_OK(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore());
     if (isRestart) {
         RETURN_IF_NOT_OK(slotRecoveryManager_->HandleLocalRestart());
     }

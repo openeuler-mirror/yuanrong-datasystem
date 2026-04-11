@@ -532,6 +532,7 @@ public:
     using SlotRecoveryManager::MarkTasksFailedInOtherIncidents;
     using SlotRecoveryManager::PickProcessWorkers;
     using SlotRecoveryManager::PlanIncident;
+    using SlotRecoveryManager::ScheduleLocalPendingTasksFromStore;
     using SlotRecoveryManager::ScheduleLocalTasks;
     using SlotRecoveryManager::Shutdown;
     using SlotRecoveryManager::TakeOverPendingFromSourceIncident;
@@ -700,6 +701,49 @@ TEST_F(SlotRecoveryTest, CreateIdempotent)
     ASSERT_EQ(planned.total_slots(), 4);
     ASSERT_EQ(planned.recovery_tasks_size(), 2);
     EXPECT_EQ(CollectAllSlots(planned), (std::set<uint32_t>{ 0, 1, 2, 3 }));
+}
+
+TEST_F(SlotRecoveryTest, SchedulesLocalPendingTasksFromStore)
+{
+    LOG(INFO) << "Scenario: local worker recovers pending tasks even without failed-worker event replay.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    const std::string failedWorker = "127.0.0.1:6101";
+    const std::string localWorker = "127.0.0.1:6102";
+    const std::string otherWorker = "127.0.0.1:6103";
+
+    store->SeedIncident(failedWorker,
+                        BuildIncident({ MakeTask(failedWorker, localWorker, RecoveryTaskPb::PENDING, { 0, 2 }),
+                                        MakeTask(failedWorker, otherWorker, RecoveryTaskPb::PENDING, { 1, 3 }) },
+                                      4));
+
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 6102), store);
+    manager.SetExecutionHook([](const RecoveryTaskPb &) { return Status::OK(); });
+    DS_ASSERT_OK(manager.InitForTest());
+
+    DS_ASSERT_OK(manager.ScheduleLocalPendingTasksFromStore());
+
+    ASSERT_TRUE(WaitUntil([&store, &failedWorker]() {
+        auto current = store->GetCurrentIncident(failedWorker);
+        return current.completed_slots() == 2 && current.failed_slots() == 0;
+    }));
+    auto current = store->GetCurrentIncident(failedWorker);
+    ASSERT_EQ(current.recovery_tasks_size(), 2);
+    bool sawCompletedLocalTask = false;
+    bool sawPendingOtherTask = false;
+    for (const auto &task : current.recovery_tasks()) {
+        if (task.owner_worker() == localWorker) {
+            sawCompletedLocalTask =
+                task.task_status() == RecoveryTaskPb::COMPLETED && CollectSlots(task) == (std::set<uint32_t>{ 0, 2 });
+        } else if (task.owner_worker() == otherWorker) {
+            sawPendingOtherTask =
+                task.task_status() == RecoveryTaskPb::PENDING && CollectSlots(task) == (std::set<uint32_t>{ 1, 3 });
+        }
+    }
+    EXPECT_TRUE(sawCompletedLocalTask);
+    EXPECT_TRUE(sawPendingOtherTask);
+    EXPECT_EQ(manager.GetExecutedTasks().size(), 1);
+
+    manager.Shutdown();
 }
 
 TEST_F(SlotRecoveryTest, CreatesLocalIncidentOnRestart)
