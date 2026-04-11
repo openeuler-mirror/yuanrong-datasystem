@@ -27,6 +27,7 @@
 
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -50,6 +51,8 @@ Status SlotWriter::Init(const std::string &slotPath, const SlotManifestData &man
 {
     Close();
     lastFlushMs_ = NowMonotonicMs();
+    VLOG(1) << "Initializing slot writer, slotPath=" << slotPath << ", activeIndex=" << manifest.activeIndex
+            << ", activeDataCount=" << manifest.activeData.size();
     if (!manifest.activeIndex.empty()) {
         auto indexPath = JoinPath(slotPath, manifest.activeIndex);
         RETURN_IF_NOT_OK(SlotIndexCodec::EnsureIndexFile(indexPath));
@@ -64,6 +67,8 @@ Status SlotWriter::Init(const std::string &slotPath, const SlotManifestData &man
         RETURN_IF_NOT_OK(OpenFile(dataPath, O_RDWR, &activeDataFd_));
         activeDataSize_ = static_cast<uint64_t>(FdFileSize(activeDataFd_));
     }
+    VLOG(1) << "Initialized slot writer, slotPath=" << slotPath << ", activeIndexSize=" << activeIndexSize_
+            << ", activeDataFileId=" << activeDataFileId_ << ", activeDataSize=" << activeDataSize_;
     return Status::OK();
 }
 
@@ -111,6 +116,8 @@ Status SlotWriter::Flush()
     if (!HasPendingWrites()) {
         return Status::OK();
     }
+    VLOG(1) << "Flushing slot writer, pendingOps=" << pendingOps_ << ", bufferedBytes=" << bufferedBytes_
+            << ", activeIndexSize=" << activeIndexSize_ << ", activeDataSize=" << activeDataSize_;
     if (activeDataFd_ >= 0) {
         RETURN_IF_NOT_OK(FsyncFd(activeDataFd_));
     }
@@ -120,6 +127,7 @@ Status SlotWriter::Flush()
     bufferedBytes_ = 0;
     pendingOps_ = 0;
     lastFlushMs_ = NowMonotonicMs();
+    VLOG(1) << "Flushed slot writer successfully";
     return Status::OK();
 }
 

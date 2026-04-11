@@ -137,6 +137,16 @@ bool IsTransferManifest(const SlotManifestData &manifest)
     return manifest.state == SlotState::IN_OPERATION && manifest.opType == SlotOperationType::TRANSFER;
 }
 
+std::string ManifestDebugString(const SlotManifestData &manifest)
+{
+    return FormatString("state=%s, opType=%s, opPhase=%s, role=%s, txnId=%s, activeIndex=%s, activeDataCount=%zu, "
+                        "pendingIndex=%s, pendingDataCount=%zu, obsoleteIndex=%s, obsoleteDataCount=%zu, gcPending=%d",
+                        ToString(manifest.state), ToString(manifest.opType), ToString(manifest.opPhase),
+                        ToString(manifest.role), manifest.txnId, manifest.activeIndex, manifest.activeData.size(),
+                        manifest.pendingIndex, manifest.pendingData.size(), manifest.obsoleteIndex,
+                        manifest.obsoleteData.size(), manifest.gcPending);
+}
+
 std::string EncodeTransferFileMap(const SlotTakeoverPlan &plan)
 {
     std::ostringstream ss;
@@ -238,6 +248,7 @@ Status Slot::EnsureRuntimeReadyLocked()
 
 Status Slot::BuildRuntimeStateLocked()
 {
+    VLOG(1) << "Building slot runtime state, slotId=" << slotId_ << ", slotPath=" << slotPath_;
     RETURN_IF_NOT_OK(BootstrapManifestIfNeed());
     SlotManifestData manifest;
     RETURN_IF_NOT_OK(LoadManifest(manifest));
@@ -250,6 +261,8 @@ Status Slot::BuildRuntimeStateLocked()
     RETURN_IF_NOT_OK(GetFileModifiedTime(manifestPath, runtime_.manifestModifiedTimeUs));
     runtime_.initialized = true;
     RETURN_IF_NOT_OK(writer_.Init(slotPath_, manifest));
+    VLOG(1) << "Built slot runtime state successfully, slotId=" << slotId_ << ", slotPath=" << slotPath_
+            << ", " << ManifestDebugString(manifest);
     return Status::OK();
 }
 
@@ -309,6 +322,8 @@ Status Slot::RotateWritableDataFileLocked(uint64_t payloadSize, uint32_t &fileId
         runtime_.manifest.activeData.emplace_back(FormatDataFileName(1));
         RETURN_IF_NOT_OK(PersistManifest(runtime_.manifest));
         RETURN_IF_NOT_OK(writer_.Init(slotPath_, runtime_.manifest));
+        VLOG(1) << "Bootstrapped first active data file for slot, slotId=" << slotId_
+                << ", dataFile=" << runtime_.manifest.activeData.back();
     }
     fileId = writer_.GetActiveDataFileId();
     if (writer_.GetActiveDataSize() + payloadSize <= maxDataFileBytes_) {
@@ -319,6 +334,8 @@ Status Slot::RotateWritableDataFileLocked(uint64_t payloadSize, uint32_t &fileId
     runtime_.manifest.activeData.emplace_back(FormatDataFileName(fileId));
     RETURN_IF_NOT_OK(PersistManifest(runtime_.manifest));
     RETURN_IF_NOT_OK(writer_.Init(slotPath_, runtime_.manifest));
+    VLOG(1) << "Rotated writable slot data file, slotId=" << slotId_ << ", payloadSize=" << payloadSize
+            << ", newDataFile=" << runtime_.manifest.activeData.back();
     return Status::OK();
 }
 
@@ -330,6 +347,7 @@ Status Slot::AllocateExclusiveDataFileLocked(uint32_t &fileId)
     RETURN_IF_NOT_OK(AllocateNextDataFileIdLocked(fileId));
     runtime_.manifest.activeData.insert(runtime_.manifest.activeData.end() - 1, FormatDataFileName(fileId));
     RETURN_IF_NOT_OK(PersistManifest(runtime_.manifest));
+    VLOG(1) << "Allocated exclusive slot data file, slotId=" << slotId_ << ", dataFile=" << FormatDataFileName(fileId);
     return Status::OK();
 }
 
@@ -434,6 +452,8 @@ Status Slot::Save(const std::string &key, uint64_t version, const std::shared_pt
                   uint64_t asyncElapse, WriteMode writeMode)
 {
     (void)asyncElapse;
+    VLOG(1) << "Slot save begin, slotId=" << slotId_ << ", key=" << key << ", version=" << version
+            << ", writeMode=" << static_cast<uint32_t>(writeMode);
     std::lock_guard<std::mutex> lock(mu_);
     RETURN_IF_NOT_OK(EnsureRuntimeReadyLocked());
     RETURN_IF_NOT_OK(EnsureWritable(runtime_.manifest));
@@ -465,11 +485,15 @@ Status Slot::Save(const std::string &key, uint64_t version, const std::shared_pt
     writer_.RecordOperation(payloadSize + encoded.size());
     runtime_.snapshot.ApplyPut(record);
     RETURN_IF_NOT_OK(FlushRuntimeLocked(false));
+    VLOG(1) << "Slot save end, slotId=" << slotId_ << ", key=" << key << ", version=" << version
+            << ", payloadSize=" << payloadSize << ", fileId=" << fileId << ", offset=" << offset
+            << ", exclusiveFile=" << useExclusiveFile;
     return Status::OK();
 }
 
 Status Slot::Get(const std::string &key, uint64_t version, std::shared_ptr<std::stringstream> &content)
 {
+    VLOG(1) << "Slot get begin, slotId=" << slotId_ << ", key=" << key << ", version=" << version;
     SlotSnapshotValue value;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -477,11 +501,14 @@ Status Slot::Get(const std::string &key, uint64_t version, std::shared_ptr<std::
         RETURN_IF_NOT_OK(runtime_.snapshot.FindExact(key, version, value));
     }
     RETURN_IF_NOT_OK(ReadRecordData(value, content));
+    VLOG(1) << "Slot get end, slotId=" << slotId_ << ", key=" << key << ", version=" << version
+            << ", fileId=" << value.fileId << ", offset=" << value.offset << ", size=" << value.size;
     return Status::OK();
 }
 
 Status Slot::GetWithoutVersion(const std::string &key, uint64_t minVersion, std::shared_ptr<std::stringstream> &content)
 {
+    VLOG(1) << "Slot get-latest begin, slotId=" << slotId_ << ", key=" << key << ", minVersion=" << minVersion;
     SlotSnapshotValue value;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -489,11 +516,16 @@ Status Slot::GetWithoutVersion(const std::string &key, uint64_t minVersion, std:
         RETURN_IF_NOT_OK(runtime_.snapshot.FindLatest(key, minVersion, value));
     }
     RETURN_IF_NOT_OK(ReadRecordData(value, content));
+    VLOG(1) << "Slot get-latest end, slotId=" << slotId_ << ", key=" << key
+            << ", resolvedVersion=" << value.version << ", fileId=" << value.fileId
+            << ", offset=" << value.offset << ", size=" << value.size;
     return Status::OK();
 }
 
 Status Slot::Delete(const std::string &key, uint64_t maxVerToDelete, bool deleteAllVersion)
 {
+    VLOG(1) << "Slot delete begin, slotId=" << slotId_ << ", key=" << key
+            << ", maxVerToDelete=" << maxVerToDelete << ", deleteAllVersion=" << deleteAllVersion;
     std::lock_guard<std::mutex> lock(mu_);
     RETURN_IF_NOT_OK(EnsureRuntimeReadyLocked());
     RETURN_IF_NOT_OK(EnsureWritable(runtime_.manifest));
@@ -506,6 +538,7 @@ Status Slot::Delete(const std::string &key, uint64_t maxVerToDelete, bool delete
     writer_.RecordOperation(encoded.size());
     runtime_.snapshot.ApplyDelete(record);
     RETURN_IF_NOT_OK(FlushRuntimeLocked(false));
+    VLOG(1) << "Slot delete end, slotId=" << slotId_ << ", key=" << key << ", tombstoneVersion=" << record.version;
     return Status::OK();
 }
 
@@ -522,12 +555,14 @@ Status Slot::PreloadLocal(const SlotPreloadCallback &callback)
         RETURN_IF_NOT_OK(FlushRuntimeLocked(true));
         RETURN_IF_NOT_OK(runtime_.snapshot.CollectVisiblePuts(visiblePuts));
     }
+    VLOG(1) << "Slot preload-local begin, slotId=" << slotId_ << ", visiblePutCount=" << visiblePuts.size();
     return RunPreloadCallback(visiblePuts, callback);
 }
 
 Status Slot::ReplayIndex(SlotSnapshot &snapshot)
 {
     std::lock_guard<std::mutex> lock(mu_);
+    VLOG(1) << "Slot replay-index begin, slotId=" << slotId_ << ", slotPath=" << slotPath_;
     INJECT_POINT("slotstore.Slot.ReplayIndex.Enter", []() { return Status::OK(); });
     RETURN_IF_NOT_OK(FlushRuntimeLocked(true));
     RETURN_IF_NOT_OK(BootstrapManifestIfNeed());
@@ -535,19 +570,24 @@ Status Slot::ReplayIndex(SlotSnapshot &snapshot)
     RETURN_IF_NOT_OK(LoadManifest(manifest));
     RETURN_IF_NOT_OK(RecoverManifestIfNeeded(manifest));
     RETURN_IF_NOT_OK(SlotSnapshot::Replay(slotPath_, manifest, snapshot));
+    VLOG(1) << "Slot replay-index end, slotId=" << slotId_ << ", slotPath=" << slotPath_
+            << ", " << ManifestDebugString(manifest);
     return Status::OK();
 }
 
 Status Slot::BootstrapManifestIfNeed()
 {
+    VLOG(1) << "Bootstrap slot manifest if needed, slotId=" << slotId_ << ", slotPath=" << slotPath_;
     RETURN_IF_NOT_OK(CreateDir(slotPath_, true));
     SlotManifestData manifest;
     auto rc = SlotManifest::Load(slotPath_, manifest);
     if (rc.GetCode() == StatusCode::K_NOT_FOUND) {
         RETURN_IF_NOT_OK(BuildBootstrapManifestFromDisk(manifest));
         RETURN_IF_NOT_OK(PersistManifest(manifest));
+        VLOG(1) << "Created bootstrap slot manifest, slotId=" << slotId_ << ", " << ManifestDebugString(manifest);
     } else {
         RETURN_IF_NOT_OK(rc);
+        VLOG(1) << "Slot manifest already exists, slotId=" << slotId_ << ", " << ManifestDebugString(manifest);
     }
     RETURN_IF_NOT_OK(EnsureActiveFiles(manifest));
     return Status::OK();
@@ -617,6 +657,7 @@ Status Slot::BuildBootstrapManifestFromDisk(SlotManifestData &manifest)
 
 Status Slot::Repair()
 {
+    VLOG(1) << "Slot repair begin, slotId=" << slotId_ << ", slotPath=" << slotPath_;
     std::lock_guard<std::mutex> lock(mu_);
     RETURN_IF_NOT_OK(FlushRuntimeLocked(true));
     writer_.Close();
@@ -635,11 +676,15 @@ Status Slot::Repair()
     RETURN_IF_NOT_OK(GetFileModifiedTime(JoinPath(slotPath_, "manifest"), runtime_.manifestModifiedTimeUs));
     runtime_.initialized = true;
     RETURN_IF_NOT_OK(writer_.Init(slotPath_, manifest));
+    VLOG(1) << "Slot repair end, slotId=" << slotId_ << ", slotPath=" << slotPath_
+            << ", recordCount=" << records.size() << ", validBytes=" << validBytes
+            << ", " << ManifestDebugString(manifest);
     return Status::OK();
 }
 
 Status Slot::Compact()
 {
+    VLOG(1) << "Slot compact begin, slotId=" << slotId_ << ", slotPath=" << slotPath_;
     RETURN_IF_NOT_OK(Repair());
     SlotManifestData baseManifest;
     SlotSnapshot snapshot;
@@ -708,6 +753,9 @@ Status Slot::Compact()
             auto rc = compactor.ApplyDeltaRecords(deltaRecords, buildResult);
             RETURN_IF_NOT_OK(rc);
             appliedFrontier = catchupFrontier;
+            VLOG(1) << "Slot compact applied catchup delta, slotId=" << slotId_
+                    << ", deltaRecordCount=" << deltaRecords.size() << ", deltaBytes=" << deltaBytes
+                    << ", frontier=" << appliedFrontier;
         }
         if (deltaBytes <= GetCurrentSlotCompactCutoverBytes()
             && deltaRecords.size() <= GetCurrentSlotCompactCutoverRecords()) {
@@ -733,6 +781,8 @@ Status Slot::Compact()
         if (!finalDeltaRecords.empty()) {
             auto rc = compactor.ApplyDeltaRecords(finalDeltaRecords, buildResult);
             RETURN_IF_NOT_OK(rc);
+            VLOG(1) << "Slot compact applied final delta, slotId=" << slotId_
+                    << ", deltaRecordCount=" << finalDeltaRecords.size();
         }
 
         SlotManifestData switching = manifest;
@@ -765,6 +815,7 @@ Status Slot::Compact()
         ResetRuntimeLocked();
         RETURN_IF_NOT_OK(BuildRuntimeStateLocked());
     }
+    VLOG(1) << "Slot compact end, slotId=" << slotId_ << ", slotPath=" << slotPath_;
     return Status::OK();
 }
 
@@ -790,6 +841,8 @@ Status Slot::Takeover(const std::string &sourceSlotPath, const SlotTakeoverReque
     CHECK_FAIL_RETURN_STATUS(!sourceSlotPath.empty(), StatusCode::K_INVALID, "sourceSlotPath must not be empty");
     CHECK_FAIL_RETURN_STATUS(sourceSlotPath != slotPath_, StatusCode::K_INVALID,
                              "sourceSlotPath must differ from target slot path");
+    VLOG(1) << "Slot takeover begin, slotId=" << slotId_ << ", targetSlot=" << slotPath_
+            << ", sourceSlot=" << sourceSlotPath << ", loadToMemory=" << request.IsPreload();
     bool expected = false;
     CHECK_FAIL_RETURN_STATUS(transferIntentActive_.compare_exchange_strong(expected, true), StatusCode::K_TRY_AGAIN,
                              "Another transfer already owns this target slot");
@@ -821,6 +874,8 @@ Status Slot::Takeover(const std::string &sourceSlotPath, const SlotTakeoverReque
     targetManifest.transferPlanPath.clear();
     targetManifest.transferFileMap.clear();
     RETURN_IF_NOT_OK(PersistManifest(targetManifest));
+    VLOG(1) << "Slot takeover fenced target manifest, slotId=" << slotId_ << ", txnId=" << txnId
+            << ", recoverySlotPath=" << recoverySlotPath;
     INJECT_POINT("slotstore.Slot.Takeover.AfterManifestFencing", []() { return Status::OK(); });
 
     if (!FileExist(recoverySlotPath)) {
@@ -840,6 +895,8 @@ Status Slot::Takeover(const std::string &sourceSlotPath, const SlotTakeoverReque
     RETURN_IF_NOT_OK(SlotTakeoverPlanner::BuildPlan(sourceSlotPath, recoverySlotPath, sourceManifest, sourceSnapshot,
                                                     slotPath_, targetManifest, request, txnId, plan));
     RETURN_IF_NOT_OK(SlotTakeoverPlanner::DumpPlan(slotPath_, plan));
+    VLOG(1) << "Slot takeover durable plan ready, slotId=" << slotId_ << ", txnId=" << txnId
+            << ", dataMappingCount=" << plan.dataMappings.size();
     INJECT_POINT("slotstore.Slot.Takeover.AfterPlanDurable", []() { return Status::OK(); });
 
     targetManifest.transferPlanPath = FormatTakeoverPlanFileName(plan.txnId);
@@ -853,11 +910,14 @@ Status Slot::Takeover(const std::string &sourceSlotPath, const SlotTakeoverReque
     RETURN_IF_NOT_OK(RecoverTransfer(targetManifest, &request));
     ResetRuntimeLocked();
     RETURN_IF_NOT_OK(BuildRuntimeStateLocked());
+    VLOG(1) << "Slot takeover end, slotId=" << slotId_ << ", targetSlot=" << slotPath_ << ", txnId=" << txnId;
     return Status::OK();
 }
 
 Status Slot::RecoverManifestIfNeeded(SlotManifestData &manifest)
 {
+    VLOG(1) << "Checking slot manifest recovery, slotId=" << slotId_ << ", slotPath=" << slotPath_
+            << ", " << ManifestDebugString(manifest);
     if (manifest.state == SlotState::IN_OPERATION && manifest.opType == SlotOperationType::COMPACT
         && manifest.opPhase == SlotOperationPhase::COMPACT_COMMITTING) {
         RETURN_IF_NOT_OK(RecoverCompactCommitting(manifest));
@@ -867,11 +927,15 @@ Status Slot::RecoverManifestIfNeeded(SlotManifestData &manifest)
     if (manifest.gcPending) {
         RETURN_IF_NOT_OK(ContinueGc(manifest));
     }
+    VLOG(1) << "Finished slot manifest recovery check, slotId=" << slotId_ << ", "
+            << ManifestDebugString(manifest);
     return Status::OK();
 }
 
 Status Slot::RecoverCompactCommitting(SlotManifestData &manifest)
 {
+    VLOG(1) << "Recovering compact-committing slot manifest, slotId=" << slotId_ << ", "
+            << ManifestDebugString(manifest);
     if (PendingArtifactsReady(manifest)) {
         manifest.obsoleteIndex = manifest.activeIndex;
         manifest.obsoleteData = manifest.activeData;
@@ -893,6 +957,8 @@ Status Slot::RecoverCompactCommitting(SlotManifestData &manifest)
     manifest.pendingIndex.clear();
     manifest.pendingData.clear();
     RETURN_IF_NOT_OK(PersistManifest(manifest));
+    VLOG(1) << "Recovered compact-committing slot manifest, slotId=" << slotId_ << ", "
+            << ManifestDebugString(manifest);
     return Status::OK();
 }
 
@@ -903,8 +969,12 @@ Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverReque
     CHECK_FAIL_RETURN_STATUS(!manifest.recoverySlotPath.empty(), StatusCode::K_INVALID,
                              "TRANSFER manifest missing recovery slot path");
     CHECK_FAIL_RETURN_STATUS(!manifest.txnId.empty(), StatusCode::K_INVALID, "TRANSFER manifest missing txn_id");
+    VLOG(1) << "Recovering slot transfer, slotId=" << slotId_ << ", targetSlot=" << slotPath_
+            << ", " << ManifestDebugString(manifest) << ", hasRequest=" << (request != nullptr);
 
     while (IsTransferManifest(manifest)) {
+        VLOG(1) << "Slot transfer phase begin, slotId=" << slotId_ << ", txnId=" << manifest.txnId
+                << ", phase=" << ToString(manifest.opPhase);
         switch (manifest.opPhase) {
             case SlotOperationPhase::TRANSFER_FENCING: {
                 if (!FileExist(manifest.recoverySlotPath)) {
@@ -938,6 +1008,8 @@ Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverReque
                 RETURN_IF_NOT_OK(PersistManifest(manifest));
                 RETURN_IF_NOT_OK(PersistSourceTransferManifest(
                     manifest.recoverySlotPath, manifest, manifest.peerSlotPath, SlotOperationPhase::TRANSFER_PREPARED));
+                VLOG(1) << "Slot transfer moved to PREPARED, slotId=" << slotId_ << ", txnId=" << manifest.txnId
+                        << ", dataMappingCount=" << plan.dataMappings.size();
                 break;
             }
             case SlotOperationPhase::TRANSFER_PREPARED: {
@@ -1007,12 +1079,16 @@ Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverReque
                                                                    plan.sourceHomeSlotPath,
                                                                    SlotOperationPhase::TRANSFER_INDEX_PUBLISHED));
                 }
+                VLOG(1) << "Slot transfer published import batch, slotId=" << slotId_ << ", txnId=" << manifest.txnId
+                        << ", dataMappingCount=" << plan.dataMappings.size() << ", publishedActiveDataCount="
+                        << manifest.activeData.size();
                 break;
             }
             case SlotOperationPhase::TRANSFER_INDEX_PUBLISHED: {
                 RETURN_IF_NOT_OK(FinalizeSourceAfterTakeover(manifest.recoverySlotPath, manifest));
                 manifest.opPhase = SlotOperationPhase::TRANSFER_SOURCE_RETIRED;
                 RETURN_IF_NOT_OK(PersistManifest(manifest));
+                VLOG(1) << "Slot transfer source retired, slotId=" << slotId_ << ", txnId=" << manifest.txnId;
                 break;
             }
             case SlotOperationPhase::TRANSFER_SOURCE_RETIRED: {
@@ -1035,6 +1111,7 @@ Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverReque
                     bool deletedPlan = false;
                     (void)DeleteFileIfExists(BaseName(transferPlanFile), deletedPlan);
                 }
+                VLOG(1) << "Slot transfer completed, slotId=" << slotId_ << ", completedTxnId=" << completedTxnId;
                 return Status::OK();
             }
             default:
@@ -1046,6 +1123,8 @@ Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverReque
 
 Status Slot::ContinueGc(SlotManifestData &manifest)
 {
+    VLOG(1) << "Slot GC begin, slotId=" << slotId_ << ", obsoleteDataCount=" << manifest.obsoleteData.size()
+            << ", obsoleteIndex=" << manifest.obsoleteIndex << ", gcPending=" << manifest.gcPending;
     bool deletedAnything = false;
     for (const auto &dataFile : manifest.obsoleteData) {
         RETURN_IF_NOT_OK(DeleteFileIfExists(dataFile, deletedAnything));
@@ -1057,6 +1136,8 @@ Status Slot::ContinueGc(SlotManifestData &manifest)
         manifest.obsoleteData.clear();
         RETURN_IF_NOT_OK(PersistManifest(manifest));
     }
+    VLOG(1) << "Slot GC end, slotId=" << slotId_ << ", deletedAnything=" << deletedAnything
+            << ", gcPending=" << manifest.gcPending;
     return Status::OK();
 }
 
@@ -1096,6 +1177,10 @@ Status Slot::CleanupStaleTakeoverArtifacts()
     }
     for (const auto &path : staleImportPaths) {
         staleRelativePaths.emplace_back(BaseName(path));
+    }
+    if (!staleRelativePaths.empty()) {
+        VLOG(1) << "Cleaning stale slot takeover artifacts, slotId=" << slotId_
+                << ", artifactCount=" << staleRelativePaths.size();
     }
     RETURN_IF_NOT_OK(CleanupArtifactFiles(staleRelativePaths));
     return Status::OK();
@@ -1147,6 +1232,8 @@ Status Slot::PersistManifest(const SlotManifestData &manifest)
         runtime_.manifest = persisted;
         RETURN_IF_NOT_OK(GetFileModifiedTime(JoinPath(slotPath_, "manifest"), runtime_.manifestModifiedTimeUs));
     }
+    VLOG(1) << "Slot persisted manifest, slotId=" << slotId_ << ", slotPath=" << slotPath_
+            << ", " << ManifestDebugString(persisted);
     return Status::OK();
 }
 
@@ -1443,6 +1530,8 @@ Status Slot::PublishImportBatch(const std::string &indexPath, const std::string 
                                 const std::string &importIndexFile, bool &published)
 {
     published = false;
+    VLOG(1) << "Publishing slot import batch, slotId=" << slotId_ << ", txnId=" << txnId
+            << ", activeIndexPath=" << indexPath << ", importIndexFile=" << importIndexFile;
     std::vector<SlotRecord> currentRecords;
     size_t validBytes = 0;
     RETURN_IF_NOT_OK(SlotIndexCodec::ReadAllRecords(indexPath, currentRecords, validBytes));
@@ -1467,6 +1556,8 @@ Status Slot::PublishImportBatch(const std::string &indexPath, const std::string 
     RETURN_IF_NOT_OK(SlotIndexCodec::AppendEncodedRecords(indexPath, payload, true));
     RETURN_IF_NOT_OK(FsyncDir(slotPath_));
     published = true;
+    VLOG(1) << "Published slot import batch successfully, slotId=" << slotId_ << ", txnId=" << txnId
+            << ", payloadBytes=" << payload.size();
     return Status::OK();
 }
 
@@ -1507,6 +1598,8 @@ Status Slot::FinalizeSourceAfterTakeover(const std::string &sourceRecoveryPath, 
     if (!FileExist(sourceRecoveryPath)) {
         return Status::OK();
     }
+    VLOG(1) << "Finalizing slot source after takeover, slotId=" << slotId_
+            << ", sourceRecoveryPath=" << sourceRecoveryPath << ", txnId=" << targetManifest.txnId;
     RETURN_IF_NOT_OK(PersistSourceTransferManifest(sourceRecoveryPath, targetManifest, targetManifest.peerSlotPath,
                                                    SlotOperationPhase::TRANSFER_SOURCE_RETIRED));
     INJECT_POINT("slotstore.Slot.Takeover.BeforeSourceFinalize", []() { return Status::OK(); });

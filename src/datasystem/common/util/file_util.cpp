@@ -79,7 +79,8 @@ off_t FileSize(const std::string &filename, bool logError)
     struct stat st{};
     errno = 0;
     if (stat(filename.c_str(), &st) < 0) {
-        LOG_IF(ERROR, logError) << "Get file size failed, file: " << filename << ", errno: " << errno;
+        LOG_IF(ERROR, logError) << "Get file size failed, file: " << filename << ", errno: " << errno
+                                << ", errmsg: " << StrErr(errno);
         return -1;
     };
     return st.st_size;
@@ -106,7 +107,8 @@ Status CheckFileSize(size_t *size, const std::string &filename)
 
     // Otherwise, the stat call had a problem.
     *size = 0;
-    std::string err = "Stat call for file " + filename + " failed with errno: " + std::to_string(errno);
+    std::string err = "Stat call for file " + filename + " failed with errno: " + std::to_string(errno)
+                      + ", errmsg: " + StrErr(errno);
     RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR, err);
 }
 
@@ -213,7 +215,8 @@ Status CheckFileExists(bool *fileExists, const std::string &filename, int mode)
     // Otherwise, the access to the file itself had a problem. This could be permission error, filesystem IO
     // error, or other errors.
     *fileExists = false;
-    std::string err = "Access call for file " + filename + " failed with errno: " + std::to_string(errno);
+    std::string err = "Access call for file " + filename + " failed with errno: " + std::to_string(errno)
+                      + ", errmsg: " + StrErr(errno);
     RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR, err);
 }
 
@@ -222,7 +225,8 @@ Status GetFileModifiedTime(const std::string &filename, int64_t &timestamp)
     struct stat statBuf{};
     if (stat(filename.c_str(), &statBuf) != 0) {
         std::stringstream ss;
-        ss << "Get file " << filename << " last modify time failed.";
+        ss << "Get file " << filename << " last modify time failed, errno: " << errno
+           << ", errmsg: " << StrErr(errno);
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, ss.str());
     }
 
@@ -284,7 +288,7 @@ Status DeleteFile(const std::string &filename)
 {
     if (unlink(filename.c_str()) != 0) {
         std::stringstream ss;
-        ss << "Delete file " << filename << " failed with error:" << errno;
+        ss << "Delete file " << filename << " failed with errno: " << errno << ", errmsg: " << StrErr(errno);
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, ss.str());
     }
     return Status::OK();
@@ -298,7 +302,8 @@ Status RenameFile(const std::string &srcFile, const std::string &targetFile)
     // Rename the source file to the target file
     if (std::rename(srcFile.c_str(), targetFile.c_str()) != 0) {
         std::stringstream ss;
-        ss << "Rename file " << srcFile << " failed with error:" << errno;
+        ss << "Rename file from " << srcFile << " to " << targetFile << " failed with errno: " << errno
+           << ", errmsg: " << StrErr(errno);
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, ss.str());
     }
 
@@ -351,7 +356,8 @@ Status FsyncDir(const std::string &dirPath)
     int fd = open(dirPath.c_str(), O_RDONLY | O_DIRECTORY);
     if (fd < 0) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
-                                FormatString("open dir failed, dir=%s, errno=%d", dirPath, errno));
+                                FormatString("open dir failed, dir=%s, errno=%d, errmsg=%s", dirPath, errno,
+                                             StrErr(errno)));
     }
     Raii closeFd([fd]() { close(fd); });
     RETURN_IF_NOT_OK(FsyncFd(fd));
@@ -360,11 +366,16 @@ Status FsyncDir(const std::string &dirPath)
 
 Status ReadWholeFile(const std::string &path, std::string &content)
 {
+    errno = 0;
     std::ifstream in(path, std::ios::binary);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(in.is_open(), StatusCode::K_IO_ERROR,
-                                         FormatString("Open file failed: %s", path));
+                                         FormatString("Open file failed: %s, errno=%d, errmsg=%s", path, errno,
+                                                      StrErr(errno)));
     std::ostringstream ss;
     ss << in.rdbuf();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!in.bad() && !(in.fail() && !in.eof()), StatusCode::K_IO_ERROR,
+                                         FormatString("Read file failed: %s, state=%d, errno=%d, errmsg=%s", path,
+                                                      static_cast<int>(in.rdstate()), errno, StrErr(errno)));
     content = ss.str();
     return Status::OK();
 }
@@ -393,7 +404,8 @@ Status IsDirectory(const std::string &path, bool &isDir)
     struct stat statBuf{};
     if (stat(path.c_str(), &statBuf) != 0) {
         std::stringstream ss;
-        ss << "error while invoke IsDirectory(" << path << "), errno: " << errno;
+        ss << "error while invoke IsDirectory(" << path << "), errno: " << errno
+           << ", errmsg: " << StrErr(errno);
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, ss.str());
     }
     isDir = S_ISDIR(statBuf.st_mode);
@@ -542,7 +554,8 @@ Status ValidateFD(const std::string &pathname, int fileDescriptor)
         if (errno == EMFILE) {
             currentCode = StatusCode::K_FILE_LIMIT_REACHED;
         }
-        RETURN_STATUS_LOG_ERROR(currentCode, "Could not open " + pathname + ", errno: " + std::to_string(errno));
+        RETURN_STATUS_LOG_ERROR(currentCode, "Could not open " + pathname + ", errno: " + std::to_string(errno)
+                                                 + ", errmsg: " + StrErr(errno));
     }
     return Status::OK();
 }
@@ -657,7 +670,7 @@ Status ReadFile(int fileDescriptor, void *buffer, size_t count, off_t offset)
         std::stringstream err;
         err << "pread failed ";
         if (bytesRead < 0) {
-            err << ". Errno = " << errno;
+            err << ". Errno = " << errno << ", errmsg = " << StrErr(errno);
         } else {
             err << "Expect to read " << count << " bytes but pread returns " << totalRead;
         }
@@ -708,7 +721,7 @@ Status WriteFileNoErrorLog(int fileDescriptor, const void *buffer, size_t count,
         std::stringstream err;
         err << "pwrite failed ";
         if (bytesWritten < 0) {
-            err << ". Errno = " << errno;
+            err << ". Errno = " << errno << ", errmsg = " << StrErr(errno);
         } else {
             err << "Expect to write " << count << " bytes but pwrite returns " << totalWrite;
         }
@@ -742,7 +755,7 @@ Status ChangeFileMod(const std::string &path, const mode_t &permission)
 {
     if (chmod(path.c_str(), permission) != 0) {
         std::stringstream ss;
-        ss << "Change mode on " << path << " fail: " << std::to_string(errno);
+        ss << "Change mode on " << path << " fail, errno: " << errno << ", errmsg: " << StrErr(errno);
         RETURN_STATUS_LOG_ERROR(K_IO_ERROR, ss.str());
     }
     return Status::OK();
@@ -752,7 +765,7 @@ Status Remove(const std::string &path)
 {
     auto ret = remove(path.c_str());
     CHECK_FAIL_RETURN_STATUS(ret == 0, StatusCode::K_IO_ERROR,
-                             FormatString("Remove failed. path=%s, errno=%d", path, errno));
+                             FormatString("Remove failed. path=%s, errno=%d, errmsg=%s", path, errno, StrErr(errno)));
     return Status::OK();
 }
 
@@ -768,20 +781,24 @@ Status RemoveAll(const std::string &path)
     char resultPath[PATH_MAX + 1] = { 0 };
     if (realpath(path.c_str(), resultPath) == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_RUNTIME_ERROR,
-                                FormatString("Unable to resolve %s. Errno = %d", path, errno));
+                                FormatString("Unable to resolve %s. Errno = %d, errmsg = %s", path, errno,
+                                             StrErr(errno)));
     }
     const std::string realPath = std::string(resultPath);
     // if input is file (include link)
     if (IsDirectory(realPath, isDir).IsError() || !isDir) {
         result = unlink(realPath.c_str());
         CHECK_FAIL_RETURN_STATUS(result == 0, StatusCode::K_RUNTIME_ERROR,
-                                 FormatString("Failed to remove %s, errno:%d", realPath, errno));
+                                 FormatString("Failed to remove %s, errno:%d, errmsg:%s", realPath, errno,
+                                              StrErr(errno)));
         return Status::OK();
     }
 
     // input is directory
     DIR *dir = opendir(realPath.c_str());
-    CHECK_FAIL_RETURN_STATUS(dir != nullptr, K_RUNTIME_ERROR, "Failed to remove: Open dir failed with " + realPath);
+    CHECK_FAIL_RETURN_STATUS(dir != nullptr, K_RUNTIME_ERROR,
+                             "Failed to remove: Open dir failed with " + realPath + ", errno: "
+                                 + std::to_string(errno) + ", errmsg: " + StrErr(errno));
     Raii releaseDir([dir] { closedir(dir); });
 
     struct dirent *ent;
@@ -798,12 +815,14 @@ Status RemoveAll(const std::string &path)
         } else {
             result = unlink(filePath.c_str());
             CHECK_FAIL_RETURN_STATUS(result == 0, StatusCode::K_RUNTIME_ERROR,
-                                     FormatString("Failed to remove file %s, errno:%d", filePath, errno));
+                                     FormatString("Failed to remove file %s, errno:%d, errmsg:%s", filePath, errno,
+                                                  StrErr(errno)));
         }
     }
     result = rmdir(realPath.c_str());
     CHECK_FAIL_RETURN_STATUS(result == 0, StatusCode::K_RUNTIME_ERROR,
-                             FormatString("Failed to remove directory %s, errno:%d", realPath, errno));
+                             FormatString("Failed to remove directory %s, errno:%d, errmsg:%s", realPath, errno,
+                                          StrErr(errno)));
     return Status::OK();
 }
 

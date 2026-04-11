@@ -27,6 +27,7 @@
 
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -108,6 +109,9 @@ Status SlotTakeoverPlanner::BuildPlan(const std::string &sourceHomeSlotPath, con
                                       SlotTakeoverPlan &plan)
 {
     CHECK_FAIL_RETURN_STATUS(!txnId.empty(), StatusCode::K_INVALID, "txnId must not be empty");
+    VLOG(1) << "Building slot takeover plan, txnId=" << txnId << ", sourceHome=" << sourceHomeSlotPath
+            << ", sourceRecovery=" << sourceRecoverySlotPath << ", targetSlot=" << targetSlotPath
+            << ", loadToMemory=" << request.IsPreload();
     plan = SlotTakeoverPlan{};
     plan.txnId = txnId;
     plan.sourceHomeSlotPath = sourceHomeSlotPath;
@@ -160,6 +164,9 @@ Status SlotTakeoverPlanner::BuildPlan(const std::string &sourceHomeSlotPath, con
         importPayload.append(encoded);
     }
     RETURN_IF_NOT_OK(SlotIndexCodec::AppendEncodedRecords(importIndexPath, importPayload, true));
+    VLOG(1) << "Built slot takeover plan, txnId=" << plan.txnId << ", targetSlot=" << plan.targetSlotPath
+            << ", dataMappingCount=" << plan.dataMappings.size() << ", importIndexFile=" << plan.importIndexFile
+            << ", visiblePutCount=" << visiblePuts.size();
     return Status::OK();
 }
 
@@ -167,15 +174,21 @@ Status SlotTakeoverPlanner::DumpPlan(const std::string &targetSlotPath, const Sl
 {
     RETURN_IF_NOT_OK(CreateDir(targetSlotPath, true));
     auto planPath = JoinPath(targetSlotPath, FormatTakeoverPlanFileName(plan.txnId));
+    VLOG(1) << "Dumping slot takeover plan, txnId=" << plan.txnId << ", planPath=" << planPath
+            << ", dataMappingCount=" << plan.dataMappings.size();
     RETURN_IF_NOT_OK(AtomicWriteTextFile(planPath, Encode(plan)));
+    VLOG(1) << "Dumped slot takeover plan successfully, txnId=" << plan.txnId << ", planPath=" << planPath;
     return Status::OK();
 }
 
 Status SlotTakeoverPlanner::LoadPlan(const std::string &planPath, SlotTakeoverPlan &plan)
 {
+    VLOG(1) << "Loading slot takeover plan, planPath=" << planPath;
     std::string content;
     RETURN_IF_NOT_OK(ReadWholeFile(planPath, content));
     RETURN_IF_NOT_OK(Decode(content, plan));
+    VLOG(1) << "Loaded slot takeover plan, txnId=" << plan.txnId << ", targetSlot=" << plan.targetSlotPath
+            << ", dataMappingCount=" << plan.dataMappings.size();
     return Status::OK();
 }
 

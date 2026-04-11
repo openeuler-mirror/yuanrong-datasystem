@@ -216,9 +216,11 @@ Status MasterWorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenc
                                                           DeletePersistenceObjectRspPb &rsp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    LOG(INFO) << "Delete persistence object: " << req.object_key();
     auto rc = ocClientWorkerSvc_->DeletePersistenceObject(req, rsp);
     rsp.mutable_last_rc()->set_error_code(rc.GetCode());
     rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+    VLOG(1) << "Delete persistence object done";
     return Status::OK();
 }
 

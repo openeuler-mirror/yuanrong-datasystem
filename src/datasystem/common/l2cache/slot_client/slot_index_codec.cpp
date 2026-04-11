@@ -30,6 +30,7 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -370,7 +371,8 @@ Status SlotIndexCodec::TruncateTail(const std::string &indexPath, size_t validBy
 {
     if (truncate(indexPath.c_str(), static_cast<off_t>(validBytes)) != 0) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
-                                FormatString("truncate index failed, path=%s, errno=%d", indexPath, errno));
+                                FormatString("truncate index failed, path=%s, errno=%d, errmsg=%s", indexPath, errno,
+                                             StrErr(errno)));
     }
     int fd = -1;
     RETURN_IF_NOT_OK(OpenFile(indexPath, O_RDWR, &fd));
