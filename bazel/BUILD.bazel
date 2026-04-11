@@ -11,7 +11,7 @@ load("@local_python_info//:version.bzl", "PYTHON_MINOR")
 load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
 load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
-load("//:version.bzl", "DATASYSTEM_VERSION")
+load("@datasystem_version//:version.bzl", "DATASYSTEM_VERSION")
 
 licenses(["notice"])
 
