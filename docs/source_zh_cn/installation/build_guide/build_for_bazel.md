@@ -1,4 +1,4 @@
-# openYuanrong datasystem + Bazel 集成指南
+# Bazel编译源码集成SDK
 
 ## 适用范围
 

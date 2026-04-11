@@ -217,8 +217,8 @@ helm install datasystem /tmp/datasystem
 kubectl get pods -o wide
 # NAME                   READY   STATUS       RESTARTS      AGE    IP           NODE 
 # ...
-# ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   Running
-# ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   Running
+# ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   node1
+# ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   node2
 ```
 
 :::

@@ -192,7 +192,7 @@ dscli generate_config -o ./
 ```bash
 dscli up -f ./cluster_config.json
 
-# [INFO] Modifed config - metastore_address
+# [INFO] Modified config - metastore_address
 # [INFO] Starting metastore head node: 192.168.1.1
 # [INFO] Setting start_metastore_service=true for node: 192.168.1.1
 # [INFO] Start worker service @ 192.168.1.1:31501 success.

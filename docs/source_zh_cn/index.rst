@@ -68,12 +68,12 @@ openYuanrong datasystem 的部署视图如上图所示：
   :hidden:
 
   self
-  getting-started/getting_started.md
-  installation/installation_linux.md
+  quick_start/quick_start.md
+  installation/index.md
   deployment/index.md
   best_practices/index.md
-  user_guide/index.md
-  development-guide/index.md
+  design_document/index.md
+  api_reference/index.md
   contributor_guide/contribution.md
   appendix/index.md
   FAQ/FAQ.md

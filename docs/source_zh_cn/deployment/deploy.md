@@ -1,7 +1,7 @@
-# 部署 openYuanrong datasystem
+# 部署指南
 
 <!-- TOC -->
-- [openYuanrong datasystem进程部署](#openyuanrong-datasystem进程部署)
+- [裸进程部署worker](#裸进程部署worker)
     - [部署环境准备](#部署环境准备)
     - [集群部署](#集群部署)
         - [单机部署](#单机部署)
@@ -10,7 +10,7 @@
     - [集群卸载](#集群卸载)
         - [单机卸载](#单机卸载)
         - [多机卸载](#多机卸载)
-- [openYuanrong datasystem Kubernetes部署](#openyuanrong-datasystem-kubernetes部署)
+- [Kubernetes部署worker](#kubernetes部署worker)
     - [部署环境准备](#部署环境准备-1)
     - [集群部署](#集群部署-1)
     - [快速验证](#快速验证-1)
@@ -18,24 +18,24 @@
 
 <!-- /TOC -->
 
-本文档介绍如何将openYuanrong datasystem通过裸进程或者Kubernetes的方式进行部署。
+本文档介绍如何将openYuanrong datasystem通过裸进程或者Kubernetes的方式进行部署worker组件。
 
-## openYuanrong datasystem进程部署
+## 裸进程部署worker
 
 ### 部署环境准备
 openYuanrong datasystem进程部署所需的系统环境依赖如下：
 |软件名称|版本|作用|
 |-------|----|----|
-| openEuler |22.03|运行openYuanrong datasystem的操作系统|
-|[CANN](#安装cann)|8.2.RC1|运行异构相关特性的依赖库|
-|[Python](#安装python)|3.9-3.11|openYuanrong datasystem dscli的使用依赖Python环境|
+| openEuler |22.03/24.04|推荐运行openYuanrong datasystem的操作系统|
+|[CANN](#安装cann非必须)|8.5|运行异构相关特性的依赖库|
+|[Python](#安装python)|3.9-3.13|openYuanrong datasystem dscli的使用依赖Python环境|
 |[dscli](#安装dscli)|-|用于部署openYuanrong datasystem的命令行工具|
 |[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
 |[SSH互信配置](#ssh互信配置)|-|仅多机部署需要，配置SSH互信用于机器间互相访问|
 
 下面给出以上依赖的安装方法。
 
-### 安装CANN
+### 安装CANN（非必须）
 CANN的安装依赖Python环境，请确保您在开始安装CANN之前环境中的Python已经就绪。
 
 在[Ascend官网](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.2.RC1)下载CANN run包，安装 run 包：
@@ -326,7 +326,7 @@ dscli down -f ./cluster_config.json
 
 当输出如上信息时说明集群卸载成功。
 
-## openYuanrong datasystem Kubernetes部署
+## Kubernetes部署worker
 
 ### 部署环境准备
 
@@ -335,7 +335,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 |软件名称|推荐版本|作用|
 |--------|-------|----|
 |openEuler |22.03|支持运行Kubernetes与Docker的操作系统|
-|[kubectl](#安装kubectl)|-|运行异构相关特性的依赖库|
+|[kubectl](#安装kubectl)|-|Kubernetes命令行工具，用于与Kubernetes集群交互|
 |[Kubernetes](#安装kubernetes)|-|Kubernetes集群，用于编排和管理openYuanrong datasystem的容器|
 |[Helm](#安装helm)|-|支持openYuanrong datasystem Kubernetes工程化部署的核心工具|
 |[Docker](#安装docker)|-|提供容器化平台，支持openYuanrong datasystem容器化部署和运行|
@@ -385,7 +385,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
     - image_name: 生成的镜像名
     - image_tag: 生成的镜像Tag
 
-    执行完成之后会在openYuanrong datasystem/docker目录下生成一个build目录，build目录中会生成一个 `datasystem.tar` 文件，即为镜像压缩文件；与此同时本地的docker仓库中也会保存 `<image_name>:<image_tag>` 的镜像。
+    执行完成之后会在yuanrong-datasystem/k8s/docker目录下生成一个build目录，build目录中会生成一个 `datasystem.tar` 文件，即为镜像压缩文件；与此同时本地的docker仓库中也会保存 `<image_name>:<image_tag>` 的镜像。
 
 #### 获取openYuanrong datasystem helm chart包
 
@@ -406,7 +406,7 @@ openYuanrong datasystem Kubernetes部署所需的依赖如下：
 
 ### 集群部署
 
-openYuanrong datasystem通过 [/tmp/datasystem/values.yaml](#获取openYuanrong datasystem-helm-chart包) 文件进行集群相关配置，其中必配项如下：
+openYuanrong datasystem通过 `/tmp/datasystem/values.yaml` 文件进行集群相关配置，其中必配项如下：
 
 ```yaml
 global:
@@ -455,7 +455,7 @@ kubectl get pods -o wide
 
 ### 快速验证
 
-openYuanrong datasystem会默认以DamonSet的方式在每个节点都部署一个 `ds-worker` Pod，默认监听 `<主机IP>:31501`，可通过如下 Python 脚本快速验证：
+openYuanrong datasystem会默认以DaemonSet的方式在每个节点都部署一个 `ds-worker` Pod，默认监听 `<主机IP>:31501`，可通过如下 Python 脚本快速验证：
 
 ```python
 from yr.datasystem.ds_client import DsClient

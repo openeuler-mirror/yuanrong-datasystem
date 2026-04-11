@@ -52,7 +52,7 @@ ETCD部署命令样例如下：
 
 ```bash
 # etcd启动指令
-etcd --name etcd-single --data-dir /root/.datasyste/etcd-data \
+etcd --name etcd-single --data-dir /root/.datasystem/etcd-data \
      --listen-client-urls http://0.0.0.0:2345 --advertise-client-urls http://0.0.0.0:2345 \
      --listen-peer-urls http://0.0.0.0:2346 --initial-advertise-peer-urls http://0.0.0.0:2346 \
      --initial-cluster etcd-single=http://0.0.0.0:2346 > /dev/null 2>&1 &

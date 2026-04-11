@@ -41,7 +41,7 @@ dscli 系统环境依赖如下：
 | 软件名称 | 版本 | 作用 |
 |-------|----|----|
 | openEuler | 22.03 | 运行openYuanrong datasystem的操作系统 |
-| [Python](#安装python) | 3.10-3.11 | openYuanrong datasystem dscli的使用依赖Python环境 |
+| [Python](#安装python) | 3.9-3.11 | openYuanrong datasystem dscli的使用依赖Python环境 |
 | [ETCD](#安装并部署etcd) | 3.5 | openYuanrong datasystem集群管理依赖组件 |
 | [SSH互信配置](#ssh互信配置) |- | 仅多机部署需要，配置SSH互信用于机器间互相访问 |
 
@@ -218,7 +218,7 @@ pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/${version}/yr_da
 
 ### 源码编译安装
 
-源码编译安装 openYuanrong datasystem 详细说明请参考：[源码编译方式安装openYuanrong datasystem](../installation/installation_linux.md#源码编译安装)。
+源码编译安装 openYuanrong datasystem 详细说明请参考：[源码编译方式安装openYuanrong datasystem](../installation/build_guide/cmake_build.md#源码编译安装)。
 
 
 ## dscli使用教程
@@ -469,7 +469,7 @@ helm install yr_datasystem /home/sn/datasystem-helm-chart/datasystem
 helm uninstall yr_datasystem
 ```
 
-更多 openYuanrong datasystem Kubernetes 部署详细信息请参考：[openYuanrong datasystem Kubernetes部署](../deployment/deploy.md#openyuanrong-datasystem-kubernetes部署)。
+更多 openYuanrong datasystem Kubernetes 部署详细信息请参考：[openYuanrong datasystem Kubernetes部署](../deployment/deploy.md#kubernetes部署worker)。
 
 更多关于 dscli generate_helm_chart 命令的使用请参考：[dscli generate_helm_chart](#dscli-generate_helm_chart)。
 
@@ -521,7 +521,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
     cat << EOF > install.sh
     conda create --name python39
     conda activate python39
-    pip install yr_datasystem
+    pip install openyuanrong-datasystem
     EOF
     ```
 

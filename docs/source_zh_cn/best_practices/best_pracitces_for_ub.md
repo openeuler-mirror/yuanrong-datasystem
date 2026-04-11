@@ -122,7 +122,7 @@ dscli generate_helm_chart -o /tmp
 
 # 通过源码获取helm chart包
 git clone -b ${version} https://gitcode.com/openeuler/yuanrong-datasystem.git
-cp -r yuanrong-datasystem/docker/chart/datasystem /tmp
+cp -r yuanrong-datasystem/k8s/helm_chart/datasystem /tmp
 ```
 
 命令运行成功后会在"/tmp"目录下生成helm chart目录。
@@ -172,8 +172,8 @@ helm install datasystem /tmp/datasystem
 kubectl get pods -o wide
 # NAME                   READY   STATUS       RESTARTS      AGE    IP           NODE 
 # ...
-# ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   Running
-# ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   Running
+# ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   node1
+# ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   node2
 ```
 
 :::
@@ -209,7 +209,7 @@ client = KVClient("192.168.0.2:31501", 31501)
 client.init()
 key = "key"
 expected_val = b"value"
-val = client.kv().get([key])
+val = client.get([key])
 assert val[0] == expected_val
 print("[OK] Get value")
 ```
