@@ -1,0 +1,26 @@
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "rpc_stub_cache_mgr_test_helper",
+    srcs = ["rpc_stub_cache_mgr_test_helper.cpp"],
+    hdrs = ["rpc_stub_cache_mgr_test_helper.h"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "rpc_stub_cache_mgr_test",
+    srcs = ["rpc_stub_cache_mgr_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:net_util",
+        "//tests/ut/common/rpc_stub_cache_mgr:rpc_stub_cache_mgr_test_helper",
+        "//tests/ut:ut_common",
+    ],
+)

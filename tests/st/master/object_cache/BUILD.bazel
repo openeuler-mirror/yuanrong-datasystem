@@ -1,0 +1,56 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "object_meta_store_etcd_test",
+    srcs = ["object_meta_store_etcd_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/master/object_cache/store:object_meta_store",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_giveup_primary_test",
+    srcs = ["oc_giveup_primary_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/master/object_cache:master_oc_service_impl",
+        "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "oc_migrate_metadata_manager_test",
+    srcs = ["oc_migrate_metadata_manager_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
+        "//tests/st:st_common",
+    ],
+)

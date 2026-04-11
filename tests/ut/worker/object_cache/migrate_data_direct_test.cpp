@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "common.h"
+#include "ut/common.h"
 
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"

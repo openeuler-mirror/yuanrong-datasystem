@@ -20,7 +20,7 @@
 
 #include <gtest/gtest.h>
 #include <memory>
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"

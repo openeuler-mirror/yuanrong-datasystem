@@ -19,7 +19,7 @@
  */
 #include <string>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/random_data.h"

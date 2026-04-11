@@ -1,0 +1,17 @@
+# tests/ut/common/kvstore/BUILD.bazel
+"""KVStore 组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# RocksDB 副本测试
+ds_cc_test(
+    name = "rocks_replica_test",
+    srcs = ["rocks_replica_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore/rocksdb:replica",
+        "//src/datasystem/master/stream_cache/store:rocks_stream_meta_store",
+        "//tests/ut:ut_common",
+    ],
+)

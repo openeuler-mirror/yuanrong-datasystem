@@ -36,7 +36,7 @@
 #include <string>
 #include <thread>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 

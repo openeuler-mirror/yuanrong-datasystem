@@ -1,0 +1,29 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# obs_client 依赖未完整实现（BUILD 中已注释），标记 manual
+ds_cc_test(
+    name = "obs_client_test",
+    srcs = ["obs_client_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/l2cache:get_object_info_list_resp",
+        "//src/datasystem/common/l2cache/obs_client:obs_client_header",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "obs_persistence_api_test",
+    srcs = ["obs_persistence_api_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/l2cache:get_object_info_list_resp",
+        "//src/datasystem/common/l2cache:persistence_api",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)

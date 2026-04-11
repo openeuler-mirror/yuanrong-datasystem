@@ -17,7 +17,7 @@
  * Description: ObjInterface test.
  */
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/object_cache/object_base.h"
 
 namespace datasystem {

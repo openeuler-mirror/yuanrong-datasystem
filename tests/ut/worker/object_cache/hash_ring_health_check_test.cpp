@@ -17,7 +17,7 @@
 /**
  * Description: Test interface to HashRingHealthCheck
  */
-#include "common.h"
+#include "ut/common.h"
 #include <google/protobuf/util/json_util.h>
 #include <nlohmann/json.hpp>
 

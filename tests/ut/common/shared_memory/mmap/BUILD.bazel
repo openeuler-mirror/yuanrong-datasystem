@@ -1,0 +1,13 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "mem_mmap_test",
+    srcs = ["mem_mmap_test.cpp"],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//tests/common/binmock:binmock",
+        "//tests/ut:ut_common",
+    ],
+)

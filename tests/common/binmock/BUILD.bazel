@@ -1,0 +1,25 @@
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "binmock",
+    srcs = [
+        "binmock.cpp",
+        "function_stub.cpp",
+        "jmp_code.cpp",
+    ],
+    hdrs = [
+        "binmock.h",
+        "function_stub.h",
+        "jmp_code.h",
+        "jmp_code_aarch.h",
+        "jmp_code_aarch32.h",
+        "jmp_code_aarch64.h",
+        "jmp_code_x64.h",
+        "jmp_code_x86.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

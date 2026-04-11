@@ -1,0 +1,27 @@
+# tests/ut/BUILD.bazel
+"""DataSystem 单元测试公共配置"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# 单元测试公共库
+ds_cc_test_library(
+    name = "ut_common",
+    srcs = ["common.cpp"],
+    hdrs = [
+        "bench_helper.h",
+        "common.h",
+    ],
+    defines = [
+        "LLT_BIN_PATH=\"$(GENDIR)/tests/ut\"",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rdma:rdma_util",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:uuid_generator",
+        "@securec",
+    ],
+)

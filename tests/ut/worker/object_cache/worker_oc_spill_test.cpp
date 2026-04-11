@@ -18,7 +18,7 @@
  * Description: Test SpillRequestHandler and SpillFileManager.
  */
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"

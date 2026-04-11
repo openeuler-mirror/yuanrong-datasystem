@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/thread_pool.h"

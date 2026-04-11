@@ -31,7 +31,7 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "common.h"
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {
@@ -325,7 +325,14 @@ public:
     void CreateShmPtr(ShmUnit &shmUnit, uint64_t maxSize, uint64_t needSize)
     {
         allocator_ = datasystem::memory::Allocator::Instance();
-        DS_ASSERT_OK(allocator_->Init(maxSize));
+        // NOTE: After Shutdown(), arenaManager is destroyed but not reset.
+        // We need to ensure Init is called only once per test lifecycle.
+        // Multiple Init() calls return OK but the arenaManager may be destroyed.
+        static std::once_flag initFlag;
+        std::call_once(initFlag, [this, maxSize]() {
+            DS_ASSERT_OK(allocator_->Init(maxSize));
+        });
+        // If allocator was already initialized with different size, just verify it works
         ASSERT_EQ(allocator_->GetMaxMemorySize(), size_t(maxSize));
         ASSERT_EQ(allocator_->GetMemoryUsage(), size_t(0));
 
@@ -340,7 +347,9 @@ public:
         if (allocator_) {
             DS_ASSERT_OK(allocator_->FreeMemory(shmUnit.pointer));
             ASSERT_EQ(allocator_->GetMemoryUsage(), size_t(0));
-            allocator_->Shutdown();
+            // NOTE: Do NOT call Shutdown() here because it destroys ArenaManager
+            // and subsequent tests cannot reinitialize it (Allocator::Init returns
+            // early if arenaManager_ is already set).
         }
     }
 

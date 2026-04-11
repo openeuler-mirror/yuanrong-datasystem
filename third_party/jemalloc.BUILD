@@ -57,6 +57,7 @@ cc_library(
     hdrs = [
         "jemalloc/jemalloc.h",
     ],
+    includes = ["."],
     linkopts = [
         "-pthread",
         "-ldl",
@@ -77,6 +78,7 @@ cc_library(
     hdrs = [
         "jemalloc/jemalloc.h",
     ],
+    includes = ["."],
     linkopts = [
         "-pthread",
         "-ldl",

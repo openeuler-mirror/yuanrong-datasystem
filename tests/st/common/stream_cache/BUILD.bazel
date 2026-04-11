@@ -1,0 +1,20 @@
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "stream_common",
+    srcs = ["element_generator.cpp"],
+    hdrs = [
+        "element_generator.h",
+        "mock_evictmanager.h",
+        "stream_common.h",
+    ],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//tests/st:st_common",
+    ],
+)

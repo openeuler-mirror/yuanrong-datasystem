@@ -65,6 +65,9 @@ public:
 
     Status InitForTest(uint64_t maxStubCount, int maxFdNum = 100)
     {
+        // Reset lruCache_ before rebuilding to satisfy LruCache Build() requirement
+        lruCache_.reset();
+        creators_.clear();
         RETURN_IF_NOT_OK(Init(maxStubCount));
         creators_.emplace(
             StubType::TEST_TYPE_1, [this](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) -> Status {

@@ -1,0 +1,189 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# All device tests require NPU hardware and are manual only.
+# Tests using ascend_device_manager_mock.cpp (which includes binmock.h with
+# a relative path "../common/binmock/binmock.h") need -Itests/st copts.
+
+MOCK_COPTS = ["-Itests/st"]
+
+DEVICE_COMMON_DEPS = [
+    "//src/datasystem/client:datasystem",
+    "//src/datasystem/client/hetero_cache:hetero_client",
+    "//src/datasystem/common/inject:common_inject",
+    "//src/datasystem/common/log:common_log",
+    "//src/datasystem/common/util:status_helper",
+    "//tests/st:st_common",
+    "//tests/st/client/object_cache:oc_client_common",
+]
+
+ds_cc_test(
+    name = "acl_resource_manager_fallback_test",
+    srcs = [
+        "acl_resource_manager_fallback_test.cpp",
+        "mock/ascend_device_manager_mock.cpp",
+    ],
+    copts = MOCK_COPTS,
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/common/device/ascend:acl_resource_manager",
+        "//tests/common/binmock",
+    ],
+)
+
+ds_cc_test(
+    name = "ascend_device_manager_test",
+    srcs = [
+        "ascend_device_manager_test.cpp",
+        "mock/ascend_device_manager_mock.cpp",
+    ],
+    copts = MOCK_COPTS,
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/client/object_cache/device:p2p_subscribe",
+        "//src/datasystem/common/device:device_pointer_wrapper",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/device/ascend:cann_types",
+        "//src/datasystem/common/util:thread_pool",
+        "//tests/common/binmock",
+    ],
+)
+
+ds_cc_test(
+    name = "dev_object_hetero_rh2d_test",
+    srcs = ["dev_object_hetero_rh2d_test.cpp"],
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "dev_object_hetero_test",
+    srcs = ["dev_object_hetero_test.cpp"],
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "dev_object_scale_test",
+    srcs = ["dev_object_scale_test.cpp"],
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/common/device:device_helper",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "edge_condition_dev_object_hetero_test",
+    srcs = ["edge_condition_dev_object_hetero_test.cpp"],
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_test(
+    name = "hetero_client_pub_sub_bench_test",
+    srcs = [
+        "hetero_client_pub_sub_bench_test.cpp",
+        "mock/ascend_device_manager_mock.cpp",
+    ],
+    copts = MOCK_COPTS,
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/common/binmock",
+    ],
+)
+
+ds_cc_test(
+    name = "hetero_d2h_test",
+    srcs = [
+        "hetero_d2h_test.cpp",
+        "mock/ascend_device_manager_mock.cpp",
+    ],
+    copts = MOCK_COPTS,
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/common/binmock",
+    ],
+)
+
+ds_cc_test(
+    name = "hetero_get_meta_info_test",
+    srcs = ["hetero_get_meta_info_test.cpp"],
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
+    name = "hetero_object_replica_test",
+    srcs = [
+        "hetero_object_replica_test.cpp",
+        "mock/ascend_device_manager_mock.cpp",
+    ],
+    copts = MOCK_COPTS,
+    tags = ["manual"],
+    deps = DEVICE_COMMON_DEPS + [
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/client/kv_cache:kv_client",
+        "//src/datasystem/common/device/ascend:acl_device_manager",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+        "//tests/common/binmock",
+        "@com_google_googletest//:gmock",
+    ],
+)

@@ -23,7 +23,7 @@
 #include <fstream>
 #include <string>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/spdlog/provider.h"

@@ -17,7 +17,7 @@
 /**
  * Description: test strings util function
  */
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {

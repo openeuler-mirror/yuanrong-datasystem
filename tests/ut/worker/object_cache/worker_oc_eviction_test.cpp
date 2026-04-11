@@ -23,7 +23,7 @@
 #include "securec.h"
 
 #include "bench_helper.h"
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"

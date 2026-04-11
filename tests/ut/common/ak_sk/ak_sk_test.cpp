@@ -19,6 +19,8 @@
  */
 #include <gtest/gtest.h>
 #include <memory>
+
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_local.h"
@@ -26,8 +28,9 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/util/raii.h"
-#include "common.h"
 #include "datasystem/utils/sensitive_value.h"
+
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {

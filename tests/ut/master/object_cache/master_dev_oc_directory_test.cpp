@@ -20,7 +20,7 @@
 
 #include <cstddef>
 #include <string>
-#include "common.h"
+#include "ut/common.h"
 
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_directory.h"

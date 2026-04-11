@@ -3,6 +3,22 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "generic_service_impl",
+    srcs = [
+        "generic_service_impl.cpp",
+    ],
+    hdrs = [
+        "generic_service_impl.h",
+    ],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:generic_service_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "common_server",
     srcs = [
         "common_server.cpp",
@@ -25,7 +41,6 @@ ds_cc_library(
         "//src/datasystem/common/util:uri",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/protos:generic_service_cc_proto",
-        # "//src/datasystem/protos:generic_service_zmq_cc_proto",
-        # "//src/datasystem/server:generic_service_impl",
+        "//src/datasystem/server:generic_service_impl",
     ],
 )

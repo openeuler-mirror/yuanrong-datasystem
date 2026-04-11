@@ -19,7 +19,7 @@
  */
 
 #include <sstream>
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/httpclient/curl_http_client.h"
 #include "datasystem/common/httpclient/http_response.h"
 #include "datasystem/common/log/logging.h"

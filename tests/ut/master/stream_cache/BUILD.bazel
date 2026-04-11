@@ -1,0 +1,31 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "rocks_streammeta_store_test",
+    srcs = ["rocks_streammeta_store_test.cpp"],
+    deps = [
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/stream_cache:stream_fields",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/master/stream_cache/store:rocks_stream_meta_store",
+        "//src/datasystem/protos:master_stream_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "sc_migrate_metadata_manager_test",
+    srcs = ["sc_migrate_metadata_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/master/stream_cache:sc_migrate_metadata_manager",
+        "//tests/common/binmock:binmock",
+        "//tests/ut:ut_common",
+    ],
+)

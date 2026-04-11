@@ -23,7 +23,7 @@
 
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 #include "datasystem/common/util/gflag/flags.h"

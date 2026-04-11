@@ -19,7 +19,7 @@
  */
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/stream_cache/stream_meta_shm.h"

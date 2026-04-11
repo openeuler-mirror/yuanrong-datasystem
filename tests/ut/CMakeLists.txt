@@ -35,6 +35,7 @@ set(DS_UT_DEPEND_LIBS
 #include dirs
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${PROJECT_DIR}/src)
+include_directories(${PROJECT_DIR}/tests)  # For #include "ut/common.h"
 
 # fetch ut test files and remove the files we don't care about.
 file(GLOB_RECURSE DS_TEST_UT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")

@@ -25,7 +25,7 @@
 #include <thread>
 #include <vector>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"

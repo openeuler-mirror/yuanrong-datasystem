@@ -13,7 +13,7 @@
 #include <tbb/concurrent_hash_map.h>
 #include <tbb/concurrent_unordered_set.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/thread_pool.h"

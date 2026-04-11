@@ -22,7 +22,7 @@
 
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/utils/status.h"

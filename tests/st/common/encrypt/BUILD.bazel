@@ -1,0 +1,14 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "encrypt_decrypt_test",
+    srcs = ["encrypt_decrypt_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/flags:ds_flags",
+        "//tests/st:st_common",
+    ],
+)

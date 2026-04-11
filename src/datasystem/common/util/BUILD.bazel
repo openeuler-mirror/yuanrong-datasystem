@@ -90,7 +90,10 @@ ds_cc_library(
         ":thread",
         ":timer",
         "//src/datasystem/common/log:common_log_header",
-    ],
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
 )
 
 ds_cc_library(
@@ -120,6 +123,7 @@ ds_cc_library(
     deps = [
         ":meta_route_tool_header",
         ":strings_util",
+        "//src/datasystem/common/inject:common_inject",  # Add dependency for injection point support
     ],
 )
 
@@ -354,12 +358,16 @@ ds_cc_library(
         "uri.h",
     ],
     deps = [
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "@re2",
-    ],
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
 )
 
 ds_cc_library(
@@ -431,7 +439,15 @@ ds_cc_library(
         ":strings_util",
         ":timer",
         "//src/datasystem/common/log:common_log_header",
-    ],
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
+)
+
+ds_cc_library(
+    name = "skip_list",
+    hdrs = ["skip_list.h"],
 )
 
 ds_cc_library(

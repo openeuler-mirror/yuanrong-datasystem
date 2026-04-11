@@ -17,7 +17,7 @@
 /**
  * Description: Test AsyncUpdateLocationManager.
  */
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"

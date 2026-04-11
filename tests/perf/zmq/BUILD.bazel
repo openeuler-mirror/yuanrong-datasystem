@@ -1,0 +1,142 @@
+"""ZMQ 性能测试二进制"""
+
+package(default_visibility = ["//visibility:public"])
+
+# ZMQ 性能测试客户端实现库
+cc_library(
+    name = "zmq_perf_run_lib",
+    srcs = ["zmq_perf_run.cpp"],
+    hdrs = [
+        "zmq_perf_common.h",
+        "zmq_perf_run.h",
+    ],
+    copts = ["-std=c++17"],
+    includes = ["."],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_credential",
+        "//src/datasystem/common/rpc/zmq:zmq_common",
+        "//src/datasystem/common/rpc/zmq:zmq_constants",
+        "//src/datasystem/common/rpc/zmq:zmq_msg_queue",
+        "//src/datasystem/common/rpc/zmq:zmq_payload",
+        "//src/datasystem/common/rpc/zmq:zmq_socket",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:uri",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:zmq_perf_zmq_cc_proto",
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
+)
+
+# ZMQ 性能测试服务端实现库
+cc_library(
+    name = "zmq_perf_server_lib",
+    srcs = ["zmq_perf_server.cpp"],
+    hdrs = [
+        "zmq_perf_common.h",
+        "zmq_perf_server.h",
+    ],
+    copts = ["-std=c++17"],
+    includes = ["."],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/rpc:rpc_service_cfg",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:utils_cc_proto",
+        "//src/datasystem/protos:zmq_perf_zmq_cc_proto",
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
+)
+
+# ZMQ 性能测试 Agent 实现库
+cc_library(
+    name = "zmq_perf_agent_lib",
+    srcs = ["zmq_perf_agent.cpp"],
+    hdrs = [
+        "zmq_perf_agent.h",
+        "zmq_perf_common.h",
+    ],
+    copts = ["-std=c++17"],
+    includes = ["."],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_credential",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/rpc:rpc_service_cfg",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/rpc/zmq:zmq_common",
+        "//src/datasystem/common/rpc/zmq:zmq_context",
+        "//src/datasystem/common/rpc/zmq:zmq_payload",
+        "//src/datasystem/common/rpc/zmq:zmq_socket",
+        "//src/datasystem/common/rpc/zmq:zmq_stub_impl",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/protos:zmq_perf_zmq_cc_proto",
+    ] + select({
+        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
+        "//conditions:default": [],
+    }),
+)
+
+# ZMQ 性能测试客户端可执行文件
+cc_binary(
+    name = "zmq_perf_client",
+    srcs = ["zmq_perf_main.cpp"],
+    copts = ["-std=c++17"],
+    deps = [
+        ":zmq_perf_run_lib",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc/zmq:zmq_constants",
+    ],
+)
+
+# ZMQ 性能测试服务端可执行文件
+cc_binary(
+    name = "zmq_perf_server",
+    srcs = ["zmq_server_main.cpp"],
+    copts = ["-std=c++17"],
+    deps = [
+        ":zmq_perf_server_lib",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc/zmq:zmq_constants",
+    ],
+)
+
+# ZMQ 性能测试 Agent 可执行文件
+cc_binary(
+    name = "zmq_perf_agent",
+    srcs = ["zmq_perf_agt_exe.cpp"],
+    copts = ["-std=c++17"],
+    deps = [
+        ":zmq_perf_agent_lib",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+# 所有性能测试目标
+filegroup(
+    name = "all_perf_binaries",
+    srcs = [
+        ":zmq_perf_agent",
+        ":zmq_perf_client",
+        ":zmq_perf_server",
+    ],
+)

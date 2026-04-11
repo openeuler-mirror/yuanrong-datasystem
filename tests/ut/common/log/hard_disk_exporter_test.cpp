@@ -17,7 +17,7 @@
 /**
  * Description: HardDiskExporter log rotation tests.
  */
-#include "common.h"
+#include "ut/common.h"
 
 #include <chrono>
 #include <string>

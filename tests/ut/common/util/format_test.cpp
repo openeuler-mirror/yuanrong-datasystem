@@ -20,7 +20,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/version.h"
 
-#include "common.h"
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {

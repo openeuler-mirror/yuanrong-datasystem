@@ -18,7 +18,7 @@
  * Description: Test StreamPage StreamPageOwner classes.
  */
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/stream_cache/cursor.h"

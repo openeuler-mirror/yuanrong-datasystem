@@ -1,0 +1,33 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "allocator_test",
+    srcs = ["allocator_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:validator",
+        "//tests/ut:ut_common",
+        "@jemalloc",
+    ],
+)
+
+ds_cc_test(
+    name = "shared_disk_detecter_test",
+    srcs = ["shared_disk_detecter_test.cpp"],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:file_util",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+    ],
+)

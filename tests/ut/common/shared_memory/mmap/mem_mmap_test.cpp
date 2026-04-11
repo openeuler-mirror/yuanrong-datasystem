@@ -20,7 +20,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/shared_memory/mmap/allocation.h"
 #include "datasystem/common/shared_memory/mmap/mem_mmap.h"
 #include "../../../../common/binmock/binmock.h"

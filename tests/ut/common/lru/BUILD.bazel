@@ -1,0 +1,16 @@
+# tests/ut/common/lru/BUILD.bazel
+"""LRU 缓存组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# LRU 测试
+ds_cc_test(
+    name = "lru_test",
+    srcs = ["lru_test.cpp"],
+    deps = [
+        "//src/datasystem/common/lru:lru_cache",
+        "//tests/ut:ut_common",
+    ],
+)

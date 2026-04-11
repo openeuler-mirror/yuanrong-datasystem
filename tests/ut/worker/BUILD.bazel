@@ -1,0 +1,364 @@
+# tests/ut/worker/BUILD.bazel
+"""Worker组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# 驱逐管理器测试公共辅助库
+ds_cc_test_library(
+    name = "eviction_manager_common",
+    hdrs = ["object_cache/eviction_manager_common.h"],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/object_cache:object_ref_info",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 异步资源释放器测试
+ds_cc_test(
+    name = "async_resource_releaser_test",
+    srcs = ["object_cache/async_resource_releaser_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache/data_migrator/handler:async_resource_releaser",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
+# Hash Ring 分配器测试
+ds_cc_test(
+    name = "hash_ring_allocator_test",
+    srcs = ["object_cache/hash_ring_allocator_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/hash_ring",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 节点选择器测试
+ds_cc_test(
+    name = "node_selector_test",
+    srcs = ["object_cache/node_selector_test.cpp"],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Worker OC 驱逐测试
+ds_cc_test(
+    name = "worker_oc_eviction_test",
+    srcs = ["object_cache/worker_oc_eviction_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
+# Worker OC 服务实现测试
+ds_cc_test(
+    name = "worker_oc_service_impl_test",
+    srcs = ["object_cache/worker_oc_service_impl_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 异步更新位置测试
+ds_cc_test(
+    name = "async_updatelocation_test",
+    srcs = ["object_cache/async_updatelocation_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:async_update_location_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 认证测试
+ds_cc_test(
+    name = "authenticate_test",
+    srcs = ["object_cache/authenticate_test.cpp"],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/httpclient:curl_http_client",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//src/datasystem/protos:ut_object_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:authenticate",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Hash Ring 健康检查测试
+ds_cc_test(
+    name = "hash_ring_health_check_test",
+    srcs = ["object_cache/hash_ring_health_check_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/hash_ring",
+        "//tests/ut:ut_common",
+        "@com_google_protobuf//:protobuf",
+        "@nlohmann_json//:json",
+    ],
+)
+
+# 迁移数据直传测试
+ds_cc_test(
+    name = "migrate_data_direct_test",
+    srcs = ["object_cache/migrate_data_direct_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_request_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
+# 迁移数据处理器测试
+ds_cc_test(
+    name = "migrate_data_handler_test",
+    srcs = ["object_cache/migrate_data_handler_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache/data_migrator/basic:migrate_progress",
+        "//src/datasystem/worker/object_cache/data_migrator/handler:migrate_data_handler",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:scale_down_node_selector",
+        "//src/datasystem/worker/object_cache/data_migrator/strategy:spill_node_selector",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
+# 迁移数据服务测试
+ds_cc_test(
+    name = "migrate_data_service_test",
+    srcs = ["object_cache/migrate_data_service_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:shm_guard",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_request_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
+# Worker OC Spill 驱逐测试
+ds_cc_test(
+    name = "worker_oc_spill_eviction_test",
+    srcs = ["object_cache/worker_oc_spill_eviction_test.cpp"],
+    deps = [
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
+# Worker OC Spill 测试
+ds_cc_test(
+    name = "worker_oc_spill_test",
+    srcs = ["object_cache/worker_oc_spill_test.cpp"],
+    deps = [
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Worker-Worker OC API 测试
+ds_cc_test(
+    name = "worker_worker_oc_api_test",
+    srcs = ["object_cache/worker_worker_oc_api_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Lock Map 测试
+ds_cc_test(
+    name = "lock_map_test",
+    srcs = ["stream_cache/lock_map_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:locks",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 共享页队列测试
+ds_cc_test(
+    name = "shared_page_queue_test",
+    srcs = ["stream_cache/shared_page_queue_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/stream_cache:stream_manager",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 共享页队列组测试
+ds_cc_test(
+    name = "shared_page_queue_group_test",
+    srcs = ["stream_cache/shared_page_queue_group_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Stream Buffer Pool 测试
+ds_cc_test(
+    name = "stream_bufferpool_test",
+    srcs = ["stream_cache/stream_bufferpool_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Stream Cursor 测试
+ds_cc_test(
+    name = "stream_cursor_test",
+    srcs = ["stream_cache/stream_cursor_test.cpp"],
+    deps = [
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/stream_cache:cursor",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/stream_cache:producer",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Stream Data Page 测试
+ds_cc_test(
+    name = "stream_data_page_test",
+    srcs = ["stream_cache/stream_data_page_test.cpp"],
+    deps = [
+        "//include/datasystem/stream:stream_headers",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/stream_cache:stream_data_page",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/stream_cache:buffer_pool",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Stream 使用率监控测试
+ds_cc_test(
+    name = "stream_usagemonitor_test",
+    srcs = ["stream_cache/stream_usagemonitor_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache:usage_monitor",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 客户端管理器测试
+ds_cc_test(
+    name = "client_manager_test",
+    srcs = ["client_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/client_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 汇总测试套件
+test_suite(
+    name = "all_worker_tests",
+    tests = [
+        "async_resource_releaser_test",
+        "async_updatelocation_test",
+        "authenticate_test",
+        "client_manager_test",
+        "hash_ring_allocator_test",
+        "hash_ring_health_check_test",
+        "lock_map_test",
+        "migrate_data_direct_test",
+        "migrate_data_handler_test",
+        "migrate_data_service_test",
+        "node_selector_test",
+        "shared_page_queue_group_test",
+        "shared_page_queue_test",
+        "stream_bufferpool_test",
+        "stream_cursor_test",
+        "stream_data_page_test",
+        "stream_usagemonitor_test",
+        "worker_oc_eviction_test",
+        "worker_oc_service_impl_test",
+        "worker_oc_spill_eviction_test",
+        "worker_oc_spill_test",
+        "worker_worker_oc_api_test",
+    ],
+)

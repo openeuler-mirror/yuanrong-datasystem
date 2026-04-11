@@ -1,6 +1,9 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
-package(default_visibility = ["//src/datasystem:__subpackages__"])
+package(default_visibility = [
+    "//src/datasystem:__subpackages__",
+    "//tests:__subpackages__",
+])
 
 ds_cc_library(
     name = "mmap_table",

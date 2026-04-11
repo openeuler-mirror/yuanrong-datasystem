@@ -24,7 +24,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/lock_map.h"
 #include <tbb/concurrent_hash_map.h>

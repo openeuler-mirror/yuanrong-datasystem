@@ -10,10 +10,12 @@ ds_cc_library(
     hdrs = [
         "inject_point.h",
     ],
+    defines = select({
+        "//:with_tests": ["WITH_TESTS=1"],
+        "//conditions:default": [],
+    }),
     deps = [
-        #"//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/common/util:net_util",
     ],
 )

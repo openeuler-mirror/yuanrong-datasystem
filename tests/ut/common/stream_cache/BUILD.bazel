@@ -1,0 +1,23 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "shared_mem_view_lock_test",
+    srcs = ["shared_mem_view_lock_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/stream_cache:cursor",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "stream_meta_shm_test",
+    srcs = ["stream_meta_shm_test.cpp"],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/stream_cache:stream_meta_shm",
+        "//tests/ut:ut_common",
+    ],
+)

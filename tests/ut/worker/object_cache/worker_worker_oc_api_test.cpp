@@ -21,7 +21,7 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/utils/status.h"
 
 using namespace datasystem::object_cache;

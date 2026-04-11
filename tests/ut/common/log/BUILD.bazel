@@ -1,0 +1,62 @@
+# tests/ut/common/log/BUILD.bazel
+"""日志组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# 失败处理器测试
+ds_cc_test(
+    name = "failure_handler_test",
+    srcs = ["failure_handler_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:failure_handler",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 硬盘导出器测试
+ds_cc_test(
+    name = "hard_disk_exporter_test",
+    srcs = ["hard_disk_exporter_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics/hard_disk_exporter",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 日志性能测试
+ds_cc_test(
+    name = "log_performance_test",
+    timeout = "long",
+    srcs = ["log_performance_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 日志测试
+ds_cc_test(
+    name = "logging_test",
+    srcs = ["logging_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+        "@re2",
+    ],
+)
+
+# 追踪测试
+ds_cc_test(
+    name = "trace_test",
+    srcs = ["trace_test.cpp"],
+    deps = [
+        "//src/datasystem/client/context",
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)

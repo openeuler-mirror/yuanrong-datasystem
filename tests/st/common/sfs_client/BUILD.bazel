@@ -1,0 +1,25 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "sfs_end2end_test",
+    srcs = ["sfs_end2end_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/l2cache/sfs_client:sfs_client",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
+    name = "sfs_persistence_api_test",
+    srcs = ["sfs_persistence_api_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/l2cache:get_object_info_list_resp",
+        "//src/datasystem/common/l2cache:persistence_api",
+        "//tests/st:st_common",
+    ],
+)

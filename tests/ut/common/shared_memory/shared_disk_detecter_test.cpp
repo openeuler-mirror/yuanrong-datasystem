@@ -26,7 +26,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/utils/status.h"

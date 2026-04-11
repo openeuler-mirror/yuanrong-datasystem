@@ -20,7 +20,7 @@
 
 #include <map>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/page_queue/shared_page_queue_group.h"
 #include "datasystem/common/util/uuid_generator.h"

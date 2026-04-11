@@ -137,6 +137,14 @@ cc_proto_library(
     deps = [":generic_service_proto"],
 )
 
+zmq_cc_proto_library(
+    name = "generic_service_zmq_cc_proto",
+    extra_protos = [],
+    proto = "generic_service.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [":generic_service_cc_proto"],
+)
+
 proto_library(
     name = "master_object_proto",
     srcs = ["master_object.proto"],
@@ -295,6 +303,15 @@ cc_proto_library(
     deps = [":ut_object_proto"],
 )
 
+zmq_cc_proto_library(
+    name = "ut_object_zmq_cc_proto",
+    proto = "ut_object.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":ut_object_cc_proto",
+    ],
+)
+
 proto_library(
     name = "zmq_perf_proto",
     srcs = ["zmq_perf.proto"],
@@ -447,6 +464,37 @@ zmq_cc_proto_library(
     deps = [
         ":rpc_option_cc_proto",
         ":stream_posix_cc_proto",
+        ":utils_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "zmq_perf_zmq_cc_proto",
+    extra_protos = [
+        ":meta_zmq_proto",
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+    proto = "zmq_perf.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":meta_zmq_cc_proto",
+        ":rpc_option_cc_proto",
+        ":utils_cc_proto",
+        ":zmq_perf_cc_proto",
+    ],
+)
+
+zmq_cc_proto_library(
+    name = "zmq_test_zmq_cc_proto",
+    extra_protos = [
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+    proto = "zmq_test.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [
+        ":rpc_option_cc_proto",
         ":utils_cc_proto",
     ],
 )

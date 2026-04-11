@@ -80,6 +80,11 @@ add_dependencies(datasystem_worker_shared
         share_memory_protos
         posix_protos)
 
+if (WITH_TESTS)
+    target_include_directories(datasystem_worker_static PUBLIC ${PROJECT_SOURCE_DIR}/tests/st)
+    target_include_directories(datasystem_worker_shared PUBLIC ${PROJECT_SOURCE_DIR}/tests/st)
+endif ()
+
 # generate datasystem_worker bin
 add_executable(datasystem_worker_bin worker_main.cpp)
 set_target_properties(datasystem_worker_bin PROPERTIES LINK_FLAGS "-fPIE -pie")

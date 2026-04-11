@@ -155,7 +155,10 @@ ds_cc_library(
         "//src/datasystem/worker/stream_cache:master_worker_sc_service_impl",
         "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
         "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
-    ],
+    ] + select({
+        "//:with_tests": ["//tests/st:st_common"],
+        "//conditions:default": [],
+    }),
     alwayslink = True,
 )
 
@@ -358,6 +361,7 @@ ds_cc_library(
 ds_cc_library(
     name = "add_miss_libs_fixme",
     deps = [
+        "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/l2cache:persistence_api",
         "//src/datasystem/common/util:meta_route_tool",
         "//src/datasystem/master/object_cache:master_worker_oc_local_api",

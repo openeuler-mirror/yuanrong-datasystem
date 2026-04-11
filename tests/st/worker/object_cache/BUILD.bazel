@@ -1,0 +1,128 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "etcd_cluster_manager_test",
+    srcs = ["etcd_cluster_manager_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "evict_mem_test",
+    srcs = ["evict_mem_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/queue:queue",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
+    name = "hash_ring_test",
+    srcs = ["hash_ring_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:container_util",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/worker:worker_cli",
+        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/hash_ring:hash_ring",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_oc_eviction_test",
+    srcs = ["worker_oc_eviction_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/mmap:mmap_table",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util/queue:queue",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_oc_master_test",
+    srcs = ["worker_oc_master_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/master/object_cache/store:object_meta_store",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_oc_service_impl_test",
+    srcs = ["worker_oc_service_impl_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client/mmap:mmap_table",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/master/object_cache:master_oc_service_impl",
+        "//src/datasystem/master/object_cache/store:object_meta_store",
+        "//src/datasystem/master/replica_manager",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_populate_startup_test",
+    srcs = ["worker_populate_startup_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//tests/st:st_common",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_start_stop_test",
+    srcs = ["worker_start_stop_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//tests/st:st_common",
+    ],
+)

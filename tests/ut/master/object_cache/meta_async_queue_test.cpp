@@ -29,7 +29,7 @@
 
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/log/log.h"
 

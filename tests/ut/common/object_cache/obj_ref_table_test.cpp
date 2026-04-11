@@ -21,8 +21,7 @@
 #include <chrono>
 #include <thread>
 
-#include "common.h"
-#include "datasystem/common/inject/inject_point.h"
+#include "ut/common.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/random_data.h"

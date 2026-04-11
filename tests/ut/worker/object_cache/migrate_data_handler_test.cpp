@@ -28,7 +28,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/mem_view.h"

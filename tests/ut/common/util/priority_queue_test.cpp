@@ -26,7 +26,7 @@
 #include "datasystem/common/util/queue/queue.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/wait_post.h"
-#include "common.h"
+#include "ut/common.h"
 
 namespace datasystem {
 namespace ut {

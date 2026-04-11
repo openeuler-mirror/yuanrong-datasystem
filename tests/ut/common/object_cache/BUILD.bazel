@@ -1,0 +1,40 @@
+# tests/ut/common/object_cache/BUILD.bazel
+"""对象缓存组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# 对象引用表测试
+ds_cc_test(
+    name = "obj_ref_table_test",
+    srcs = ["obj_ref_table_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/object_cache:object_ref_info",
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 对象基础测试
+ds_cc_test(
+    name = "object_base_test",
+    srcs = ["object_base_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:object_ref_info",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 读写锁测试
+ds_cc_test(
+    name = "rwlock_test",
+    srcs = ["rwlock_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/object_cache:object_ref_info",
+        "//tests/ut:ut_common",
+    ],
+)

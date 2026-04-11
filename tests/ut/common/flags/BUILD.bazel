@@ -1,0 +1,16 @@
+# tests/ut/common/flags/BUILD.bazel
+"""Flags 组件单元测试"""
+
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Flags 测试
+ds_cc_test(
+    name = "flags_test",
+    srcs = ["flags_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//tests/ut:ut_common",
+    ],
+)

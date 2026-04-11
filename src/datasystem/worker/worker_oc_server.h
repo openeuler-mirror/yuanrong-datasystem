@@ -50,7 +50,7 @@
 #include "datasystem/worker/worker_service_impl.h"
 #include "datasystem/common/kvstore/metastore/metastore_server.h"
 #ifdef WITH_TESTS
-#include "datasystem/../../tests/st/st_oc_service_impl.h"
+#include "st_oc_service_impl.h"
 #endif
 #ifdef ENABLE_PERF
 #include "datasystem/worker/perf_service/perf_service_impl.h"

@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/inject/inject_point.h"
 
 namespace datasystem {

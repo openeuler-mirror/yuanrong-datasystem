@@ -1,0 +1,33 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "mmap_manager_test",
+    srcs = ["mmap_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:mmap_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "mmap_table_test",
+    srcs = ["mmap_table_test.cpp"],
+    deps = [
+        "//src/datasystem/client/mmap:mmap_table",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "parallel_for_local_test",
+    srcs = ["parallel_for_local_test.cpp"],
+    deps = [
+        "//src/datasystem/common/parallel:common_parallel",
+        "//tests/ut:ut_common",
+    ],
+)

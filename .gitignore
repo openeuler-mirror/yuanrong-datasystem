@@ -86,10 +86,11 @@ false
 # ai context
 AGENTS.md
 docs/agent
+CLAUDE.md
+.claude
 plan.md
 
 # bazel
 bazel-*
 .clwb/
 MODULE.bazel.lock
-.claude

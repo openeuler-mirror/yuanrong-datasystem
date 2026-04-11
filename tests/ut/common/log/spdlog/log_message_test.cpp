@@ -26,7 +26,7 @@
 
 #include <dirent.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/logger_provider.h"
