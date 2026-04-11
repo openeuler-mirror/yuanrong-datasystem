@@ -291,7 +291,8 @@ public:
     explicit ClientWorkerLocalCommonApi(HostPort hostPort,
                                         std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api,
                                         void *worker, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                        bool enableCrossNodeConnection = false, Signature *signature = nullptr);
+                                        bool enableCrossNodeConnection = false, Signature *signature = nullptr,
+                                        std::string deviceId = "");
 
     virtual ~ClientWorkerLocalCommonApi() = default;
 
@@ -325,6 +326,7 @@ protected:
 
 private:
     void *workerService_{ nullptr };
+    std::string deviceId_;
 };
 
 class ClientWorkerRemoteCommonApi : virtual public IClientWorkerCommonApi {
@@ -337,12 +339,13 @@ public:
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId TenantId of client user.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
+     * @param[in] deviceId pipeline h2d device id
      */
     explicit ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred = {},
                                          HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                          SensitiveValue token = "", Signature *signature = nullptr,
                                          std::string tenantId = "", bool enableCrossNodeConnection = false,
-                                         bool enableExclusiveConnection = false);
+                                         bool enableExclusiveConnection = false, std::string deviceId = "");
 
     virtual ~ClientWorkerRemoteCommonApi();
 
@@ -472,6 +475,7 @@ protected:
     // URMA handshake retry pool and flags.
     std::unique_ptr<ThreadPool> urmaHandshakeRetryPool_{ nullptr };
     std::atomic_bool stopUrmaHandshakeRetry_{ false };
+    std::string deviceId_;
 
 private:
     /**

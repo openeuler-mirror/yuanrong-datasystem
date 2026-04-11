@@ -211,6 +211,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     enableRemoteH2D_ = connectOptions.enableRemoteH2D;
     serviceDiscovery_ = connectOptions.serviceDiscovery;
     fastTransportMemSize_ = connectOptions.fastTransportMemSize;
+    deviceId_ = connectOptions.deviceId;
 }
 
 ObjectClientImpl::~ObjectClientImpl()
@@ -331,12 +332,12 @@ Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool init
     workerApi_.resize(STANDBY2_WORKER + 1);
     auto &workerApi = workerApi_[LOCAL_WORKER];
     if (!initWithWorker) {
-        workerApi =
-            std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
-                                                    tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_);
+        workerApi = std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
+                                                            tenantId_, enableCrossNodeConnection_,
+                                                            enableExclusiveConnection_, deviceId_);
     } else {
-        workerApi_[LOCAL_WORKER] = std::make_shared<ClientWorkerLocalApi>(ipAddress_, embeddedClientWorkerApi_, worker_,
-                                                                          heartbeatType, signature_.get(), false);
+        workerApi_[LOCAL_WORKER] = std::make_shared<ClientWorkerLocalApi>(
+            ipAddress_, embeddedClientWorkerApi_, worker_, heartbeatType, signature_.get(), false, deviceId_);
     }
     RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
@@ -1284,8 +1285,8 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         uint64_t metadataSize = 0;
         auto shmBuf = std::make_shared<ShmUnitInfo>();
         std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;
-        RETURN_IF_NOT_OK(workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf,
-                                           urmaDataInfo, param.cacheType));
+        RETURN_IF_NOT_OK(
+            workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType));
         std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
         if (!urmaDataInfo) {
@@ -1361,8 +1362,8 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     if (canUseShm || IsUrmaEnabled() || !skipCheckExistence) {
         // Call MultiCreate if: 1) using shared memory, OR 2) UB enabled (need urma_info), OR 3) need to check existence
         // When shared memory is unavailable but UB is enabled or we need to check existence, MultiCreate will use RPC
-        RETURN_IF_NOT_OK(workerApi->MultiCreate(skipCheckExistence, multiCreateParamList, version,
-                                                exists, useShmTransfer));
+        RETURN_IF_NOT_OK(
+            workerApi->MultiCreate(skipCheckExistence, multiCreateParamList, version, exists, useShmTransfer));
     } else {
         // Only skip existence check when explicitly requested AND not using shared memory
         exists.resize(objectKeyList.size(), false);
@@ -1541,9 +1542,8 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
-        FormatString("Publish object %s", objectKey));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
+                                     FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
     return Status::OK();
@@ -1714,7 +1714,7 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     do {                                                                        \
         if (!(cond)) {                                                          \
             asyncResource->promise.set_value({ Status(err, msg), objectKeys }); \
-            LOG(ERROR) << (msg);                                                  \
+            LOG(ERROR) << (msg);                                                \
             return future;                                                      \
         }                                                                       \
     } while (0)
@@ -1728,7 +1728,7 @@ struct PipelineAsyncResource {
 
 std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     const std::vector<std::string> &objectKeys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
-    const std::vector<uint32_t> &devIds, int64_t subTimeoutMs)
+    int64_t subTimeoutMs)
 {
     auto asyncResource = std::make_shared<PipelineAsyncResource>();
     std::shared_future<AsyncResult> future = asyncResource->promise.get_future().share();
@@ -1739,13 +1739,25 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     // check args
     CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(objectKeys.size() == devShmChunk.size(), K_INVALID,
                                                    "objectKeys size is not equal to devShmChunk size");
-    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(objectKeys.size() == devIds.size(), K_INVALID,
-                                                   "objectKeys size is not equal to devIds size");
     CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(
         Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
         FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(CheckValidObjectKeyVector(objectKeys));
 
+    // client should be at same site with worker by shmem
+    std::shared_ptr<IClientWorkerApi> workerApi = workerApi_[LOCAL_WORKER];
+    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(workerApi != nullptr, K_INVALID, "no local worker api");
+    workerApi->IncreaseInvokeCount();
+    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(workerApi->IsShmEnable(), K_NOT_SUPPORTED,
+                                                   "not support pipeline rh2d: shared memory is not enabled");
+
+    uint32_t devId = -1;
+    try {
+        devId = static_cast<uint32_t>(std::stoi(deviceId_));
+    } catch (...) {
+        COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(
+            Status(K_NOT_SUPPORTED, "client is not initialized with pipeline device id"));
+    }
     // check status
     COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(IsClientReady());
     COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(CheckConnection());
@@ -1753,8 +1765,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     // copy params
     std::vector<OsXprtPipln::DevShmInfo> devInfos;
     for (size_t i = 0; i < objectKeys.size(); i++) {
-        devInfos.emplace_back(OsXprtPipln::DevShmInfo{ OsXprtPipln::TargetDeviceType::CUDA, devIds[i],
-                                                       devShmChunk[i].first, devShmChunk[i].second });
+        devInfos.emplace_back(OsXprtPipln::DevShmInfo{ OsXprtPipln::TargetDeviceType::CUDA, devId, devShmChunk[i].first,
+                                                       devShmChunk[i].second });
     }
     asyncResource->h2DParam = H2DParam{
         .subTimeoutMs = subTimeoutMs,
@@ -1763,12 +1775,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     };
 
     auto traceID = Trace::Instance().GetTraceID();
-    asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceID]() {
+    asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceID, workerApi]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-
-        // client should be at same site with worker
-        std::shared_ptr<IClientWorkerApi> workerApi = workerApi_[LOCAL_WORKER];
-        workerApi->IncreaseInvokeCount();
         std::unique_ptr<Raii> raii = std::make_unique<Raii>([workerApi]() { workerApi->DecreaseInvokeCount(); });
 
         // do H2D
@@ -1799,7 +1807,6 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
 #else
     (void)objectKeys;
     (void)devShmChunk;
-    (void)devIds;
     (void)subTimeoutMs;
     COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D"));
 #endif

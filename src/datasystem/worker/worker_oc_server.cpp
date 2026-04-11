@@ -1419,10 +1419,10 @@ void WorkerOCServer::AfterClientLostHandler(const ClientKey &clientId)
 
 Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
                                  const std::string &tenantId, bool enableCrossNode, const std::string &podName,
-                                 bool supportMultiShmRefCount, uint32_t &lockId)
+                                 bool supportMultiShmRefCount, std::string deviceId, uint32_t &lockId)
 {
     RETURN_IF_NOT_OK(ClientManager::Instance().AddClient(clientId, shmEnabled, socketFd, tenantId, enableCrossNode,
-                                                         podName, lockId));
+                                                         podName, std::move(deviceId), lockId));
     if (objCacheClientWorkerSvc_ != nullptr) {
         objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
     }

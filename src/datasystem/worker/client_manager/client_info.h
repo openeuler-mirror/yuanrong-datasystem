@@ -49,9 +49,11 @@ public:
      * @param[in] tenantId The tenant id.
      * @param[in] enableCrossNode Client is enable cross node connection or not.
      * @param[in] podName Client pod name.
+     * @param[in] deviceId pipeline h2d device id
      */
     ClientInfo(int32_t socketFd, ClientKey clientId, bool uniqueCount, bool shmEnabled = true,
-               std::string tenantId = "", bool enableCrossNode = false, const std::string &podName = "")
+               std::string tenantId = "", bool enableCrossNode = false, const std::string &podName = "",
+               std::string deviceId = "")
         : socketFd_(socketFd),
           clientId_(std::move(clientId)),
           uniqueCount_(uniqueCount),
@@ -59,11 +61,18 @@ public:
           shmEnabled_(shmEnabled),
           tenantId_(std::move(tenantId)),
           enableCrossNode_(enableCrossNode),
-          podName_(podName)
+          podName_(podName),
+          deviceId_(std::move(deviceId))
     {
     }
 
     ~ClientInfo() = default;
+
+    /**
+     * @brief Get pipeline h2d device id
+     * @return device id.
+     */
+    const std::string &GetDeviceId() const;
 
     /**
      * @brief Set whether the number of shmUnitId is unique.
@@ -259,6 +268,7 @@ private:
     bool enableCrossNode_;
     std::atomic<bool> removable_{ false };
     const std::string podName_;
+    const std::string deviceId_;
 };
 
 }  // namespace worker

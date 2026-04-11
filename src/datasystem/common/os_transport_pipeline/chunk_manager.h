@@ -48,13 +48,12 @@ public:
     }
     virtual ~IpcDriver()
     {
-        Release();
     }
     virtual Status EncodeDriver() = 0;
     virtual Status DecodeDriver() = 0;
     virtual Status SubmitIO(void *srcData, size_t srcSize, size_t destOffset) = 0;
     virtual Status WaitIO() = 0;
-    virtual Status Release() = 0;  // cancel and release
+    virtual Status Release() = 0;
 
     static Status GetDriver(const DevShmInfo &devInfo, const std::string &targetHandle, bool isClient,
                             std::shared_ptr<IpcDriver> &driver);

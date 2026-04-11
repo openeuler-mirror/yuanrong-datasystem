@@ -51,11 +51,13 @@ public:
      * @param[in] tenantId The tenant id.
      * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
      * @param[in] enableExclusiveConnection Indicates whether the client will use exclusive, per-thread connections
+     * @param[in] deviceId pipeline h2d device id
      */
     explicit ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred,
                                    HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                    SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-                                   bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false);
+                                   bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false,
+                                   std::string deviceId = "");
 
     ~ClientWorkerRemoteApi() = default;
 

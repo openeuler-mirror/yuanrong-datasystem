@@ -23,10 +23,11 @@
 
 #ifdef BUILD_PIPLN_H2D
 #include <ub/umdk/urma/urma_api.h>
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/os_transport_pipeline/chunk_manager.h"
 static inline bool SupportPipelineRH2D()
 {
-    return (IsUrmaEnabled() && FLAGS_enable_pipeline_h2d);
+    return (FLAGS_enable_urma && FLAGS_enable_pipeline_h2d);
 }
 #define RETURN_IF_NOT_SUPPORT_PIPLN_H2D() \
     if (!SupportPipelineRH2D())           \

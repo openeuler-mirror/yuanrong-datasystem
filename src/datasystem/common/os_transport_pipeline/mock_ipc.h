@@ -32,6 +32,7 @@ public:
     }
     virtual ~MockIPC()
     {
+        Release();
     }
 
     Status SubmitIO(void *srcData, size_t srcSize, size_t destOffset) override;

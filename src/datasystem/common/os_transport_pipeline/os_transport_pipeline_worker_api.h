@@ -29,7 +29,7 @@ using namespace datasystem;
 namespace OsXprtPipln {
 
 DEFINE_HOOK(Status ParsePiplnH2DRequest(const GetReqPb &req, H2DChunkManager &mgr, const std::string &objectKey,
-                                        int infoIdx));
+                                        int infoIdx, std::string deviceId));
 
 DEFINE_HOOK(Status ConstructPipelineRH2DResponse(GetRspPb &resp, H2DChunkManager &mgr,
                                                  std::vector<std::string> rawObjectKeys));

@@ -88,14 +88,15 @@ Status ClientManager::AddClient(const ClientKey &clientId, int socketFd, bool un
 }
 
 Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
-                                bool enableCrossNode, const std::string &podName, uint32_t &lockId)
+                                bool enableCrossNode, const std::string &podName, std::string deviceId,
+                                uint32_t &lockId)
 {
     RETURN_IF_NOT_OK(GetLockId(lockId));
     Status status;
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     bool uniqueCount = true;
-    auto clientInfo =
-        std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, shmEnabled, tenantId, enableCrossNode, podName);
+    auto clientInfo = std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, shmEnabled, tenantId,
+                                                   enableCrossNode, podName, std::move(deviceId));
     clientInfo->SetLockId(lockId);
     bool insert = tbbClientTable_.emplace(clientId, std::move(clientInfo));
     if (!insert) {

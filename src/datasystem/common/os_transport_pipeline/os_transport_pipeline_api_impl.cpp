@@ -27,14 +27,22 @@ namespace OsXprtPipln {
 
 using namespace datasystem;
 
-Status ParsePiplnH2DRequest(const GetReqPb &req, H2DChunkManager &mgr, const std::string &objectKey, int infoIdx)
+Status ParsePiplnH2DRequest(const GetReqPb &req, H2DChunkManager &mgr, const std::string &objectKey, int infoIdx,
+                            std::string deviceId)
 {
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
 
     const auto &info = req.h2d_infos(static_cast<int>(infoIdx));
+
+    int32_t devId = -1;
+    try {
+        devId = std::stoi(deviceId);
+    } catch (...) {
+        return Status(K_INVALID, "invalid device id " + deviceId);
+    }
     DevShmInfo devShmInfo{ .devType = TargetDeviceType::CUDA,
-                           .devId = info.dev_id(),
-                           .ptr = nullptr, /* pointer is inited in AddKey */
+                           .devId = static_cast<uint32_t>(devId), /* now only support int device id */
+                           .ptr = nullptr,                        /* pointer is inited in AddKey */
                            .size = size_t(info.target_size()) };
     uint32_t workerReqId = (uint32_t)GenerateReqId();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.AddKey(objectKey, workerReqId, devShmInfo, info.target_device_handle()),
@@ -116,7 +124,8 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
     RETURN_IF_NOT_OK(UrmaManager::Instance().GetTargetSeg(segAddress, segSize, remoteAddress, &targetSeg, &targetJfr));
 
     // start Receiver
-    RETURN_IF_NOT_OK(mgr.StartReceiver(reqId, src, size, targetSeg, targetJfr));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.StartReceiver(reqId, src, size, targetSeg, targetJfr),
+                                     "failed to start receiver");
 
     // set field to trigger sender
     subReq.mutable_urma_info()->set_client_req_id(reqId);
@@ -128,8 +137,11 @@ Status InitOsPiplnH2DEnv(void *ctx, void *jfc, void *jfce)
 {
     if (!SupportPipelineRH2D())
         return Status::OK();
-    return H2DChunkManager::InitOsPiplnH2DEnv((urma_context_t *)ctx, (urma_jfc_t *)jfc, (urma_jfce_t *)jfce,
-                                              FLAGS_pipeline_h2d_thread_num);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        H2DChunkManager::InitOsPiplnH2DEnv((urma_context_t *)ctx, (urma_jfc_t *)jfc, (urma_jfce_t *)jfce,
+                                           FLAGS_pipeline_h2d_thread_num),
+        "failed to init os pipeline env");
+    return Status::OK();
 }
 
 int PiplnH2DRecvEventHook(void *cr)
@@ -151,8 +163,8 @@ Status StartPipelineSender(PiplnSndArgs &args)
         .size = 0,
     };
     mgr.AddKey("", args.clientKey, dev, "");
-    RETURN_IF_NOT_OK(mgr.StartSender(args));
-    RETURN_IF_NOT_OK(mgr.WaitAll());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.StartSender(args), "failed to start sender");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.WaitAll(), "failed to wait send done");
     return Status::OK();
 }
 

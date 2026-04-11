@@ -199,7 +199,7 @@ TEST_F(ClientManagerTest, TestRunCallbackByUDSHeartbeat)
     int socketFd = sockFd.GetFd();
 
     // Manager a client and register a callback
-    ASSERT_TRUE(clientMgr.AddClient(clientId, true, socketFd, "", "", "", lockId));
+    ASSERT_TRUE(clientMgr.AddClient(clientId, true, socketFd, "", "", "", "", lockId));
     bool called = false;
     auto callback = [&called]() {
         LOG(INFO) << "run callback";
@@ -228,7 +228,7 @@ TEST_F(ClientManagerTest, DISABLED_TestRunCallbackByRPCHeartbeat)
     auto clientId = ClientKey::Intern("clientId");
 
     // Manager a client and register a callback
-    ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", "", "", lockId));
+    ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", "", "", "", lockId));
     std::atomic<bool> called{ false };
     auto callback = [&called]() {
         LOG(INFO) << "run callback";
@@ -250,9 +250,9 @@ TEST_F(ClientManagerTest, TestAddClientFailed)
     DS_ASSERT_OK(clientMgr.Init());
     auto clientId = ClientKey::Intern(GetBytesUuid());
     uint32_t lockId;
-    DS_ASSERT_OK(clientMgr.AddClient(clientId, true, -1, "", true, "", lockId));
+    DS_ASSERT_OK(clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId));
     for (int i = 0; i < 20; i++) { // retry num is 20
-        auto status = clientMgr.AddClient(clientId, true, -1, "", true, "", lockId);
+        auto status = clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId);
         ASSERT_TRUE(status.GetMsg().find("Failed to insert client") != std::string::npos) << status.GetMsg();
     }
 }
@@ -265,11 +265,11 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
     uint32_t lockId;
     for (size_t i = 0; i < count; ++i) {
         auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
-        ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", true, "", lockId));
+        ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId));
     }
     for (size_t i = 0; i < count; ++i) {
         auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
-        ASSERT_FALSE(clientMgr.AddClient(clientId, true, -1, "", true, "", lockId));
+        ASSERT_FALSE(clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId));
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count);
 

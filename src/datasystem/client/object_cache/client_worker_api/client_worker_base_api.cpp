@@ -86,7 +86,6 @@ Status ClientWorkerBaseApi::PreparePipelineRH2DReq(H2DParam &h2DParam, H2DChunkM
                           "should not happen: reqId " + std::to_string(reqId) + " has no reqInfo in chunkManager");
         }
         auto info = req.add_h2d_infos();
-        info->set_dev_id(reqInfo->driver->devId);
         info->set_target_device_handle(reqInfo->driver->targetHandle);
         info->set_target_size(reqInfo->driver->targetSize);
     }

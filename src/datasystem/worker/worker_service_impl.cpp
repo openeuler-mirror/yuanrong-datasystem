@@ -274,7 +274,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     if (req.heartbeat_enabled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
             worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
-                               supportMultiShmRefCount, lockId),
+                               supportMultiShmRefCount, req.device_id(), lockId),
             "worker add client failed");
     }
     // After executing "AddClient", the server fd will be bound to the client and released when the client loses

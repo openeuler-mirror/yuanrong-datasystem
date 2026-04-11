@@ -521,11 +521,16 @@ Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const st
     HostPort remoteSenderAddr;
     remoteSenderAddr.ParseString(address);
     std::string remoteConnectionId = remoteSenderAddr.ToString();
-    TbbJfrMap::const_accessor jfrAccessor;
+    uint32_t jfrId;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        GetOrCreateLocalJfr(remoteConnectionId, jfrId),
+        FormatString("[GetTargetSeg] GetOrCreateLocalJfr for %s failed", remoteConnectionId));
+    TbbJfrMap::accessor jfrAccessor;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localJfrMap_.find(jfrAccessor, remoteConnectionId), K_RUNTIME_ERROR,
-                                         FormatString("No local JFR for %s", remoteConnectionId));
+                                         FormatString("[GetTargetSeg] find jfr for %s failed", remoteConnectionId));
+
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jfrAccessor->second != nullptr, K_RUNTIME_ERROR,
-                                         FormatString("Local JFR is null for %s", remoteConnectionId));
+                                         FormatString("[GetTargetSeg] Local JFR is null for %s", remoteConnectionId));
     *targetJfr = jfrAccessor->second->Raw();
     return Status::OK();
 }
@@ -1342,10 +1347,12 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 "Try to set client UB transport memory size to %lu, but it is already set to %lu", transportSize,
                 UrmaManager::ubTransportMemSize_);
         }
-        // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
 #ifdef BUILD_PIPLN_H2D
+        // pipeline h2d flag should be set for client to init pipeline env
         FLAGS_enable_pipeline_h2d = true;
+        FLAGS_pipeline_h2d_thread_num = 0;
 #endif
+        // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
     }
 }
 

@@ -79,11 +79,12 @@ public:
      * @param[in] tenantId The tenant id
      * @param[in] enableCrossNode Client is enable cross node connection or not.
      * @param[in] podName Client pod name.
+     * @param[in] deviceId pipeline h2d device id
      * @param[out] lockId Lock id for client.
      * @return Status of the call.
      */
     Status AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
-                     bool enableCrossNode, const std::string &podName, uint32_t &lockId);
+                     bool enableCrossNode, const std::string &podName, std::string deviceId, uint32_t &lockId);
 
     /**
      * @brief Remove client information.

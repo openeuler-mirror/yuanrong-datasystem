@@ -102,8 +102,17 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
             CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(iter->second.offsetInfo == offsetInfo, K_INVALID,
                                                  FormatString("Duplicate offset read for objectKey %s", objectKey));
         }
-        if (OsXprtPipln::IsPiplnH2DRequest(req))
-            RETURN_IF_NOT_OK(OsXprtPipln::ParsePiplnH2DRequest(req, GetH2DChunkManager(), objectKey, i));
+        if (OsXprtPipln::IsPiplnH2DRequest(req)) {
+            std::shared_ptr<worker::ClientInfo> clientInfo;
+            clientInfo = worker::ClientManager::Instance().GetClientInfo(ClientKey::Intern(req.client_id()));
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(clientInfo, K_RUNTIME_ERROR,
+                                                 "no clientInfo for client id " + req.client_id());
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!clientInfo->GetDeviceId().empty(), K_RUNTIME_ERROR,
+                                                 "device id is empty for pipeline rh2d");
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                OsXprtPipln::ParsePiplnH2DRequest(req, GetH2DChunkManager(), objectKey, i, clientInfo->GetDeviceId()),
+                "ParsePiplnH2DRequest failed");
+        }
         VLOG(1) << "objectKey " << objectKey << " add to GetRequest success";
     }
     threadPool_ = std::move(threadPool);

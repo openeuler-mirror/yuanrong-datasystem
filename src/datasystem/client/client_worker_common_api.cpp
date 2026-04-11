@@ -109,10 +109,11 @@ ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
 
 ClientWorkerLocalCommonApi::ClientWorkerLocalCommonApi(
     HostPort hostPort, std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api, void *worker,
-    HeartbeatType heartbeatType, bool enableCrossNodeConnection, Signature *signature)
+    HeartbeatType heartbeatType, bool enableCrossNodeConnection, Signature *signature, std::string deviceId)
     : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, false, signature),
       api_(std::move(api)),
-      worker_(worker)
+      worker_(worker),
+      deviceId_(std::move(deviceId))
 {
     (void)enableCrossNodeConnection;
 }
@@ -211,6 +212,7 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     req.set_enable_cross_node(enableCrossNodeConnection_);
     req.set_enable_exclusive_connection(false);
     req.set_pod_name(Logging::PodName());
+    req.set_device_id(deviceId_);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RegisterClientRspPb rsp;
     Status status;
@@ -231,11 +233,13 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
 ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred,
                                                          HeartbeatType heartbeatType, SensitiveValue token,
                                                          Signature *signature, std::string tenantId,
-                                                         bool enableCrossNodeConnection, bool enableExclusiveConnection)
+                                                         bool enableCrossNodeConnection, bool enableExclusiveConnection,
+                                                         std::string deviceId)
     : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature),
       cred_(cred),
       tenantId_(std::move(tenantId)),
-      enableExclusiveConnection_(enableExclusiveConnection)
+      enableExclusiveConnection_(enableExclusiveConnection),
+      deviceId_(std::move(deviceId))
 {
     recvPageThread_ = Thread(&ClientWorkerRemoteCommonApi::RecvPageFd, this);
     clientAccessToken_ = std::make_unique<ClientAccessToken>(std::move(token));
@@ -569,6 +573,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_enable_exclusive_connection(enableExclusiveConnection_);
     req.set_pod_name(Logging::PodName());
     req.set_support_multi_shm_ref_count(true);
+    req.set_device_id(deviceId_);
 #ifdef WITH_TESTS
     INJECT_POINT("client.RegisterClient.multi_shm_ref_count", [&req](bool multiShmRefCount) {
         req.set_support_multi_shm_ref_count(multiShmRefCount);

@@ -134,7 +134,36 @@ KVClient
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
-    
+
+    .. cpp:function:: Status MGetH2D(const std::vectorstd::string &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk, std::vectorstd::string &outFailedKeys, int32_t subTimeoutMs)
+
+        由服务端将多个键对应的值复制到设备共享内存中。
+
+        参数：
+            - **keys** - 键列表。
+            - **devShmChunk** - 设备共享内存指针与大小的配对列表，用于指定目标设备内存地址及容量。
+            - **outFailedKeys** - 传出参数，返回主机到设备（H2D）传输失败的键列表。
+            - **subTimeoutMs** - 当对象未就绪时，等待结果返回的超时时长，单位毫秒。必须为非负整数，0 表示不允许等待（立即返回）。
+
+        返回：
+            - 返回 ``StatusCode::K_OK`` 表示操作成功。
+            - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 为空或参数校验不通过。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示 ``key`` 不存在。
+            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 worker 获取值或服务端内部错误。
+            - 返回 ``StatusCode::K_NOT_SUPPORT`` 表示 client 或 worker 不支持 MGetH2D。
+
+    .. cpp:function:: std::shared_future<AsyncResult> AsyncMGetH2D(const std::vectorstd::string &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk, int32_t subTimeoutMs)
+
+        由服务端异步将多个键对应的值复制到设备共享内存中。
+
+        参数：
+            - **keys** - 键列表。
+            - **devShmChunk** - 设备共享内存指针与大小的配对列表，用于指定目标设备内存地址及容量。
+            - **subTimeoutMs** - 当对象未就绪时，等待结果返回的超时时长，单位毫秒。必须为非负整数，0 表示不允许等待（立即返回）。
+
+        返回：
+            - 返回 ``std::shared_future<AsyncResult>`` 异步任务句柄，调用方可通过该句柄查询操作状态或获取最终结果。
+
     .. cpp:function:: Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)
 
         获取键对应的数据。
