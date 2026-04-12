@@ -1,4 +1,4 @@
-# 异构对象
+# HeteroClient编程示例
 
 ## 基本概念
 
@@ -205,7 +205,7 @@ void HeteroDevSubscribe()
 ```python
 import acl
 import random
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import DsClient, DeviceBlobList, Blob
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -373,7 +373,7 @@ MGetH2D / MSetD2H 需配套使用。当 MSetD2H 对 HBM 的小数据块合并后
 ```python
 import acl
 import random
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import DsClient, DeviceBlobList, Blob
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"

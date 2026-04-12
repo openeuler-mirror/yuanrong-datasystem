@@ -1,23 +1,129 @@
+/* Custom styles for Furo theme (openYuanrong datasystem) */
+
+/* Improve font */
 html {
     --pst-font-family-base: 'Microsoft Yahei', 'Inter', sans-serif;
 }
 
-.bd-page-width {
-    max-width: 100%;
-    min-width: 100%;
+/* Brand colors (blue-based, modern and professional) */
+:root {
+    --openyuanrong-primary: #3498db;
+    --openyuanrong-secondary: #2c3e50;
+    --openyuanrong-accent: #1abc9c;
+    --openyuanrong-code: #27ae60;
+    --openyuanrong-background: #f8f9fa;
+    --openyuanrong-card: #ffffff;
 }
 
-.bd-content .sd-tab-set>input:checked+label {
-    border-color: #d3d3d3 #d3d3d3 transparent;
+/* Dark mode colors */
+[data-theme="dark"] {
+    --openyuanrong-primary: #5dade2;
+    --openyuanrong-secondary: #e2e8f0;
+    --openyuanrong-accent: #48c9b0;
+    --openyuanrong-code: #7dcea0;
+    --openyuanrong-background: #1a1a1a;
+    --openyuanrong-card: #2d3748;
 }
 
-.bd-content .sd-tab-set .sd-tab-content {
-    border-color: #d3d3d3;
+/* Improved sidebar brand styling */
+.sidebar-brand {
+    padding: 5px 15px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
 }
 
-/* 1. 灯箱模态框背景 */
+.sidebar-brand-text {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-logo {
+    max-width: 140px;
+    max-height: 140px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.sidebar-brand-name {
+    font-weight: 700;
+    font-size: 0.95em;
+    color: var(--color-foreground-primary);
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.sidebar-brand-name:hover {
+    color: var(--color-brand-primary);
+}
+
+/* Hide default project name span from Furo */
+.sidebar-brand-text > span {
+    display: none;
+}
+
+.sidebar-logo:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-logo:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-brand-text span {
+    font-weight: 700;
+    font-size: 1.1em;
+    color: var(--color-foreground-primary);
+    letter-spacing: -0.2px;
+}
+
+/* Improved version switcher styling */
+.sidebar-version-switcher {
+    padding: 8px 15px;
+    border-top: 1px solid var(--color-sidebar-border);
+    border-bottom: 1px solid var(--color-sidebar-border);
+    background-color: var(--color-sidebar-background);
+}
+
+/* Improved code block styling */
+pre code {
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+
+/* Better card styling */
+div.card {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: box-shadow 0.2s;
+}
+
+div.card:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+/* Custom callouts */
+.callout.admonition {
+    border-left: 4px solid var(--openyuanrong-primary);
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 0;
+    background-color: var(--openyuanrong-background);
+}
+
+/* Lightbox for images */
 #custom-image-modal {
-    display: none; /* 默认隐藏 */
+    display: none;
     position: fixed;
     top: 0;
     left: 0;
@@ -31,7 +137,6 @@ html {
     flex-direction: column;
 }
 
-/* 2. 关闭按钮 */
 #custom-modal-close {
     position: absolute;
     top: 20px;
@@ -55,7 +160,6 @@ html {
     background-color: rgba(255, 255, 255, 0.2);
 }
 
-/* 3. 放大后的图片 */
 #custom-modal-image {
     max-width: 90%;
     max-height: 80%;
@@ -64,7 +168,6 @@ html {
     cursor: default;
 }
 
-/* 4. 为文档中的所有图片添加鼠标手势提示 */
 div.body img,
 figure img {
     cursor: zoom-in !important;

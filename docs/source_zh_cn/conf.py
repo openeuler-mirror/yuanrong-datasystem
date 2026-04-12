@@ -98,7 +98,8 @@ autosummary_imported_members = True
 #   HTML templates
 # -----------------------------------------------------------------------------
 html_logo = "./images/logo-small.png"
-html_theme = "sphinx_book_theme"
+html_favicon = "./images/favicon.png"
+html_theme = "furo"
 
 html_static_path = ["../_static"]
 html_css_files = [
@@ -107,32 +108,31 @@ html_css_files = [
 html_js_files = ["custom.js"]
 
 html_theme_options = {
-    "show_navbar_depth": 1,
-    "max_navbar_depth": 7,
-    "collapse_navigation": True,
-    "use_download_button": False,
-    "extra_footer": """
-        Built with
-        <a href="https://www.sphinx-doc.org/en/master/">Sphinx</a>
-        using a
-        <a href="https://github.com/executablebooks/sphinx-book-theme">theme</a>
-        provided by
-        <a href="https://github.com/executablebooks">Executable Books Project</a>.
-    """,
-    "switcher": {
-        "json_url": "https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/versions.json", 
-        "version_match": os.getenv("BUILD_VERSION", "latest"), 
-    }
+    "sidebar_hide_name": False,
+    "source_repository": "https://gitcode.com/openeuler/yuanrong-datasystem",
+    "source_branch": "master",
+    "source_directory": "docs/source_zh_cn/",
+    # Disable per-page edit/view buttons; GitCode link is in sidebar instead
+    "top_of_page_buttons": [],
+    "light_css_variables": {
+        "color-brand-primary": "#3498db",
+        "color-brand-content": "#3498db",
+        "color-api-background": "#f8f9fa",
+        "color-api-name": "#2c3e50",
+        "color-api-pre-name": "#2c3e50",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#5dade2",
+        "color-brand-content": "#5dade2",
+        "color-api-background": "#2d3748",
+        "color-api-name": "#e2e8f0",
+        "color-api-pre-name": "#e2e8f0",
+    },
+    # Version switcher is handled by custom brand.html template (hardcoded versions)
+    # Note: Furo does not support versions_url/version_match options
 }
 
-html_sidebars = {
-    "**": [
-        "navbar-logo.html",
-        "version-switcher.html",
-        "search-button-field.html", 
-        "sbt-sidebar-nav.html",
-    ]
-}
+# html_sidebars for Furo theme (uses default)
 
 # -----------------------------------------------------------------------------
 #   Myst extensions

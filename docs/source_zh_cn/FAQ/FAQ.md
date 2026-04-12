@@ -50,4 +50,4 @@ traceId      : 3ebd1347-1ae2-46a4-906b-a1dcde8db79e]
 2. 对高可用场景，建议 Client 启用备用节点连接能力，在本地 Worker 重启失败期间切换到备用节点处理请求。
 3. 在资源充足且开启大页或UB的情况下，不要仅依据 `sharedMemory < requests.memory` 进行配置，建议进一步将共享内存控制在 Pod 内存上限的 `1/2` 以下，为 Worker 重启窗口预留余量。
 
-更多约束说明请参考：[共享内存生命周期约束](../deployment/k8s_configuration.md#共享内存生命周期约束)。
+更多约束说明请参考：[共享内存生命周期相关约束](../deployment/k8s_configuration.md#共享内存生命周期相关约束)。

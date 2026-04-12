@@ -1,10 +1,12 @@
-### 一，常用构建命令
+# 基于Bazel自定义编译
+
+## 一，常用构建命令
 
 **1. sdk 包构建：**
 
 ```bash
 bazel build //bazel:datasystem_sdk
-#输出sdk包括： bazel-bin/bazel/datasystem_sdk.zip ，里面包含 libdatasytem.so 和头文件，以及其他python接口等
+#输出sdk包括： bazel-bin/bazel/datasystem_sdk.zip ，里面包含 libdatasystem.so 和头文件，以及其他python接口等
 ```
 
 性能优化的Release版本，需要带上 --config=release，下同
@@ -48,7 +50,7 @@ bazel build --config=urma --config=release //bazel:datasystem_wheel
 bazel build //src/datasystem/common/rdma:fast_transport_manager_wrapper
 ```
 
-### 二，构建指定版本
+## 二，构建指定版本
 
 **1. 指定python版本编译：**
 
@@ -65,10 +67,10 @@ bazel build //bazel:datasystem_wheel --define glibc_version=2.35 --config=releas
 #可选版本包括：2.34, 2.35, 2.36, 2.37, 2.38
 ```
 
-### 三，做为第三方组件源码集成
+## 三，做为第三方组件源码集成
 **1. bazelrc 默认选项：**
-```bash
-common --enable_bzlmod=false   # 关闭 bzlmod 
+```text
+common --enable_bzlmod=false   # 关闭 bzlmod
 build --cxxopt=-std=c++17    # 使用 c++17编译
 # 关闭 RDMA 和 OBS 支持
 build --cxxopt=-DDISABLE_RDMA
@@ -86,7 +88,7 @@ build:urma --copt=-DURMA_OVER_UB
 
 **2. WORKSPACE 配置**
 
-```bash
+```python
 load("@yuanrong-datasystem//bazel:ds_deps.bzl", "ds_deps", "setup_grpc")
 
 ds_deps()    #加载datasystem默认依赖
@@ -118,7 +120,7 @@ py_repositories()
 ```
 **3. BUILD 添加client依赖关系**
 依赖关系添加：@yuanrong-datasystem//src/datasystem/client:datasystem
-```bash
+```python
 cc_binary(
     name = "datasystem_example",
     srcs = [
@@ -131,7 +133,7 @@ cc_binary(
 ```
 **4. C++ 代码**
 添加 数据系统头文件，使用接口
-```C++
+```cpp
 #include "datasystem/datasystem.h"
 
 using datasystem::KVClient;

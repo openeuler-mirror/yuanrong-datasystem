@@ -1,8 +1,8 @@
-# openYuanrong datasystem Kubernetes配置项
+# kubernetes部署配置项
 
 <!-- TOC -->
 
-- [openYuanrong datasystem Kubernetes配置项](#openyuanrong-datasystem-kubernetes配置项)
+- [kubernetes部署配置项](#kubernetes部署配置项)
   - [最小化配置项](#最小化配置项)
   - [详细配置项](#详细配置项)
     - [镜像相关配置](#镜像相关配置)
@@ -53,7 +53,7 @@ global:
     etcdAddress: "127.0.0.1:2379"
 ```
 
-部署openYuanrong datasystem请参考：[openYuanrong datasystem Kubernetes部署](../deployment/deploy.md#openyuanrong-datasystem-kubernetes部署)。
+部署openYuanrong datasystem请参考：[openYuanrong datasystem Kubernetes部署](../deployment/deploy.md#kubernetes部署worker)。
 
 默认情况下，每个 openYuanrong datasystem DaemonSet 最大可使用 2GB 共享内存空间用于缓存数据，如果需要调整该值，可以通过 [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 调整。
 
@@ -80,7 +80,7 @@ global:
         memory: "5Gi"
       requests:
         cpu: "3"
-        # 该值必须大于 shreadMemory
+        # 该值必须大于 sharedMemory
         memory: "5Gi"
       # 将共享内存最大使用容量调整为4GB
       sharedMemory: 4096
@@ -430,7 +430,7 @@ global:
 | global.gracefulShutdown.enableLosslessDataExitMode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
 | global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | global.gracefulShutdown.dataMigrateRateLimitMb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
-| global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worekr Pod |
+| global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worker Pod |
 
 ### 性能相关配置
 
@@ -529,7 +529,7 @@ global:
         memory: "4Gi"
     workerResources:
       sharedMemory: 1024
-  # 在亲和性标签为 `small` 的节点部署第一种规格的Pod
+  # 在亲和性标签为 `small` 的节点部署第二种规格的Pod
   - name: "ds-worker-small"
     affinityLabel: "small"
     resources:
@@ -541,7 +541,7 @@ global:
         memory: "2Gi"
     workerResources:
       sharedMemory: 1024
-  # 在亲和性标签为 `big` 的节点部署第一种规格的Pod
+  # 在亲和性标签为 `big` 的节点部署第三种规格的Pod
   - name: "ds-worker-big"
     affinityLabel: "big"
     resources:
