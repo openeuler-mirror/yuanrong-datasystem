@@ -84,9 +84,7 @@ docs/source_en/generated
 false
 
 # ai context
-AGENTS.md
 docs/agent
-CLAUDE.md
 .claude
 plan.md
 
