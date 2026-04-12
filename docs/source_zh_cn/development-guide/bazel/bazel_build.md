@@ -70,9 +70,8 @@ bazel build //bazel:datasystem_wheel --define glibc_version=2.35 --config=releas
 ```bash
 common --enable_bzlmod=false   # 关闭 bzlmod 
 build --cxxopt=-std=c++17    # 使用 c++17编译
-# 关闭 RDMA 和 OBS 支持
+# 关闭 RDMA 支持
 build --cxxopt=-DDISABLE_RDMA
-build --cxxopt=-DDISABLE_OBS
 # 去掉grpc部分功能和依赖
 build --define=grpc_no_xds=true
 build --define=grpc_no_binder=true

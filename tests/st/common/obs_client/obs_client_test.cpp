@@ -27,7 +27,6 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/random_data.h"
 
-#include <eSDKOBS.h>
 
 DS_DECLARE_string(obs_access_key);
 DS_DECLARE_string(obs_secret_key);

@@ -17,3 +17,12 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "hasher_test",
+    srcs = ["hasher_test.cpp"],
+    deps = [
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/log:common_log",
+    ],
+)

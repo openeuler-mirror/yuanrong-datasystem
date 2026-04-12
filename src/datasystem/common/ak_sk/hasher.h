@@ -119,6 +119,48 @@ public:
      * @return Status of the call.
      */
     Status GetSha256Hex(const std::string &str, std::string &hashVal);
+
+    /**
+     * @brief Get HMAC SHA1. Used by OBS V2 signing.
+     * @param[in] key The secret key.
+     * @param[in] data The data to calculate.
+     * @param[out] output The raw SHA1 output (20 bytes).
+     * @return Status of the call.
+     */
+    Status GetHMACSha1(const SensitiveValue &key, const std::string &data, std::string &output);
+
+    /**
+     * @brief Base64 encode input data.
+     * @param[in] input The binary data to encode.
+     * @param[out] output The base64 encoded string.
+     * @return Status of the call.
+     */
+    static Status Base64Encode(const std::string &input, std::string &output);
+
+    /**
+     * @brief Get HMAC SHA1 + Base64. Used by OBS V2 signing.
+     * @param[in] key The secret key.
+     * @param[in] data The data to calculate.
+     * @param[out] output The base64 encoded HMAC-SHA1 signature.
+     * @return Status of the call.
+     */
+    Status GetHMACSha1Base64(const SensitiveValue &key, const std::string &data, std::string &output);
+
+    /**
+     * @brief Get MD5 hash. Used by OBS Batch Delete Content-MD5 header.
+     * @param[in] data The data to calculate.
+     * @param[out] output The raw MD5 output (16 bytes).
+     * @return Status of the call.
+     */
+    static Status GetMD5(const std::string &data, std::string &output);
+
+    /**
+     * @brief Get MD5 + Base64. Used by OBS Batch Delete Content-MD5 header.
+     * @param[in] data The data to calculate.
+     * @param[out] output The base64 encoded MD5 hash.
+     * @return Status of the call.
+     */
+    static Status GetMD5Base64(const std::string &data, std::string &output);
 };
 }  // namespace datasystem
 #endif

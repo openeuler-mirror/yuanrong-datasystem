@@ -24,3 +24,21 @@ package(default_visibility = ["//visibility:public"])
 #        "//tests/ut:ut_common",
 #    ],
 #)
+
+ds_cc_test(
+    name = "obs_signature_test",
+    srcs = ["obs_signature_test.cpp"],
+    deps = [
+        "//src/datasystem/common/l2cache/obs_client:obs_signature",
+        "//src/datasystem/common/log:common_log",
+    ],
+)
+
+ds_cc_test(
+    name = "obs_xml_util_test",
+    srcs = ["obs_xml_util_test.cpp"],
+    deps = [
+        "//src/datasystem/common/l2cache/obs_client:obs_xml_util",
+        "//src/datasystem/common/log:common_log",
+    ],
+)

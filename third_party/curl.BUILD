@@ -17,7 +17,7 @@ config_setting(
 
 bool_flag(
     name = "http_only",
-    build_setting_default = True,
+    build_setting_default = False,
 )
 
 config_setting(
@@ -258,7 +258,7 @@ cc_library(
         "//conditions:default": [],
     }) + select({
         ":http_only_setting": ["HTTP_ONLY"],
-        "//conditions:default": [],
+        "//conditions:default": ["USE_OPENSSL", "HAVE_OPENSSL", "HAVE_LIBSSL", "HAVE_LIBCRYPTO"],
     }) + select({
         ":ca_bundle_is_unset": [],
         "//conditions:default": ['CURL_CA_BUNDLE=\\"$(CURL_CA_BUNDLE)\\"'],
@@ -273,7 +273,8 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = select({
         ":use_mbedtls_setting": ["@mbedtls"],
-        "//conditions:default": [],
+        ":http_only_setting": [],
+        "//conditions:default": ["@boringssl//:ssl", "@boringssl//:crypto"],
     }),
 )
 

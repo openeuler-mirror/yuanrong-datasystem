@@ -442,7 +442,15 @@ auto CallFunction(const std::string &name, F &&f, const std::string &param) -> t
  * INJECT_POINT("point", [](std::string, int64_t){return 0;});
  * INJECT_POINT("point", [](std::string, std::string){return 0;});
  */
-INJECT_PARAM_EXT()
+// Zero-arg overload: avoid ##__VA_ARGS__ which leaves trailing comma in template args
+template <typename F>
+auto Execute(int lineOfCode, const std::string &fileName, const std::string &name, F &&f)
+    -> Handle<typename std::result_of<F()>::type>
+{
+    return Execute(lineOfCode, fileName, name, [&name, &f](const std::string &arg) {
+        return CallFunction<F>(name, std::move(f), arg);
+    });
+}
 INJECT_PARAM_EXT(int64_t)
 INJECT_PARAM_EXT(int64_t, int64_t)
 INJECT_PARAM_EXT(int64_t, int64_t, int64_t, int64_t)

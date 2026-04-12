@@ -256,14 +256,24 @@ class MockOBSHandler(BaseHTTPRequestHandler):
 
     def _write_file_content(self, file_path):
         with open(file_path, 'wb') as f:
-            remaining = int(self.headers['Content-Length'])
-            while remaining > 0:
+            content_length = self.headers.get('Content-Length')
+            if content_length is not None:
+                remaining = int(content_length)
+                while remaining > 0:
+                    chunk_size = 10 * 1024 * 1024
+                    chunk = self.rfile.read(min(remaining, chunk_size))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+            else:
+                # Handle chunked transfer encoding or unknown content length
                 chunk_size = 10 * 1024 * 1024
-                chunk = self.rfile.read(min(remaining, chunk_size))
-                if not chunk:
-                    break
-                f.write(chunk)
-                remaining -= len(chunk)
+                while True:
+                    chunk = self.rfile.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
 
     def _seek_and_unlink(self, deleted, errors, bucket, root):
         for obj in root.findall('Object'):

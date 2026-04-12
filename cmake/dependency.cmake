@@ -21,7 +21,6 @@ include(${CMAKE_SOURCE_DIR}/cmake/external_libs/xml2.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/pcre.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/cjson.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/external_libs/spdlog.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/external_libs/sdk_c_obs.cmake)
 
 if (BUILD_PIPLN_H2D)
     if (NOT BUILD_WITH_URMA)

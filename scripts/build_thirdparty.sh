@@ -38,15 +38,13 @@ CMAKE_FILES_L1=(
   "protobuf.cmake" # absl
   "libcurl.cmake" # openssl
   "grpc.cmake" # protobuf/openssl/zlib
-  "sdk_c_obs.cmake"
   )
 
 DEPENDENCIES=(
   "re2:absl"
-  "protobuf:absl" 
+  "protobuf:absl"
   "libcurl:openssl"
   "grpc:protobuf:openssl:zlib:re2"
-  "sdk_c_obs:libcurl:securec:openssl:iconv:xml2:pcre:cjson:spdlog"
 )
 
 function is_on() {

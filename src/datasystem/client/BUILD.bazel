@@ -202,9 +202,6 @@ ds_cc_library(
     srcs = [
         "datasystem.cpp",
     ],
-    defines = [
-        "DISABLE_OBS",
-    ],
     visibility = ["//visibility:public"],
     deps = [
         ":add_client_miss_libs_fixme",

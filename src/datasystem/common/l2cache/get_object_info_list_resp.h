@@ -23,9 +23,7 @@
 #include <vector>
 
 #include "datasystem/utils/status.h"
-#ifndef DISABLE_OBS
 #include "datasystem/common/l2cache/obs_client/obs_client.h"
-#endif
 #include "datasystem/common/l2cache/l2cache_object_info.h"
 
 namespace datasystem {
@@ -42,9 +40,7 @@ public:
      */
     virtual ~GetObjectInfoListResp() = default;
 
-#ifndef DISABLE_OBS
     void FillInListObjectData(const ObsClient::ListObjectData &listObjData);
-#endif
     /**
      * @brief set the isTruncated_ flag
      * @param[in] truncatedFlag true or false
