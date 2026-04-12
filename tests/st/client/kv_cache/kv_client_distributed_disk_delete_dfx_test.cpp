@@ -71,7 +71,6 @@ public:
         opts.workerGflagParams = FormatString(
             " -l2_cache_type=distributed_disk"
             " -distributed_disk_path=%s"
-            " -distributed_disk_slot_num=16"
             " -distributed_disk_sync_interval_ms=0"
             " -distributed_disk_sync_batch_bytes=1"
             " -enable_metadata_recovery=false"

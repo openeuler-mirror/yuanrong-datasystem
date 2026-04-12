@@ -38,6 +38,7 @@
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/slot_client/slot_compactor.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
 #include "datasystem/common/l2cache/slot_client/slot.h"
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
@@ -50,12 +51,9 @@ DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
 DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_uint32(distributed_disk_slot_num);
 DS_DECLARE_uint32(distributed_disk_max_data_file_size_mb);
 DS_DECLARE_uint32(distributed_disk_sync_interval_ms);
 DS_DECLARE_uint64(distributed_disk_sync_batch_bytes);
-DS_DECLARE_uint64(distributed_disk_compact_cutover_bytes);
-DS_DECLARE_uint32(distributed_disk_compact_cutover_records);
 
 namespace datasystem {
 namespace ut {
@@ -401,10 +399,7 @@ public:
         FLAGS_distributed_disk_path = baseDir_;
         FLAGS_sfs_path = baseDir_;
         FLAGS_cluster_name = "ut_cluster";
-        FLAGS_distributed_disk_slot_num = 4;
         FLAGS_distributed_disk_max_data_file_size_mb = 1;
-        FLAGS_distributed_disk_compact_cutover_bytes = 64 * 1024;
-        FLAGS_distributed_disk_compact_cutover_records = 128;
         SetSlotWorkerNamespace(SanitizeSlotWorkerNamespace(TARGET_WORKER_ADDRESS));
     }
 
@@ -646,7 +641,7 @@ TEST_F(SlotStoreTest, PersistenceApiAggregateSavePreservesWriteMode)
 
     auto slotRoot = BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name);
     uint32_t slotId =
-        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyWriteModeApi") % FLAGS_distributed_disk_slot_num);
+        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyWriteModeApi") % DISTRIBUTED_DISK_SLOT_NUM);
     auto slotPath = slotRoot + "/" + FormatSlotDir(slotId);
     SlotManifestData manifest;
     ASSERT_TRUE(SlotManifest::Load(slotPath, manifest).IsOk());
@@ -678,7 +673,7 @@ TEST_F(SlotStoreTest, DistributedDiskUsesDistributedDiskPathInsteadOfSfsPath)
     auto distributedRoot = BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name);
     auto legacyRoot = BuildSlotStoreRoot(FLAGS_sfs_path, FLAGS_cluster_name);
     uint32_t slotId =
-        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyDiskRoot") % FLAGS_distributed_disk_slot_num);
+        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyDiskRoot") % DISTRIBUTED_DISK_SLOT_NUM);
     ASSERT_TRUE(FileExist(JoinPath(distributedRoot, FormatSlotDir(slotId))));
     ASSERT_FALSE(FileExist(JoinPath(legacyRoot, FormatSlotDir(slotId))));
 
@@ -742,7 +737,7 @@ TEST_F(SlotStoreTest, ReplaySkipsInvalidPut)
     ASSERT_TRUE(api->Save("tenant/keyB", 5, 1000, body).IsOk());
 
     auto slotRoot = BuildSlotStoreRoot(FLAGS_distributed_disk_path, FLAGS_cluster_name);
-    uint32_t slotId = static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyB") % FLAGS_distributed_disk_slot_num);
+    uint32_t slotId = static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyB") % DISTRIBUTED_DISK_SLOT_NUM);
     auto slotPath = slotRoot + "/" + FormatSlotDir(slotId);
     auto dataPath = slotPath + "/" + FormatDataFileName(1);
     ASSERT_TRUE(DeleteFile(dataPath).IsOk());
@@ -1196,7 +1191,7 @@ TEST_F(SlotStoreTest, SlotClientBackgroundCompactAbsorbsConcurrentMutations)
 
     const std::string keepKey = "tenant/background_keep";
     const std::string deleteKey = "tenant/background_delete";
-    auto keepSlotId = static_cast<uint32_t>(std::hash<std::string>{}(keepKey) % FLAGS_distributed_disk_slot_num);
+    auto keepSlotId = static_cast<uint32_t>(std::hash<std::string>{}(keepKey) % DISTRIBUTED_DISK_SLOT_NUM);
     auto slotPath = GetSlotPath(baseDir_, keepSlotId, TARGET_WORKER_ADDRESS);
 
     ASSERT_TRUE(client.Save(keepKey, 1, 0, MakeBody("v1"), 0, WriteMode::WRITE_THROUGH_L2_CACHE).IsOk());
@@ -1923,7 +1918,7 @@ TEST_F(SlotStoreTest, SlotClientCompactSlotWorks)
     ASSERT_TRUE(client.Save("tenant/keyClientCompact", 1, 1000, body).IsOk());
 
     uint32_t slotId =
-        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyClientCompact") % FLAGS_distributed_disk_slot_num);
+        static_cast<uint32_t>(std::hash<std::string>{}("tenant/keyClientCompact") % DISTRIBUTED_DISK_SLOT_NUM);
     ASSERT_TRUE(client.CompactSlot(slotId).IsOk());
 
     auto content = std::make_shared<std::stringstream>();

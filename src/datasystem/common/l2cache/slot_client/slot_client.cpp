@@ -29,6 +29,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
+#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/l2cache/slot_client/slot.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
@@ -36,13 +37,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
 
-DS_DEFINE_uint32(distributed_disk_slot_num, 128, "The number of slot partitions used by distributed disk.");
 DS_DEFINE_uint32(distributed_disk_max_data_file_size_mb, 1024,
                  "The target max size in MB of a rolling slot data file. Large objects may use a dedicated file.");
-DS_DEFINE_validator(distributed_disk_slot_num, [](const char *flagName, uint32_t value) {
-    (void)flagName;
-    return value > 0;
-});
 DS_DEFINE_validator(distributed_disk_max_data_file_size_mb, [](const char *flagName, uint32_t value) {
     (void)flagName;
     return value > 0;
@@ -106,7 +102,7 @@ Status SlotClient::Init()
     CHECK_FAIL_RETURN_STATUS(!sfsPath_.empty(), StatusCode::K_INVALID,
                              "distributed_disk_path must not be empty when l2_cache_type=distributed_disk");
     rootPath_ = BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name);
-    slotNum_ = FLAGS_distributed_disk_slot_num;
+    slotNum_ = DISTRIBUTED_DISK_SLOT_NUM;
     maxDataFileBytes_ = static_cast<uint64_t>(FLAGS_distributed_disk_max_data_file_size_mb) * 1024ul * 1024ul;
     VLOG(1) << "Initializing slot client, sfsPath=" << sfsPath_ << ", rootPath=" << rootPath_
             << ", slotNum=" << slotNum_ << ", maxDataFileBytes=" << maxDataFileBytes_;

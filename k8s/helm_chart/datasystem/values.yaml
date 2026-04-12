@@ -179,20 +179,14 @@ global:
     distributedDisk:
       # Root path of distributed disk storage inside the container.
       path: ""
-      # Number of distributed disk slots.
-      slotNum: 128
       # Maximum size in MB of a single distributed disk data file.
       maxDataFileSizeMb: 1024
       # Maximum group commit interval in milliseconds.
-      syncIntervalMs: 5000
+      syncIntervalMs: 1000
       # Group commit batch threshold in bytes.
-      syncBatchBytes: 4194304
+      syncBatchBytes: 33554432
       # Fixed interval in seconds between background compact runs.
       compactIntervalS: 3600
-      # Maximum delta bytes allowed during compact final cutover.
-      compactCutoverBytes: 4194304
-      # Maximum delta record count allowed during compact final cutover.
-      compactCutoverRecords: 4096
 
     obs:
       # The access key for obs AK/SK authentication.
