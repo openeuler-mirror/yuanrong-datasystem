@@ -46,6 +46,7 @@
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_string(master_address);
 DS_DECLARE_uint32(node_timeout_s);
+DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_int32(sc_regular_socket_num);
 DS_DECLARE_int32(sc_stream_socket_num);
 
@@ -124,6 +125,7 @@ void WorkerLivenessCheck::Run()
     const uint32_t intervalMs = 100;             // short interval for quick shutdown.
     const uint32_t minProbeCount = 3;            // at lease probe 3 times.
     const uint32_t maxProbeIntervalMs = 10'000;  // max probe interval in ms.
+    const uint32_t logCheckIntervalS = 60;       // min log interval in s.
     uint32_t probeIntervalMs =
         std::min({ probeTimeoutMs_ / minProbeCount, maxProbeIntervalMs, FLAGS_node_timeout_s / minProbeCount });
     Timer timer;
@@ -141,14 +143,15 @@ void WorkerLivenessCheck::Run()
         timer.Reset();
         isFirst = false;
         rc = DoLivenessCheck();
-        LOG(INFO) << FormatString("DoLivenessCheck, Status: %s", rc.ToString());
+        LOG_EVERY_T(INFO, logCheckIntervalS) << FormatString("DoLivenessCheck, Status: %s", rc.ToString());
 
         if (rc.IsOk()) {
             logFlag = false;
             LOG_IF_ERROR(SetLivenessProbe(true), "SetLivenessProbe failed");
             continue;
         }
-        LOG_IF(ERROR, !logFlag) << "liveness probe failed, try delete liveness probe file!";
+        LOG_IF(ERROR, !logFlag) << "Check worker liveness probe failed, detail message: "
+                                << rc.ToString() << ". maybe you can try delete liveness probe file!";
         LOG_IF_ERROR(SetLivenessProbe(false), "SetLivenessProbe failed");
         logFlag = true;
     }
@@ -261,7 +264,7 @@ Status WorkerLivenessCheck::CheckWorkerServices()
 Status WorkerLivenessCheck::CheckRocksDbService()
 {
     INJECT_POINT("WorkerLivenessCheck.CheckRocksDbService.failed");
-    if (!IsMasterNode()) {
+    if (!IsMasterNode() || (FLAGS_rocksdb_write_mode == "none")) {
         return Status::OK();
     }
     master::CreateMetaReqPb req;
