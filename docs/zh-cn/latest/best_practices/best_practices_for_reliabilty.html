@@ -3,11 +3,11 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="openYuanrong datasystem 日志" href="log_guide.html"><link rel="prev" title="贡献者指南" href="../contributor_guide/contribution.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="UB最佳实践" href="best_pracitces_for_ub.html"><link rel="prev" title="最佳实践" href="index.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
-        <title>附录 - openYuanrong datasystem documentation</title>
+        <title>可靠性最佳实践 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -233,7 +233,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
         <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
@@ -310,11 +310,11 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l2"><a class="reference internal" href="../deployment/dsbench.html">dsbench性能测试工具</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">可靠性最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_practices_for_rh2d.html">RH2D最佳实践</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -529,10 +529,10 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
-<li class="toctree-l1 current has-children current-page"><a class="current reference internal" href="#">附录</a><input aria-label="Toggle navigation of 附录" checked="" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="log_guide.html">openYuanrong datasystem 日志</a></li>
-<li class="toctree-l2"><a class="reference internal" href="client_env_guide.html">Client环境变量</a></li>
-<li class="toctree-l2"><a class="reference internal" href="hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/client_env_guide.html">Client环境变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
@@ -563,21 +563,492 @@ document.addEventListener('DOMContentLoaded', function() {
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
             <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>附录<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
-<div class="toctree-wrapper compound">
-</div>
-<p>附录包含以下内容：</p>
+<h1>可靠性最佳实践<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
+<p>本文档介绍 openYuanrong datasystem 在可靠性场景下的二级缓存配置方法。当前承担数据可靠性能力的
+<code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code> 包括 <code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code>、<code class="docutils literal notranslate"><span class="pre">sfs</span></code> 和 <code class="docutils literal notranslate"><span class="pre">obs</span></code> 三种模式。</p>
+<section id="id2">
+<h2>可靠性能力的生效条件<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<p>可靠性能力同时依赖集群侧配置和业务侧写入模式。</p>
+<ol class="arabic simple">
+<li><p>集群侧需要配置二级缓存类型，即将 <code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code> 或 <code class="docutils literal notranslate"><span class="pre">l2CacheType</span></code> 设置为
+<code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code>、<code class="docutils literal notranslate"><span class="pre">sfs</span></code> 或 <code class="docutils literal notranslate"><span class="pre">obs</span></code>。</p></li>
+<li><p>业务侧写入数据时，需要使用具备二级缓存语义的写模式。</p></li>
+</ol>
+<p>具备可靠性语义的写模式包括：</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="log_guide.html"><span class="std std-doc">openYuanrong datasystem 日志指南</span></a></p></li>
-<li><p><a class="reference internal" href="client_env_guide.html"><span class="std std-doc">openYuanrong datasystem client环境变量配置指南</span></a></p></li>
-<li><p><a class="reference internal" href="hugepage_guide.html"><span class="std std-doc">openYuanrong datasystem 大页内存配置指南</span></a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WRITE_THROUGH_L2_CACHE</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WRITE_BACK_L2_CACHE</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WRITE_BACK_L2_CACHE_EVICT</span></code></p></li>
 </ul>
+<p>其中：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">WRITE_THROUGH_L2_CACHE</span></code> 表示同步写入二级缓存，可靠性语义最直接。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WRITE_BACK_L2_CACHE</span></code> 表示异步写入二级缓存，在故障窗口内可能存在尚未落入二级缓存的数据。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WRITE_BACK_L2_CACHE_EVICT</span></code> 表示异步写入二级缓存，并允许对象在缓存容量不足时被提前淘汰。</p></li>
+</ul>
+<p>以下写模式不提供二级缓存可靠性：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">NONE_L2_CACHE</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NONE_L2_CACHE_EVICT</span></code></p></li>
+</ul>
+</section>
+<section id="id3">
+<h2>二级缓存类型说明<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>类型</p></th>
+<th class="head"><p>依赖介质</p></th>
+<th class="head"><p>配置特点</p></th>
+<th class="head"><p>典型场景</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code></p></td>
+<td><p>共享 NFS 目录</p></td>
+<td><p>通过 slot 存储在共享目录上持久化数据</p></td>
+<td><p>集群内所有 worker 已挂载同一份 NFS 目录</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sfs</span></code></p></td>
+<td><p>SFS Turbo</p></td>
+<td><p>依赖共享文件系统参数</p></td>
+<td><p>已使用 SFS Turbo 承载可靠性数据</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">obs</span></code></p></td>
+<td><p>对象存储服务</p></td>
+<td><p>依赖 OBS 认证信息和桶配置</p></td>
+<td><p>需要通过对象存储提供可靠性能力</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id4">
+<h2>不同部署方式的配置入口<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<p>不同部署方式对应的可靠性配置入口如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>部署方式</p></th>
+<th class="head"><p>配置入口</p></th>
+<th class="head"><p>参数形式</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Kubernetes DaemonSet</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s/helm_chart/datasystem/values.yaml</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">global.l2Cache.*</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Kubernetes Deployment</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s_deployment/helm_chart/worker.config</span></code></p></td>
+<td><p>worker 级 flag，例如 <code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dscli</span></code> 进程部署</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 或 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 命令行参数</p></td>
+<td><p>worker 级 flag，例如 <code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>对于 Kubernetes DaemonSet 模式，Helm chart 会将 <code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">global.l2Cache.*</span></code> 转换为实际的 worker
+启动参数。对于 Kubernetes Deployment 模式和 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 进程部署模式，可靠性相关配置均直接以 worker flag 的
+形式生效。</p>
+</section>
+<section id="id5">
+<h2>配置方法<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-0">
+distributed_disk</label><div class="sd-tab-content docutils">
+<p><strong>模式说明</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code> 模式由 slot 存储承担可靠性能力。系统会基于 <code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code> 构建 slot 根目录，并在
+该目录下持久化对象版本数据。该路径并不是各 worker 独占的本地磁盘路径，而应部署在<strong>所有 worker 均可访问的
+同一份共享 NFS 目录</strong>上。</p>
+<p>生产环境中使用 <code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code> 时，应满足以下条件：</p>
+<ul class="simple">
+<li><p>所有 worker 节点均已挂载同一份 NFS 目录。</p></li>
+<li><p>所有 worker 对该目录具有一致的读写可见性。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code> 在所有 worker 上最终指向同一份共享存储。</p></li>
+</ul>
+<p><strong>配置入口概览</strong></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>部署方式</p></th>
+<th class="head"><p>配置入口</p></th>
+<th class="head"><p>关键参数</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Kubernetes DaemonSet</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s/helm_chart/datasystem/values.yaml</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">global.l2Cache.l2CacheType</span></code>、<code class="docutils literal notranslate"><span class="pre">global.l2Cache.distributedDisk.*</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Kubernetes Deployment</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s_deployment/helm_chart/worker.config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_*</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dscli</span></code> 进程部署</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 或 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 参数</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_*</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>该模式下需要重点关注：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code> 应配置为所有 worker 均可访问的共享 NFS 路径。</p></li>
+<li><p>DaemonSet Helm chart 会将宿主机路径挂载到容器内固定目录
+<code class="docutils literal notranslate"><span class="pre">/home/yuanrong/datasystem/distributed_disk</span></code>，并以
+<code class="docutils literal notranslate"><span class="pre">-distributed_disk_path=/home/yuanrong/datasystem/distributed_disk</span></code>
+的形式传递给 worker。</p></li>
+</ul>
+<p><strong>必选配置项与可选配置项</strong></p>
+<ul class="simple">
+<li><p>必选配置项：<code class="docutils literal notranslate"><span class="pre">l2_cache_type=distributed_disk</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code></p></li>
+<li><p>可选配置项：<code class="docutils literal notranslate"><span class="pre">distributed_disk_max_data_file_size_mb</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_sync_interval_ms</span></code>、
+<code class="docutils literal notranslate"><span class="pre">distributed_disk_sync_batch_bytes</span></code>、<code class="docutils literal notranslate"><span class="pre">distributed_disk_compact_interval_s</span></code>、<code class="docutils literal notranslate"><span class="pre">enableL2CacheFallback</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code> 用于指定所有 worker 共享可见的 NFS 目录，是该模式能够正常工作的前提。</p></li>
+<li><p>其余可选配置项主要用于调优文件大小、刷盘节奏和 compact 周期；如无特殊吞吐或时延诉求，可先使用默认值。</p></li>
+</ul>
+<p><strong>Kubernetes DaemonSet</strong></p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">l2Cache</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># 必选：启用 distributed_disk 二级缓存</span>
+<span class="w">    </span><span class="nt">l2CacheType</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;distributed_disk&quot;</span>
+
+<span class="w">    </span><span class="nt">distributedDisk</span><span class="p">:</span>
+<span class="w">      </span><span class="c1"># 必选：宿主机上所有 worker 共享可见的 NFS 挂载路径</span>
+<span class="w">      </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/mnt/datasystem-nfs&quot;</span>
+<span class="w">      </span><span class="c1"># 可选：单个 data file 的大小上限，单位 MB</span>
+<span class="w">      </span><span class="nt">maxDataFileSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<span class="w">      </span><span class="c1"># 可选：group commit 的最长刷盘间隔，单位毫秒</span>
+<span class="w">      </span><span class="nt">syncIntervalMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span>
+<span class="w">      </span><span class="c1"># 可选：group commit 的批量刷盘阈值，单位字节</span>
+<span class="w">      </span><span class="nt">syncBatchBytes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">33554432</span>
+<span class="w">      </span><span class="c1"># 可选：后台 compact 执行周期，单位秒</span>
+<span class="w">      </span><span class="nt">compactIntervalS</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3600</span>
+</pre></div>
+</div>
+<p>DaemonSet 模式下，用户真正需要提供的是宿主机侧的共享 NFS 路径 <code class="docutils literal notranslate"><span class="pre">global.l2Cache.distributedDisk.path</span></code>。
+Helm chart 会负责将该路径挂载到容器内固定目录，并把对应 worker flag 自动传入进程。</p>
+<p><strong>Kubernetes Deployment</strong></p>
+<div class="highlight-javascript notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// 必选：启用 distributed_disk 二级缓存</span>
+<span class="w">  </span><span class="s2">&quot;l2_cache_type&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;distributed_disk&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 必选：所有 worker 共享可见的 NFS 路径</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_path&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;/mnt/datasystem-nfs&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：单个 data file 的大小上限，单位 MB</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_max_data_file_size_mb&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;1024&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：group commit 的最长刷盘间隔，单位毫秒</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_sync_interval_ms&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;1000&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：group commit 的批量刷盘阈值，单位字节</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_sync_batch_bytes&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;33554432&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：后台 compact 执行周期，单位秒</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_compact_interval_s&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;3600&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Kubernetes Deployment 模式下，worker 直接读取 <code class="docutils literal notranslate"><span class="pre">worker.config</span></code> 中的 flag 配置，因此最小可运行配置是
+<code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code> 和 <code class="docutils literal notranslate"><span class="pre">distributed_disk_path</span></code>；其他 <code class="docutils literal notranslate"><span class="pre">distributed_disk_*</span></code> 选项均属于可选调优参数。</p>
+<p><strong>dscli 进程部署</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">dscli</span></code> 进程部署建议分两步配置：先配置必选项，确认系统已经使用共享 NFS 目录工作；再根据实际吞吐和刷盘压力补充可选项。</p>
+<p>命令行最小示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--l2_cache_type<span class="w"> </span><span class="s2">&quot;distributed_disk&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--distributed_disk_path<span class="w"> </span><span class="s2">&quot;/mnt/datasystem-nfs&quot;</span>
+</pre></div>
+</div>
+<p>命令行补充可选调优项后的示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--l2_cache_type<span class="w"> </span><span class="s2">&quot;distributed_disk&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--distributed_disk_path<span class="w"> </span><span class="s2">&quot;/mnt/datasystem-nfs&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--distributed_disk_max_data_file_size_mb<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--distributed_disk_sync_interval_ms<span class="w"> </span><span class="m">1000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--distributed_disk_sync_batch_bytes<span class="w"> </span><span class="m">33554432</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--distributed_disk_compact_interval_s<span class="w"> </span><span class="m">3600</span>
+</pre></div>
+</div>
+<p>必选配置项：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--l2_cache_type</span> <span class="pre">distributed_disk</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--distributed_disk_path</span> <span class="pre">/path/to/shared-nfs</span></code></p></li>
+</ul>
+<p>可选配置项：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--distributed_disk_max_data_file_size_mb</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--distributed_disk_sync_interval_ms</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--distributed_disk_sync_batch_bytes</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--distributed_disk_compact_interval_s</span></code></p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 示例：</p>
+<div class="highlight-javascript notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// 必选：启用 distributed_disk 二级缓存</span>
+<span class="w">  </span><span class="s2">&quot;l2_cache_type&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;distributed_disk&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 必选：所有 worker 共享可见的 NFS 路径</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_path&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;/mnt/datasystem-nfs&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：单个 data file 的大小上限，单位 MB</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_max_data_file_size_mb&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;1024&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：group commit 的最长刷盘间隔，单位毫秒</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_sync_interval_ms&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;1000&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：group commit 的批量刷盘阈值，单位字节</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_sync_batch_bytes&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;33554432&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="c1">// 可选：后台 compact 执行周期，单位秒</span>
+<span class="w">  </span><span class="s2">&quot;distributed_disk_compact_interval_s&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">&quot;value&quot;</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;3600&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>使用建议</strong></p>
+<ul class="simple">
+<li><p>当业务已经具备统一的 NFS 挂载体系时，<code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code> 是优先推荐的配置方式。</p></li>
+<li><p>该模式依赖共享目录的一致可见性，不适合将每个 worker 指向彼此独立的本地磁盘目录。</p></li>
+</ul>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-1">
+sfs</label><div class="sd-tab-content docutils">
+<p><strong>模式说明</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">sfs</span></code> 模式依赖 SFS Turbo 作为二级缓存存储介质。worker 通过挂载的共享文件系统路径读写二级缓存数据。</p>
+<p><strong>配置入口概览</strong></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>部署方式</p></th>
+<th class="head"><p>配置入口</p></th>
+<th class="head"><p>关键参数</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Kubernetes DaemonSet</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s/helm_chart/datasystem/values.yaml</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">global.l2Cache.l2CacheType</span></code>、<code class="docutils literal notranslate"><span class="pre">global.l2Cache.sfsTurbo.*</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Kubernetes Deployment</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s_deployment/helm_chart/worker.config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code>、<code class="docutils literal notranslate"><span class="pre">sfs_path</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dscli</span></code> 进程部署</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 或 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 参数</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code>、<code class="docutils literal notranslate"><span class="pre">sfs_path</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>该模式下，Helm chart 会在容器内使用固定的 <code class="docutils literal notranslate"><span class="pre">sfs_path</span></code>，并由 PVC 将 SFS Turbo 挂载到 worker。</p>
+<p><strong>Kubernetes DaemonSet</strong></p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">l2Cache</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">l2CacheType</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;sfs&quot;</span>
+<span class="w">    </span><span class="nt">enableL2CacheFallback</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+
+<span class="w">    </span><span class="nt">sfsTurbo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1&quot;</span>
+<span class="w">      </span><span class="nt">subPath</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/datasystem&quot;</span>
+<span class="w">      </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
+<span class="w">      </span><span class="nt">projectId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
+<span class="w">      </span><span class="nt">capacity</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;500Gi&quot;</span>
+</pre></div>
+</div>
+<p><strong>Kubernetes Deployment</strong></p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;l2_cache_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sfs&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;sfs_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/opt/data/datasystem/sfs-turbo&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>dscli 进程部署</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 示例：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;l2_cache_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sfs&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;sfs_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/opt/data/datasystem/sfs-turbo&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>命令行示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--l2_cache_type<span class="w"> </span><span class="s2">&quot;sfs&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sfs_path<span class="w"> </span><span class="s2">&quot;/opt/data/datasystem/sfs-turbo&quot;</span>
+</pre></div>
+</div>
+<p><strong>使用建议</strong></p>
+<ul class="simple">
+<li><p>当集群已经使用 SFS Turbo 作为共享文件系统时，优先考虑 <code class="docutils literal notranslate"><span class="pre">sfs</span></code>。</p></li>
+<li><p>需要确保所有 worker 均能访问相同的 SFS 路径。</p></li>
+</ul>
+</div>
+<input id="sd-tab-item-2" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-2">
+obs</label><div class="sd-tab-content docutils">
+<p><strong>模式说明</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">obs</span></code> 模式依赖对象存储服务承载可靠性数据，适用于已经具备 OBS 访问与认证体系的场景。</p>
+<p><strong>配置入口概览</strong></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>部署方式</p></th>
+<th class="head"><p>配置入口</p></th>
+<th class="head"><p>关键参数</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Kubernetes DaemonSet</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s/helm_chart/datasystem/values.yaml</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">global.l2Cache.l2CacheType</span></code>、<code class="docutils literal notranslate"><span class="pre">global.l2Cache.obs.*</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Kubernetes Deployment</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">k8s_deployment/helm_chart/worker.config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_access_key</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_secret_key</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_endpoint</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_bucket</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dscli</span></code> 进程部署</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 或 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span></code> 参数</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">l2_cache_type</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_access_key</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_secret_key</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_endpoint</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_bucket</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>如果集群使用临时凭据模式，DaemonSet 模式下还应继续配置
+<code class="docutils literal notranslate"><span class="pre">global.l2Cache.obs.cloudServiceTokenRotation.*</span></code>。</p>
+<p><strong>Kubernetes DaemonSet</strong></p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">l2Cache</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">l2CacheType</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;obs&quot;</span>
+<span class="w">    </span><span class="nt">enableL2CacheFallback</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+
+<span class="w">    </span><span class="nt">obs</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">obsAccessKey</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">      </span><span class="nt">obsSecretKey</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">      </span><span class="nt">obsEndpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;obs.example.com&quot;</span>
+<span class="w">      </span><span class="nt">obsBucket</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;datasystem-l2&quot;</span>
+<span class="w">      </span><span class="nt">obsHttpsEnabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+<p><strong>Kubernetes Deployment</strong></p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;l2_cache_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;obs&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_access_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_secret_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_endpoint&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;obs.example.com&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_bucket&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;datasystem-l2&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_https_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>dscli 进程部署</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 示例：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;l2_cache_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;obs&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_access_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_secret_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_endpoint&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;obs.example.com&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_bucket&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;datasystem-l2&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;obs_https_enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>命令行示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--l2_cache_type<span class="w"> </span><span class="s2">&quot;obs&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--obs_access_key<span class="w"> </span><span class="s2">&quot;&lt;ak&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--obs_secret_key<span class="w"> </span><span class="s2">&quot;&lt;sk&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--obs_endpoint<span class="w"> </span><span class="s2">&quot;obs.example.com&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--obs_bucket<span class="w"> </span><span class="s2">&quot;datasystem-l2&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--obs_https_enabled<span class="w"> </span><span class="nb">true</span>
+</pre></div>
+</div>
+<p><strong>使用建议</strong></p>
+<ul class="simple">
+<li><p>当业务侧已经具备 OBS 认证、桶管理与网络连通能力时，<code class="docutils literal notranslate"><span class="pre">obs</span></code> 是合适的二级缓存模式。</p></li>
+<li><p>需要确保认证参数、桶名和 endpoint 与实际云环境一致。</p></li>
+</ul>
+</div>
+</div>
+</section>
+<section id="id6">
+<h2>使用建议<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p>首次接入可靠性能力时，应先明确部署方式，再选择对应的配置入口。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code> 模式下，最关键的前提是共享 NFS 目录的一致可见性。</p></li>
+<li><p>无论使用哪种二级缓存类型，业务侧都应同步审视 <code class="docutils literal notranslate"><span class="pre">writeMode</span></code>，避免仅配置集群侧参数而未启用可靠性写模式。</p></li>
+</ol>
+</section>
+<section id="id7">
+<h2>参考文档<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="../api_reference/example/kv.html#id7"><span class="std std-ref">KV 示例中的可靠性章节</span></a></p></li>
+<li><p><a class="reference internal" href="../deployment/k8s_configuration.html#id7"><span class="std std-ref">Kubernetes 配置说明</span></a></p></li>
+<li><p><a class="reference internal" href="../deployment/dscli.html#id20"><span class="std std-ref">dscli 部署参数说明</span></a></p></li>
+</ul>
+</section>
 </section>
 
         </article>
@@ -585,23 +1056,23 @@ document.addEventListener('DOMContentLoaded', function() {
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="log_guide.html">
+          <a class="next-page" href="best_pracitces_for_ub.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">openYuanrong datasystem 日志</div>
+                <div class="title">UB最佳实践</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="../contributor_guide/contribution.html">
+          <a class="prev-page" href="index.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">贡献者指南</div>
+                <div class="title">最佳实践</div>
                 
               </div>
             </a>
@@ -623,8 +1094,32 @@ document.addEventListener('DOMContentLoaded', function() {
         
       </footer>
     </div>
-    <aside class="toc-drawer no-toc">
+    <aside class="toc-drawer">
       
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">可靠性最佳实践</a><ul>
+<li><a class="reference internal" href="#id2">可靠性能力的生效条件</a></li>
+<li><a class="reference internal" href="#id3">二级缓存类型说明</a></li>
+<li><a class="reference internal" href="#id4">不同部署方式的配置入口</a></li>
+<li><a class="reference internal" href="#id5">配置方法</a></li>
+<li><a class="reference internal" href="#id6">使用建议</a></li>
+<li><a class="reference internal" href="#id7">参考文档</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
       
       
     </aside>

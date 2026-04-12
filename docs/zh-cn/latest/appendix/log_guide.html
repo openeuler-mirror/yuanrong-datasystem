@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Client环境变量" href="client_env_guide.html"><link rel="prev" title="附录" href="index.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>openYuanrong datasystem日志 - openYuanrong datasystem documentation</title>
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+        <title>openYuanrong datasystem 日志 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -311,6 +311,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
@@ -529,7 +530,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">附录</a><input aria-label="Toggle navigation of 附录" checked="" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
-<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">openYuanrong datasystem 日志</a></li>
 <li class="toctree-l2"><a class="reference internal" href="client_env_guide.html">Client环境变量</a></li>
 <li class="toctree-l2"><a class="reference internal" href="hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
@@ -568,17 +569,21 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="openyuanrong-datasystem">
-<h1>openYuanrong datasystem日志<a class="headerlink" href="#openyuanrong-datasystem" title="Link to this heading">¶</a></h1>
+<h1>openYuanrong datasystem 日志<a class="headerlink" href="#openyuanrong-datasystem" title="Link to this heading">¶</a></h1>
 <section id="id1">
 <h2>日志类别<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
-<p>openYuanrong datasystem的日志分为四类：</p>
+<p>openYuanrong datasystem 的日志分为以下类型：</p>
 <ol class="arabic simple">
-<li><p>运行日志: 记录客户端、服务端运行时的日志信息，包括DEBUG、INFO、WARNING、ERROR级别；</p></li>
-<li><p>访问日志：记录每一个访问客户端/服务端请求，而且每个请求仅打印一条日志，可用于定界定位上游应用是否访问客户端/服务端；</p></li>
-<li><p>请求第三方日志：记录datasystem_worker每一个访问第三方组件日志的请求，而且每个请求仅打印一条日志，可用于定界定位openYuanrong datasystem是否有成功访问该外部组件；</p></li>
-<li><p>资源日志：定时输出datasystem_worker运行时关键资源信息，包括共享内存使用量、Spill磁盘使用量、 threadpool及队列使用量等等信息。</p></li>
+<li><p><strong>运行日志</strong>：记录客户端、服务端运行时的日志信息，包括 INFO、WARNING、ERROR、FATAL；更细粒度调试可通过 <code class="docutils literal notranslate"><span class="pre">VLOG</span></code> 与 gflags（如 <code class="docutils literal notranslate"><span class="pre">--v</span></code>）控制。</p></li>
+<li><p><strong>访问日志</strong>：记录每一次访问客户端/服务端的请求，每个请求一条日志，用于定界上游是否访问客户端/服务端（需开启 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code>）。</p></li>
+<li><p><strong>请求第三方日志（request_out）</strong>：记录 Worker 访问第三方组件的请求，每个请求一条日志，可用于定界 openYuanrong datasystem 是否成功访问该外部组件；当前实现中 <strong><code class="docutils literal notranslate"><span class="pre">access_point.def</span></code> 主要接入 ETCD gRPC</strong>（需开启 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code>）。</p></li>
+<li><p><strong>资源日志</strong>：定时输出 Worker 运行时关键资源信息，包括共享内存、Spill 磁盘、线程池、队列、流缓存相关统计等（需 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code>）。</p></li>
+<li><p><strong>流缓存指标日志（sc_metrics）</strong>：流缓存运行数据（需开启 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code>）。</p></li>
+<li><p><strong>容器/进程相关日志</strong>：容器运行日志，管理和监控worker进程的生命周期。</p></li>
 </ol>
-<p>openYuanrong datasystem 不同模块日志分类如下表所示：</p>
+<p>日志目录一般为配置项 <code class="docutils literal notranslate"><span class="pre">log_dir</span></code>（如部署下的 <code class="docutils literal notranslate"><span class="pre">yr_datasystem/logs</span></code>）；下文 <code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs</span></code> 表示该目录。</p>
+<section id="id2">
+<h3>不同模块日志文件<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -591,47 +596,54 @@ document.addEventListener('DOMContentLoaded', function() {
 <tbody>
 <tr class="row-even"><td><p>1</p></td>
 <td><p>datasystem_worker</p></td>
-<td><p>/path/yr_datasystem/logs/datasystem_worker.INFO.log</p></td>
-<td><p>worker运行日志</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/{log_filename}.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等轮转文件）</p></td>
+<td><p>Worker 运行日志；<code class="docutils literal notranslate"><span class="pre">log_filename</span></code> 由部署配置决定，示例常为 <code class="docutils literal notranslate"><span class="pre">datasystem_worker</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
 <td><p>datasystem_worker</p></td>
-<td><p>/path/yr_datasystem/logs/access.log</p></td>
-<td><p>访问worker POSIX接口的日志</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/access.log</span></code></p></td>
+<td><p>访问 Worker POSIX 等接口的日志</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p>datasystem_worker</p></td>
-<td><p>/path/yr_datasystem/logs/resource.log</p></td>
-<td><p>Worker资源使用日志，默认关闭，通过log_monitor开关控制是否开启</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/resource.log</span></code></p></td>
+<td><p>Worker 资源使用日志；默认关闭，由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>datasystem_worker</p></td>
-<td><p>/path/yr_datasystem/logs/requestout.log</p></td>
-<td><p>访问ETCD接口日志</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/request_out.log</span></code></p></td>
+<td><p>访问第三方（当前主要为 ETCD）接口日志</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
 <td><p>datasystem_worker</p></td>
-<td><p>/path/yr_datasystem/logs/container.log</p></td>
-<td><p>容器运行日志，管理和监控worker进程的生命周期</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/sc_metrics.log</span></code></p></td>
+<td><p>流缓存运行数据；由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制是否开启</p></td>
 </tr>
 <tr class="row-odd"><td><p>6</p></td>
-<td><p>Client</p></td>
-<td><p>/path/client/ds_client_&lt;pid&gt;.log</p></td>
-<td><p>SDK运行日志</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/container.log</span></code></p></td>
+<td><p>容器运行日志，管理和监控worker进程的生命周期</p></td>
 </tr>
 <tr class="row-even"><td><p>7</p></td>
 <td><p>Client</p></td>
-<td><p>/path/client/ds_client_access_&lt;pid&gt;.log</p></td>
-<td><p>SDK接口访问日志</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_{pid}.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等；<code class="docutils literal notranslate"><span class="pre">{pid}</span></code> 为进程号）</p></td>
+<td><p>SDK 运行日志；基名可由启动参数与环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_NAME</span></code> 覆盖</p></td>
+</tr>
+<tr class="row-odd"><td><p>8</p></td>
+<td><p>Client</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access_{pid}.log</span></code></p></td>
+<td><p>SDK 接口访问日志；基名可由 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code> 覆盖</p></td>
 </tr>
 </tbody>
 </table>
 </div>
 </section>
-<section id="id2">
-<h2>日志格式<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+</section>
+<hr class="docutils" />
 <section id="id3">
-<h3>格式介绍<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<h2>日志格式<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<section id="id4">
+<h3>格式总览<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -655,9 +667,13 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>资源日志</p></td>
-<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | shm_info | spill_disk_info | client nums | object nums | object total datasize | WorkerOcService threadpool | WorkerWorkerOcService threadpool | MasterWorkerOcService threadpool | MasterOcService threadpool | write ETCD queue | ETCDrequest success rate | OBSrequest success rate | Master AsyncTask threadpool |Cache Hit Info |</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | shm info | spill disk info | client nums | object nums | object total datasize | WorkerOcService threadpool | WorkerWorkerOcService threadpool | MasterWorkerOcService threadpool | MasterOcService threadpool | write ETCD queue | ETCDrequest success rate | OBSrequest success rate | Master AsyncTask threadpool | stream nums | ClientWorkerSCService threadpool | WorkerWorkerSCService threadpool | MasterWorkerSCService threadpool | MasterSCService threadpool | remote stream push success rate | shared disk info | scLocalCache info | Cache Hit Info</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
+<td><p>流缓存数据日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | sc_metric</p></td>
+</tr>
+<tr class="row-odd"><td><p>6</p></td>
 <td><p>容器运行日志</p></td>
 <td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | message</p></td>
 </tr>
@@ -665,8 +681,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </table>
 </div>
 </section>
-<section id="id4">
-<h3>日志字段<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>日志字段<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -698,11 +714,11 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>trace_id</p></td>
 <td><p>36</p></td>
-<td><p>请求的trace_id。</p></td>
+<td><p>请求的trace_id</p></td>
 </tr>
 <tr class="row-even"><td><p>cluster_name</p></td>
 <td><p>128</p></td>
-<td><p>输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker。</p></td>
+<td><p>输出日志的组件名，最大长度为128，超出长度则截断。示例：ds-worker</p></td>
 </tr>
 <tr class="row-odd"><td><p>Message</p></td>
 <td><p>1024</p></td>
@@ -710,7 +726,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-even"><td><p>status_code</p></td>
 <td><p>5</p></td>
-<td><p>该请求的状态，不同消息类型状态值不一样。SDK/datasystem_worker 访问日志，0表示成功，其他表示失败。</p></td>
+<td><p>该请求的状态，不同消息类型状态值不一样。SDK/datasystem_worker 访问日志，0表示成功，其他表示失败</p></td>
 </tr>
 <tr class="row-odd"><td><p>action</p></td>
 <td><p>64</p></td>
@@ -722,31 +738,31 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>datasize</p></td>
 <td><p>16</p></td>
-<td><p>记录Publish请求接收到的Payload大小。</p></td>
+<td><p>记录Publish请求接收到的Payload大小</p></td>
 </tr>
 <tr class="row-even"><td><p>request param</p></td>
 <td><p>2560</p></td>
-<td><p>记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格。</p></td>
+<td><p>记录该请求的关键请求参数，最大长度2048。请参考“关键请求参数”表格</p></td>
 </tr>
 <tr class="row-odd"><td><p>response param</p></td>
 <td><p>1024</p></td>
-<td><p>记录该请求的响应信息。最大长度为1024 Byte，超出则截断。</p></td>
+<td><p>记录该请求的响应信息。最大长度为1024 Byte，超出则截断</p></td>
 </tr>
-<tr class="row-even"><td><p>shm_info</p></td>
+<tr class="row-even"><td><p>shm info</p></td>
 <td><p>47</p></td>
-<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %.</p></td>
+<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_disk_info</p></td>
+<tr class="row-odd"><td><p>spill disk info</p></td>
 <td><p>47</p></td>
-<td><p>记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>1) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>2) physicalSpaceUsage	已使用的物理磁盘大小。<br>3) totalLimit	Spill磁盘总大小。<br>4) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %.</p></td>
+<td><p>记录Spill磁盘使用信息。单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：spaceUsage/physicalSpaceUsage/totalLimit/rate<br>1) spaceUsage	已使用的磁盘大小，是已Spill的对象大小总和。<br>2) physicalSpaceUsage	已使用的物理磁盘大小。<br>3) totalLimit	Spill磁盘总大小。<br>4) Rate	Spill磁盘使用率，spaceUsage /totalLimit, 保留3位有效数字，单位: %</p></td>
 </tr>
 <tr class="row-even"><td><p>client nums</p></td>
 <td><p>5</p></td>
-<td><p>记录已和worker成功建立连接的Client数。最大值为10000.</p></td>
+<td><p>记录已和worker成功建立连接的Client数。最大值为10000</p></td>
 </tr>
 <tr class="row-odd"><td><p>object nums</p></td>
 <td><p>9</p></td>
-<td><p>记录worker已缓存对象数。按照1亿对象限制数量。</p></td>
+<td><p>记录worker已缓存对象数。按照1亿对象限制数量</p></td>
 </tr>
 <tr class="row-even"><td><p>object total datasize</p></td>
 <td><p>13</p></td>
@@ -754,7 +770,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>WorkerOcService threadpool</p></td>
 <td><p>21</p></td>
-<td><p>WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idleNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字。</p></td>
+<td><p>WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idleNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字</p></td>
 </tr>
 <tr class="row-even"><td><p>WorkerWorkerOcService threadpool</p></td>
 <td><p>21</p></td>
@@ -774,25 +790,62 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-even"><td><p>ETCDrequest success rate</p></td>
 <td><p>6</p></td>
-<td><p>请求使用率，单位 %,保留3位有效数字</p></td>
+<td><p>请求成功率，单位 %,保留3位有效数字</p></td>
 </tr>
 <tr class="row-odd"><td><p>OBSrequest success rate</p></td>
 <td><p>6</p></td>
-<td><p>请求使用率，单位 %,保留3位有效数字</p></td>
+<td><p>请求成功率，单位 %,保留3位有效数字</p></td>
 </tr>
 <tr class="row-even"><td><p>Master AsyncTask threadpool</p></td>
 <td><p>21</p></td>
 <td><p>threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
 </tr>
+<tr class="row-odd"><td><p>stream nums</p></td>
+<td><p>9</p></td>
+<td><p>记录本节点流的个数。本节点上的流：在本节点存在producer或者consumer</p></td>
+</tr>
+<tr class="row-even"><td><p>ClientWorkerSCService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
+</tr>
+<tr class="row-odd"><td><p>WorkerWorkerSCService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
+</tr>
+<tr class="row-even"><td><p>MasterWorkerSCService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
+</tr>
+<tr class="row-odd"><td><p>MasterSCService threadpool</p></td>
+<td><p>21</p></td>
+<td><p>线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate</p></td>
+</tr>
+<tr class="row-even"><td><p>remote stream push success rate</p></td>
+<td><p>6</p></td>
+<td><p>请求成功率，单位 %,保留3位有效数字</p></td>
+</tr>
+<tr class="row-odd"><td><p>shared disk info</p></td>
+<td><p>47</p></td>
+<td><p>记录共享磁盘使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usage/physicaleUsage/totalLimit/rate<br>1) usage  已使用的磁盘大小，是已缓存的对象大小总和<br>2) physicaleUsage 已使用的物理磁盘大小<br>3) totalLimit     共享磁盘总大小<br>4) rate   共享磁盘使用率，usage/totalLimit, 保留3位有效数字，单位: %</p></td>
+</tr>
+<tr class="row-even"><td><p>scLocalCache info</p></td>
+<td><p>47</p></td>
+<td><p>记录scLocalCache使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usedSize/reservedSize/totalLimit/usedRate</p></td>
+</tr>
 <tr class="row-odd"><td><p>Cache Hit Info</p></td>
 <td><p>9</p></td>
 <td><p>缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。<br>2) diskHitNum	本地磁盘命中次数. <br>3) l2HitNum	二级缓存命中次数。<br>4) remoteHitNum 远端worker命中次数。<br>5) missNum 未命中次数。</p></td>
 </tr>
+<tr class="row-even"><td><p>sc_metric</p></td>
+<td><p>1024</p></td>
+<td><p>流缓存运行数据(sc_stream_metric)。worker上一个stream的的流缓存数据，格式：streamName [“exit”]/numLocalProd/numRemoteProd/numLocalCon/numRemoteCon/sharedMemUsed/localMemUsed/numEleSent/numEleRecv/numEleAck/numSendReq/numRecvReq/numPagesCreated/numPagesReleased/numPagesInUse/numPagesCached/numBigPagesCreated/numBigPagesReleased/numLocalProdBlocked/numRemoteProdBlocked/numRemoteConBlocking/retainData/streamState/numProdMaster/numConMaster<br>1) streamName [“exit”] stream名字，带有” exit”表示stream正要关闭<br>2) numLocalProd 本地producer数量<br>3) numRemoteProd - Number of remote workers with atleast one producewill be 0, if no local consumers)<br>4) numLocalCon 本地consumer数量<br>5) numRemoteCon 远端consumer数量<br>6) sharedMemUsed stream使用共享内存大小，单位: Byte<br>7) localMemUsed stream使用本地内存大小，单位: Byte<br>8) numEleSent - Total number of elements produced by all local producers<br>9) numEleRecv - Total number of elements received by all local consumers (value will be 0, if no local consumers)<br>10) numEleAck element acked数量<br>11) numSendReq client调用producer.send()次数<br>12) numRecvReq client调用consumer.receive()次数<br>13) numPagesCreated page创建次数<br>14) numPagesReleased page释放次数<br>15) numPagesInUse page in use数量<br>16) numPagesCached page cached数量<br>17) numBigPagesCreated big element page创建次数<br>18) numBigPagesReleased big element page释放次数<br>19) numLocalProdBlocked 本地producer blocked数量<br>20) numRemoteProdBlocked 远端producer blocked数量<br>21) numRemoteConBlocking 远端consumer blocking数量<br>22) retainData retain data state<br>23) streamState stream state<br>24) numProdMaster master上producer数量<br>25) numConMaster master上consumer数量<br>- 如果worker不是stream的master，24-25会没有数据。如果worker只有master数据，2-23会没有据</p></td>
+</tr>
 </tbody>
 </table>
 </div>
-<section id="sdkworker">
-<h4>SDK与worker访问日志关键请求参数<a class="headerlink" href="#sdkworker" title="Link to this heading">¶</a></h4>
+</section>
+<section id="sdk-worker">
+<h3>SDK 与 Worker 访问日志关键请求参数<a class="headerlink" href="#sdk-worker" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -808,7 +861,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-odd"><td><p>object_keys</p></td>
 <td><p>1024</p></td>
-<td><p>多个对象KEY。单个Item长度：255Byte，全部长度：1KB；超出的对象KEY，只显示出总数。示例： {“object_keys”:[”id1xx”,”id2xx”,”id3xx”,”id4xx”, total: 100]}</p></td>
+<td><p>多个对象 KEY。单个 Item 最长 255 Byte，展示总长上限约 1KB；超出时仅显示总数等缩写。示例 JSON：<code class="docutils literal notranslate"><span class="pre">{&quot;object_keys&quot;:[&quot;id1xx&quot;,&quot;id2xx&quot;,&quot;id3xx&quot;,&quot;id4xx&quot;],&quot;total&quot;:100}</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>Nested_keys</p></td>
 <td><p>1024</p></td>
@@ -854,8 +907,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </table>
 </div>
 </section>
-<section id="id5">
-<h4>访问第三方日志关键请求参数<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<section id="id6">
+<h3>访问第三方日志关键请求参数<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -874,7 +927,6 @@ document.addEventListener('DOMContentLoaded', function() {
 </tbody>
 </table>
 </div>
-</section>
 </section>
 </section>
 </section>
@@ -934,15 +986,16 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">openYuanrong datasystem日志</a><ul>
-<li><a class="reference internal" href="#id1">日志类别</a></li>
-<li><a class="reference internal" href="#id2">日志格式</a><ul>
-<li><a class="reference internal" href="#id3">格式介绍</a></li>
-<li><a class="reference internal" href="#id4">日志字段</a><ul>
-<li><a class="reference internal" href="#sdkworker">SDK与worker访问日志关键请求参数</a></li>
-<li><a class="reference internal" href="#id5">访问第三方日志关键请求参数</a></li>
+<li><a class="reference internal" href="#">openYuanrong datasystem 日志</a><ul>
+<li><a class="reference internal" href="#id1">日志类别</a><ul>
+<li><a class="reference internal" href="#id2">不同模块日志文件</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#id3">日志格式</a><ul>
+<li><a class="reference internal" href="#id4">格式总览</a></li>
+<li><a class="reference internal" href="#id5">日志字段</a></li>
+<li><a class="reference internal" href="#sdk-worker">SDK 与 Worker 访问日志关键请求参数</a></li>
+<li><a class="reference internal" href="#id6">访问第三方日志关键请求参数</a></li>
 </ul>
 </li>
 </ul>
@@ -957,15 +1010,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
