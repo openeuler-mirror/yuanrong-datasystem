@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="ObjectClient编程示例" href="object.html"><link rel="prev" title="HeteroClient编程示例" href="hetero.html">
         <link rel="prefetch" href="../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>KVClient编程示例 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=33406c05" />
@@ -311,6 +311,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../best_practices/index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
@@ -529,7 +530,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="../../appendix/log_guide.html">openYuanrong datasystem日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../appendix/client_env_guide.html">Client环境变量</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../appendix/hugepage_guide.html">大页内存配置指南</a></li>
 </ul>
@@ -719,10 +720,11 @@ C++</label><div class="sd-tab-content docutils">
 <section id="id7">
 <h3>数据可靠性<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <p>数据系统 KV 接口提供可靠性语义，在数据写入时，通过 <strong>writeMode</strong> 参数配置数据可靠性级别。仅当 <strong>writeMode</strong> 配置为 <em><strong>WRITE_THROUGH_L2_CACHE</strong></em> 或 <em><strong>WRITE_BACK_L2_CACHE</strong></em> 时才保证数据可靠性，否则当出现故障或空间不足时，数据可能丢失。<br />
-数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：OBS/SFS。<br />
+数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：
+distributed_disk / OBS / SFS。
 在集群部署时，需要在数据系统的部署参数中配置二级缓存相关参数，若未配置，则在 KV 写入时 <strong>writeMode</strong> 参数指定为 <em><strong>WRITE_THROUGH_L2_CACHE</strong></em> 或 <em><strong>WRITE_BACK_L2_CACHE</strong></em> 时会写入失败。</p>
 <p>集群部署时通过以下参数指定二级缓存类型。</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># 指定二级缓存的类型。可选值为：&#39;obs&#39;, &#39;sfs&#39;.</span>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># 指定二级缓存的类型。可选值为：&#39;distributed_disk&#39;, &#39;obs&#39;, &#39;sfs&#39;.</span>
 <span class="c1"># 默认值为&#39;none&#39;，表示不支持二级缓存。</span>
 <span class="nt">l2CacheType</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;none&quot;</span>
 </pre></div>
@@ -731,6 +733,23 @@ C++</label><div class="sd-tab-content docutils">
 <div class="sd-tab-set docutils">
 <input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-2">
+distributed_disk</label><div class="sd-tab-content docutils">
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">distributedDisk</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># The root path used by distributed disk storage.</span>
+<span class="w">  </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="c1"># The maximum size in MB of a single distributed disk data file.</span>
+<span class="w">  </span><span class="nt">maxDataFileSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<span class="w">  </span><span class="c1"># The maximum time interval in milliseconds before distributed disk group commit flushes pending writes.</span>
+<span class="w">  </span><span class="nt">syncIntervalMs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span>
+<span class="w">  </span><span class="c1"># The batch size threshold in bytes that triggers distributed disk group commit flush.</span>
+<span class="w">  </span><span class="nt">syncBatchBytes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">33554432</span>
+<span class="w">  </span><span class="c1"># The fixed interval in seconds between distributed disk background compact runs.</span>
+<span class="w">  </span><span class="nt">compactIntervalS</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3600</span>
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-3">
 obs</label><div class="sd-tab-content docutils">
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">obs</span><span class="p">:</span>
 <span class="w">  </span><span class="c1"># The access key for obs AK/SK authentication. If the value of encryptKit is not plaintext, encryption is required.</span>
@@ -767,8 +786,8 @@ obs</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 </div>
-<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
-<label class="sd-tab-label" for="sd-tab-item-3">
+<input id="sd-tab-item-4" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-4">
 sfs</label><div class="sd-tab-content docutils">
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sfsTurbo</span><span class="p">:</span>
 <span class="w">  </span><span class="c1"># Endpoint of sfs-turbo, which is used to concatenate the shared path in sfs-turbo. such as &#39;172.21.7.239&#39;.</span>
@@ -868,15 +887,15 @@ sfs</label><div class="sd-tab-content docutils">
     </aside>
   </div>
 </div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../_static/custom.js?v=f6e2bf52"></script>

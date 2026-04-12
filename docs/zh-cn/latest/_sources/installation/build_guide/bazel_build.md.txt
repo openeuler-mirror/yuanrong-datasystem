@@ -139,5 +139,3 @@ cc_binary(
 using datasystem::KVClient;
 
 ```
-
-
