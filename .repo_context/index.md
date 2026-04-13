@@ -30,8 +30,14 @@ Use it to jump from a question type to the smallest useful document instead of r
 | understand resource metric collection cadence or handler registration | `modules/infra/metrics/resource-collector.md` | `src/datasystem/common/metrics/res_metric_collector.*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand metric exporter buffering or hard-disk output | `modules/infra/metrics/exporters-and-buffering.md` | `src/datasystem/common/metrics/metrics_exporter.*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
 | understand metric family definitions or runtime registration | `modules/infra/metrics/metric-families-and-registration.md` | `src/datasystem/common/metrics/res_metrics.def`, `src/datasystem/common/metrics/metrics_description.def`, `src/datasystem/worker/worker_oc_server.cpp` |
+| diagnose a runtime, operations, or observability issue across modules | `modules/infra/observability/diagnosis-and-operations.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*`, `tests/*` |
+| map a symptom to the first logs, metrics, configs, and files to inspect | `modules/infra/observability/signal-map.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*` |
+| investigate a performance regression or latency issue | `modules/infra/observability/performance-troubleshooting.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*`, `tests/perf/*` |
+| understand readiness, liveness, and runtime health checks | `modules/infra/observability/runtime-health-and-runbook.md` | `src/datasystem/worker/worker_liveness_check.*`, `src/datasystem/worker/worker_main.cpp`, `src/datasystem/worker/worker_oc_server.cpp` |
 | choose tests or reproduce a bug | `modules/quality/tests-and-reproduction.md` | `tests/*`, `build.sh` |
 | design and implement a low-risk logging feature | `playbooks/features/infra/logging/implementation.md` | `modules/infra/logging/design.md`, `src/datasystem/common/log/*` |
+| triage a production-style incident or collect first-pass evidence | `playbooks/operations/incident-triage.md` | `modules/infra/observability/diagnosis-and-operations.md`, `modules/quality/tests-and-reproduction.md` |
+| run a structured performance investigation | `playbooks/operations/performance-investigation.md` | `modules/infra/observability/performance-troubleshooting.md`, `tests/perf/*` |
 | decide what kind of context file to update | `playbooks/README.md` | `maintenance.md` |
 
 ## Quick Routing By Area
@@ -53,6 +59,11 @@ Use it to jump from a question type to the smallest useful document instead of r
 | resource collector | `modules/infra/metrics/resource-collector.md` | `src/datasystem/common/metrics/res_metric_collector.*` |
 | exporters and buffering | `modules/infra/metrics/exporters-and-buffering.md` | `src/datasystem/common/metrics/metrics_exporter.*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
 | metric families and registration | `modules/infra/metrics/metric-families-and-registration.md` | `src/datasystem/common/metrics/res_metrics.def`, `src/datasystem/common/metrics/metrics_description.def`, `src/datasystem/worker/worker_oc_server.cpp` |
+| observability and operations overview | `modules/infra/observability/README.md` | `src/datasystem/worker`, `src/datasystem/common/log`, `src/datasystem/common/metrics`, `tests` |
+| diagnosis and operations | `modules/infra/observability/diagnosis-and-operations.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*` |
+| signal map | `modules/infra/observability/signal-map.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*` |
+| performance troubleshooting | `modules/infra/observability/performance-troubleshooting.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*`, `tests/perf` |
+| runtime health and runbook | `modules/infra/observability/runtime-health-and-runbook.md` | `src/datasystem/worker/worker_liveness_check.*`, `src/datasystem/worker/worker_main.cpp`, `src/datasystem/worker/worker_oc_server.cpp` |
 | build/test/debug | `modules/quality/build-test-debug.md` | `build.sh`, `tests`, top-level CMake |
 | test selection and repro | `modules/quality/tests-and-reproduction.md` | `tests/ut`, `tests/st` |
 

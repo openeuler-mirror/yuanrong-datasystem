@@ -9,6 +9,10 @@ Use a playbook when the question is not “what is this module?” but “how sh
 ```text
 playbooks/
 ├── README.md
+├── operations/
+│   ├── README.md
+│   ├── incident-triage.md
+│   └── performance-investigation.md
 └── features/
     ├── README.md
     └── infra/
@@ -33,8 +37,11 @@ This layer is now partially seeded. General workflow still lives in:
 - `modules/quality/tests-and-reproduction.md`
 - `modules/quality/build-test-debug.md`
 
-Feature-specific guidance now starts in:
+Task-oriented guidance now starts in:
 
+- `operations/README.md`
+- `operations/incident-triage.md`
+- `operations/performance-investigation.md`
 - `features/README.md`
 - `features/infra/README.md`
 - `features/infra/logging/README.md`
@@ -46,6 +53,7 @@ Feature-specific guidance now starts in:
 - `code-review-checklist.md`
 - `context-update-rules.md`
 - more `features/*.md` playbooks for compatibility-sensitive modules
+- more `operations/*.md` playbooks for deployment, rollout, and recovery workflows
 
 ## Rule Of Thumb
 

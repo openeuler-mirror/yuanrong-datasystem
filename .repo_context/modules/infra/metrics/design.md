@@ -126,6 +126,7 @@
 
 - Current implementation or baseline behavior:
   - metrics are collected as string payloads, not typed numeric objects, and persisted through a single concrete exporter backend named `"harddisk"`.
+  - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
   - collector startup is gated by `log_monitor` and exporter initialization;
   - `HardDiskExporter` is shared with logging-side access records, so exporter changes are cross-cutting;
@@ -138,6 +139,20 @@
   - string-based handlers are simple to wire but easier to misuse semantically;
   - local file persistence is operationally simple but does not provide replicated availability by itself;
   - exporter sharing reduces duplication but couples metrics changes to logging behavior.
+  - operators cannot directly query request-path percentile series such as `set/get p95` from the current common-metrics surface.
+
+## Current Request-Path Metrics Gap
+
+- Verified current repository behavior:
+  - `src/datasystem/common/metrics/res_metric_collector.cpp` samples periodic resource families;
+  - `src/datasystem/common/log/access_recorder.cpp` records per-operation elapsed time into access/performance logs;
+  - no common `src/datasystem` HTTP scrape endpoint or Prometheus exposition path is currently part of this module.
+- What this means for `set/get` analysis:
+  - request latency distribution is visible only indirectly through log samples, test output, or ad hoc analysis of recorded access lines;
+  - the metrics module is stronger for resource trend diagnosis than for instant request percentile diagnosis.
+- If future work needs richer online diagnosis:
+  - prefer adding typed counters and histograms for hot request families before adding more file-only monitor strings;
+  - keep request metrics separate from resource metrics so percentile and throughput questions do not depend on monitor-file parsing.
 
 ## Architecture Overview
 
