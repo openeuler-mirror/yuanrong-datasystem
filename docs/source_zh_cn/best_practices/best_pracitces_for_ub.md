@@ -188,7 +188,7 @@ kubectl get pods -o wide
 在节点1执行以下Python脚本：
 
 ```python
-from datasystem import KVClient
+from yr.datasystem import KVClient
 
 client = KVClient("192.168.0.1:31501", 31501)
 client.init()
@@ -203,7 +203,7 @@ print("[OK] Set value")
 在节点2执行以下Python脚本：
 
 ```python
-from datasystem import KVClient
+from yr.datasystem import KVClient
 
 client = KVClient("192.168.0.2:31501", 31501)
 client.init()
