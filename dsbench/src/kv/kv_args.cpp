@@ -171,6 +171,14 @@ Status KVArgs::Parse(int argc, char *argv[])
         return Status(K_INVALID, "");
     }
 
+    constexpr uint64_t kMaxTotalThreadNum = 128;
+    if (clientNum > kMaxTotalThreadNum / threadNum) {
+        std::cerr << "Error: client_num * thread_num must be <= " << kMaxTotalThreadNum << "\n";
+        std::cerr << "Please refer to the usage below:\n";
+        std::cerr << Usage(argv[0]);
+        return Status(K_INVALID, "");
+    }
+
     if (workerAddress.empty()) {
         std::cerr << "Error: workerAddress cannot be empty\n";
         std::cerr << "Please refer to the usage below:\n";

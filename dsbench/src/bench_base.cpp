@@ -61,6 +61,10 @@ Status BenchBase::ParallelRun()
     if (totalThreadNum == 0) {
         return Status(K_INVALID, "Invalid argument: threadNum must be positive");
     }
+    constexpr uint64_t kMaxTotalThreadNum = 128;
+    if (totalThreadNum > kMaxTotalThreadNum) {
+        return Status(K_INVALID, "Invalid argument: clientNum * threadNum must be <= 128");
+    }
     perThreadStatus_.clear();
     perThreadStatus_.resize(totalThreadNum);
     perThreadCostDetail_.clear();
