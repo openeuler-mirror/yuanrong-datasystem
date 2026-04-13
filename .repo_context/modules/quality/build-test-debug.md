@@ -111,6 +111,11 @@ Backed by `CMakeLists.txt`:
 - sanitizers are supported through `build.sh -S address|thread|undefined`;
 - coverage mode is supported through `build.sh -c on|html`.
 
+Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
+
+- `//bazel:datasystem_sdk` now emits a directory artifact at `bazel-bin/bazel/datasystem_sdk` instead of a zip file;
+- the directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and shared libraries under `cpp/lib/`.
+
 ## Environment Notes
 
 Backed by `build.sh` and current docs:

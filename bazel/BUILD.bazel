@@ -8,10 +8,10 @@ load(
     "GLIBC_2_38_PLATFORM",
 )
 load("@local_python_info//:version.bzl", "PYTHON_MINOR")
-load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
 load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("@datasystem_version//:version.bzl", "DATASYSTEM_VERSION")
+load("//bazel:datasystem_sdk.bzl", "datasystem_sdk_tree")
 
 licenses(["notice"])
 
@@ -48,10 +48,12 @@ py_package(
     ],
 )
 
-pkg_zip(
+datasystem_sdk_tree(
     name = "datasystem_sdk",
-    srcs = [":datasystem_client"],
-    out = "datasystem_sdk.zip",
+    build_tpl = ":datasystem_sdk_cpp.BUILD.tpl",
+    headers = ["//include/datasystem:headers_srcs"],
+    libdatasystem = "//:libdatasystem_file",
+    libds_client_py = "//:libds_client_py_file",
 )
 
 config_setting(
