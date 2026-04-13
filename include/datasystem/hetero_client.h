@@ -74,7 +74,7 @@ public:
 
     /// \brief Write the data of the device to the host. If the BLOB of the device contains multiple memory addresses,
     ///     the device automatically combines data and writes the data to the host.
-    /// \param[in] keys Keys in the host
+    /// \param[in] keys Keys in the host. For performance reasons, only the validity of the first key is validated.
     /// \param[in] devBlobList Pointers to the HBM memory in a group of devices. Data is obtained from these pointers
     ///     and written to the key of the host. If the DeviceBlobList contains multiple HBM pointers, the data is
     ///     combined and written to the shared memory corresponding to the host key.
@@ -92,6 +92,7 @@ public:
 
     /// @brief For device object Async set multiple objects, and return before publish rpc called.
     /// \param[in] keys Keys in the host. Constraint: The number of keys cannot exceed 10,000.
+    ///     For performance reasons, only the validity of the first key is validated.
     /// \param[in] devBlobList Pointers to the HBM memory in a group of devices. Data is obtained from these pointers
     ///     and written to the key of the host. If the DeviceBlobList contains multiple HBM pointers, the data is
     ///     combined and written to the shared memory corresponding to the host key.
@@ -156,7 +157,8 @@ public:
     ///     blob2dList to the data system so that other clients can access the data system.
     ///     DevMSet and DevMGet must be used together. Heterogeneous objects are not automatically deleted after
     ///     DevMGet is executed. If an object is no longer used, invoke DevLocalDelete to delete it.
-    /// \param[in] keys Keys corresponding to blob2dList
+    /// \param[in] keys Keys corresponding to blob2dList.
+    ///     For performance reasons, only the validity of the first key is validated.
     /// \param[in] devBlobList List describing the structure of Device memory
     /// \param[out] failedKeys Returns failed keys if caching fails
     /// \return K_OK on when return sucesssfully; the error code otherwise.

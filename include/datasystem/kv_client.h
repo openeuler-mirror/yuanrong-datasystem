@@ -175,7 +175,7 @@ public:
     /// \brief Transactional multi-key set interface, it guarantees all the keys are either successfully created or
     ///  none of them is created. The number of keys should be in the range of 1 to 8.
     ///
-    /// \param[in] keys The keys to be set.
+    /// \param[in] keys The keys to be set. For performance reasons, only the validity of the first key is validated.
     /// \param[in] vals The values for the keys.
     /// \param[in] param The set parameters.
     ///
@@ -186,7 +186,7 @@ public:
     /// \brief Multi-key set interface, it can batch set keys and return failed keys. The max keys size < 2000
     ///  and the max value for key to set < 500 * 1024
     ///
-    /// \param[in] keys The keys of object
+    /// \param[in] keys The keys of object. For performance reasons, only the validity of the first key is validated.
     /// \param[in] vals The vals to set
     /// \param[out] outFailedKeys The failed keys for set
     /// \param[in] param The set parameters.
