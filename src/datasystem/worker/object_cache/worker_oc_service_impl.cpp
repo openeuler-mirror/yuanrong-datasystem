@@ -905,7 +905,8 @@ void WorkerOCServiceImpl::CollectRecoveryWorkerUuidsForRestart(const std::string
 Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &workerAddr)
 {
     RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
-    RETURN_OK_IF_TRUE(FLAGS_l2_cache_type == "distributed_disk");
+    LOG(INFO) << "Begin to recover metadata of restarted worker: " << workerAddr
+              << ", local worker: " << localAddress_.ToString();
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
     CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
     auto *hashRing = etcdCM_->GetHashRing();
@@ -921,7 +922,9 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
     MetadataRecoverySelector selector(objectTable_, etcdCM_);
     MetadataRecoverySelector::SelectionRequest selectReq;
     selectReq.includeL2CacheIds = true;
+    selectReq.ranges = hashRing->GetHashRangeByWorker(workerAddr);
     selectReq.workerUuids = recoverUuids;
+    LOG(INFO) << "Recover metadata after node restart, select request: " << selectReq.ToString();
     std::vector<std::string> matchObjIds;
     RETURN_IF_NOT_OK(selector.Select(selectReq, matchObjIds));
     RETURN_OK_IF_TRUE(matchObjIds.empty());
@@ -930,8 +933,8 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
     std::string standbyWorker;
     auto rc = RecoverMetadataOfData(matchObjIds, failedIds, standbyWorker);
     if (!failedIds.empty()) {
-        LOG(WARNING) << "Recover metadata after node restart has failed object keys: "
-                     << VectorToString(failedIds) << ", restartWorker: " << workerAddr;
+        LOG(WARNING) << "Recover metadata after node restart has failed object keys: " << VectorToString(failedIds)
+                     << ", restartWorker: " << workerAddr;
     }
     return rc;
 }
@@ -940,11 +943,11 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr
 {
     RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
     RETURN_OK_IF_TRUE(workerAddr.empty() || workerAddr == localAddress_.ToString());
-    RETURN_OK_IF_TRUE(FLAGS_l2_cache_type == "distributed_disk");
     if (threadPool_ == nullptr) {
         return RecoverMetadataOfRestartedWorker(workerAddr);
     }
     threadPool_->Execute([this, workerAddr]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
         LOG_IF_ERROR(RecoverMetadataOfRestartedWorker(workerAddr),
                      "RecoverMetadataOfRestartedWorker failed after NodeRestartEvent");
     });
@@ -1822,9 +1825,9 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
             RETURN_IF_NOT_OK(IfNeedTriggerReconciliation());
         }
     }
-    RETURN_IF_NOT_OK(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore());
+    LOG_IF_ERROR(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore(), "Recover slot failed");
     if (isRestart) {
-        RETURN_IF_NOT_OK(slotRecoveryManager_->HandleLocalRestart());
+        LOG_IF_ERROR(slotRecoveryManager_->HandleLocalRestart(), "Recover slot failed");
     }
     return Status::OK();
 }
