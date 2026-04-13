@@ -53,6 +53,11 @@ DS_DEFINE_validator(client_dead_timeout_s, &ValidClientDeadTimeoutSecs);
 namespace datasystem {
 namespace worker {
 
+const std::string &ClientInfo::GetDeviceId() const
+{
+    return deviceId_;
+}
+
 void ClientInfo::SetUniqueCount(bool uniqueCount)
 {
     uniqueCount_ = uniqueCount;

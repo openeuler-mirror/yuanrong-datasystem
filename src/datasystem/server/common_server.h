@@ -74,12 +74,13 @@ public:
      * @param[in] enableCrossNode Client is enable cross node connection or not.
      * @param[in] podName Client pod name.
      * @param[in] supportMultiShmRefCount Client support multi shm ref count or not.
+     * @param[in] deviceId pipeline h2d device id
      * @param[out] lockId The lock id.
      * @return Status of the call.
      */
     virtual Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
                              bool enableCrossNode, const std::string &podName, bool supportMultiShmRefCount,
-                             uint32_t &lockId) = 0;
+                             std::string deviceId, uint32_t &lockId) = 0;
 
     /**
      * @brief After restart crashed server, we need to do some recovery job according to the message from the client.

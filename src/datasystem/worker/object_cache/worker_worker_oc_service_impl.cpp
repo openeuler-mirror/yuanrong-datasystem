@@ -190,6 +190,12 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
     const uint64_t batchLimitKeys = 1024;  // must same as obj_cache_shm_unit in req side.
     uint64_t metadataSize = ocClientWorkerSvc_->GetMetadataSize();
 
+    if (OsXprtPipln::IsPiplnH2DRequest(req)) {
+        // pipeline rh2d doesn't support aggregate memory now
+        info.canBatchHandler = false;
+        return Status::OK();
+    }
+
     for (uint64_t i = 0; i < reqSize; i++) {
         uint64_t dataSize = req.requests(i).data_size();
         if (dataSize > FLAGS_oc_worker_aggregate_single_max) {

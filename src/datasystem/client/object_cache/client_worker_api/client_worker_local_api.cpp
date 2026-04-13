@@ -37,10 +37,11 @@ namespace object_cache {
 ClientWorkerLocalApi::ClientWorkerLocalApi(HostPort hostPort,
                                            std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api,
                                            void *worker, HeartbeatType heartbeatType, Signature *signature,
-                                           bool enableCrossNodeConnection)
+                                           bool enableCrossNodeConnection, std::string deviceId)
     : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
       ClientWorkerBaseApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
-      ClientWorkerLocalCommonApi(hostPort, std::move(api), worker, heartbeatType, enableCrossNodeConnection, signature)
+      ClientWorkerLocalCommonApi(hostPort, std::move(api), worker, heartbeatType, enableCrossNodeConnection, signature,
+                                 std::move(deviceId))
 {
 }
 

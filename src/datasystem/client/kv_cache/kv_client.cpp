@@ -259,12 +259,12 @@ Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<
 }
 
 Status KVClient::MGetH2D(const std::vector<std::string> &keys,
-                         const std::vector<std::pair<void *, size_t>> &devShmChunk, const std::vector<uint32_t> &devIds,
+                         const std::vector<std::pair<void *, size_t>> &devShmChunk,
                          std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs)
 {
     PerfPoint point(PerfKey::KV_CLIENT_MGET_H2D);
     LOG(ERROR) << "RH2D:MGetH2D start";
-    std::shared_future<AsyncResult> future = AsyncMGetH2D(keys, devShmChunk, devIds, subTimeoutMs);
+    std::shared_future<AsyncResult> future = AsyncMGetH2D(keys, devShmChunk, subTimeoutMs);
     auto result = future.get();
     LOG(ERROR) << "RH2D:MGetH2D end";
     outFailedKeys = std::move(result.failedList);
@@ -273,10 +273,10 @@ Status KVClient::MGetH2D(const std::vector<std::string> &keys,
 
 std::shared_future<AsyncResult> KVClient::AsyncMGetH2D(const std::vector<std::string> &keys,
                                                        const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                                                       const std::vector<uint32_t> &devIds, int32_t subTimeoutMs)
+                                                       int32_t subTimeoutMs)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->GetWithOsTransportPipeline(keys, devShmChunk, devIds, subTimeoutMs);
+    return impl_->GetWithOsTransportPipeline(keys, devShmChunk, subTimeoutMs);
 }
 
 Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs)

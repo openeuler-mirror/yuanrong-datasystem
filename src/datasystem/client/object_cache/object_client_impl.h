@@ -309,14 +309,13 @@ public:
      * @brief Invoke worker client to get an object.
      * @param[in] objectKeys The vector of the object key.
      * @param[in] devShmChunk share memory ptr and size pair.
-     * @param[in] devIds cuda memory device id.
      * @param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer number
      * required. 0 means no waiting time allowed.
      * @return Status of the result.
      */
-    std::shared_future<AsyncResult> GetWithOsTransportPipeline(const std::vector<std::string> &objectKeys,
-                const std::vector<std::pair<void*, size_t>> &devShmChunk,
-                const std::vector<uint32_t>& devIds, int64_t subTimeoutMs);
+    std::shared_future<AsyncResult> GetWithOsTransportPipeline(
+        const std::vector<std::string> &objectKeys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
+        int64_t subTimeoutMs);
 
     /**
      * @brief Some data in an object can be read based on the specified key and parameters.
@@ -1343,6 +1342,7 @@ private:
     std::unique_ptr<ClientDeviceObjectManager> devOcImpl_{ nullptr };
     bool enableRemoteH2D_;
     int32_t devId_ = -1;
+    std::string deviceId_;
 
     // Protect tbb map globalRefCount_, use unique_lock in for/while loop.
     mutable std::shared_timed_mutex globalRefMutex_;

@@ -50,6 +50,7 @@ message RegisterClientReqPb {
     string pod_name = 10;
     bool enable_exclusive_connection = 11;
     bool support_multi_shm_ref_count = 12;
+    string device_id = 13;
 
     // DFX required, need to send something to worker when reconnect.
     repeated google.protobuf.Any extend = 50;

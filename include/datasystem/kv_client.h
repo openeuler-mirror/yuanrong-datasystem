@@ -200,7 +200,6 @@ public:
     ///
     /// \param[in] keys The keys.
     /// \param[in] devShmChunk share memory ptr and size pair.
-    /// \param[in] devIds cuda memory device id.
     /// \param[out] outFailedKeys failed H2D keys.
     /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
     ///  number required. 0 means no waiting time allowed.
@@ -209,21 +208,21 @@ public:
     ///         K_INVALID: the key is empty.
     ///         K_NOT_FOUND: the key not found.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
+    ///         K_NOT_SUPPORT: client or worker don't support MGetH2D
     Status MGetH2D(const std::vector<std::string> &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                   const std::vector<uint32_t> &devIds, std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs);
+                   std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs);
 
     /// \brief copy values of keys to device share memory by server
     ///
     /// \param[in] keys The keys.
     /// \param[in] devShmChunk share memory ptr and size pair.
-    /// \param[in] devIds cuda memory device id.
     /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
     ///  number required. 0 means no waiting time allowed.
     ///
     /// \return async future
     std::shared_future<AsyncResult> AsyncMGetH2D(const std::vector<std::string> &keys,
                                                  const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                                                 const std::vector<uint32_t> &devIds, int32_t subTimeoutMs);
+                                                 int32_t subTimeoutMs);
 
     /// \brief Invoke worker client to get the value of a key.
     ///

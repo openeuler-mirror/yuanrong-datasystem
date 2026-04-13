@@ -349,7 +349,7 @@ TEST_F(WorkerOCServiceImplTest, TestPublish)
 {
     auto clientId = ClientKey::Intern("c1");
     uint32_t lockId;
-    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, false, 1, "", "", "", lockId));
+    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, false, 1, "", "", "", "", lockId));
 
     size_t dataSz = 100;
     auto str = random_.GetRandomString(dataSz);
@@ -373,7 +373,7 @@ TEST_F(WorkerOCServiceImplTest, TestPut)
 {
     auto clientId = ClientKey::Intern("c1");
     uint32_t lockId;
-    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, true, true, "", "", "", lockId));
+    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, true, true, "", "", "", "", lockId));
 
     // Create.
     std::string shmId;
@@ -418,7 +418,7 @@ TEST_F(WorkerOCServiceImplTest, TestMultiCreate)
 {
     auto clientId = ClientKey::Intern("c1");
     uint32_t lockId;
-    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, true, true, "", "", "", lockId));
+    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, true, true, "", "", "", "", lockId));
 
     MultiCreateReqPb req;
     std::string objectKey = "o1";

@@ -59,7 +59,7 @@ Status CudaIPC::EncodeDriver()
     if (!targetAddr)
         return Status(StatusCode::K_INVALID, "targetAddr is nullptr");
 
-    cudaIpcMemHandle_t *handle = (cudaIpcMemHandle_t *)GetEncodeHandle(sizeof(type));
+    cudaIpcMemHandle_t *handle = (cudaIpcMemHandle_t *)GetEncodeHandle(sizeof(cudaIpcMemHandle_t));
     CUDA_RETURN_IF_NOT_OK(cudaSetDevice, {}, devId);
     CUDA_RETURN_IF_NOT_OK(cudaIpcGetMemHandle, {}, handle, targetAddr);
     return Status::OK();
@@ -71,7 +71,7 @@ Status CudaIPC::DecodeDriver()
         return Status(StatusCode::K_NOT_SUPPORTED, "DecodeDriver should be called in server");
 
     // decode handle
-    cudaIpcMemHandle_t *handle = (cudaIpcMemHandle_t *)GetDecodeHandle(sizeof(type));
+    cudaIpcMemHandle_t *handle = (cudaIpcMemHandle_t *)GetDecodeHandle(sizeof(cudaIpcMemHandle_t));
     if (!handle)
         return Status(StatusCode::K_RUNTIME_ERROR, "handle is not set");
 

@@ -36,6 +36,7 @@ public:
     }
     virtual ~CudaIPC()
     {
+        Release();
     }
 
     Status SubmitIO(void *srcData, size_t srcSize, size_t destOffset) override;

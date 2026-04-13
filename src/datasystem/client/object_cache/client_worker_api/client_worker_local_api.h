@@ -44,7 +44,8 @@ class ClientWorkerLocalApi : public ClientWorkerBaseApi, public client::ClientWo
 public:
     ClientWorkerLocalApi(HostPort hostPort, std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api,
                          void *worker, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                         Signature *signature = nullptr, bool enableCrossNodeConnection = false);
+                         Signature *signature = nullptr, bool enableCrossNodeConnection = false,
+                         std::string deviceId = "");
 
     ~ClientWorkerLocalApi() = default;
 

@@ -32,7 +32,7 @@ size_t MockIPC::currentOffset = 0;
 
 Status MockIPC::EncodeDriver()
 {
-    MockIPCMemHandle *handle = (MockIPCMemHandle *)GetEncodeHandle(sizeof(type));
+    MockIPCMemHandle *handle = (MockIPCMemHandle *)GetEncodeHandle(sizeof(MockIPCMemHandle));
     handle->currentOffset = currentOffset;
     currentOffset += targetSize;
     return Status::OK();
@@ -40,7 +40,7 @@ Status MockIPC::EncodeDriver()
 
 Status MockIPC::DecodeDriver()
 {
-    MockIPCMemHandle *handle = (MockIPCMemHandle *)GetDecodeHandle(sizeof(type));
+    MockIPCMemHandle *handle = (MockIPCMemHandle *)GetDecodeHandle(sizeof(MockIPCMemHandle));
     offset = handle->currentOffset;
     return Status::OK();
 }
