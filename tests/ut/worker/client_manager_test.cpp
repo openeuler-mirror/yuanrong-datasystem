@@ -257,6 +257,33 @@ TEST_F(ClientManagerTest, TestAddClientFailed)
     }
 }
 
+TEST_F(ClientManagerTest, TestMaxClientNumOnlyCountsShmEnabled)
+{
+    FLAGS_max_client_num = 1;
+    ClientManager &clientMgr = ClientManager::Instance();
+    DS_ASSERT_OK(clientMgr.Init());
+
+    // Setting shmEnabled to true will consume lockId quota.
+    auto shmClientId1 = ClientKey::Intern("shm_client_1");
+    uint32_t lockId1 = 0;
+    DS_ASSERT_OK(clientMgr.AddClient(shmClientId1, true, -1, "", true, "", "", lockId1));
+    ASSERT_NE(lockId1, 0u);
+
+    auto shmClientId2 = ClientKey::Intern("shm_client_2");
+    uint32_t lockId2 = 0;
+    auto rc = clientMgr.AddClient(shmClientId2, true, -1, "", true, "", "", lockId2);
+    ASSERT_TRUE(rc.IsError());
+    ASSERT_TRUE(rc.GetMsg().find("Client number upper to the limit") != std::string::npos) << rc.ToString();
+
+    // Setting shmEnabled to false should not consume lockId quota and must return lockId=0.
+    for (int i = 0; i < 10; ++i) {
+        auto nonShmClientId = ClientKey::Intern("non_shm_client_" + std::to_string(i));
+        uint32_t nonShmLockId = 123; // Ensure it will be covered
+        DS_ASSERT_OK(clientMgr.AddClient(nonShmClientId, false, -1, "", true, "", "", nonShmLockId));
+        ASSERT_EQ(nonShmLockId, 0u);
+    }
+}
+
 TEST_F(ClientManagerTest, TestRemovableClientCount)
 {
     ClientManager &clientMgr = ClientManager::Instance();
