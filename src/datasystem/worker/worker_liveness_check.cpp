@@ -267,23 +267,11 @@ Status WorkerLivenessCheck::CheckRocksDbService()
     if (!IsMasterNode() || (FLAGS_rocksdb_write_mode == "none")) {
         return Status::OK();
     }
-    master::CreateMetaReqPb req;
-    master::CreateMetaRspPb rsp;
-    datasystem::ObjectMetaPb *metadata = req.mutable_meta();
-    metadata->set_object_key(livenessKey_);
-    metadata->set_data_size(1);
-    metadata->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
-    metadata->set_ttl_second(0);
-    ConfigPb *configPb = metadata->mutable_config();
-    configPb->set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE));
-    configPb->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
-    configPb->set_consistency_type(static_cast<uint32_t>(ConsistencyType::PRAM));
-    req.set_address(hostPort_.ToString());
-    g_MetaRocksDbName = workerUuid_;
+    master::LivenessCheckReqPb req;
+    master::LivenessCheckRspPb rsp;
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = workerOcServer_->GetOcMetaSvc()->CreateMeta(req, rsp);
-    // ignore error if the primary replica aready switch to other worker
-    if (rc.IsOk() || rc.GetCode() == K_REPLICA_NOT_READY || lastSuccessTimeUs_ == 0) {
+    auto rc = workerOcServer_->GetOcMetaSvc()->LivenessCheck(req, rsp);
+    if (rc.IsOk() || lastSuccessTimeUs_ == 0) {
         lastSuccessTimeUs_ = GetSteadyClockTimeStampUs();
     }
     if (rc.IsError()) {

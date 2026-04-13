@@ -686,6 +686,15 @@ message ResourceReportRspPb {
   repeated WorkerStat stats = 1;
 }
 
+message LivenessCheckReqPb {
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message LivenessCheckRspPb {}
+
 service MasterOCService {
   rpc CreateMeta (CreateMetaReqPb) returns (CreateMetaRspPb) {}
   rpc CreateCopyMeta (CreateCopyMetaReqPb) returns (CreateCopyMetaRspPb) {}
@@ -720,6 +729,7 @@ service MasterOCService {
   rpc ReleaseGRefsOfRemoteClientId(ReleaseGRefsReqPb) returns (ReleaseGRefsRspPb) {}
   rpc CreateMultiMeta(CreateMultiMetaReqPb) returns (CreateMultiMetaRspPb) {}
   rpc ReportResource(ResourceReportReqPb) returns (ResourceReportRspPb) {}
+  rpc LivenessCheck(LivenessCheckReqPb) returns (LivenessCheckRspPb) {}
 
 
   // Heterogeneous Memory Object RPCs.

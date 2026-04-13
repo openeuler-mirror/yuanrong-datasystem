@@ -522,6 +522,15 @@ bool ObjectMetaStore::CheckHealth()
     return true;
 }
 
+Status ObjectMetaStore::LivenessCheckRocksdb()
+{
+    auto rc = PutToRocksStore(HEALTH_TABLE, LIVENESS_CHECK, LIVENESS_OK);
+    if (rc.IsError()) {
+        RETURN_STATUS(StatusCode::K_KVSTORE_ERROR, "Liveness check rocksdb failed");
+    }
+    return Status::OK();
+}
+
 void ObjectMetaStore::GetMetasMatch(
     std::function<bool(const std::string &)> &&matchFunc,
     std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &objAsyncMap)

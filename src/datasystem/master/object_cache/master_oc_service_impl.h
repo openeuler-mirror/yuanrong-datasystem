@@ -462,6 +462,14 @@ public:
      */
     Status Expire(const ExpireReqPb &req, ExpireRspPb &rsp) override;
 
+    /**
+     * @brief Liveness check.
+     * @param[in] req The rpc req protobuf.
+     * @param[in] rsp The rpc rsp protobuf.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status LivenessCheck(const LivenessCheckReqPb &req, LivenessCheckRspPb &rsp) override;
+
 private:
     HostPort masterAddress_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
