@@ -6,7 +6,9 @@
 
 ```bash
 bazel build //bazel:datasystem_sdk
-#输出sdk包括： bazel-bin/bazel/datasystem_sdk.zip ，里面包含 libdatasystem.so 和头文件，以及其他python接口等
+#输出sdk目录：bazel-bin/bazel/datasystem_sdk/cpp
+#主要内容包括：BUILD.bazel、头文件（统一在 cpp/include/datasystem 目录下）、
+#以及动态库 cpp/lib/libdatasystem.so 和 cpp/lib/libds_client_py.so
 ```
 
 性能优化的Release版本，需要带上 --config=release，下同

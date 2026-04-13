@@ -1,12 +1,30 @@
 # include/datasystem/BUILD
 package(default_visibility = ["//visibility:public"])
 
+SUBPACKAGE_HEADERS = [
+    "//include/datasystem/hetero:device_common.h",
+    "//include/datasystem/hetero:future.h",
+    "//include/datasystem/object:buffer.h",
+    "//include/datasystem/object:object_enum.h",
+    "//include/datasystem/stream:consumer.h",
+    "//include/datasystem/stream:element.h",
+    "//include/datasystem/stream:producer.h",
+    "//include/datasystem/stream:stream_config.h",
+    "//include/datasystem/utils:connection.h",
+    "//include/datasystem/utils:embedded_config.h",
+    "//include/datasystem/utils:optional.h",
+    "//include/datasystem/utils:sensitive_value.h",
+    "//include/datasystem/utils:service_discovery.h",
+    "//include/datasystem/utils:status.h",
+    "//include/datasystem/utils:string_view.h",
+]
+
 filegroup(
     name = "headers_srcs",
     srcs = glob([
         "**/*.h",
         "**/*.hpp",
-    ]),
+    ]) + SUBPACKAGE_HEADERS,
 )
 
 cc_library(
@@ -14,7 +32,7 @@ cc_library(
     hdrs = glob([
         "**/*.h",
         "**/*.hpp",
-    ]),
+    ]) + SUBPACKAGE_HEADERS,
     includes = ["."],
     strip_include_prefix = "/include",
     visibility = ["//visibility:public"],

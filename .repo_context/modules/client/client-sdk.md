@@ -141,11 +141,13 @@
 
 - Main build definition:
   - `src/datasystem/client/CMakeLists.txt`
+  - `bazel/BUILD.bazel`
 - Notable facts:
   - client sources build both `datasystem_static` and `datasystem` shared library
   - `ds_router_client` is a separate client-facing library built from `router_client.cpp`
   - Python bindings are built from `src/datasystem/pybind_api` when Python API build is enabled
   - transfer engine is only added from the root build when transfer-engine, hetero, and NPU-related conditions are satisfied
+  - Bazel target `//bazel:datasystem_sdk` packages a C++ SDK directory tree at `bazel-bin/bazel/datasystem_sdk/cpp`, with all public headers under `cpp/include/datasystem/` and `lib/libdatasystem.so` + `lib/libds_client_py.so`
 
 ## Review And Bugfix Notes
 
