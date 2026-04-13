@@ -34,6 +34,12 @@ Status L2CacheClient::SendObsRequest(const std::shared_ptr<HttpClient> httpClien
     request->SetConnectTimeoutMs(timeoutMs);
     request->SetRequestTimeoutMs(timeoutMs);
 
+    // Create response with body stream so curl write callback can store response data
+    if (response == nullptr) {
+        response = std::make_shared<HttpResponse>();
+        response->SetBody(std::make_shared<std::stringstream>());
+    }
+
     PerfPoint point(PerfKey::OBS_HTTP_SEND);
     RETURN_IF_NOT_OK_APPEND_MSG(httpClient->Send(request, response), " when send request to obs.");
     point.Record();

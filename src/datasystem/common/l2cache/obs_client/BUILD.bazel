@@ -24,14 +24,48 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "obs_signature",
+    srcs = [
+        "obs_signature.cpp",
+    ],
+    hdrs = [
+        "obs_signature.h",
+    ],
+    deps = [
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:sensitive_value",
+        "@boringssl//:ssl",
+    ],
+)
+
+ds_cc_library(
+    name = "obs_xml_util",
+    srcs = [
+        "obs_xml_util.cpp",
+    ],
+    hdrs = [
+        "obs_xml_util.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
     name = "obs_client_header",
     hdrs = [
         "obs_client.h",
     ],
     deps = [
         "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/httpclient:http_client",
+        "//src/datasystem/common/httpclient:http_request",
+        "//src/datasystem/common/httpclient:http_response",
         "//src/datasystem/common/l2cache:l2cache_client",
         "//src/datasystem/common/l2cache/obs_client:cloud_service_rotation",
+        "//src/datasystem/common/l2cache/obs_client:obs_signature",
+        "//src/datasystem/common/l2cache/obs_client:obs_xml_util",
         "//src/datasystem/common/metrics/metrics_vector",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
@@ -41,33 +75,39 @@ ds_cc_library(
     ],
 )
 
-# ds_cc_library(
-#     name = "obs_client",
-#     srcs = [
-#         "obs_client.cpp",
-#     ],
-#     deps = [
-#         ":obs_client_header",
-#         "//include/datasystem/utils:utils_headers",
-#         "//src/datasystem/common/ak_sk:ak_sk_manager",
-#         "//src/datasystem/common/encrypt:common_encrypt",
-#         "//src/datasystem/common/flags:ds_flags",
-#         "//src/datasystem/common/inject:common_inject",
-#         "//src/datasystem/common/l2cache:get_object_info_list_resp",
-#         "//src/datasystem/common/l2cache:l2cache_client",
-#         "//src/datasystem/common/l2cache/obs_client:cloud_service_rotation",
-#         "//src/datasystem/common/log:common_log",
-#         "//src/datasystem/common/metrics:common_metrics",
-#         "//src/datasystem/common/metrics/metrics_vector",
-#         "//src/datasystem/common/util:file_util",
-#         "//src/datasystem/common/util:format",
-#         "//src/datasystem/common/util:raii",
-#         "//src/datasystem/common/util:status_helper",
-#         "//src/datasystem/common/util:strings_util",
-#         "//src/datasystem/common/util:thread",
-#         "//src/datasystem/common/util:thread_pool",
-#         "//src/datasystem/common/util:timer",
-#         "//src/datasystem/common/util:validator",
-#         # TODO: add obs third party
-#     ],
-# )
+ds_cc_library(
+    name = "obs_client",
+    srcs = [
+        "obs_client.cpp",
+    ],
+    deps = [
+        ":obs_client_header",
+        ":obs_signature",
+        ":obs_xml_util",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/encrypt:common_encrypt",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/httpclient:curl_http_client",
+        "//src/datasystem/common/httpclient:http_request",
+        "//src/datasystem/common/httpclient:http_response",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/l2cache:get_object_info_list_resp",
+        "//src/datasystem/common/l2cache:l2cache_client",
+        "//src/datasystem/common/l2cache/obs_client:cloud_service_rotation",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/metrics/metrics_vector",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:validator",
+        "@boringssl//:ssl",
+        "@nlohmann_json//:json",
+    ],
+)

@@ -93,15 +93,13 @@ ds_cc_library(
         "object_persistence_api.h",
         "persistence_api.h",
     ],
-    defines = [
-        "DISABLE_OBS",
-    ],
     deps = [
         ":l2cache_client",
         ":l2cache_object_info_header",
         ":slot_client",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/l2cache/obs_client:obs_client",
         "//src/datasystem/common/l2cache/sfs_client",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:raii",
@@ -133,12 +131,9 @@ ds_cc_library(
     hdrs = [
         "get_object_info_list_resp.h",
     ],
-    defines = [
-        "DISABLE_OBS",
-    ],
     deps = [
         "//src/datasystem/common/l2cache:l2cache_object_info_header",
-        #"//src/datasystem/common/l2cache/obs_client:obs_client_header",
+        "//src/datasystem/common/l2cache/obs_client:obs_client_header",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",

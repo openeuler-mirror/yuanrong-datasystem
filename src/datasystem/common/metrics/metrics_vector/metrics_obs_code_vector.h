@@ -25,10 +25,6 @@
 #include <numeric>
 #include <vector>
 
-#ifndef DISABLE_OBS
-#include <eSDKOBS.h>
-#endif
-
 #include "datasystem/common/metrics/metrics_vector/metrics_blocking_vector.h"
 
 namespace datasystem {
@@ -36,14 +32,13 @@ class MetricsObsCodeVector : public MetricsBlockingVector {
 public:
     /**
      * @brief Blocking emplace result code to vector.
-     * @param[in] code The result code.
+     * @param[in] code The HTTP status code.
      */
     virtual void BlockingEmplaceBackCode(int code) override
     {
-        #ifndef DISABLE_OBS
-        auto realValue = ((code == OBS_STATUS_OK || code == OBS_STATUS_NoSuchKey) ? 1.0f : 0.0f);
+        // HTTP 2xx = success, 404 = not found (treated as success for metrics)
+        auto realValue = ((code >= 200 && code < 300) || code == 404) ? 1.0f : 0.0f;
         BlockingEmplaceBack(realValue);
-        #endif
     }
 };
 }  // namespace datasystem

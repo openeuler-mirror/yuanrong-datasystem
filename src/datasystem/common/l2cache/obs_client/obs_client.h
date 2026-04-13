@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Interface to OBS SDK.
+ * Description: Interface to OBS via HTTP REST API.
  */
 
 #ifndef DATASYSTEM_COMMON_L2CACHE_OBS_CLIENT_OBS_CLIENT_H
@@ -25,12 +25,16 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
-
-#include <eSDKOBS.h>
+#include <shared_mutex>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/httpclient/http_client.h"
+#include "datasystem/common/httpclient/http_request.h"
+#include "datasystem/common/httpclient/http_response.h"
 #include "datasystem/common/l2cache/l2cache_client.h"
 #include "datasystem/common/l2cache/obs_client/cloud_service_rotation.h"
+#include "datasystem/common/l2cache/obs_client/obs_signature.h"
+#include "datasystem/common/l2cache/obs_client/obs_xml_util.h"
 #include "datasystem/common/metrics/metrics_vector/metrics_obs_code_vector.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -42,19 +46,29 @@
 namespace datasystem {
 class GetObjectInfoListResp;
 class L2CacheClient;
+
+/**
+ * @brief Snapshot of OBS credential used for a single HTTP request.
+ */
+struct ObsCredential {
+    std::string ak;
+    std::string sk;
+    std::string token;  // empty for AK/SK mode, non-empty for token rotation mode
+};
+
 class ObsClient : public L2CacheClient {
 public:
     struct ObsPutBuffer {
         std::shared_ptr<std::iostream> buffer{ nullptr };
         size_t bufferSize{ 0 };
         size_t offset{ 0 };
-        obs_status status{ OBS_STATUS_BUTT };
+        int httpStatus{ 0 };
     };
 
     struct GetObjectBuffer {
         std::shared_ptr<std::stringstream> buffer{ nullptr };
         size_t size{ 0 };
-        obs_status status{ OBS_STATUS_BUTT };
+        int httpStatus{ 0 };
     };
 
     struct MultiPartUploadBuffer {
@@ -67,22 +81,17 @@ public:
         mutable std::mutex mx;
     };
 
-    struct ObsRsp {
-        obs_status status{ OBS_STATUS_BUTT };
-    };
-
     struct OnePartUploadBuffer {
         static constexpr size_t ETAG_LENGTH = 1024;
         std::shared_ptr<std::iostream> buffer{ nullptr };
-        char eTag[ETAG_LENGTH] = {0};
-        char *uploadId{ nullptr };
+        std::string eTag;
+        std::string uploadId;
         size_t partNum{ 0 };
         size_t partSize{ 0 };
         size_t offset{ 0 };
-        obs_options *option{ nullptr };
-        char *key{ nullptr };
-        std::mutex *mx{ nullptr };  // pointing to datasystem::ObsClient::mx_
-        obs_status status{ OBS_STATUS_BUTT };
+        std::string key;
+        std::mutex *mx{ nullptr };  // pointing to ObsClient::multiPartUploadMx_
+        int httpStatus{ 0 };
     };
 
     struct ObsObject {
@@ -95,30 +104,19 @@ public:
         std::string storageClass;
         std::string type;
 
-        ObsObject(const char *keyArg, int64_t lastModifiedArg, const char *etagArg, uint64_t sizeArg,
-                  const char *ownerIdArg, const char *ownerDisplayNameArg, const char *storageClassArg,
-                  const char *typeArg)
+        ObsObject() = default;
+        ObsObject(const std::string &keyArg, int64_t lastModifiedArg, const std::string &etagArg, uint64_t sizeArg,
+                  const std::string &ownerIdArg, const std::string &ownerDisplayNameArg,
+                  const std::string &storageClassArg, const std::string &typeArg)
+            : key(keyArg),
+              lastModified(lastModifiedArg),
+              etag(etagArg),
+              size(sizeArg),
+              ownerId(ownerIdArg),
+              ownerDisplayName(ownerDisplayNameArg),
+              storageClass(storageClassArg),
+              type(typeArg)
         {
-            if (keyArg != nullptr) {
-                key = std::string(keyArg);
-            }
-            lastModified = lastModifiedArg;
-            if (etagArg != nullptr) {
-                etag = std::string(etagArg);
-            }
-            size = sizeArg;
-            if (ownerIdArg != nullptr) {
-                ownerId = std::string(ownerIdArg);
-            }
-            if (ownerDisplayNameArg != nullptr) {
-                ownerDisplayName = std::string(ownerDisplayNameArg);
-            }
-            if (storageClassArg != nullptr) {
-                storageClass = std::string(storageClassArg);
-            }
-            if (typeArg != nullptr) {
-                type = std::string(typeArg);
-            }
         }
     };
 
@@ -129,11 +127,11 @@ public:
         int commonPrefixCount{ 0 };
         std::vector<std::string> commonPrefixes;
         std::vector<ObsObject> objects;
-        obs_status status{ OBS_STATUS_BUTT };
+        int httpStatus{ 0 };
     };
 
     ObsClient(const std::string &endPoint, const std::string &bucketName)
-        : endPoint_(endPoint), bucketName_(bucketName), optGenerator_(this)
+        : endPoint_(endPoint), bucketName_(bucketName), credentialManager_(this)
     {
     }
 
@@ -163,7 +161,7 @@ public:
      * @brief get the object list from obs
      * @param[in] objectPrefix the object path in obs bucket
      * @param[in] timeoutMs the connect and request timeout in million second
-     * @param[in] listIncompleteVersions whether to list those incomplete versions. Usually they are partially uploaded.
+     * @param[in] listIncompleteVersions whether to list those incomplete versions.
      * @param[out] listResp the object listResp
      * @return Status of the call
      */
@@ -220,14 +218,18 @@ private:
         }
     };
 
-    class OptionGenerator {
+    /**
+     * @brief Manages OBS credentials (AK/SK and token rotation).
+     * Provides thread-safe credential snapshots via GetCredential().
+     */
+    class ObsCredentialManager {
     public:
-        OptionGenerator(ObsClient *client) : client_(client)
+        ObsCredentialManager(ObsClient *client) : client_(client)
         {
         }
-        OptionGenerator() = delete;
+        ObsCredentialManager() = delete;
 
-        ~OptionGenerator()
+        ~ObsCredentialManager()
         {
             if (accessKey_ != nullptr && accessKeyLen_ > 0) {
                 int ret = memset_s(accessKey_.get(), accessKeyLen_, 0, accessKeyLen_);
@@ -246,11 +248,10 @@ private:
         bool Init();
 
         /**
-         * @brief Specifies the Obs option for which an Obs request needs to be sent.
-         * @param[in,out] opts Obs options.
-         * @param[in,out] tempCredential Credentials required for a temporary token authentications.
+         * @brief Get a credential snapshot for signing an HTTP request.
+         * @return ObsCredential snapshot with ak, sk, and optional token.
          */
-        void GenerateObsOption(obs_options &opts, ObsTempCredential &tempCredential);
+        ObsCredential GetCredential();
 
         /**
          * @brief Update credentials of temporary token authentications.
@@ -270,18 +271,18 @@ private:
 
     private:
         /**
-        * @brief Decrypt ak/sk.
-        * @return Status of the call
-        */
+         * @brief Decrypt ak/sk.
+         * @return Status of the call.
+         */
         Status DecryptAKSK();
 
         /**
-        * @brief Decrypts ciphertext into plaintext.
-        * @param[in] cipher The ciphertext needs to decrypt.
-        * @param[out] plainText The plaintext after decrypting ciphertext.
-        * @param[out] outSize The length of plaintext.
-        * @return Status of the call.
-        */
+         * @brief Decrypts ciphertext into plaintext.
+         * @param[in] cipher The ciphertext needs to decrypt.
+         * @param[out] plainText The plaintext after decrypting ciphertext.
+         * @param[out] outSize The length of plaintext.
+         * @return Status of the call.
+         */
         Status Decrypt(const std::string &cipher, std::unique_ptr<char[]> &plainText, int &outSize);
 
         struct EncryptedCredentialInfo {
@@ -295,19 +296,6 @@ private:
          * @return true if all credentials have been initialized.
          */
         bool IsCredentialInitialized() const;
-
-        /**
-         * @brief Options required for constructing common AK/SK authentication.
-         * @param[in,out] opts Obs options.
-         */
-        void GenerateCommonObsOption(obs_options &opts);
-
-        /**
-         * @brief Options required for constructing temporary token authentication.
-         * @param[in,out] opts Obs options.
-         * @param[in,out] tempCredential Temp credential that has been decrypted.
-         */
-        void GenerateTokenRotationObsOption(obs_options &opts, ObsTempCredential &tempCredential);
 
         /**
          * @brief Decrypts temp ak, sk or token into plaintext.
@@ -370,19 +358,15 @@ private:
      */
     Status MultiPartUpload(const std::shared_ptr<std::iostream> &body, size_t size, const std::string &objPath,
                            size_t partitionSize, Timer &timer);
-    
+
     /**
-     * @brief Initialize multipart upload.
+     * @brief Initialize multipart upload via REST API.
      * @param[in] objectPath the object path in obs bucket
-     * @param[in] opts obs_options
-     * @param[in] putProperties obs_put_properties
      * @param[in] timer timer recording elapsed time for timeout limit
-     * @param[in] uploadIdSize size of upload ID
-     * @param[in] uploadId returned upload ID
+     * @param[out] uploadId returned upload ID
      * @return Status of the call
      */
-    Status InitMultiPartUpload(const std::string &objPath, obs_options &opts, obs_put_properties &putProperties,
-                               Timer &timer, const size_t uploadIdSize, char *uploadId);
+    Status InitMultiPartUpload(const std::string &objPath, Timer &timer, std::string &uploadId);
 
     /**
      * @brief Submit threads each uploading a part of an object.
@@ -390,12 +374,11 @@ private:
      * @param[in] objectPath the object path in obs bucket
      * @param[in] bufferSize size of the whole buffer/object
      * @param[in] uploadId upload ID
-     * @param[in] options obs_options for all threads
-     * @param[in] parts vector of OnePartUploadBuffer all threads, containing object and information for partition
+     * @param[in] parts vector of OnePartUploadBuffer all threads
      * @return Status of the call
      */
     Status SubmitUploadThreads(const MultiPartUploadBuffer &multiPartBuffer, const std::string &objPath,
-                               size_t bufferSize, char *uploadId, std::vector<obs_options> &options,
+                               size_t bufferSize, const std::string &uploadId,
                                std::vector<OnePartUploadBuffer> &parts);
 
     /**
@@ -404,6 +387,14 @@ private:
      * @return Status of the call
      */
     Status OnePartUpload(OnePartUploadBuffer &onePartUploadBuffer);
+
+    /**
+     * @brief Abort a multipart upload.
+     * @param[in] objectPath the object path in obs bucket
+     * @param[in] uploadId upload ID
+     * @return Status of the call
+     */
+    Status AbortMultipartUpload(const std::string &objectPath, const std::string &uploadId);
 
     /**
      * @brief Get an object from obs.
@@ -421,7 +412,22 @@ private:
      * @param[in] listResp GetObjectInfoListResp holding object information
      * @return Status of the call
      */
-    Status ListObjects(const std::string &objectPrefix, Timer &timer, std::shared_ptr<GetObjectInfoListResp> &listResp);
+    Status ListObjects(const std::string &objectPrefix, Timer &timer,
+                       std::shared_ptr<GetObjectInfoListResp> &listResp);
+
+    /**
+     * @brief Build and send a single ListObjects HTTP request for one page.
+     * @param[in] objectPrefix Object prefix filter.
+     * @param[in] marker Pagination marker (empty for first page).
+     * @param[in] maxKeys Maximum keys per page.
+     * @param[in] timeoutMs Request timeout.
+     * @param[in] credential OBS credential.
+     * @param[out] respBody Response XML body.
+     * @return Status of the call.
+     */
+    Status SendListObjectsRequest(const std::string &objectPrefix, const std::string &marker,
+                                  uint16_t maxKeys, int64_t timeoutMs, const ObsCredential &credential,
+                                  std::string &respBody);
 
     /**
      * @brief Delete objects in batch in [beg, end)
@@ -431,6 +437,29 @@ private:
      * @return Status of the call
      */
     Status BatchDeleteObjects(const std::vector<std::string> &objects, size_t beg, size_t end);
+
+    /**
+     * @brief Sign an HTTP request with OBS V2 signature.
+     * @param[in] credential AK/SK credential snapshot.
+     * @param[in,out] request The HTTP request to sign.
+     * @param[in] contentMd5 MD5 of request body (optional).
+     * @param[in] subResources Sub-resource query parameters for canonical resource.
+     * @return Status of the call.
+     */
+    Status SignRequest(const ObsCredential &credential, std::shared_ptr<HttpRequest> &request,
+                       const std::string &contentMd5,
+                       const std::map<std::string, std::string> &subResources);
+
+    /**
+     * @brief Build a fully configured HTTP request for OBS.
+     * @param[in] method HTTP method.
+     * @param[in] objectKey Object key.
+     * @param[in] timeoutMs Request timeout.
+     * @param[in] subResources Sub-resource query parameters.
+     * @return Configured HttpRequest shared_ptr.
+     */
+    std::shared_ptr<HttpRequest> BuildRequest(HttpMethod method, const std::string &objectKey, int64_t timeoutMs,
+                                              const std::map<std::string, std::string> &subResources = {});
 
     /**
      * @brief Read csms token for build iam request header.
@@ -457,39 +486,6 @@ private:
      */
     Status UpdateTempObsToken();
 
-    static void CreateBucketRspCompleteCallback(obs_status status, const obs_error_details *errorDetails,
-                                                void *callbackData);
-
-    static obs_status PutRspPropertiesCallback(const obs_response_properties *properties, void *callbackData);
-    static void PutRspCompleteCallback(obs_status status, const obs_error_details *errorDetails, void *callbackData);
-    static int PutObjectDataCallback(int bufferSize, char *buffer, void *callbackData);
-
-    static obs_status MultiUploadRspPropertiesCallback(const obs_response_properties *properties, void *callbackData);
-    static void MultiUploadRspCompleteCallback(obs_status status, const obs_error_details *errorDetails,
-                                               void *callbackData);
-    static obs_status MultiUploadCompleteCallback(const char *location, const char *bucket, const char *key,
-                                                  const char* eTag, void *callbackData);
-    static obs_status OneUploadRspPropertiesCallback(const obs_response_properties *properties, void *callbackData);
-    static void OneUploadRspCompleteCallback(obs_status status, const obs_error_details *error, void *callbackData);
-    static int OneUploadDataCallback(int bufferSize, char *buffer, void *callbackData);
-
-    static obs_status GetObjRspPropertiesCallback(const obs_response_properties *properties, void *callbackData);
-    static void GetObjResponseCompleteCallback(obs_status status,  const obs_error_details *errorDetails,
-                                               void *callbackData);
-    static obs_status GetObjDataCallback(int bufferSize, const char *buffer, void *callbackData);
-
-    static obs_status ListObjRspPropertiesCallback(const obs_response_properties *properties, void *callbackData);
-    static void ListObjRspCompleteCallback(obs_status status,  const obs_error_details *errorDetails,
-                                           void *callbackData);
-    static obs_status ListObjectsCallback(int isTruncated, const char *nextMarker, int contentsCount,
-                                          const obs_list_objects_content *contents, int commonPrefixesCount,
-                                          const char **commonPrefixes, void *callbackData);
-
-    static obs_status BatchDelObjRspPropertiesCallback(const obs_response_properties *properties, void *callbackData);
-    static void BatchDelObjResponseCompleteCallback(obs_status status,  const obs_error_details *errorDetails,
-                                                    void *callbackData);
-    static obs_status BatchDelObjectsDataCallback(int contentsCount, obs_delete_objects *delObjs, void *callbackData);
-
     const int NUM_THREAD = 10;
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };  // Used for concurrent multipart upload.
     std::mutex multiPartUploadMx_;
@@ -501,9 +497,10 @@ private:
     size_t rotationIntervalSec_ = 0;
     std::string endPoint_;  // OBS host to connect to
     std::string bucketName_;
-    OptionGenerator optGenerator_;
+    ObsCredentialManager credentialManager_;
+    std::shared_ptr<HttpClient> httpClient_;
     std::atomic_bool initialized_{ false };
     MetricsObsCodeVector successRateVec_;
 };
-}
+}  // namespace datasystem
 #endif

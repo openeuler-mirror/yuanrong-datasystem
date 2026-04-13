@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Interface to OBS SDK.
+ * Description: Interface to OBS via HTTP REST API.
  */
 
 #include "datasystem/common/l2cache/obs_client/obs_client.h"
@@ -25,10 +25,10 @@
 #include <limits>
 #include <string>
 
-#include <eSDKOBS.h>
 #include <nlohmann/json.hpp>
 #include <securec.h>
 
+#include "datasystem/common/httpclient/curl_http_client.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -59,6 +59,7 @@ const size_t MAX_OBS_TOKEN_TIMEOUT_SEC = 86400;  // 24 hours.
 const size_t MIN_OBS_TOKEN_TIMEOUT_SEC = 900;    // 15 minutes.
 const size_t ROTATION_DEFAULT_INTERVAL = 43200;  // 12 hours.
 const size_t CONFIG_VALID_STRING_LEN = 128;
+const int64_t OBS_DEFAULT_TIMEOUT_MS = 30000;    // 30 seconds default timeout for OBS requests.
 
 namespace datasystem {
 inline bool ValidateConfigString(const std::string &key, const std::string &value)
@@ -135,10 +136,6 @@ ObsClient::~ObsClient()
             rotationThread_.join();
         }
     }
-    if (initialized_.load()) {
-        obs_deinitialize();
-        initialized_.store(false);
-    }
 }
 
 Status ObsClient::Init()
@@ -146,6 +143,7 @@ Status ObsClient::Init()
     if (initialized_.load()) {
         return Status::OK();
     }
+    httpClient_ = std::make_shared<CurlHttpClient>(false);
     Status status;
     if (FLAGS_enable_cloud_service_token_rotation) {
         status = ObsClientInitByToken();
@@ -164,13 +162,8 @@ Status ObsClient::ObsClientInitByAkSk()
     CHECK_FAIL_RETURN_STATUS(!endPoint_.empty(), K_INVALID, "OBS endpoint is empty");
     CHECK_FAIL_RETURN_STATUS(!FLAGS_obs_access_key.empty(), K_INVALID, "FLAGS_obs_access_key is empty");
     CHECK_FAIL_RETURN_STATUS(!FLAGS_obs_secret_key.empty(), K_INVALID, "FLAGS_obs_secret_key is empty");
-    obs_status ret = OBS_STATUS_BUTT;
-    ret = obs_initialize(OBS_INIT_ALL);
-    CHECK_FAIL_RETURN_STATUS(ret == OBS_STATUS_OK, K_RUNTIME_ERROR,
-                             FormatString("obs_initialize failed with status: %s.", obs_get_status_name(ret)));
-    if (!optGenerator_.Init()) {
-        obs_deinitialize();
-        RETURN_STATUS(K_RUNTIME_ERROR, "OptionGenerator initialization failed.");
+    if (!credentialManager_.Init()) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "ObsCredentialManager initialization failed.");
     }
     threadPool_ = std::make_unique<ThreadPool>(NUM_THREAD, 0, "ObsClient");
     return Status::OK();
@@ -187,13 +180,8 @@ Status ObsClient::ObsClientInitByToken()
         obsTempCredentialInfo_.access.Clear();
         obsTempCredentialInfo_.secret.Clear();
     });
-    obs_status ret = OBS_STATUS_BUTT;
-    ret = obs_initialize(OBS_INIT_ALL);
-    CHECK_FAIL_RETURN_STATUS(ret == OBS_STATUS_OK, K_RUNTIME_ERROR,
-                             FormatString("obs_initialize failed with status: %s.", obs_get_status_name(ret)));
-    if (!optGenerator_.Init()) {
-        obs_deinitialize();
-        RETURN_STATUS(K_RUNTIME_ERROR, "OptionGenerator initialization failed.");
+    if (!credentialManager_.Init()) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "ObsCredentialManager initialization failed.");
     }
     threadPool_ = std::make_unique<ThreadPool>(NUM_THREAD, 0, "ObsClient");
     isTokenRotationStarting_.store(true);
@@ -285,7 +273,7 @@ Status ObsClient::UpdateTempObsToken()
         obsTempCredentialInfo_.secret.Clear();
     });
     RETURN_IF_NOT_OK(TokenRotationInit());
-    return optGenerator_.UpdateCredentialInfo();
+    return credentialManager_.UpdateCredentialInfo();
 }
 
 Status ObsClient::Upload(const std::string &objectPath, int64_t timeoutMs, const std::shared_ptr<std::iostream> &body,
@@ -353,59 +341,156 @@ Status ObsClient::List(const std::string &objectPrefix, int64_t timeoutMs, bool 
     return ListObjects(objectPrefix, timer, listResp);
 }
 
+// ========================
+// HTTP REST API operations
+// ========================
+
+std::shared_ptr<HttpRequest> ObsClient::BuildRequest(HttpMethod method, const std::string &objectKey,
+                                                     int64_t timeoutMs,
+                                                     const std::map<std::string, std::string> &subResources)
+{
+    std::string scheme = FLAGS_obs_https_enabled ? "https://" : "http://";
+    std::string host;
+    std::string path;
+    if (FLAGS_obs_https_enabled) {
+        // Virtual-hosted-style URL: https://bucket.endpoint/objectKey
+        host = bucketName_ + "." + endPoint_;
+        path = objectKey.empty() ? "/" : "/" + objectKey;
+    } else {
+        // Path-style URL: http://endpoint/bucket/objectKey
+        host = endPoint_;
+        path = "/" + bucketName_ + "/" + objectKey;
+    }
+    std::string url = scheme + host + path;
+    auto request = std::make_shared<HttpRequest>();
+    request->SetUrl(std::move(url));
+    request->SetMethod(std::move(method));
+    request->SetRequestTimeoutMs(timeoutMs);
+    request->SetConnectTimeoutMs(timeoutMs);
+    for (const auto &param : subResources) {
+        request->AddQueryParam(param.first, param.second);
+    }
+    request->ConcatenateQueryParams();
+    return request;
+}
+
+Status ObsClient::SignRequest(const ObsCredential &credential, std::shared_ptr<HttpRequest> &request,
+                              const std::string &contentMd5,
+                              const std::map<std::string, std::string> &subResources)
+{
+    std::string method = HttpRequest::HttpMethodStr(request->GetMethod());
+    std::string date = ObsSignature::FormatDateRFC1123();
+    request->AddHeader("Date", date);
+
+    std::string contentType = request->GetHeader("Content-Type");
+
+    // Collect x-obs-* headers for signing (sorted map)
+    std::map<std::string, std::string> obsHeaders;
+    for (const auto &hdr : request->Headers()) {
+        if (hdr.first.find("x-obs-") == 0) {
+            obsHeaders[hdr.first] = hdr.second;
+        }
+    }
+
+    // Add token header if using token rotation
+    if (!credential.token.empty()) {
+        request->AddHeader("x-obs-security-token", credential.token);
+        obsHeaders["x-obs-security-token"] = credential.token;
+    }
+
+    // Extract objectKey from URL for canonical resource
+    std::string objectKey;
+    const auto &url = request->GetUrl();
+    std::string scheme = FLAGS_obs_https_enabled ? "https://" : "http://";
+    std::string prefix;
+    if (FLAGS_obs_https_enabled) {
+        prefix = scheme + bucketName_ + "." + endPoint_ + "/";
+    } else {
+        prefix = scheme + endPoint_ + "/" + bucketName_ + "/";
+    }
+    if (url.size() > prefix.size()) {
+        objectKey = url.substr(prefix.size());
+        auto qpos = objectKey.find('?');
+        if (qpos != std::string::npos) {
+            objectKey = objectKey.substr(0, qpos);
+        }
+    }
+
+    std::string canonicalResource = ObsSignature::BuildCanonicalResource(bucketName_, objectKey, subResources);
+
+    std::string stringToSign = ObsSignature::BuildStringToSign(method, contentMd5, contentType, date, obsHeaders,
+                                                               canonicalResource);
+    std::string signature;
+    RETURN_IF_NOT_OK(ObsSignature::Sign(credential.sk, stringToSign, signature));
+    request->AddHeader("Authorization", ObsSignature::BuildAuthHeader(credential.ak, signature));
+    return Status::OK();
+}
+
 Status ObsClient::StreamingUpload(const std::shared_ptr<std::iostream> &body, size_t size, const std::string &objPath,
                                   Timer &timer)
 {
     LOG(INFO) << FormatString("Streaming upload starts. Object path: %s.", objPath);
-    ObsTempCredential tempCredential;
-    obs_options opts;
-    optGenerator_.GenerateObsOption(opts, tempCredential);
-
-    obs_put_properties properties;
-    init_put_properties(&properties);
-    ObsPutBuffer obsBuf;
-    obsBuf.buffer = body;
-    obsBuf.bufferSize = size;
-    obs_put_object_handler handler = { { &PutRspPropertiesCallback, &PutRspCompleteCallback },
-                                       &PutObjectDataCallback,
-                                       nullptr };
+    ObsCredential credential = credentialManager_.GetCredential();
     int64_t remainingTime = timer.GetRemainingTimeMs();
-    opts.request_options.max_connected_time = remainingTime;
-    opts.request_options.connect_time = remainingTime;
-    put_object(&opts, const_cast<char *>(objPath.c_str()), obsBuf.bufferSize, &properties, nullptr, &handler, &obsBuf);
-    INJECT_POINT("ObsClient.StreamingUpload.ObsUploadFailed", [&obsBuf]() {
-        obsBuf.status = OBS_STATUS_InternalError;
+    auto request = BuildRequest(HttpMethod::PUT, objPath, remainingTime);
+    request->AddHeader("Content-Type", "application/octet-stream");
+    request->SetBody(body);
+
+    RETURN_IF_NOT_OK(SignRequest(credential, request, "", {}));
+
+    std::shared_ptr<HttpResponse> response;
+    int httpStatus = 0;
+    INJECT_POINT("ObsClient.StreamingUpload.ObsUploadFailed", [&httpStatus]() {
+        httpStatus = 500;
         return Status::OK();
     });
-    INJECT_POINT("ObsClient.StreamingUpload.ObsNoSuchKey", [&obsBuf]() {
-        obsBuf.status = OBS_STATUS_NoSuchKey;
+    INJECT_POINT("ObsClient.StreamingUpload.ObsNoSuchKey", [&httpStatus]() {
+        httpStatus = 404;
         return Status::OK();
     });
-    successRateVec_.BlockingEmplaceBackCode(static_cast<int>(obsBuf.status));
-    if (OBS_STATUS_OK == obsBuf.status) {
+    if (httpStatus == 0) {
+        RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, remainingTime, response));
+        httpStatus = response->GetStatus();
+    }
+    successRateVec_.BlockingEmplaceBackCode(httpStatus);
+    if (httpStatus >= 200 && httpStatus < 300) {
         LOG(INFO) << FormatString("Putting object to OBS is done. Object path: %s", objPath);
         return Status::OK();
     }
-    RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, FormatString("Failed to put object: %s, buffer size: %zu, status: %s",
-                                                          objPath, size, obs_get_status_name(obsBuf.status)));
+    RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
+                            FormatString("Failed to put object: %s, buffer size: %zu, http status: %d", objPath, size,
+                                         httpStatus));
 }
 
-Status ObsClient::InitMultiPartUpload(const std::string &objPath, obs_options &opts, obs_put_properties &putProperties,
-                                      Timer &timer, const size_t uploadIdSize, char *uploadId)
+Status ObsClient::InitMultiPartUpload(const std::string &objPath, Timer &timer, std::string &uploadId)
 {
-    obs_response_handler initiateMultiPartUploadHandler = { &MultiUploadRspPropertiesCallback,
-                                                            &MultiUploadRspCompleteCallback };
-
+    ObsCredential credential = credentialManager_.GetCredential();
     int64_t remaining = timer.GetRemainingTimeMs();
-    opts.request_options.connect_time = remaining;
-    opts.request_options.max_connected_time = remaining;
-    ObsRsp initRsp;
-    initiate_multi_part_upload(&opts, const_cast<char *>(objPath.c_str()), uploadIdSize, uploadId, &putProperties,
-                               nullptr, &initiateMultiPartUploadHandler, &initRsp);
-    CHECK_FAIL_RETURN_STATUS(
-        initRsp.status == OBS_STATUS_OK, K_RUNTIME_ERROR,
-        FormatString("Initiate multipart upload failed. obs status: %s", obs_get_status_name(initRsp.status)));
+    std::map<std::string, std::string> subResources = { {"uploads", ""} };
+    auto request = BuildRequest(HttpMethod::POST, objPath, remaining, subResources);
+    request->AddHeader("Content-Type", "application/octet-stream");
 
+    RETURN_IF_NOT_OK(SignRequest(credential, request, "", subResources));
+
+    std::shared_ptr<HttpResponse> response;
+    RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, remaining, response));
+    int httpStatus = response->GetStatus();
+    CHECK_FAIL_RETURN_STATUS(httpStatus >= 200 && httpStatus < 300, K_RUNTIME_ERROR,
+                             FormatString("Initiate multipart upload failed. Object: %s, http status: %d", objPath,
+                                          httpStatus));
+
+    // Parse UploadId from response body
+    std::string respBody;
+    auto &respStream = response->GetBody();
+    if (respStream != nullptr) {
+        std::ostringstream oss;
+        oss << respStream->rdbuf();
+        respBody = oss.str();
+    }
+    uploadId = ObsXmlUtil::ParseInitiateMultipartResponse(respBody);
+    CHECK_FAIL_RETURN_STATUS(!uploadId.empty(), K_RUNTIME_ERROR,
+                             FormatString("Failed to parse UploadId from response. Object: %s, body: %s", objPath,
+                                          respBody));
     return Status::OK();
 }
 
@@ -413,17 +498,10 @@ Status ObsClient::MultiPartUpload(const std::shared_ptr<std::iostream> &body, si
                                   size_t partitionSize, Timer &timer)
 {
     LOG(INFO) << FormatString("Multipart upload starts. Object path: %s.", objPath);
-    ObsTempCredential tempCredential;
-    obs_options opts;
-    optGenerator_.GenerateObsOption(opts, tempCredential);
 
     // Initialize multipart upload
-    const size_t uploadIdSize = 255;
-    char uploadId[uploadIdSize + 1] = { 0 };
-    obs_put_properties putProperties;
-    (void)memset_s((void *)&putProperties, sizeof(obs_put_properties), 0, sizeof(obs_put_properties));
-    init_put_properties(&putProperties);
-    RETURN_IF_NOT_OK(InitMultiPartUpload(objPath, opts, putProperties, timer, uploadIdSize, uploadId));
+    std::string uploadId;
+    RETURN_IF_NOT_OK(InitMultiPartUpload(objPath, timer, uploadId));
 
     if (size / partitionSize > std::numeric_limits<int>::max()) {
         RETURN_STATUS(StatusCode::K_INVALID, "size too large: " + std::to_string(size));
@@ -436,59 +514,64 @@ Status ObsClient::MultiPartUpload(const std::shared_ptr<std::iostream> &body, si
     multiUploadBuf.partNum =
         static_cast<int>((size % partitionSize == 0) ? (size / partitionSize) : (size / partitionSize + 1));
     std::vector<OnePartUploadBuffer> parts(multiUploadBuf.partNum, OnePartUploadBuffer());
-    int64_t remaining = timer.GetRemainingTimeMs();
-    opts.request_options.connect_time = remaining;
-    opts.request_options.max_connected_time = remaining;
-    std::vector<obs_options> optVec(multiUploadBuf.partNum, opts);
-    RETURN_IF_NOT_OK(SubmitUploadThreads(multiUploadBuf, objPath, size, uploadId, optVec, parts));
+    RETURN_IF_NOT_OK(SubmitUploadThreads(multiUploadBuf, objPath, size, uploadId, parts));
 
     // Complete upload
-    obs_complete_multi_part_upload_handler completeMultiHandler = {
-        { &MultiUploadRspPropertiesCallback, &MultiUploadRspCompleteCallback }, &MultiUploadCompleteCallback
-    };
-    ObsRsp completeRsp;
-    std::vector<obs_complete_upload_Info> uploadInfo(multiUploadBuf.partNum, obs_complete_upload_Info());
+    ObsCredential credential = credentialManager_.GetCredential();
+    int64_t remaining = timer.GetRemainingTimeMs();
+    std::map<std::string, std::string> subResources = { {"uploadId", uploadId} };
+    auto request = BuildRequest(HttpMethod::POST, objPath, remaining, subResources);
+    request->AddHeader("Content-Type", "application/xml");
+
+    // Build complete multipart XML body
+    std::vector<std::pair<int, std::string>> partInfos;
     for (int i = 0; i < multiUploadBuf.partNum; ++i) {
-        uploadInfo[i].etag = parts[i].eTag;
-        uploadInfo[i].part_number = parts[i].partNum;
+        partInfos.emplace_back(static_cast<int>(parts[i].partNum), parts[i].eTag);
     }
-    remaining = timer.GetRemainingTimeMs();
-    opts.request_options.connect_time = remaining;
-    opts.request_options.max_connected_time = remaining;
-    complete_multi_part_upload(&opts, const_cast<char *>(objPath.c_str()), uploadId, multiUploadBuf.partNum,
-                               &uploadInfo[0], &putProperties, &completeMultiHandler, &completeRsp);
-    successRateVec_.BlockingEmplaceBackCode(static_cast<int>(completeRsp.status));
+    std::string xmlBody = ObsXmlUtil::BuildCompleteMultipartXml(partInfos);
+    auto xmlStream = std::make_shared<std::stringstream>(xmlBody);
+    request->SetBody(xmlStream);
+
+    // Calculate Content-MD5 for the XML body
+    std::string md5Base64;
+    RETURN_IF_NOT_OK(Hasher::GetMD5Base64(xmlBody, md5Base64));
+    request->AddHeader("Content-MD5", md5Base64);
+
+    RETURN_IF_NOT_OK(SignRequest(credential, request, md5Base64, subResources));
+
+    std::shared_ptr<HttpResponse> response;
+    RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, remaining, response));
+    int httpStatus = response->GetStatus();
+    successRateVec_.BlockingEmplaceBackCode(httpStatus);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        completeRsp.status == OBS_STATUS_OK, K_RUNTIME_ERROR,
-        FormatString("Complete multipart upload failed. Object: %s, buffer size: %zu, obs status: %s", objPath, size,
-                     obs_get_status_name(completeRsp.status)));
+        httpStatus >= 200 && httpStatus < 300, K_RUNTIME_ERROR,
+        FormatString("Complete multipart upload failed. Object: %s, buffer size: %zu, http status: %d", objPath, size,
+                     httpStatus));
     LOG(INFO) << FormatString("Uploading object to OBS is done. Object path: %s", objPath);
 
     return Status::OK();
 }
 
 Status ObsClient::SubmitUploadThreads(const MultiPartUploadBuffer &multiPartBuffer, const std::string &objPath,
-                                      size_t bufferSize, char *uploadId, std::vector<obs_options> &options,
+                                      size_t bufferSize, const std::string &uploadId,
                                       std::vector<OnePartUploadBuffer> &parts)
 {
     std::vector<std::future<Status>> results;
     // Use lock to ensure the upload tasks of the same object are submitted to thread pool together
     std::unique_lock<std::mutex> lk(multiPartUploadMx_);
 
-    auto job = [this, &options, &parts](int i) {
+    auto job = [this, &objPath, &uploadId, &parts, &multiPartBuffer, bufferSize](int i) {
         auto startTime = std::chrono::steady_clock::now();
-        int64_t elapsed = 0;
-        int64_t limit = options[i].request_options.max_connected_time;
+        int64_t limit = static_cast<int64_t>(parts[i].partSize) * 2;  // generous timeout
         Status rc = Status::OK();
+        int64_t elapsed = 0;
         do {
-            options[i].request_options.max_connected_time = limit - elapsed;
-            options[i].request_options.connect_time = limit - elapsed;
             rc = OnePartUpload(parts[i]);
             if (rc.GetCode() != K_RUNTIME_ERROR) {
                 return rc;
             }
             elapsed =
-                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startTime)
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime)
                     .count();
         } while (elapsed < limit);
         return rc;
@@ -499,8 +582,7 @@ Status ObsClient::SubmitUploadThreads(const MultiPartUploadBuffer &multiPartBuff
         part.buffer = multiPartBuffer.buffer;
         part.partNum = i + 1;
         part.uploadId = uploadId;
-        part.key = const_cast<char *>(objPath.c_str());
-        part.option = &options[i];
+        part.key = objPath;
         if (i != multiPartBuffer.partNum - 1) {
             part.partSize = multiPartBuffer.partSize;
         } else {
@@ -519,7 +601,8 @@ Status ObsClient::SubmitUploadThreads(const MultiPartUploadBuffer &multiPartBuff
     for (int i = 0; i < multiPartBuffer.partNum; ++i) {
         Status rc = results[i].get();
         if (rc.IsError()) {
-            RETURN_IF_NOT_OK(Delete({ objPath }));
+            // Abort the multipart upload on failure
+            (void)AbortMultipartUpload(objPath, uploadId);
             RETURN_STATUS(K_RUNTIME_ERROR,
                           FormatString("Failed to Upload object: %s, err msg: %s", objPath, rc.GetMsg()));
         }
@@ -539,56 +622,147 @@ Status ObsClient::OnePartUpload(OnePartUploadBuffer &onePartUploadBuffer)
     if (setPoint) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Runtime error for test.");
     }
-    obs_upload_part_info partInfo;
-    partInfo.part_number = onePartUploadBuffer.partNum;
-    partInfo.upload_id = onePartUploadBuffer.uploadId;
-    obs_upload_handler handler = { { &OneUploadRspPropertiesCallback, &OneUploadRspCompleteCallback },
-                                   &OneUploadDataCallback,
-                                   nullptr };
-    upload_part(onePartUploadBuffer.option, onePartUploadBuffer.key, &partInfo, onePartUploadBuffer.partSize, nullptr,
-                nullptr, &handler, &onePartUploadBuffer);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        onePartUploadBuffer.status == OBS_STATUS_OK, K_RUNTIME_ERROR,
-        FormatString("Upload one part failed. Object path: %s, upload ID: %s, buffer size: %zu, part number: %zu, "
-                     "obs err status: %s",
-                     onePartUploadBuffer.key, partInfo.upload_id, onePartUploadBuffer.partSize, partInfo.part_number,
-                     obs_get_status_name(onePartUploadBuffer.status)));
-    LOG(INFO) << FormatString("Uploading one part is done. Object path: %s, part number: %zu", onePartUploadBuffer.key,
-                              partInfo.part_number);
 
+    ObsCredential credential = credentialManager_.GetCredential();
+    std::map<std::string, std::string> subResources = { {"partNumber", std::to_string(onePartUploadBuffer.partNum)},
+                                                        {"uploadId", onePartUploadBuffer.uploadId} };
+    int64_t timeoutMs = std::max(OBS_DEFAULT_TIMEOUT_MS,
+                                  static_cast<int64_t>(onePartUploadBuffer.partSize) * 2);
+    auto request = BuildRequest(HttpMethod::PUT, onePartUploadBuffer.key, timeoutMs, subResources);
+    request->AddHeader("Content-Type", "application/octet-stream");
+
+    // Read the part data from the shared buffer
+    std::string partData;
+    partData.resize(onePartUploadBuffer.partSize);
+    {
+        std::unique_lock<std::mutex> lk(*onePartUploadBuffer.mx);
+        onePartUploadBuffer.buffer->seekg(onePartUploadBuffer.offset);
+        onePartUploadBuffer.buffer->read(&partData[0], onePartUploadBuffer.partSize);
+        auto bytesRead = onePartUploadBuffer.buffer->gcount();
+        partData.resize(bytesRead);
+    }
+    auto partStream = std::make_shared<std::stringstream>(partData);
+    request->SetBody(partStream);
+
+    RETURN_IF_NOT_OK(SignRequest(credential, request, "", subResources));
+
+    std::shared_ptr<HttpResponse> response;
+    RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, timeoutMs, response));
+    int httpStatus = response->GetStatus();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        httpStatus >= 200 && httpStatus < 300, K_RUNTIME_ERROR,
+        FormatString("Upload one part failed. Object path: %s, upload ID: %s, part size: %zu, part number: %zu, "
+                     "http status: %d",
+                     onePartUploadBuffer.key, onePartUploadBuffer.uploadId, onePartUploadBuffer.partSize,
+                     onePartUploadBuffer.partNum, httpStatus));
+
+    // Extract ETag from response header
+    const auto &headers = response->Headers();
+    auto etagIt = headers.find("ETag");
+    if (etagIt != headers.end()) {
+        onePartUploadBuffer.eTag = etagIt->second;
+    } else {
+        etagIt = headers.find("etag");
+        if (etagIt != headers.end()) {
+            onePartUploadBuffer.eTag = etagIt->second;
+        }
+    }
+
+    LOG(INFO) << FormatString("Uploading one part is done. Object path: %s, part number: %zu",
+                              onePartUploadBuffer.key, onePartUploadBuffer.partNum);
+
+    return Status::OK();
+}
+
+Status ObsClient::AbortMultipartUpload(const std::string &objectPath, const std::string &uploadId)
+{
+    ObsCredential credential = credentialManager_.GetCredential();
+    std::map<std::string, std::string> subResources = { {"uploadId", uploadId} };
+    auto request = BuildRequest(HttpMethod::DELETE, objectPath, OBS_DEFAULT_TIMEOUT_MS, subResources);
+
+    RETURN_IF_NOT_OK(SignRequest(credential, request, "", subResources));
+
+    std::shared_ptr<HttpResponse> response;
+    Status rc = SendObsRequest(httpClient_, request, OBS_DEFAULT_TIMEOUT_MS, response);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("Abort multipart upload failed. Object: %s, uploadId: %s, status: %s",
+                                     objectPath, uploadId, rc.ToString());
+    }
     return Status::OK();
 }
 
 Status ObsClient::GetObject(const std::string &objPath, std::shared_ptr<std::stringstream> &buf, Timer &timer)
 {
     LOG(INFO) << FormatString("GetObject starts. Object path: %s", objPath);
-    ObsTempCredential tempCredential;
-    obs_options opts;
-    optGenerator_.GenerateObsOption(opts, tempCredential);
-
-    obs_get_conditions conditions;
-    (void)memset_s(&conditions, sizeof(obs_get_conditions), 0, sizeof(obs_get_conditions));
-    init_get_properties(&conditions);
-
-    obs_get_object_handler getObjHandler = { { &GetObjRspPropertiesCallback, &GetObjResponseCompleteCallback },
-                                             &GetObjDataCallback };
-
-    obs_object_info objInfo = { const_cast<char *>(objPath.c_str()), nullptr };
-    GetObjectBuffer getObjBuf;
-    getObjBuf.buffer = std::make_shared<std::stringstream>();
+    ObsCredential credential = credentialManager_.GetCredential();
     int64_t remaining = timer.GetRemainingTimeMs();
-    opts.request_options.connect_time = remaining;
-    opts.request_options.max_connected_time = remaining;
-    get_object(&opts, &objInfo, &conditions, nullptr, &getObjHandler, &getObjBuf);
-    successRateVec_.BlockingEmplaceBackCode(static_cast<int>(getObjBuf.status));
-    if (getObjBuf.status != OBS_STATUS_OK) {
-        auto errCode = getObjBuf.status == OBS_STATUS_NoSuchKey ? K_NOT_FOUND : K_RUNTIME_ERROR;
-        RETURN_STATUS_LOG_ERROR(errCode, FormatString("Failed to get object: %s, obs status: %s", objPath,
-                                                      obs_get_status_name(getObjBuf.status)));
+    auto request = BuildRequest(HttpMethod::GET, objPath, remaining);
+    request->AddHeader("Content-Type", "application/octet-stream");
+
+    RETURN_IF_NOT_OK(SignRequest(credential, request, "", {}));
+
+    std::shared_ptr<HttpResponse> response;
+    RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, remaining, response));
+    int httpStatus = response->GetStatus();
+    successRateVec_.BlockingEmplaceBackCode(httpStatus);
+    if (httpStatus == 404) {
+        RETURN_STATUS_LOG_ERROR(K_NOT_FOUND, FormatString("Failed to get object: %s, http status: %d", objPath,
+                                                           httpStatus));
     }
-    buf = std::move(getObjBuf.buffer);
+    if (httpStatus < 200 || httpStatus >= 300) {
+        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, FormatString("Failed to get object: %s, http status: %d", objPath,
+                                                               httpStatus));
+    }
+    // Copy response body to output buffer
+    auto &respBody = response->GetBody();
+    buf = std::make_shared<std::stringstream>();
+    if (respBody != nullptr) {
+        *buf << respBody->rdbuf();
+    }
     LOG(INFO) << FormatString("Getting object is done. Object path: %s.", objPath);
 
+    return Status::OK();
+}
+
+Status ObsClient::SendListObjectsRequest(const std::string &objectPrefix, const std::string &marker,
+                                         uint16_t maxKeys, int64_t timeoutMs, const ObsCredential &credential,
+                                         std::string &respBody)
+{
+    std::string queryString = "?prefix=" + objectPrefix + "&max-keys=" + std::to_string(maxKeys);
+    if (!marker.empty()) {
+        queryString += "&marker=" + marker;
+    }
+    std::string scheme = FLAGS_obs_https_enabled ? "https://" : "http://";
+    std::string url;
+    if (FLAGS_obs_https_enabled) {
+        url = scheme + bucketName_ + "." + endPoint_ + "/" + queryString;
+    } else {
+        url = scheme + endPoint_ + "/" + bucketName_ + "/" + queryString;
+    }
+    auto request = std::make_shared<HttpRequest>();
+    request->SetUrl(std::move(url));
+    request->SetMethod(HttpMethod::GET);
+    request->SetRequestTimeoutMs(timeoutMs);
+    request->SetConnectTimeoutMs(timeoutMs);
+    request->AddHeader("Content-Type", "application/xml");
+
+    std::map<std::string, std::string> subResources;
+    RETURN_IF_NOT_OK(SignRequest(credential, request, "", subResources));
+
+    std::shared_ptr<HttpResponse> response;
+    RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, timeoutMs, response));
+    int httpStatus = response->GetStatus();
+    successRateVec_.BlockingEmplaceBackCode(httpStatus);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(httpStatus >= 200 && httpStatus < 300, K_RUNTIME_ERROR,
+                                         FormatString("Failed to list objects. Prefix: %s, http status: %d",
+                                                      objectPrefix, httpStatus));
+
+    auto &respStream = response->GetBody();
+    if (respStream != nullptr) {
+        std::ostringstream oss;
+        oss << respStream->rdbuf();
+        respBody = oss.str();
+    }
     return Status::OK();
 }
 
@@ -597,34 +771,35 @@ Status ObsClient::ListObjects(const std::string &objectPrefix, Timer &timer,
 {
     LOG(INFO) << FormatString("ListObjects starts. Prefix: %s", objectPrefix);
     CHECK_FAIL_RETURN_STATUS(listResp != nullptr, K_INVALID, "Must provide GetObjectInfoListResp");
-    ObsTempCredential tempCredential;
-    obs_options opts;
-    optGenerator_.GenerateObsOption(opts, tempCredential);
-
-    obs_list_objects_handler handler = { { &ListObjRspPropertiesCallback, &ListObjRspCompleteCallback },
-                                         &ListObjectsCallback };
-    uint64_t remaining = timer.GetRemainingTimeMs();
-    opts.request_options.connect_time = remaining;
-    opts.request_options.max_connected_time = remaining;
+    ObsCredential credential = credentialManager_.GetCredential();
+    int64_t remaining = timer.GetRemainingTimeMs();
     std::string nextMarker;
     static const uint16_t maxNumObj = 1000;
     int keyCount = 0;
     do {
+        std::string respBody;
+        RETURN_IF_NOT_OK(SendListObjectsRequest(objectPrefix, nextMarker, maxNumObj, remaining, credential, respBody));
+
+        std::vector<std::string> keys;
+        std::vector<uint64_t> sizes;
+        bool isTruncated = false;
+        std::string parsedNextMarker;
+        RETURN_IF_NOT_OK(ObsXmlUtil::ParseListObjectsResponse(respBody, keys, sizes, isTruncated, parsedNextMarker));
+
         ListObjectData listObjData;
-        if (!listResp->NextMarker().empty()) {
-            nextMarker = listResp->NextMarker();
+        listObjData.isTruncated = isTruncated ? 1 : 0;
+        listObjData.nextMarker = parsedNextMarker;
+        listObjData.keyCount = static_cast<int>(keys.size());
+        for (size_t idx = 0; idx < keys.size(); ++idx) {
+            listObjData.objects.emplace_back(keys[idx], 0, "", sizes[idx], "", "", "", "");
         }
-        list_bucket_objects(&opts, objectPrefix.c_str(), nextMarker.c_str(), nullptr, maxNumObj, &handler,
-                            &listObjData);
-        successRateVec_.BlockingEmplaceBackCode(static_cast<int>(listObjData.status));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(listObjData.status == OBS_STATUS_OK, K_RUNTIME_ERROR,
-                                             FormatString("Failed to list objects. Prefix: %s, obs status: %s",
-                                                          objectPrefix, obs_get_status_name(listObjData.status)));
         keyCount = listObjData.keyCount;
+        if (!parsedNextMarker.empty()) {
+            nextMarker = parsedNextMarker;
+        }
         listResp->FillInListObjectData(listObjData);
     } while (keyCount == maxNumObj);
     LOG(INFO) << FormatString("Listing objects is done. Prefix: %s.", objectPrefix);
-
     return Status::OK();
 }
 
@@ -639,267 +814,55 @@ Status ObsClient::BatchDeleteObjects(const std::vector<std::string> &objects, si
     CHECK_FAIL_RETURN_STATUS(beg < end, K_INVALID, "The end index of the range should be greater than the begin.");
     CHECK_FAIL_RETURN_STATUS(end <= objects.size(), K_INVALID, "The end of the range is out of the vector.");
     CHECK_FAIL_RETURN_STATUS(end - beg <= limit, K_INVALID, "Batch size is at most 1000.");
-    ObsTempCredential tempCredential;
-    obs_options opts;
-    optGenerator_.GenerateObsOption(opts, tempCredential);
+    ObsCredential credential = credentialManager_.GetCredential();
 
-    auto objectInfos = std::make_unique<obs_object_info[]>(end - beg);
-    for (size_t i = beg; i < end; ++i) {
-        objectInfos[i - beg].key = const_cast<char *>(objects[i].c_str());
-        objectInfos[i - beg].version_id = nullptr;
-    }
+    std::vector<std::string> keysToDelete(objects.begin() + beg, objects.begin() + end);
+    std::string xmlBody = ObsXmlUtil::BuildBatchDeleteXml(keysToDelete);
+    auto bodyStream = std::make_shared<std::stringstream>(xmlBody);
 
-    obs_delete_object_info delInfo;
-    delInfo.keys_number = end - beg;
+    std::map<std::string, std::string> subResources = { {"delete", ""} };
+    auto request = BuildRequest(HttpMethod::POST, "", OBS_DEFAULT_TIMEOUT_MS, subResources);
+    request->AddHeader("Content-Type", "application/xml");
+    request->SetBody(bodyStream);
 
-    ObsRsp delRsp;
-    obs_delete_object_handler handler = { { &BatchDelObjRspPropertiesCallback, &BatchDelObjResponseCompleteCallback },
-                                          &BatchDelObjectsDataCallback };
-    batch_delete_objects(&opts, objectInfos.get(), &delInfo, nullptr, &handler, &delRsp);
-    successRateVec_.BlockingEmplaceBackCode(static_cast<int>(delRsp.status));
-    if (delRsp.status != OBS_STATUS_OK) {
+    // Calculate Content-MD5
+    std::string md5Base64;
+    RETURN_IF_NOT_OK(Hasher::GetMD5Base64(xmlBody, md5Base64));
+    request->AddHeader("Content-MD5", md5Base64);
+
+    RETURN_IF_NOT_OK(SignRequest(credential, request, md5Base64, subResources));
+
+    std::shared_ptr<HttpResponse> response;
+    RETURN_IF_NOT_OK(SendObsRequest(httpClient_, request, OBS_DEFAULT_TIMEOUT_MS, response));
+    int httpStatus = response->GetStatus();
+    successRateVec_.BlockingEmplaceBackCode(httpStatus);
+    if (httpStatus < 200 || httpStatus >= 300) {
         std::stringstream ss;
         ss << "Failed to delete objects:\n";
         for (size_t i = beg; i < end; ++i) {
             ss << objects[i] << "\n";
         }
-        ss << "number of objects: " << delInfo.keys_number << ", obs status: " << obs_get_status_name(delRsp.status);
+        ss << "number of objects: " << (end - beg) << ", http status: " << httpStatus;
+
+        // Try to parse error response for more details
+        std::string respBody;
+        auto &respStream = response->GetBody();
+        if (respStream != nullptr) {
+            std::ostringstream oss;
+            oss << respStream->rdbuf();
+            respBody = oss.str();
+        }
+        std::string errCode;
+        std::string errMsg;
+        ObsXmlUtil::ParseErrorResponse(respBody, errCode, errMsg);
+        if (!errCode.empty()) {
+            ss << ", error: " << errCode << " - " << errMsg;
+        }
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, ss.str());
     }
     LOG(INFO) << FormatString("Deleting objects is done. Begin: %zu, end: %zu.", beg, end);
 
     return Status::OK();
-}
-
-void ObsClient::CreateBucketRspCompleteCallback(obs_status status, const obs_error_details *errorDetails,
-                                                void *callbackData)
-{
-    (void)errorDetails;
-    if (callbackData != nullptr) {
-        obs_status *ret = (obs_status *)callbackData;
-        *ret = status;
-    }
-}
-
-obs_status ObsClient::PutRspPropertiesCallback(const obs_response_properties *properties, void *callbackData)
-{
-    (void)properties;
-    (void)callbackData;
-    return OBS_STATUS_OK;
-}
-
-void ObsClient::PutRspCompleteCallback(obs_status status, const obs_error_details *errorDetails, void *callbackData)
-{
-    (void)errorDetails;
-    if (callbackData != nullptr) {
-        auto data = (ObsPutBuffer *)callbackData;
-        data->status = status;
-    }
-}
-
-int ObsClient::PutObjectDataCallback(int bufferSize, char *buffer, void *callbackData)
-{
-    int toRead = 0;
-    if (callbackData != nullptr) {
-        auto data = (ObsPutBuffer *)callbackData;
-        if (data->bufferSize <= 0) {
-            return 0;
-        }
-        toRead = std::min(data->bufferSize, (size_t)bufferSize);
-        data->buffer->read(buffer, toRead);
-        toRead = static_cast<int>(data->buffer->gcount());
-        data->bufferSize -= toRead;
-        data->offset += toRead;
-    }
-    return toRead;
-}
-
-obs_status ObsClient::MultiUploadRspPropertiesCallback(const obs_response_properties *properties, void *callbackData)
-{
-    (void)properties;
-    (void)callbackData;
-    return OBS_STATUS_OK;
-}
-
-void ObsClient::MultiUploadRspCompleteCallback(obs_status status, const obs_error_details *errorDetails,
-                                               void *callbackData)
-{
-    (void)errorDetails;
-    if (callbackData != nullptr) {
-        ObsRsp *data = (ObsRsp *)callbackData;
-        data->status = status;
-    }
-}
-
-obs_status ObsClient::MultiUploadCompleteCallback(const char *location, const char *bucket, const char *key,
-                                                  const char *eTag, void *callbackData)
-{
-    (void)callbackData;
-    VLOG(1) << FormatString("location = %s \nbucket = %s \nkey = %s \neTag = %s \n", location, bucket, key, eTag);
-    return OBS_STATUS_OK;
-}
-
-obs_status ObsClient::OneUploadRspPropertiesCallback(const obs_response_properties *properties, void *callbackData)
-{
-    if (properties == nullptr || callbackData == nullptr) {
-        return OBS_STATUS_AbortedByCallback;
-    }
-    OnePartUploadBuffer *data = (OnePartUploadBuffer *)callbackData;
-    if (properties->etag != nullptr) {
-        errno_t re = strcpy_s(data->eTag, sizeof(data->eTag), properties->etag);
-        if (re != EOK) {
-            return OBS_STATUS_AbortedByCallback;
-        }
-    }
-    return OBS_STATUS_OK;
-}
-
-void ObsClient::OneUploadRspCompleteCallback(obs_status status, const obs_error_details *error, void *callbackData)
-{
-    (void)error;
-    if (callbackData == nullptr) {
-        return;
-    }
-    OnePartUploadBuffer *data = (OnePartUploadBuffer *)callbackData;
-    data->status = status;
-}
-
-int ObsClient::OneUploadDataCallback(int bufferSize, char *buffer, void *callbackData)
-{
-    size_t toRead = 0;
-    if (callbackData != nullptr) {
-        OnePartUploadBuffer *data = (OnePartUploadBuffer *)callbackData;
-        if (data->partSize > 0) {
-            toRead = std::min(data->partSize, (size_t)bufferSize);
-            std::unique_lock<std::mutex> lk(*data->mx);
-            data->buffer->seekg(data->offset);  // reset the iostream after it was used by other threads
-            data->buffer->read(buffer, toRead);
-            toRead = static_cast<size_t>(data->buffer->gcount());
-        }
-        data->partSize -= toRead;
-        data->offset += toRead;
-    }
-    return toRead;
-}
-
-obs_status ObsClient::GetObjRspPropertiesCallback(const obs_response_properties *properties, void *callbackData)
-{
-    (void)properties;
-    (void)callbackData;
-    return OBS_STATUS_OK;
-}
-
-void ObsClient::GetObjResponseCompleteCallback(obs_status status, const obs_error_details *errorDetails,
-                                               void *callbackData)
-{
-    (void)errorDetails;
-    if (callbackData != nullptr) {
-        auto data = (GetObjectBuffer *)callbackData;
-        data->status = status;
-    }
-}
-
-obs_status ObsClient::GetObjDataCallback(int bufferSize, const char *buffer, void *callbackData)
-{
-    if (callbackData == nullptr) {
-        LOG(ERROR) << "callbackData is nullptr.";
-        return OBS_STATUS_AbortedByCallback;
-    }
-    if (buffer == nullptr) {
-        LOG(ERROR) << "buffer is nullptr.";
-        return OBS_STATUS_AbortedByCallback;
-    }
-    if (bufferSize <= 0) {
-        LOG(ERROR) << "bufferSize is invalid.";
-        return OBS_STATUS_AbortedByCallback;
-    }
-    GetObjectBuffer *data = (GetObjectBuffer *)callbackData;
-    if (data->buffer == nullptr) {
-        LOG(ERROR) << "data->buffer is nullptr.";
-        return OBS_STATUS_AbortedByCallback;
-    }
-    data->buffer->write(buffer, bufferSize);
-    if (data->buffer->bad()) {
-        LOG(ERROR) << "Failed to get object data from obs.";
-        return OBS_STATUS_AbortedByCallback;
-    }
-    data->size += static_cast<size_t>(bufferSize);
-    return OBS_STATUS_OK;
-}
-
-obs_status ObsClient::ListObjRspPropertiesCallback(const obs_response_properties *properties, void *callbackData)
-{
-    (void)properties;
-    (void)callbackData;
-    return OBS_STATUS_OK;
-}
-
-void ObsClient::ListObjRspCompleteCallback(obs_status status, const obs_error_details *errorDetails, void *callbackData)
-{
-    (void)errorDetails;
-    if (callbackData != nullptr) {
-        auto data = (ListObjectData *)callbackData;
-        data->status = status;
-    }
-}
-
-obs_status ObsClient::ListObjectsCallback(int isTruncated, const char *nextMarker, int contentsCount,
-                                          const obs_list_objects_content *contents, int commonPrefixesCount,
-                                          const char **commonPrefixes, void *callbackData)
-{
-    (void)commonPrefixes;
-    (void)commonPrefixesCount;
-
-    if (callbackData == nullptr) {
-        return OBS_STATUS_AbortedByCallback;
-    }
-    auto *data = (ListObjectData *)callbackData;
-
-    data->isTruncated = isTruncated;
-
-    if ((nextMarker == nullptr || nextMarker[0] == 0) && contentsCount != 0) {
-        nextMarker = contents[contentsCount - 1].key;
-    }
-
-    if (nextMarker != nullptr) {
-        data->nextMarker = nextMarker;
-    }
-
-    auto &callbackObjects = data->objects;
-    callbackObjects.reserve(contentsCount);
-    for (int i = 0; i < contentsCount; ++i) {
-        const obs_list_objects_content &content = contents[i];
-        callbackObjects.emplace_back(content.key, content.last_modified, content.etag, content.size, content.owner_id,
-                                     content.owner_display_name, content.storage_class, content.type);
-    }
-    data->keyCount += contentsCount;
-
-    return OBS_STATUS_OK;
-}
-
-obs_status ObsClient::BatchDelObjRspPropertiesCallback(const obs_response_properties *properties, void *callbackData)
-{
-    (void)properties;
-    (void)callbackData;
-    return OBS_STATUS_OK;
-}
-
-void ObsClient::BatchDelObjResponseCompleteCallback(obs_status status, const obs_error_details *errorDetails,
-                                                    void *callbackData)
-{
-    (void)errorDetails;
-    if (callbackData != nullptr) {
-        auto data = (ObsRsp *)callbackData;
-        data->status = status;
-    }
-}
-
-obs_status ObsClient::BatchDelObjectsDataCallback(int contentsCount, obs_delete_objects *delObjs, void *callbackData)
-{
-    (void)contentsCount;
-    (void)delObjs;
-    (void)callbackData;
-    return OBS_STATUS_OK;
 }
 
 void ObsClient::StartTokenRotation()
@@ -945,18 +908,22 @@ Status ObsClient::CheckValidRotationToken()
 {
     INJECT_POINT("ObsClient.CheckValidRotationToken.VerifyOriginCredential",
                  [this](const std::string &validAk, const std::string &validSk) {
-                     return optGenerator_.VerifyEncryptedCredential(validAk, validSk, "ORIGIN_MOCK_TOKEN");
+                     return credentialManager_.VerifyEncryptedCredential(validAk, validSk, "ORIGIN_MOCK_TOKEN");
                  });
     INJECT_POINT("ObsClient.CheckValidRotationToken.VerifyUpdateCredential",
                  [this](const std::string &validAk, const std::string &validSk) {
-                     return optGenerator_.VerifyEncryptedCredential(validAk, validSk, "UPDATE_MOCK_TOKEN");
+                     return credentialManager_.VerifyEncryptedCredential(validAk, validSk, "UPDATE_MOCK_TOKEN");
                  });
     return Status::OK();
 }
 
-Status ObsClient::OptionGenerator::VerifyEncryptedCredential(const std::string &encryptedAk,
-                                                             const std::string &encryptedSk,
-                                                             const std::string &encryptedToken)
+// ============================================
+// ObsCredentialManager implementation
+// ============================================
+
+Status ObsClient::ObsCredentialManager::VerifyEncryptedCredential(const std::string &encryptedAk,
+                                                                  const std::string &encryptedSk,
+                                                                  const std::string &encryptedToken)
 {
     std::shared_lock<std::shared_timed_mutex> optionLk(optionMutex_);
     CHECK_FAIL_RETURN_STATUS(encryptedInfos_.access.GetData() == encryptedAk, K_INVALID, "Check encrypted ak failed.");
@@ -966,7 +933,8 @@ Status ObsClient::OptionGenerator::VerifyEncryptedCredential(const std::string &
     return Status::OK();
 }
 
-Status ObsClient::OptionGenerator::Decrypt(const std::string &cipher, std::unique_ptr<char[]> &plainText, int &outSize)
+Status ObsClient::ObsCredentialManager::Decrypt(const std::string &cipher, std::unique_ptr<char[]> &plainText,
+                                                int &outSize)
 {
     outSize = 0;
     auto rc = SecretManager::Instance()->Decrypt(cipher, plainText, outSize);
@@ -977,10 +945,12 @@ Status ObsClient::OptionGenerator::Decrypt(const std::string &cipher, std::uniqu
     return Status::OK();
 }
 
-Status ObsClient::OptionGenerator::DecryptAKSK()
+Status ObsClient::ObsCredentialManager::DecryptAKSK()
 {
-    std::unique_ptr<char[]> plainTextOfAK, plainTextOfSK;
-    int textLenOfAK = 0, textLenOfSK = 0;
+    std::unique_ptr<char[]> plainTextOfAK;
+    std::unique_ptr<char[]> plainTextOfSK;
+    int textLenOfAK = 0;
+    int textLenOfSK = 0;
     Raii raii([&plainTextOfAK, &textLenOfAK, &plainTextOfSK, &textLenOfSK]() mutable {
         ClearUniqueChar(plainTextOfAK, textLenOfAK);
         ClearUniqueChar(plainTextOfSK, textLenOfSK);
@@ -991,30 +961,30 @@ Status ObsClient::OptionGenerator::DecryptAKSK()
     accessKeyLen_ = textLenOfAK;
     auto rc = strcpy_s(accessKey_.get(), textLenOfAK + 1, plainTextOfAK.get());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc == EOK, K_RUNTIME_ERROR,
-                                         "strcpy_s access key in OptionGenerator failed: " + std::to_string(rc));
+                                         "strcpy_s access key in ObsCredentialManager failed: " + std::to_string(rc));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Decrypt(FLAGS_obs_secret_key, plainTextOfSK, textLenOfSK),
                                      "ObsSK decrypt failed.");
     secretKey_ = std::make_unique<char[]>(textLenOfSK + 1);
     secretKeyLen_ = textLenOfSK;
     rc = strcpy_s(secretKey_.get(), textLenOfSK + 1, plainTextOfSK.get());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc == EOK, K_RUNTIME_ERROR,
-                                         "strcpy_s secret key in OptionGenerator failed: " + std::to_string(rc));
+                                         "strcpy_s secret key in ObsCredentialManager failed: " + std::to_string(rc));
     return Status::OK();
 }
 
-bool ObsClient::OptionGenerator::Init()
+bool ObsClient::ObsCredentialManager::Init()
 {
     endPoint_ = std::make_unique<char[]>(client_->endPoint_.size() + 1);
     int rc = strcpy_s(endPoint_.get(), client_->endPoint_.size() + 1, client_->endPoint_.c_str());
     if (rc != EOK) {
-        LOG(ERROR) << "strcpy_s endpoint in OptionGenerator failed: " << rc;
+        LOG(ERROR) << "strcpy_s endpoint in ObsCredentialManager failed: " << rc;
         return false;
     }
 
     bucketName_ = std::make_unique<char[]>(client_->bucketName_.size() + 1);
     rc = strcpy_s(bucketName_.get(), client_->bucketName_.size() + 1, client_->bucketName_.c_str());
     if (rc != EOK) {
-        LOG(ERROR) << "strcpy_s bucket name in OptionGenerator failed: " << rc;
+        LOG(ERROR) << "strcpy_s bucket name in ObsCredentialManager failed: " << rc;
         return false;
     }
 
@@ -1034,7 +1004,7 @@ bool ObsClient::OptionGenerator::Init()
         accessKeyLen_ = static_cast<int>(FLAGS_obs_access_key.size());
         int status = strcpy_s(accessKey_.get(), FLAGS_obs_access_key.size() + 1, FLAGS_obs_access_key.c_str());
         if (status != EOK) {
-            LOG(ERROR) << "strcpy_s access key in OptionGenerator failed: " << status;
+            LOG(ERROR) << "strcpy_s access key in ObsCredentialManager failed: " << status;
             return false;
         }
 
@@ -1042,7 +1012,7 @@ bool ObsClient::OptionGenerator::Init()
         secretKeyLen_ = static_cast<int>(FLAGS_obs_secret_key.size());
         status = strcpy_s(secretKey_.get(), FLAGS_obs_secret_key.size() + 1, FLAGS_obs_secret_key.c_str());
         if (status != EOK) {
-            LOG(ERROR) << "strcpy_s secret key in OptionGenerator failed: " << status;
+            LOG(ERROR) << "strcpy_s secret key in ObsCredentialManager failed: " << status;
             return false;
         }
     }
@@ -1050,57 +1020,44 @@ bool ObsClient::OptionGenerator::Init()
     return true;
 }
 
-void ObsClient::OptionGenerator::GenerateObsOption(obs_options &opts, ObsTempCredential &tempCredential)
+ObsCredential ObsClient::ObsCredentialManager::GetCredential()
 {
-    init_obs_options(&opts);
+    ObsCredential cred;
     if (FLAGS_enable_cloud_service_token_rotation) {
-        GenerateTokenRotationObsOption(opts, tempCredential);
+        // Decrypt temp credentials
+        ObsTempCredential tempCredential;
+        std::shared_lock<std::shared_timed_mutex> optionLk(optionMutex_);
+        if (!encryptedInfos_.access.Empty() && !encryptedInfos_.secret.Empty()
+            && !encryptedInfos_.securityToken.Empty()) {
+            auto rc1 =
+                DecryptOneInfo(encryptedInfos_.access, tempCredential.tempAccessKey, tempCredential.accessKeyLen);
+            auto rc2 =
+                DecryptOneInfo(encryptedInfos_.secret, tempCredential.tempSecretKey, tempCredential.secretKeyLen);
+            auto rc3 = DecryptOneInfo(encryptedInfos_.securityToken, tempCredential.tempToken, tempCredential.tokenLen);
+            if (rc1.IsOk() && rc2.IsOk() && rc3.IsOk()) {
+                cred.ak = std::string(tempCredential.tempAccessKey.get(), tempCredential.accessKeyLen);
+                cred.sk = std::string(tempCredential.tempSecretKey.get(), tempCredential.secretKeyLen);
+                cred.token = std::string(tempCredential.tempToken.get(), tempCredential.tokenLen);
+            } else {
+                LOG(ERROR) << "Decrypt temp ak, sk or tokens failed.";
+            }
+        } else {
+            LOG(ERROR) << "Can not found temp ak, sk or tokens.";
+        }
     } else {
-        GenerateCommonObsOption(opts);
+        // AK/SK mode
+        if (accessKey_ != nullptr) {
+            cred.ak = std::string(accessKey_.get());
+        }
+        if (secretKey_ != nullptr) {
+            cred.sk = std::string(secretKey_.get());
+        }
     }
+    return cred;
 }
 
-void ObsClient::OptionGenerator::GenerateCommonObsOption(obs_options &opts)
-{
-    opts.bucket_options.host_name = endPoint_.get();
-    opts.bucket_options.bucket_name = bucketName_.get();
-    opts.bucket_options.access_key = accessKey_.get();
-    opts.bucket_options.secret_access_key = secretKey_.get();
-    opts.bucket_options.uri_style = obs_uri_style::OBS_URI_STYLE_PATH;
-    opts.bucket_options.protocol = OBS_PROTOCOL_HTTP;
-    if (FLAGS_obs_https_enabled) {
-        opts.bucket_options.protocol = OBS_PROTOCOL_HTTPS;
-    }
-}
-
-void ObsClient::OptionGenerator::GenerateTokenRotationObsOption(obs_options &opts, ObsTempCredential &tempCredential)
-{
-    std::shared_lock<std::shared_timed_mutex> optionLk(optionMutex_);
-    if (encryptedInfos_.access.Empty() || encryptedInfos_.secret.Empty() || encryptedInfos_.securityToken.Empty()) {
-        LOG(ERROR) << "Can not found temp ak, sk or tokens.";
-        return;
-    }
-    auto rc1 = DecryptOneInfo(encryptedInfos_.access, tempCredential.tempAccessKey, tempCredential.accessKeyLen);
-    auto rc2 = DecryptOneInfo(encryptedInfos_.secret, tempCredential.tempSecretKey, tempCredential.secretKeyLen);
-    auto rc3 = DecryptOneInfo(encryptedInfos_.securityToken, tempCredential.tempToken, tempCredential.tokenLen);
-    if (rc1.IsError() || rc2.IsError() || rc3.IsError()) {
-        LOG(ERROR) << "Decrypt temp ak, sk or tokens failed.";
-        return;
-    }
-    opts.bucket_options.host_name = endPoint_.get();
-    opts.bucket_options.bucket_name = bucketName_.get();
-    opts.bucket_options.uri_style = obs_uri_style::OBS_URI_STYLE_PATH;
-    opts.bucket_options.protocol = OBS_PROTOCOL_HTTP;
-    if (FLAGS_obs_https_enabled) {
-        opts.bucket_options.protocol = OBS_PROTOCOL_HTTPS;
-    }
-    opts.bucket_options.access_key = tempCredential.tempAccessKey.get();
-    opts.bucket_options.secret_access_key = tempCredential.tempSecretKey.get();
-    opts.bucket_options.token = tempCredential.tempToken.get();
-}
-
-Status ObsClient::OptionGenerator::DecryptOneInfo(const SensitiveValue &info, std::unique_ptr<char[]> &textInfo,
-                                                  int &textLen)
+Status ObsClient::ObsCredentialManager::DecryptOneInfo(const SensitiveValue &info,
+                                                       std::unique_ptr<char[]> &textInfo, int &textLen)
 {
     int tempSize;
     auto status = Decrypt(info.GetData(), textInfo, tempSize);
@@ -1110,13 +1067,13 @@ Status ObsClient::OptionGenerator::DecryptOneInfo(const SensitiveValue &info, st
     return Status::OK();
 }
 
-bool ObsClient::OptionGenerator::IsCredentialInitialized() const
+bool ObsClient::ObsCredentialManager::IsCredentialInitialized() const
 {
     return !client_->obsTempCredentialInfo_.access.Empty() && !client_->obsTempCredentialInfo_.secret.Empty()
            && !client_->obsTempCredentialInfo_.securityToken.Empty();
 }
 
-Status ObsClient::OptionGenerator::UpdateCredentialInfo()
+Status ObsClient::ObsCredentialManager::UpdateCredentialInfo()
 {
     std::lock_guard<std::shared_timed_mutex> optionLk(optionMutex_);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(IsCredentialInitialized(), K_INVALID, "OBS temp credential is empty.");

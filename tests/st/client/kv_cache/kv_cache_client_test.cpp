@@ -2324,7 +2324,7 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeL2Cache)
     std::string val;
     DS_ASSERT_OK(client1->Get(key1, val));
     ASSERT_EQ(val, data);
-    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_NOT_FOUND);
     ASSERT_EQ(val, data);
 }
 
@@ -2409,7 +2409,7 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeL2Cache)
     std::string val;
     DS_ASSERT_OK(client1->Get(key1, val));
     ASSERT_EQ(val, data);
-    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
 TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)

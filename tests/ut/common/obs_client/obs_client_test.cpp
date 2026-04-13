@@ -30,7 +30,6 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/random_data.h"
 
-#include <eSDKOBS.h>
 
 DS_DECLARE_string(encrypt_kit);
 DS_DECLARE_bool(enable_cloud_service_token_rotation);

@@ -113,12 +113,10 @@ set(SDK_USER_LIB_PATTERNS
        "${OpenSSL_LIB_PATH}/libcrypto.so*"
        ${RPC_LIB_PATH}
        "${CURL_LIB_PATH}/libcurl.so*"
-       "${OBS_LIB_PATH}/libeSDKLogAPI.so"
-       "${OBS_LIB_PATH}/libeSDKOBS.so"
-       "${OBS_LIB_PATH}/libiconv.so*"
-       "${OBS_LIB_PATH}/libpcre.so*"
-       "${OBS_LIB_PATH}/libxml2.so*"
-       "${OBS_LIB_PATH}/libcjson.so*"
+       "${ICONV_LIB_PATH}/libiconv.so*"
+       "${PCRE_LIB_PATH}/libpcre.so*"
+       "${XML2_LIB_PATH}/libxml2.so*"
+       "${CJSON_LIB_PATH}/libcjson.so*"
        "${absl_LIB_PATH}/libabseil_dll*"
 )
 
@@ -288,13 +286,11 @@ set(SERVICE_LIB_PATTERNS
     "${gRPC_LIB_PATH}/libupb*"
     "${gRPC_LIB_PATH}/libutf8*"
     "${gRPC_LIB_PATH}/libaddress_sorting.so*"
-    "${OBS_LIB_PATH}/libeSDKLogAPI.so"
-    "${OBS_LIB_PATH}/libeSDKOBS.so"
-    "${OBS_LIB_PATH}/libiconv.so*"
-    "${OBS_LIB_PATH}/libpcre.so*"
-    "${OBS_LIB_PATH}/libxml2.so*"
+    "${ICONV_LIB_PATH}/libiconv.so*"
+    "${PCRE_LIB_PATH}/libpcre.so*"
+    "${XML2_LIB_PATH}/libxml2.so*"
     ${RPC_LIB_PATH}
-    "${OBS_LIB_PATH}/libcjson.so*"
+    "${CJSON_LIB_PATH}/libcjson.so*"
     "${absl_LIB_PATH}/libabseil_dll*"
 )
 

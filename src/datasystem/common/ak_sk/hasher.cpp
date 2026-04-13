@@ -25,6 +25,7 @@
 
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
+#include <openssl/evp.h>
 
 const int DIVIDE_TO_BYTES = 2;
 
@@ -160,5 +161,64 @@ Status Hasher::GetSha256Hex(const std::string &str, std::string &hashVal)
     std::unique_ptr<unsigned char[]> data;
     RETURN_IF_NOT_OK(HexEncode(outHashData, outHashSize, hashVal));
     return Status::OK();
+}
+
+Status Hasher::GetHMACSha1(const SensitiveValue &key, const std::string &data, std::string &output)
+{
+    CHECK_FAIL_RETURN_STATUS(key.GetSize() <= INT_MAX, K_INVALID,
+                             FormatString("Key size %zu exceed INT_MAX", key.GetSize()));
+    auto keySize = static_cast<int>(key.GetSize());
+    unsigned char result[EVP_MAX_MD_SIZE];
+    unsigned int resultLen = 0;
+    if (HMAC(EVP_sha1(), key.GetData(), keySize,
+             reinterpret_cast<const unsigned char *>(data.data()), data.size(),
+             result, &resultLen) == nullptr) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Failed to calc HMAC-SHA1");
+    }
+    output.assign(reinterpret_cast<char *>(result), resultLen);
+    return Status::OK();
+}
+
+Status Hasher::Base64Encode(const std::string &input, std::string &output)
+{
+    if (input.empty()) {
+        output.clear();
+        return Status::OK();
+    }
+    // BoringSSL does not support nullptr output buffer in EVP_EncodeBlock,
+    // so calculate the encoded length directly: 4 * ceil(input_size / 3)
+    size_t inputSize = input.size();
+    size_t encodedLen = 4 * ((inputSize + 2) / 3);
+    output.resize(encodedLen);
+    int actualLen = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(&output[0]),
+                    reinterpret_cast<const unsigned char *>(input.data()), static_cast<int>(input.size()));
+    output.resize(actualLen);
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r' || output.back() == '\0')) {
+        output.pop_back();
+    }
+    return Status::OK();
+}
+
+Status Hasher::GetHMACSha1Base64(const SensitiveValue &key, const std::string &data, std::string &output)
+{
+    std::string hmacResult;
+    RETURN_IF_NOT_OK(GetHMACSha1(key, data, hmacResult));
+    return Base64Encode(hmacResult, output);
+}
+
+Status Hasher::GetMD5(const std::string &data, std::string &output)
+{
+    unsigned char result[EVP_MAX_MD_SIZE];
+    unsigned int resultLen = 0;
+    EVP_Digest(data.data(), data.size(), result, &resultLen, EVP_md5(), nullptr);
+    output.assign(reinterpret_cast<char *>(result), resultLen);
+    return Status::OK();
+}
+
+Status Hasher::GetMD5Base64(const std::string &data, std::string &output)
+{
+    std::string md5Result;
+    RETURN_IF_NOT_OK(GetMD5(data, md5Result));
+    return Base64Encode(md5Result, output);
 }
 }  // namespace datasystem
