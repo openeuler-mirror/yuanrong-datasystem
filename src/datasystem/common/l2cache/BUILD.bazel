@@ -65,6 +65,7 @@ ds_cc_library(
         "slot_client/slot_client.h",
         "slot_client/slot_transfer.h",
         "slot_client/slot_writer.h",
+        "slot_client/slot_internal_config.h",
     ],
     deps = [
         "//include/datasystem/object:object_headers",
