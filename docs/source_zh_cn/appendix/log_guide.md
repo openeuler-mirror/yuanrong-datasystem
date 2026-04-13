@@ -6,7 +6,7 @@ openYuanrong datasystem 的日志分为以下类型：
 
 1. **运行日志**：记录客户端、服务端运行时的日志信息，包括 INFO、WARNING、ERROR、FATAL；更细粒度调试可通过 `VLOG` 与 gflags（如 `--v`）控制。
 2. **访问日志**：记录每一次访问客户端/服务端的请求，每个请求一条日志，用于定界上游是否访问客户端/服务端（需开启 `log_monitor`）。
-3. **请求第三方日志（request_out）**：记录 Worker 访问第三方组件的请求，每个请求一条日志，可用于定界 openYuanrong datasystem 是否成功访问该外部组件；当前实现中 **`access_point.def` 主要接入 ETCD gRPC**（需开启 `log_monitor`）。
+3. **请求第三方日志（request_out）**：记录 Worker 访问第三方组件的请求，每个请求一条日志，可用于定界 openYuanrong datasystem 是否成功访问该外部组件；当前实现中 **主要接入 ETCD gRPC**（需开启 `log_monitor`）。
 4. **资源日志**：定时输出 Worker 运行时关键资源信息，包括共享内存、Spill 磁盘、线程池、队列、流缓存相关统计等（需 `log_monitor` 且 `log_monitor_exporter=harddisk`）。
 5. **流缓存指标日志（sc_metrics）**：流缓存运行数据（需开启 `log_monitor`）。
 6. **容器/进程相关日志**：容器运行日志，管理和监控worker进程的生命周期。
