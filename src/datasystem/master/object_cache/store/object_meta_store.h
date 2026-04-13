@@ -61,6 +61,9 @@ static const std::string HEALTH_STATUS = "ready";
 // Mark whether the reference counting metadata stored in rocksdb is in or out of the cloud.
 static const std::string REMOTE_CLIENT_FLAG = "?remoteClient";
 
+static const std::string LIVENESS_CHECK = "liveness_check";
+static const std::string LIVENESS_OK = "ok";
+
 std::string Hash2Str(uint32_t hash);
 
 const int QUEUE_CAPACITY = 10000;
@@ -412,6 +415,12 @@ public:
      * @return true Rocksdb health check success.
      */
     bool CheckHealth();
+
+    /**
+     * @brief Liveness check rocksdb.
+     * @return Status of the call.
+     */
+    Status LivenessCheckRocksdb();
 
     /**
      * @brief Get metas match function.

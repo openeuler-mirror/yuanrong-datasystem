@@ -892,5 +892,15 @@ Status MasterOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
                                      "GetOcMetadataManager failed");
     return ocMetadataManager->Expire(req, rsp);
 }
+
+Status MasterOCServiceImpl::LivenessCheck(const LivenessCheckReqPb &req, LivenessCheckRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+                                     "GetOcMetadataManager failed");
+    (void)rsp;
+    return ocMetadataManager->LivenessCheck();
+}
 }  // namespace master
 }  // namespace datasystem

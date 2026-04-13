@@ -1203,6 +1203,12 @@ public:
      */
     Status Expire(const ExpireReqPb &req, ExpireRspPb &rsp);
 
+    /**
+     * @brief Liveness check.
+     * @return Status of the call.
+     */
+    Status LivenessCheck();
+
 protected:
     /**
      * @brief Recovery object locations

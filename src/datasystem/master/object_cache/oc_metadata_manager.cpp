@@ -4758,5 +4758,10 @@ Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
     rsp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     return Status::OK();
 }
+
+Status OCMetadataManager::LivenessCheck()
+{
+    return objectStore_->LivenessCheckRocksdb();
+}
 }  // namespace master
 }  // namespace datasystem

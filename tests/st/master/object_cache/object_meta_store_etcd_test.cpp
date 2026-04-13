@@ -391,5 +391,14 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestEtcdQueueWithNoLimit)
                                                           ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD));
     }
 }
+
+TEST_F(ObjectMetaStoreEtcdTest, TestLivenessCheckRocksdb)
+{
+    InitInstance();
+    DS_ASSERT_OK(objectMetaStore_->LivenessCheckRocksdb());
+    datasystem::inject::Set("master.rocksdb.put", "return(K_KVSTORE_ERROR)");
+    auto rc = objectMetaStore_->LivenessCheckRocksdb();
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_KVSTORE_ERROR);
+}
 }  // namespace st
 }  // namespace datasystem
