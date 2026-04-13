@@ -60,6 +60,7 @@ OsTransportLibLoader *OsTransportLibLoader::Instance()
 void OsTransportLibLoader::Load()
 {
     LibLoaderBase::Load();
+    DLSYM_FUNC_OBJ_LINK(DoLogReg, os_transport_log_reg, handle_);
     DLSYM_FUNC_OBJ_LINK(DoInit, os_transport_init, handle_);
     DLSYM_FUNC_OBJ_LINK(DoRecv, os_transport_recv, handle_);
     DLSYM_FUNC_OBJ_LINK(DoSend, os_transport_send, handle_);
@@ -71,6 +72,7 @@ void OsTransportLibLoader::Load()
 void OsTransportLibLoader::UnLoad()
 {
     LibLoaderBase::UnLoad();
+    DLSYM_FUNC_OBJ_DESTROY(DoLogReg);
     DLSYM_FUNC_OBJ_DESTROY(DoInit);
     DLSYM_FUNC_OBJ_DESTROY(DoRecv);
     DLSYM_FUNC_OBJ_DESTROY(DoSend);

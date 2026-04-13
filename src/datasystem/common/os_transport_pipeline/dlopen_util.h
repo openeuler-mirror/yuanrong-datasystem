@@ -64,6 +64,7 @@ struct OsTransportLibLoader : public LibLoaderBase {
     static OsTransportLibLoader *Instance();
 
     // os transport
+    REG_METHOD(DoLogReg, int, int, log_callback_t);
     REG_METHOD(DoInit, uint32_t, urma_context_t *urma_ctx, os_transport_cfg_t *ost_cfg, void **handle);
     REG_METHOD(DoRecv, uint32_t, void *handle, ost_buffer_info_t *host_src, ost_device_info_t *device_dst, uint32_t len,
                uint32_t client_key, task_sync_t **ret_sync_handle);
