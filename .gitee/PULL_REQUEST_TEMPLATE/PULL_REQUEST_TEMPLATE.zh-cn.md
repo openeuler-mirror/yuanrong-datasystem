@@ -30,35 +30,6 @@ Fixes #
 
 **PR对程序接口进行了哪些修改？**
 
-
-
-----
-
-**Commit提交信息说明**：
-
-**MR标题格式**：`fix[function_proxy]：xxxxx`
-
-- `fix` 表示PR类型（可以是 fix/feat/perf/style/chore/revert/refactor/ci/test/docs/build 等）
-- `function_proxy` 表示修改的模块名称（根据实际修改的模块填写）
-- `xxxxx` 为具体的修改描述
-
-**Commit信息格式**：
-
-- Commit信息开头必须包含PR类型前缀，格式：`fix: xxxxx`
-- Commit信息需要包含详细的修改说明，描述具体修改内容和原因
-- Commit信息最后必须包含 Signed-off-by，通过 `git commit -s` 命令生成
-
-**示例**：
-```
-fix: 修复InstanceProxy序列化反序列化时is_async属性无法还原的问题
-
-- 在constants.py中添加IS_ASYNC常量
-- 在serialization_方法中保存is_async属性
-- 在deserialization_方法中恢复is_async属性，确保序列化后再反序列化能正确还原is_async值
-
-Signed-off-by: YourName <your.email@example.com>
-```
-
 ----
 
 **Self-checklist**:（**请自检，在[ ]内打上x，我们将检视你的完成情况，否则会导致pr无法合入**）
