@@ -1,5 +1,28 @@
 # Log Lifecycle And Rotation
 
+## Document Metadata
+
+- Status:
+  - `active`
+- Doc type:
+  - behavior note | submodule reference
+- Primary code paths:
+  - `src/datasystem/common/log/logging.h`
+  - `src/datasystem/common/log/logging.cpp`
+  - `src/datasystem/common/log/log_manager.h`
+  - `src/datasystem/common/log/log_manager.cpp`
+  - `src/datasystem/common/log/failure_handler.h`
+  - `src/datasystem/common/log/failure_handler.cpp`
+- Last verified against source:
+  - `2026-04-13`
+- Related design docs:
+  - `.repo_context/modules/infra/logging/design.md`
+  - `.repo_context/modules/infra/logging/access-recorder.md`
+- Related tests:
+  - `//tests/ut/common/log:logging_test`
+  - `//tests/ut/common/log:failure_handler_test`
+  - `//tests/st/common/log:logging_free_test`
+
 ## Scope
 
 - Paths:
@@ -20,6 +43,8 @@
 - `src/datasystem/common/log/log_manager.cpp`
 - `src/datasystem/common/log/failure_handler.h`
 - `src/datasystem/common/log/failure_handler.cpp`
+- `tests/ut/common/log/BUILD.bazel`
+- `tests/st/common/log/BUILD.bazel`
 
 ## Startup Flow
 
@@ -71,6 +96,29 @@
   - `minloglevel`
   - `log_async_queue_size`
 
+## Compatibility And Operations Notes
+
+- Stability-sensitive behavior:
+  - log file naming patterns must stay aligned with `LogManager` rolling and pruning regexes;
+  - `DATASYSTEM_*` environment overrides are externally visible operational contracts for client processes;
+  - `container.log` remains the expected crash-path output location beneath the resolved log directory.
+- Operations implications:
+  - retention and compression settings affect both ordinary logs and monitor-style files;
+  - bad directory permissions or path overrides can break startup and crash logging together;
+  - changing startup order can create partial observability failures even when the service itself still runs.
+
+## Verification Hints
+
+- Fast source checks:
+  - confirm startup ordering and env override behavior in `src/datasystem/common/log/logging.cpp`;
+  - confirm rolling, compression, and pruning patterns in `src/datasystem/common/log/log_manager.cpp`;
+  - confirm crash-path behavior in `src/datasystem/common/log/failure_handler.cpp`.
+- Fast validation targets:
+  - `bazel test //tests/ut/common/log:failure_handler_test`
+  - `bazel test //tests/ut/common/log:logging_test`
+- Manual validation:
+  - start one process with a writable temp log dir, emit logs, force rotation conditions, and confirm expected file families plus `container.log` behavior.
+
 ## Failure Logging
 
 - Verified from `failure_handler.cpp`:
@@ -90,3 +138,9 @@
 - Common risks:
   - changing rotation/compression rules affects both ordinary logs and monitor/resource logs;
   - changing startup order between provider init, log manager start, and access-recorder manager init can create partial observability failures.
+
+## Update Rules For This Document
+
+- Keep this file focused on startup, configuration, maintenance loop behavior, and crash-path handling instead of duplicating the full architecture in `design.md`.
+- Update this file when startup order, flag or env semantics, rolling or pruning patterns, or failure-handler behavior changes.
+- If an operational statement depends on an unverified deployment path, mark it as pending verification rather than generalizing it.
