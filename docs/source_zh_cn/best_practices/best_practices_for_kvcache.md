@@ -55,7 +55,6 @@ modelscope download --model Eco-Tech/GLM-5-w4a8 --local_dir /home/models
 
 ::::{tab-set}
 :::{tab-item} A2 双机
-:sync:a2-double
 
 ```bash
 docker pull quay.io/ascend/vllm-ascend:0.18.0rc1
@@ -63,7 +62,6 @@ docker pull quay.io/ascend/vllm-ascend:0.18.0rc1
 
 :::
 :::{tab-item} A3 单机
-:sync:a3-single
 
 ```bash
 docker pull quay.io/ascend/vllm-ascend:0.18.0rc1-a3
@@ -72,13 +70,12 @@ docker pull quay.io/ascend/vllm-ascend:0.18.0rc1-a3
 :::
 ::::
 
-> 提示：如果下载较慢，可将 quay.io 替换为 m.daocloud.io/quay.io 或 quay.nju.edu.cn 以加速拉取。更多镜像说明可参考[安装文档](../../installation.md#set-up-using-docker)。
+> 提示：如果下载较慢，可将 quay.io 替换为 m.daocloud.io/quay.io 或 quay.nju.edu.cn 以加速拉取。
 
 **3. 启动 Docker 容器**
 
 ::::{tab-set}
 :::{tab-item} A2 双机
-:sync:a2-double
 在两个节点上分别启动包含 8 张 NPU 卡的 Docker 容器：
 ```bash
 export IMAGE=quay.io/ascend/vllm-ascend:0.18.0rc1
@@ -112,7 +109,6 @@ docker run --rm \
 
 :::
 :::{tab-item} A3 单机
-:sync:a3-single
 启动包含 16 张 NPU 卡的 Docker 容器：
 ```bash
 export IMAGE=quay.io/ascend/vllm-ascend:0.18.0rc1-a3
@@ -791,5 +787,5 @@ tail -f glm-5_yuanrong.log
 - [Yuanrong Datasystem 代码仓](https://atomgit.com/openeuler/yuanrong-datasystem)
 - [etcd 文档](https://etcd.io/docs/)
 - [vLLM Ascend 文档](https://docs.vllm.ai/projects/ascend/)
-- [GLM-5 教程](../../tutorials/models/GLM5.md)
+- [GLM-5 教程](https://modelscope.cn/models/Eco-Tech/GLM-5-w4a8)
 
