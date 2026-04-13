@@ -286,6 +286,13 @@ public:
     }
 
     /**
+     * @brief Get hash ranges owned by a specified worker in the current hash ring.
+     * @param[in] workerAddr The worker address.
+     * @return Hash ranges owned by the worker. It can return empty ranges.
+     */
+    HashRange GetHashRangeByWorker(const std::string &workerAddr);
+
+    /**
      * @brief Whether the datasystem is deployed with centralized master.
      */
     bool IsCentralized() const
@@ -501,6 +508,13 @@ protected:
      * @brief Save hash range of current worker.
      */
     void SaveHashRange();
+
+    /**
+     * @brief Build hash ranges owned by a specified worker from tokenMap_.
+     * @param[in] workerAddr The worker address.
+     * @return Hash ranges owned by the worker. It can return empty ranges.
+     */
+    HashRange BuildHashRangeForWorkerNoLock(const std::string &workerAddr) const;
 
     /**
      * @brief Add workers to be added into the working hash ring.
@@ -788,8 +802,8 @@ protected:
     using WorkerAddr = std::string;
     std::map<HashPosition, WorkerAddr> tokenMap_;
     std::map<HashPosition, WorkerAddr> workerUuidHashMap_;
-    std::map<std::string, HostPort> workerUuid2AddrMap_; // for route master
-    std::map<std::string, HostPort> relatedWorkerMap_; // for get related worker
+    std::map<std::string, HostPort> workerUuid2AddrMap_;  // for route master
+    std::map<std::string, HostPort> relatedWorkerMap_;    // for get related worker
     std::map<WorkerAddr, std::string> workerAddr2UuidMap_;
 
     mutable std::mutex hashRangeMutex_;  // for hash range

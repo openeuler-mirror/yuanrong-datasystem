@@ -1353,24 +1353,38 @@ Status HashRing::GetMasterUuid(const std::string &objKey, std::string &masterUui
 
 void HashRing::SaveHashRange()
 {
-    std::unique_lock<std::mutex> l(hashRangeMutex_);
+    auto ranges = BuildHashRangeForWorkerNoLock(workerAddr_);
+    std::unique_lock<std::mutex> lock(hashRangeMutex_);
+    hashRange_ = std::move(ranges);
+}
+
+HashRange HashRing::GetHashRangeByWorker(const std::string &workerAddr)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    return BuildHashRangeForWorkerNoLock(workerAddr);
+}
+
+HashRange HashRing::BuildHashRangeForWorkerNoLock(const std::string &workerAddr) const
+{
     HashPosition curr = 0;
     bool needExtra = false;
+    HashRange ranges;
     for (auto iter = tokenMap_.begin(); iter != tokenMap_.end(); ++iter) {
-        if (iter->second == workerAddr_) {
+        if (iter->second == workerAddr) {
             needExtra |= (curr == 0);
             auto beg = curr;
             auto end = iter->first == 0 ? 0 : iter->first - 1;
             if (beg == 0 && end == 0) {
                 continue;
             }
-            hashRange_.emplace_back(beg, end);
+            ranges.emplace_back(beg, end);
         }
         curr = iter->first;
     }
     if (needExtra) {
-        hashRange_.emplace_back(curr, UINT32_MAX);
+        ranges.emplace_back(curr, UINT32_MAX);
     }
+    return ranges;
 }
 
 bool HashRing::NeedToTryRemoveWorker(const std::string &workerAddr, const std::unordered_set<std::string> &failWorkers)
