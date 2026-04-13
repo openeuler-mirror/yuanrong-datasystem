@@ -190,9 +190,9 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
 
 template <class Function, class Handler>
 Status RetryOnErrorRepent(int64_t timeoutMs, Function &&func, Handler &&errorHandler,
-                          const std::unordered_set<StatusCode> &errCode)
+                          const std::unordered_set<StatusCode> &errCode, bool repent = true)
 {
-    return RetryOnError(timeoutMs, func, errorHandler, errCode, MAX_RPC_TIMEOUT_MS, {}, true);
+    return RetryOnError(timeoutMs, func, errorHandler, errCode, MAX_RPC_TIMEOUT_MS, {}, repent);
 }
 
 template <class Function, class Handler>

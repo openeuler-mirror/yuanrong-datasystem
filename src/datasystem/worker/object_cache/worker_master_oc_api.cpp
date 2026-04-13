@@ -218,7 +218,7 @@ Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &requ
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE });
+          StatusCode::K_RPC_UNAVAILABLE }, false);
 
     return status;
 }
