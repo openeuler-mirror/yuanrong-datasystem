@@ -113,8 +113,8 @@ Backed by `CMakeLists.txt`:
 
 Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 
-- `//bazel:datasystem_sdk` now emits a directory artifact at `bazel-bin/bazel/datasystem_sdk` instead of a zip file;
-- the directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and shared libraries under `cpp/lib/`.
+- `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.zip`;
+- the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and shared libraries under `cpp/lib/`.
 
 ## Environment Notes
 

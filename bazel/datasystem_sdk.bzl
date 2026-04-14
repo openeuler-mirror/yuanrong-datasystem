@@ -1,5 +1,6 @@
 def _datasystem_sdk_tree_impl(ctx):
     out_dir = ctx.actions.declare_directory(ctx.label.name)
+    out_zip = ctx.actions.declare_file(ctx.label.name + ".zip")
     headers_manifest = ctx.actions.declare_file(ctx.label.name + "_headers_manifest.txt")
 
     header_lines = []
@@ -23,6 +24,7 @@ headers_manifest="$2"
 build_tpl="$3"
 libdatasystem="$4"
 libds_client_py="$5"
+out_zip="$6"
 
 mkdir -p "$out_dir/cpp/lib"
 cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
@@ -37,6 +39,15 @@ while IFS=$'\\t' read -r src rel; do
   mkdir -p "$out_dir/cpp/include/datasystem/$(dirname "$rel")"
   cp -f "$src" "$out_dir/cpp/include/datasystem/$rel"
 done < "$headers_manifest"
+
+parent_dir="$(dirname "$out_dir")"
+base_name="$(basename "$out_dir")"
+zip_name="$(basename "$out_zip")"
+(
+  cd "$parent_dir"
+  rm -f "$zip_name"
+  zip -qry "$zip_name" "$base_name"
+)
 """
 
     ctx.actions.run_shell(
@@ -44,7 +55,7 @@ done < "$headers_manifest"
             [headers_manifest, ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libds_client_py],
             transitive = [depset(ctx.files.headers)],
         ),
-        outputs = [out_dir],
+        outputs = [out_dir, out_zip],
         command = command,
         arguments = [
             out_dir.path,
@@ -52,12 +63,13 @@ done < "$headers_manifest"
             ctx.file.build_tpl.path,
             ctx.file.libdatasystem.path,
             ctx.file.libds_client_py.path,
+            out_zip.path,
         ],
         mnemonic = "BuildDatasystemSdkTree",
         progress_message = "Packaging datasystem SDK tree for %s" % ctx.label,
     )
 
-    return [DefaultInfo(files = depset([out_dir]))]
+    return [DefaultInfo(files = depset([out_dir, out_zip]))]
 
 datasystem_sdk_tree = rule(
     implementation = _datasystem_sdk_tree_impl,
