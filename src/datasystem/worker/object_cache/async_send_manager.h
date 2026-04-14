@@ -343,7 +343,7 @@ private:
      * @return Status of the call.
      */
     Status SendToRemoteOnLock(const std::string &objectKey, std::shared_ptr<std::stringstream> buf, uint64_t createTime,
-                              uint64_t &dataSize, WriteMode writeMode,
+                              uint64_t &dataSize, WriteMode writeMode, uint32_t ttlSecond,
                               std::chrono::time_point<std::chrono::steady_clock> &beginTime);
 
     /**

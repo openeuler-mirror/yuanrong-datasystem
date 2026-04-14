@@ -82,7 +82,7 @@ public:
      * @return Status of the call.
      */
     Status Save(const std::string &key, uint64_t version, const std::shared_ptr<std::iostream> &body,
-                uint64_t asyncElapse = 0, WriteMode writeMode = WriteMode::NONE_L2_CACHE);
+                uint64_t asyncElapse = 0, WriteMode writeMode = WriteMode::NONE_L2_CACHE, uint32_t ttlSecond = 0);
 
     /**
      * @brief Read one exact version from this slot.

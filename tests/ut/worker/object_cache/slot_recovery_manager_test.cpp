@@ -68,7 +68,7 @@ public:
     }
 
     Status Save(const std::string &, uint64_t, int64_t, const std::shared_ptr<std::iostream> &, uint64_t,
-                WriteMode) override
+                WriteMode, uint32_t) override
     {
         return Status::OK();
     }

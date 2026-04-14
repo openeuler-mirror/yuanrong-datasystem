@@ -32,6 +32,7 @@ std::unique_ptr<ObjectInterface> CreateObjectEntry(const ObjEntryParams &objPara
     objShmUnit->SetDataSize(objParams.dataSize);
     objShmUnit->SetMetadataSize(objParams.metaSize);
     objShmUnit->SetCreateTime(objParams.createTime);
+    objShmUnit->SetTtlSecond(objParams.ttlSecond);
     objShmUnit->modeInfo = objParams.entryMode;
     objShmUnit->stateInfo = objParams.entryState;
     objShmUnit->SetLifeState(objParams.lifeState);
@@ -89,6 +90,7 @@ void SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSi
               .dataSize = meta.data_size(),
               .metaSize = metaDataSize,
               .createTime = (int64_t)meta.version(),
+              .ttlSecond = meta.ttl_second(),
               .entryMode = ModeInfo(ConsistencyType(configPb.consistency_type()), WriteMode(configPb.write_mode()),
                                     CacheType(configPb.cache_type())),
               .entryState = StateInfo(DataFormat(configPb.data_format())),

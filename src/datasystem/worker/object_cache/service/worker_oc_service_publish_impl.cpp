@@ -200,6 +200,7 @@ Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const 
     }
     if (rc.IsOk()) {
         safeObj->SetCreateTime(publishVersion);
+        safeObj->SetTtlSecond(params.ttlSecond);
     } else {
         LOG_IF_ERROR(safeObj->FreeResources(), "SafeObj free failed");
         LOG(ERROR) << FormatString("[ObjectKey %s] RequestingToMaster failed, status: %s", objectKey, rc.ToString());

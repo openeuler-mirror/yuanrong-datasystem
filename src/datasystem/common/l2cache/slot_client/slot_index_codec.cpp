@@ -195,6 +195,7 @@ Status SlotIndexCodec::EncodePut(const SlotPutRecord &record, std::string &paylo
     AppendRaw(payload, record.version);
     auto writeMode = static_cast<uint8_t>(record.writeMode);
     AppendRaw(payload, writeMode);
+    AppendRaw(payload, record.ttlSecond);
     auto crc = CalcCrc32(reinterpret_cast<const uint8_t *>(payload.data()), payload.size());
     AppendRaw(payload, crc);
     return Status::OK();
@@ -309,6 +310,9 @@ Status SlotIndexCodec::ReadAllRecordFrames(const std::string &indexPath, std::ve
                 break;
             }
             frame.record.put.writeMode = static_cast<WriteMode>(writeMode);
+            if (!TryReadRaw(content, offset, frame.record.put.ttlSecond)) {
+                break;
+            }
             uint32_t storedCrc = 0;
             if (!TryReadRaw(content, offset, storedCrc)) {
                 break;

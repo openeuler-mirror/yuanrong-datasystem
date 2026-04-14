@@ -109,6 +109,11 @@ struct ObjectInterface {
         return 0;
     }
 
+    virtual uint32_t GetTtlSecond() const
+    {
+        return 0;
+    }
+
     /**
      * @brief A setter function for the data size.
      * @param[in] size The data size.
@@ -188,6 +193,11 @@ struct ObjectInterface {
     virtual void SetCreateTime(const uint64_t newCreateTime)
     {
         (void)newCreateTime;
+    }
+
+    virtual void SetTtlSecond(uint32_t ttlSecond)
+    {
+        (void)ttlSecond;
     }
 
     /**

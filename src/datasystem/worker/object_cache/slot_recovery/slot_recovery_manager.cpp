@@ -163,6 +163,7 @@ ObjectMetaPb BuildRecoveredMetadata(const SlotPreloadMeta &meta, const std::stri
     objectMeta.set_object_key(meta.objectKey);
     objectMeta.set_data_size(meta.size);
     objectMeta.set_version(meta.version);
+    objectMeta.set_ttl_second(meta.ttlSecond);
     objectMeta.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
     objectMeta.set_primary_address(localWorker);
     objectMeta.set_is_recovered(true);

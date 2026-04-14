@@ -56,7 +56,8 @@ Status ObjectPersistenceApi::Init()
 }
 
 Status ObjectPersistenceApi::Save(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
-                                  const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse, WriteMode writeMode)
+                                  const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse,
+                                  WriteMode writeMode, uint32_t ttlSecond)
 {
     INJECT_POINT("PersistenceApi.Save.timeout", [&timeoutMs](int timeout) {
         timeoutMs = timeout;
@@ -66,6 +67,7 @@ Status ObjectPersistenceApi::Save(const std::string &objectKey, uint64_t version
     INJECT_POINT("persistence.service.save");
 
     (void)writeMode;
+    (void)ttlSecond;
     std::string encodeKey;
     RETURN_IF_NOT_OK(PersistenceApi::UrlEncode(objectKey, encodeKey));
     std::string objectPath;

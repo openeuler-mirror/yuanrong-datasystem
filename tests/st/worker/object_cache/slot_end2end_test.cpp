@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <sstream>
 #include <thread>
@@ -1082,6 +1083,32 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryTakeoverOwnerRestartDataIntact)
     for (const auto &keyValue : keyValues) {
         ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
     }
+}
+
+TEST_F(SlotEndToEndPassiveScaleDownTest, RestoreObjectWithTtl)
+{
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+
+    constexpr int ttl = 5;
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = ttl };
+    const std::string objKey0 = FindKeyForSlot(0, "object_with_ttl_worker0");
+    ASSERT_FALSE(objKey0.empty());
+    const std::string value0 = "value_worker0_" + std::to_string(0);
+    DS_ASSERT_OK(client0->Set(objKey0, value0, param));
+    Timer remainTtl(static_cast<int64_t>(ttl * S2MS));
+    std::this_thread::sleep_for(std::chrono::milliseconds((500)));
+
+    client0.reset();
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    WaitAllNodesJoinIntoHashRingFast(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds((remainTtl.GetRemainingTimeMs() + 1) * S2MS));
+    std::string val;
+    ASSERT_EQ(client1->Get(objKey0, val).GetCode(), K_NOT_FOUND);
 }
 
 class SlotEndToEndScaleUpTest : public SlotEndToEndTest {

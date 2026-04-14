@@ -1006,6 +1006,7 @@ private:
         metadata->set_data_size(obj->GetDataSize());
         metadata->set_life_state((uint64_t)obj->GetLifeState());
         metadata->set_version(obj->GetCreateTime());
+        metadata->set_ttl_second(obj->GetTtlSecond());
     }
 
     /**

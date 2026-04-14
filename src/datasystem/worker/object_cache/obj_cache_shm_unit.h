@@ -94,6 +94,10 @@ public:
      */
     void SetCreateTime(uint64_t newCreateTime) override;
 
+    uint32_t GetTtlSecond() const override;
+
+    void SetTtlSecond(uint32_t ttlSecond) override;
+
     /**
      * @brief Get dataSize.
      * @return The dataSize.
@@ -162,6 +166,7 @@ private:
     uint64_t metadataSize_{ 0 };
     // When this object was created.
     uint64_t createTime_{ 0 };
+    uint32_t ttlSecond_{ 0 };
     // The source of updated data address.
     std::string address_;
     // The life state of object.
