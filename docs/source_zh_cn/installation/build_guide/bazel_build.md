@@ -1,6 +1,14 @@
 # 基于Bazel自定义编译
 
-## 一，常用构建命令
+## 一，环境依赖
+
+### OpenEuler OS
+
+```bash
+yum install -y autoconf automake libtool m4
+```
+
+## 二，常用构建命令
 
 **1. sdk 包构建：**
 
