@@ -310,6 +310,21 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "register_client_non_shm_rsp_test",
+    srcs = ["register_client_non_shm_rsp_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/util:version",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/protos:share_memory_protos",
+        "//src/datasystem/protos:share_memory_zmq_cc_proto",
+    ],
+)
+
+ds_cc_test(
     name = "shm_threshold_test",
     srcs = ["shm_threshold_test.cpp"],
     tags = ["manual"],

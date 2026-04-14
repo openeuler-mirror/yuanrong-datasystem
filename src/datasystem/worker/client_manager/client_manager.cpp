@@ -91,7 +91,11 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
                                 bool enableCrossNode, const std::string &podName, std::string deviceId,
                                 uint32_t &lockId)
 {
-    RETURN_IF_NOT_OK(GetLockId(lockId));
+    // Ensure callers never observe a stale lockId on failure paths.
+    lockId = 0;
+    if (shmEnabled) {
+        RETURN_IF_NOT_OK(GetLockId(lockId));
+    }
     Status status;
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     bool uniqueCount = true;
@@ -100,7 +104,10 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
     clientInfo->SetLockId(lockId);
     bool insert = tbbClientTable_.emplace(clientId, std::move(clientInfo));
     if (!insert) {
-        ReturnLockId(lockId);
+        if (shmEnabled) {
+            ReturnLockId(lockId);
+            lockId = 0;
+        }
         status = Status(StatusCode::K_RUNTIME_ERROR, FormatString("Failed to insert client %s to table", clientId));
     }
     return status;

@@ -285,18 +285,21 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->ProcessServerReboot(clientId, tenantId, req.token(), req.extend()),
                                          "worker process server reboot failed");
     }
-    int fd;
-    uint64_t mmapSize;
-    ptrdiff_t offset;
+    int fd = -1;
+    uint64_t mmapSize = 0;
+    ptrdiff_t offset = 0;
     ShmKey id;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
-                                     "worker process get ShmQ unit failed");
+    if (shmEnabled) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
+                                         "worker process get ShmQ unit failed");
+    }
 
     std::string exclusiveConnSockPath;
     if (req.enable_exclusive_connection()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetExclConnSockPath(exclusiveConnSockPath),
                                          "worker process get exclusive connection socket path failed");
     }
+    
     rsp.set_page_size(FLAGS_page_size);
     rsp.set_quorum_timeout_mult(timeoutMultiplier_);
     rsp.set_client_id(clientId);
