@@ -147,7 +147,7 @@
   - `ds_router_client` is a separate client-facing library built from `router_client.cpp`
   - Python bindings are built from `src/datasystem/pybind_api` when Python API build is enabled
   - transfer engine is only added from the root build when transfer-engine, hetero, and NPU-related conditions are satisfied
-  - Bazel target `//bazel:datasystem_sdk` packages a C++ SDK directory tree at `bazel-bin/bazel/datasystem_sdk/cpp`, with all public headers under `cpp/include/datasystem/` and `lib/libdatasystem.so` + `lib/libds_client_py.so`
+  - Bazel target `//bazel:datasystem_sdk` packages a C++ SDK directory tree at `bazel-bin/bazel/datasystem_sdk/cpp` and also outputs `bazel-bin/bazel/datasystem_sdk.zip`; headers are under `cpp/include/datasystem/`, and shared libraries are `lib/libdatasystem.so` + `lib/libds_client_py.so`
 
 ## Review And Bugfix Notes
 
