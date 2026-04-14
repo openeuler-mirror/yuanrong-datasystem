@@ -113,10 +113,11 @@ Status SlotClient::Init()
 }
 
 Status SlotClient::Save(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
-                        const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse, WriteMode writeMode)
+                        const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse, WriteMode writeMode,
+                        uint32_t ttlSecond)
 {
     (void)timeoutMs;
-    auto rc = GetSlot(GetSlotId(objectKey)).Save(objectKey, version, body, asyncElapse, writeMode);
+    auto rc = GetSlot(GetSlotId(objectKey)).Save(objectKey, version, body, asyncElapse, writeMode, ttlSecond);
     if (rc.IsOk()) {
         WakeBackgroundCompactThread();
     }

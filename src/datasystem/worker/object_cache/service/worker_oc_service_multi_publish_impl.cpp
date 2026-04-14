@@ -393,7 +393,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObject(const MultiPublishReq
         RETURN_IF_NOT_OK(CreateMultiMetaToCentralMaster(objectKeys, entries, req, versions));
     }
 
-    UpdateObjectAfterCreatingMeta(objectKeys, entries, versions);
+    UpdateObjectAfterCreatingMeta(objectKeys, entries, versions, req.ttl_second());
 
     return Status::OK();
 }
@@ -958,7 +958,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToCentralMaster(
 
 void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
-    const std::vector<uint64_t> &versions)
+    const std::vector<uint64_t> &versions, uint32_t ttlSecond)
 {
     const auto &keys = objectKeys;
     const auto &entries = objectEntries;
@@ -980,6 +980,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
     for (size_t i = 0; i < keys.size(); i++) {
         ObjectKV objectKV(keys[i], *entries[i]);
         objectKV.GetObjEntry()->SetCreateTime(versions[i]);
+        objectKV.GetObjEntry()->SetTtlSecond(ttlSecond);
         // Save object to L2 cache
         if ((*entries[i])->IsWriteThroughMode()) {
             if (IsSupportL2Storage(supportL2Storage_)) {
@@ -1059,7 +1060,7 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
         lastRc = recvRc.IsOk() ? lastRc : recvRc;
     }
     point.Reset(PerfKey::WORKER_UPDATE_OBJECT_AFTER_CREATE_META);
-    UpdateObjectAfterCreatingMeta(keys, entries, versions);
+    UpdateObjectAfterCreatingMeta(keys, entries, versions, req.ttl_second());
 
     return Status::OK();
 }

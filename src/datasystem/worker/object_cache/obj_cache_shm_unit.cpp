@@ -94,6 +94,16 @@ void ObjCacheShmUnit::SetCreateTime(const uint64_t newCreateTime)
     createTime_ = newCreateTime;
 }
 
+uint32_t ObjCacheShmUnit::GetTtlSecond() const
+{
+    return ttlSecond_;
+}
+
+void ObjCacheShmUnit::SetTtlSecond(uint32_t ttlSecond)
+{
+    ttlSecond_ = ttlSecond;
+}
+
 uint64_t ObjCacheShmUnit::GetDataSize() const
 {
     return dataSize_;

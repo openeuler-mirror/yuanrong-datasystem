@@ -29,7 +29,6 @@
 
 #include "common.h"
 #include "client/kv_cache/kv_client_scale_common.h"
-#include "datasystem/common/util/file_util.h"
 
 namespace datasystem {
 namespace st {
@@ -39,7 +38,7 @@ constexpr int WAIT_GET_INTERVAL_MS = 200;
 constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t NODE_DEAD_TIMEOUT_S = 3;
 constexpr uint64_t HEARTBEAT_INTERVAL_MS = 500;
-constexpr uint32_t OBJECT_COUNT = 64;
+constexpr int S2MS = 1000;
 }  // namespace
 
 class MetadataRecoveryTest : public KVClientScaleCommon {
@@ -50,12 +49,8 @@ public:
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
         opts.addNodeTime = 0;
-        distributedDiskPath_ = testCasePath_ + "/distributed_disk";
-        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         std::stringstream ss;
-        ss << "-l2_cache_type=distributed_disk "
-           << "-distributed_disk_path=" << distributedDiskPath_ << " "
-           << "-enable_metadata_recovery=true "
+        ss << "-enable_metadata_recovery=true "
            << "-enable_reconciliation=false "
            << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
@@ -81,23 +76,19 @@ protected:
         return false;
     }
 
-    std::string distributedDiskPath_;
     static constexpr int timeoutMs_ = 5'000;
 };
 
 TEST_F(MetadataRecoveryTest, MetadataOwnerRestart)
 {
     std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client0, timeoutMs_);
+    InitTestKVClient(1, client1, timeoutMs_);
 
-    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    std::vector<std::pair<std::string, std::string>> keyValues;
-    for (uint32_t i = 0; i < OBJECT_COUNT; ++i) {
-        auto key = "metadata_recovery_" + std::to_string(i);
-        auto value = GenRandomString(128);
-        DS_ASSERT_OK(client0->Set(key, value, param));
-        keyValues.emplace_back(std::move(key), std::move(value));
-    }
+    std::string objKey = client1->GenerateKey("meta_own_worker1");
+    auto value = GenRandomString(10);
+    DS_ASSERT_OK(client0->Set(objKey, value));
 
     DS_ASSERT_OK(cluster_->KillWorker(1));
 
@@ -105,11 +96,55 @@ TEST_F(MetadataRecoveryTest, MetadataOwnerRestart)
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
     WaitAllNodesJoinIntoHashRing(2, 20);
 
-    std::shared_ptr<KVClient> client1;
     InitTestKVClient(1, client1, timeoutMs_);
-    for (const auto &keyValue : keyValues) {
-        ASSERT_TRUE(WaitUntilGetSucceeds(client1, keyValue.first, keyValue.second)) << keyValue.first;
-    }
+    ASSERT_TRUE(WaitUntilGetSucceeds(client1, objKey, value)) << objKey;
+}
+
+TEST_F(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
+{
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0, timeoutMs_);
+    InitTestKVClient(1, client1, timeoutMs_);
+
+    constexpr int ttl = 2;
+    SetParam param{ .ttlSecond = ttl };
+    std::string objKey = client1->GenerateKey("object_with_ttl_worker0");
+    auto value = GenRandomString(10);
+    DS_ASSERT_OK(client0->Set(objKey, value, param));
+    std::this_thread::sleep_for(std::chrono::milliseconds((500)));
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+    WaitAllNodesJoinIntoHashRing(1, 20);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds((ttl + 1) * S2MS));
+    std::string val;
+    ASSERT_EQ(client0->Get(objKey, val).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
+{
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0, timeoutMs_);
+    InitTestKVClient(1, client1, timeoutMs_);
+
+    constexpr int ttl = 2;
+    SetParam param{ .ttlSecond = ttl };
+    std::string objKey = client1->GenerateKey("object_with_ttl_worker0_restart");
+    auto value = GenRandomString(10);
+    DS_ASSERT_OK(client0->Set(objKey, value, param));
+    std::this_thread::sleep_for(std::chrono::milliseconds((500)));
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
+    WaitAllNodesJoinIntoHashRing(2, 20);
+
+    InitTestKVClient(1, client1, timeoutMs_);
+    std::this_thread::sleep_for(std::chrono::milliseconds((ttl + 1) * S2MS));
+    std::string val;
+    ASSERT_EQ(client1->Get(objKey, val).GetCode(), K_NOT_FOUND);
 }
 }  // namespace st
 }  // namespace datasystem

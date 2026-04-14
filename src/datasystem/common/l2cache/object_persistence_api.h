@@ -37,7 +37,7 @@ public:
     Status Init() override;
     Status Save(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
                 const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse = 0,
-                WriteMode writeMode = WriteMode::NONE_L2_CACHE) override;
+                WriteMode writeMode = WriteMode::NONE_L2_CACHE, uint32_t ttlSecond = 0) override;
     Status Get(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
                std::shared_ptr<std::stringstream> &content) override;
     Status GetWithoutVersion(const std::string &objectKey, int64_t timeoutMs, uint64_t minVersion,

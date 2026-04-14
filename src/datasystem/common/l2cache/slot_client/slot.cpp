@@ -436,7 +436,7 @@ Status Slot::WriteExclusivePayloadLocked(const std::shared_ptr<std::iostream> &b
 }
 
 Status Slot::Save(const std::string &key, uint64_t version, const std::shared_ptr<std::iostream> &body,
-                  uint64_t asyncElapse, WriteMode writeMode)
+                  uint64_t asyncElapse, WriteMode writeMode, uint32_t ttlSecond)
 {
     (void)asyncElapse;
     VLOG(1) << "Slot save begin, slotId=" << slotId_ << ", key=" << key << ", version=" << version
@@ -466,6 +466,7 @@ Status Slot::Save(const std::string &key, uint64_t version, const std::shared_pt
     record.size = payloadSize;
     record.version = version;
     record.writeMode = writeMode;
+    record.ttlSecond = ttlSecond;
     std::string encoded;
     RETURN_IF_NOT_OK(SlotIndexCodec::EncodePut(record, encoded));
     RETURN_IF_NOT_OK(writer_.AppendIndexPayload(encoded));
@@ -1319,6 +1320,7 @@ Status Slot::RunPreloadCallback(const std::vector<SlotPutRecord> &visiblePuts,
         meta.version = put.version;
         meta.writeMode = put.writeMode;
         meta.size = put.size;
+        meta.ttlSecond = put.ttlSecond;
 
         auto rc = callback(meta, content);
         if (rc.IsError()) {

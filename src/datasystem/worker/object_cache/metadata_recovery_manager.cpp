@@ -422,6 +422,7 @@ bool MetaDataRecoveryManager::FillRecoveredMeta(const std::string &objectKey, Ob
     metadata.set_data_size((*currSafeObj)->GetDataSize());
     metadata.set_life_state(static_cast<uint32_t>((*currSafeObj)->GetLifeState()));
     metadata.set_version((*currSafeObj)->GetCreateTime());
+    metadata.set_ttl_second((*currSafeObj)->GetTtlSecond());
     metadata.set_is_recovered(true);
 
     ConfigPb *configPb = metadata.mutable_config();

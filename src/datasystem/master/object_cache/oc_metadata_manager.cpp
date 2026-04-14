@@ -3866,6 +3866,9 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
         metaCache.meta.set_allocated_object_key(NULL);
         metaCache.locations[workerAddr] = AckState::ACK;
         (void)metaTable_.emplace(accessor, objectKey, metaCache);
+        if (meta.ttl_second() > 0) {
+            RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, meta.version(), meta.ttl_second()));
+        }
     }
     std::string serializedStr;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(

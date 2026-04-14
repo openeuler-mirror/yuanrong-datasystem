@@ -321,7 +321,7 @@ private:
      */
     void UpdateObjectAfterCreatingMeta(const std::vector<std::string> &objectKeys,
                                        const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
-                                       const std::vector<uint64_t> &versions);
+                                       const std::vector<uint64_t> &versions, uint32_t ttlSecond);
 
     /**
      * @brief Publish newly objects. This function will publish entry and save data to cache.

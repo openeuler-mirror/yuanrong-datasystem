@@ -126,6 +126,7 @@ struct ObjEntryParams {
     const uint64_t dataSize;
     const uint64_t metaSize;
     const int64_t createTime;
+    const uint32_t ttlSecond = 0;
     const ModeInfo &entryMode;
     const StateInfo &entryState;
     const ObjectLifeState lifeState;

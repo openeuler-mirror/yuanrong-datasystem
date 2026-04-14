@@ -40,7 +40,7 @@ Status AggregatedPersistenceApi::Init()
 
 Status AggregatedPersistenceApi::Save(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
                                       const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse,
-                                      WriteMode writeMode)
+                                      WriteMode writeMode, uint32_t ttlSecond)
 {
     INJECT_POINT("PersistenceApi.Save.timeout", [&timeoutMs](int timeout) {
         timeoutMs = timeout;
@@ -49,7 +49,7 @@ Status AggregatedPersistenceApi::Save(const std::string &objectKey, uint64_t ver
     LOG(INFO) << FormatString("invoke save object to aggregated persistence. objectKey:%s, version %llu", objectKey,
                               version);
     INJECT_POINT("persistence.service.save");
-    return storageClient_->Save(objectKey, version, timeoutMs, body, asyncElapse, writeMode);
+    return storageClient_->Save(objectKey, version, timeoutMs, body, asyncElapse, writeMode, ttlSecond);
 }
 
 Status AggregatedPersistenceApi::Get(const std::string &objectKey, uint64_t version, int64_t timeoutMs,

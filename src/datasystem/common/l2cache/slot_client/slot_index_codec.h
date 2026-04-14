@@ -47,6 +47,7 @@ struct SlotPutRecord {
     uint64_t size{ 0 };
     uint64_t version{ 0 };
     WriteMode writeMode{ WriteMode::NONE_L2_CACHE };
+    uint32_t ttlSecond{ 0 };
 };
 
 /**
