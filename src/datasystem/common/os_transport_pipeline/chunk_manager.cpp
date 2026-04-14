@@ -172,6 +172,11 @@ ReqInfo *ChunkManager::GetReqInfo(uint32_t reqId)
     return &it->second;
 }
 
+static void OsLogCallback(int level, const char* msg)
+{
+    datasystem::LogMessage((datasystem::LogSeverity)level, __FILE__, __LINE__).Stream() << msg;
+}
+
 Status ChunkManager::InitOsPiplnH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, urma_jfce_t *jfce, int threadNum)
 {
     os_transport_cfg_t cfg;
@@ -191,6 +196,7 @@ Status ChunkManager::InitOsPiplnH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, urm
     }
 
     int ret;
+    CALL_OS_XPRT_FUNC(ret, DoLogReg, FLAGS_minloglevel, OsLogCallback);
     CALL_OS_XPRT_FUNC(ret, DoInit, ctx, &cfg, &osPiplnH2DHandle_);
     if (ret == 0) {
         return Status::OK();
