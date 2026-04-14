@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="StreamClient" href="StreamClient.html"><link rel="prev" title="C++" href="index.html">
         <link rel="prefetch" href="../../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>KVClient - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=33406c05" />
@@ -315,6 +315,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -752,6 +753,47 @@ document.addEventListener('DOMContentLoaded', function() {
 </dd></dl>
 
 <dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t">
+<span id="_CPPv3N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t"></span><span id="_CPPv2N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t"></span><span id="KVClient::MGetH2D__std::vectorstd::stringCR.std::vector:std::pair:voidP.s::CR.std::vectorstd::stringR.int32_t"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">MGetH2D</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vectorstd</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">keys</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">pair</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">void</span></span><span class="p"><span class="pre">*</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">size_t</span></span><span class="p"><span class="pre">&gt;</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">devShmChunk</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vectorstd</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">outFailedKeys</span></span>, <span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">subTimeoutMs</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t" title="Link to this definition">¶</a><br /></dt>
+<dd><p>由服务端将多个键对应的值复制到设备共享内存中。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>keys</strong> - 键列表。</p></li>
+<li><p><strong>devShmChunk</strong> - 设备共享内存指针与大小的配对列表，用于指定目标设备内存地址及容量。</p></li>
+<li><p><strong>outFailedKeys</strong> - 传出参数，返回主机到设备（H2D）传输失败的键列表。</p></li>
+<li><p><strong>subTimeoutMs</strong> - 当对象未就绪时，等待结果返回的超时时长，单位毫秒。必须为非负整数，0 表示不允许等待（立即返回）。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><ul class="simple">
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示操作成功。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示 <code class="docutils literal notranslate"><span class="pre">key</span></code> 为空或参数校验不通过。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_FOUND</span></code> 表示 <code class="docutils literal notranslate"><span class="pre">key</span></code> 不存在。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code> 表示无法从 worker 获取值或服务端内部错误。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_SUPPORT</span></code> 表示 client 或 worker 不支持 MGetH2D。</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t">
+<span id="_CPPv3N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t"></span><span id="_CPPv2N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t"></span><span id="KVClient::AsyncMGetH2D__std::vectorstd::stringCR.std::vector:std::pair:voidP.s::CR.int32_t"></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_future</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="struct-AsyncResult.html#_CPPv411AsyncResult" title="AsyncResult"><span class="n"><span class="pre">AsyncResult</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">AsyncMGetH2D</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vectorstd</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">keys</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">pair</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">void</span></span><span class="p"><span class="pre">*</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">size_t</span></span><span class="p"><span class="pre">&gt;</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">devShmChunk</span></span>, <span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">subTimeoutMs</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t" title="Link to this definition">¶</a><br /></dt>
+<dd><p>由服务端异步将多个键对应的值复制到设备共享内存中。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>keys</strong> - 键列表。</p></li>
+<li><p><strong>devShmChunk</strong> - 设备共享内存指针与大小的配对列表，用于指定目标设备内存地址及容量。</p></li>
+<li><p><strong>subTimeoutMs</strong> - 当对象未就绪时，等待结果返回的超时时长，单位毫秒。必须为非负整数，0 表示不允许等待（立即返回）。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><ul class="simple">
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">std::shared_future&lt;AsyncResult&gt;</span></code> 异步任务句柄，调用方可通过该句柄查询操作状态或获取最终结果。</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t">
 <span id="_CPPv3N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t"></span><span id="_CPPv2N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t"></span><span id="KVClient::Get__ssCR.ssR.int32_t"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Get</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">key</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">val</span></span>, <span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">subTimeoutMs</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t" title="Link to this definition">¶</a><br /></dt>
 <dd><p>获取键对应的数据。</p>
@@ -1115,6 +1157,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N8KVClient4MSetERKNSt6vectorINSt10shared_ptrI6BufferEEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::MSet()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient4MSetERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERNSt6vectorINSt6stringEEERK9MSetParam"><code class="docutils literal notranslate"><span class="pre">KVClient::MSet()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam"><code class="docutils literal notranslate"><span class="pre">KVClient::MSetTx()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::MGetH2D()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::AsyncMGetH2D()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3GetERKNSt6stringER8OptionalI14ReadOnlyBufferE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3GetERKNSt6stringER8OptionalI6BufferE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></li>
@@ -1144,15 +1188,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>

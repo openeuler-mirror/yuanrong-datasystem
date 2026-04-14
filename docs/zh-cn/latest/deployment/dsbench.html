@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="最佳实践" href="../best_practices/index.html"><link rel="prev" title="kubernetes部署配置项" href="k8s_configuration.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>dsbench性能测试工具 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -315,6 +315,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -675,7 +676,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <p>参数说明：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">-c,</span> <span class="pre">--client_num</span></code>：KVClient对象的数量，即客户端数（默认：8，范围：1-128）。每个客户端是线程安全的，多个线程可以共享同一个客户端对象</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">-t,</span> <span class="pre">--thread_num</span></code>：每个客户端使用的线程数（默认：1）。实际总线程数 = client_num × thread_num</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-t,</span> <span class="pre">--thread_num</span></code>：每个客户端使用的线程数（默认：1）。实际总线程数 = client_num × thread_num（总线程数范围：1-128）</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">-b,</span> <span class="pre">--batch_num</span></code>：每批处理的请求数量（默认：1，范围：1-10000）</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">-n,</span> <span class="pre">--num</span></code>：每个worker进程的key数量，会被均匀分配给所有线程（默认：100）</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">-s,</span> <span class="pre">--size</span></code>：数据大小（默认：1MB，支持2B/4KB/8MB/1GB等格式，也可以直接写数字，单位为字节）</p></li>
@@ -835,7 +836,7 @@ dsbench<span class="w"> </span>--min_log_level<span class="o">=</span><span clas
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-t,</span> <span class="pre">--thread_num</span></code></p></td>
 <td><p>整数</p></td>
-<td><p>每个客户端使用的线程数（默认：1）。实际总线程数 = client_num × thread_num</p></td>
+<td><p>每个客户端使用的线程数（默认：1）。实际总线程数 = client_num × thread_num(总线程数范围：1-128)</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-b,</span> <span class="pre">--batch_num</span></code></p></td>
 <td><p>整数</p></td>
@@ -1028,15 +1029,15 @@ dsbench<span class="w"> </span>--min_log_level<span class="o">=</span><span clas
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>

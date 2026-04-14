@@ -1,0 +1,1722 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="设计文档" href="../design_document/index.html"><link rel="prev" title="RH2D最佳实践" href="best_practices_for_rh2d.html">
+        <link rel="prefetch" href="../_static/logo-small.png" as="image">
+
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践 - openYuanrong datasystem documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #3498db;
+  --color-brand-content: #3498db;
+  --color-api-background: #f8f9fa;
+  --color-api-name: #2c3e50;
+  --color-api-pre-name: #2c3e50;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+      }
+    }
+  }
+</style>
+<style>
+/* 版本切换器样式 */
+.sidebar-version-switcher {
+  padding: 10px 15px;
+  border-top: 1px solid var(--color-sidebar-border);
+  border-bottom: 1px solid var(--color-sidebar-border);
+  background-color: var(--color-sidebar-background);
+}
+
+.sidebar-version-switcher-label {
+  font-size: 0.8em;
+  color: var(--color-sidebar-caption-text);
+  margin-bottom: 5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#version-selector {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-brand-primary);
+  border-radius: 4px;
+  background-color: var(--color-background-primary);
+  color: var(--color-brand-primary);
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#version-selector:hover {
+  border-color: var(--color-brand-content);
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
+}
+
+#version-selector:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.5);
+}
+</style>
+</head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">openYuanrong datasystem  documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+<div class="sidebar-brand">
+  <a class="sidebar-brand-text" href="../index.html">
+    
+      <img src="../_static/logo-small.png" class="sidebar-logo" alt="Logo">
+    
+  </a>
+  <a href="https://gitcode.com/openeuler/yuanrong-datasystem" target="_blank" class="sidebar-brand-name">openYuanrong datasystem</a>
+</div>
+
+<!-- Version Switcher in Sidebar -->
+<div class="sidebar-version-switcher">
+  <select id="version-selector" onchange="switchVersion(this.value)">
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/">Latest</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.7.0/">0.7.0</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.6.0/">0.6.0</option>
+  </select>
+</div>
+
+<script>
+function switchVersion(url) {
+  if (url && url !== '#') {
+    // 获取当前页面路径，替换版本前缀
+    var currentPath = window.location.pathname;
+    var newUrl = url + currentPath.split('/').slice(5).join('/');
+    window.location.href = newUrl;
+  }
+}
+
+// 设置当前版本的选中状态
+document.addEventListener('DOMContentLoaded', function() {
+  var selector = document.getElementById('version-selector');
+  if (selector) {
+    var currentHref = window.location.href;
+    var options = selector.options;
+
+    for (var i = 0; i < options.length; i++) {
+      if (currentHref.includes(options[i].value)) {
+        selector.selectedIndex = i;
+        break;
+      }
+    }
+  }
+});
+</script>
+
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quick_start/quick_start.html">入门</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../installation/index.html">安装</a><input aria-label="Toggle navigation of 安装" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../installation/installation_linux.html">安装指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/cmake_build.html">基于Cmake自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/bazel_build.html">基于Bazel自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/build_for_bazel.html">Bazel编译源码集成SDK</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><input aria-label="Toggle navigation of 部署" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">kubernetes部署配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dsbench.html">dsbench性能测试工具</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/cluster_management.html">集群管理</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/example/index.html">编程示例</a><input aria-label="Toggle navigation of 编程示例" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/hetero.html">HeteroClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/kv.html">KVClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/object.html">ObjectClient编程示例</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/api/index.html">API</a><input aria-label="Toggle navigation of API" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/python/index.html">Python</a><input aria-label="Toggle navigation of Python" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><input aria-label="Toggle navigation of yr.datasystem.DsClient" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.kv.html">yr.datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><input aria-label="Toggle navigation of yr.datasystem.DsTensorClient" class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" role="switch" type="checkbox"/><label for="toctree-checkbox-10"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mset_d2h.html">yr.datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mget_h2d.html">yr.datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.HeteroClient" class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" role="switch" type="checkbox"/><label for="toctree-checkbox-11"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_publish.html">yr.datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mset.html">yr.datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mget.html">yr.datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.html">yr.datasystem.hetero_client.Blob</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Blob" class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" role="switch" type="checkbox"/><label for="toctree-checkbox-12"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_dev_ptr.html">yr.datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_size.html">yr.datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.html">yr.datasystem.hetero_client.DeviceBlobList</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.DeviceBlobList" class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" role="switch" type="checkbox"/><label for="toctree-checkbox-13"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.append_blob.html">yr.datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.get_blob_list.html">yr.datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.html">yr.datasystem.hetero_client.Future</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Future" class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" role="switch" type="checkbox"/><label for="toctree-checkbox-14"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.get.html">yr.datasystem.hetero_client.Future.get</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.MetaInfo.html">yr.datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.html">yr.datasystem.kv_client.KVClient</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.KVClient" class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" role="switch" type="checkbox"/><label for="toctree-checkbox-15"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.init.html">yr.datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.read.html">yr.datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.delete.html">yr.datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.ReadOnlyBuffer" class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" role="switch" type="checkbox"/><label for="toctree-checkbox-16"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.rlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><input aria-label="Toggle navigation of yr.datasystem.object_client.ObjectClient" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" role="switch" type="checkbox"/><label for="toctree-checkbox-17"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><input aria-label="Toggle navigation of yr.datasystem.object_client.Buffer" class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" role="switch" type="checkbox"/><label for="toctree-checkbox-18"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.wlatch.html">yr.datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unwlatch.html">yr.datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.rlatch.html">yr.datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unrlatch.html">yr.datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.mutable_data.html">yr.datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.immutable_data.html">yr.datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.memory_copy.html">yr.datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.publish.html">yr.datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.seal.html">yr.datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.invalidate_buffer.html">yr.datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.get_size.html">yr.datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ConsistencyType.html">yr.datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.WriteMode.html">yr.datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.CacheType.html">yr.datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.html">yr.datasystem.stream_client.StreamClient</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.StreamClient" class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" role="switch" type="checkbox"/><label for="toctree-checkbox-19"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.init.html">yr.datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.create_producer.html">yr.datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.subscribe.html">yr.datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.delete_stream.html">yr.datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_producer_num.html">yr.datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_consumer_num.html">yr.datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.html">yr.datasystem.stream_client.Producer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Producer" class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" role="switch" type="checkbox"/><label for="toctree-checkbox-20"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.send.html">yr.datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.close.html">yr.datasystem.stream_client.Producer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.html">yr.datasystem.stream_client.Consumer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Consumer" class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" role="switch" type="checkbox"/><label for="toctree-checkbox-21"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive.html">yr.datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive_any.html">yr.datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.ack.html">yr.datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.close.html">yr.datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.SubconfigType.html">yr.datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MSetParam.html">MSetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/client_env_guide.html">Client环境变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="vllm-ascendopenyuanrong">
+<h1>vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践<a class="headerlink" href="#vllm-ascendopenyuanrong" title="Link to this heading">¶</a></h1>
+<section id="id1">
+<h2>背景介绍<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<p>本指南以 GLM-5 模型部署为例，提供在 Atlas 800T/I A2 服务器（双机）或 Atlas 800T/I A3 服务器（单机）上使用 Yuanrong Datasystem 作为 KV Cache 多级缓存后端的详细部署步骤。</p>
+<p>GLM-5 是采用混合专家架构的高效推理模型，专为复杂系统工程和长时序智能体任务设计。使用 Yuanrong 作为 KV Pool 后端可以实现高效的 KV Cache 存储和请求间的复用。
+<img alt="Yuanronng 部署架构图" src="../_images/images_deployment.png" /></p>
+<section id="id2">
+<h3>部署环境准备<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>GLM-5 单实例部署所需的软硬件环境依赖如下：</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-0">
+配置方案一：Atlas A3</label><div class="sd-tab-content docutils">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>软硬件名称</p></th>
+<th class="head"><p>版本/规格</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Atlas 800T/I A3（单机）</p></td>
+<td><p>16张NPU卡(每张64G显存)</p></td>
+<td><p>运行异构大模型推理的物理硬件，需已配置 RoCE 网络以获得最佳性能</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id3">vllm-ascend Docker 镜像</a></p></td>
+<td><p>“vllm-ascend:0.18.0rc1”</p></td>
+<td><p>提供包含 vLLM、CANN 等预配置的容器运行环境</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#id3">GLM-5 模型</a></p></td>
+<td><p>-</p></td>
+<td><p>智能体应用设计的高效推理模型权重</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#openyuanrong-datasystem">openYuanrong datasystem</a></p></td>
+<td><p>-</p></td>
+<td><p>提供 KV Cache 外部存储与复用的核心组件</p></td>
+</tr>
+<tr class="row-even"><td><p>etcd</p></td>
+<td><p>3.5</p></td>
+<td><p>Datasystem 集群与节点管理依赖组件</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-1">
+配置方案二：Atlas A2</label><div class="sd-tab-content docutils">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>软硬件名称</p></th>
+<th class="head"><p>版本/规格</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Atlas 800T/I A2(双机)</p></td>
+<td><p>8张NPU卡(每张64G显存)</p></td>
+<td><p>运行异构大模型推理的物理硬件，需已配置 RoCE 网络以获得最佳性能</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#id3">vllm-ascend Docker 镜像</a></p></td>
+<td><p>“vllm-ascend:0.18.0rc1”</p></td>
+<td><p>提供包含 vLLM、CANN 等预配置的容器运行环境</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#id3">GLM-5 模型</a></p></td>
+<td><p>-</p></td>
+<td><p>智能体应用设计的高效推理模型权重</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#openyuanrong-datasystem">openYuanrong datasystem</a></p></td>
+<td><p>-</p></td>
+<td><p>提供 KV Cache 外部存储与复用的核心组件</p></td>
+</tr>
+<tr class="row-even"><td><p>etcd</p></td>
+<td><p>3.5</p></td>
+<td><p>Datasystem 集群与节点管理依赖组件</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>下面给出以上依赖的获取与环境准备方法。</p>
+</section>
+<section id="id3">
+<h3>获取与运行基础环境<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<p><strong>1. 准备模型权重</strong></p>
+<p>下载 GLM-5 W4A8 模型权重并放置到宿主机指定目录，例如 <code class="docutils literal notranslate"><span class="pre">/home/models/GLM-5-w4a8/</span></code>。
+下载地址：<a class="reference external" href="https://modelscope.cn/models/Eco-Tech/GLM-5-w4a8">魔搭社区</a></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 下载命令</span>
+pip<span class="w"> </span>install<span class="w"> </span>modelscope
+modelscope<span class="w"> </span>download<span class="w"> </span>--model<span class="w"> </span>Eco-Tech/GLM-5-w4a8<span class="w"> </span>--local_dir<span class="w"> </span>/home/models
+</pre></div>
+</div>
+<p><strong>2. 下载 Docker 镜像</strong></p>
+<p>本教程使用的 Docker 镜像版本为 ‘vllm-ascend:0.18.0rc1’。</p>
+<blockquote>
+<div><p><strong>版本兼容性说明：</strong>
+请确保vLLM-ascend镜像版本不低于0.18.0rc1。在版本及后续版本中，系统已支持Yuanrong Datasystem作为多级缓存后端。</p>
+</div></blockquote>
+<p>如本地尚未下载，可按机器类型执行如下命令：</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-2">
+A2 双机</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>quay.io/ascend/vllm-ascend:0.18.0rc1
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-3">
+A3 单机</label><div class="sd-tab-content docutils">
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>quay.io/ascend/vllm-ascend:0.18.0rc1-a3
+</pre></div>
+</div>
+</div>
+</div>
+<blockquote>
+<div><p>提示：如果下载较慢，可将 quay.io 替换为 m.daocloud.io/quay.io 或 quay.nju.edu.cn 以加速拉取。更多镜像说明可参考<a class="reference internal" href="#../../installation.md#set-up-using-docker"><span class="xref myst">安装文档</span></a>。</p>
+</div></blockquote>
+<p><strong>3. 启动 Docker 容器</strong></p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-4">
+A2 双机</label><div class="sd-tab-content docutils">
+<p>在两个节点上分别启动包含 8 张 NPU 卡的 Docker 容器：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">IMAGE</span><span class="o">=</span>quay.io/ascend/vllm-ascend:0.18.0rc1
+<span class="nb">export</span><span class="w"> </span><span class="nv">NAME</span><span class="o">=</span>vllm-ascend
+
+docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--name<span class="w"> </span><span class="nv">$NAME</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--shm-size<span class="o">=</span>1g<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--net<span class="o">=</span>host<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci0<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci1<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci2<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci3<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci4<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci5<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci6<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci7<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci_manager<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/devmm_svm<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/hisi_hdc<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/dcmi:/usr/local/dcmi<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/bin/npu-smi:/usr/local/bin/npu-smi<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/etc/ascend_install.info:/etc/ascend_install.info<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/etc/hccn.conf:/etc/hccn.conf<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/root/.cache:/root/.cache<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-it<span class="w"> </span><span class="nv">$IMAGE</span><span class="w"> </span>bash
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-5">
+A3 单机</label><div class="sd-tab-content docutils">
+<p>启动包含 16 张 NPU 卡的 Docker 容器：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">IMAGE</span><span class="o">=</span>quay.io/ascend/vllm-ascend:0.18.0rc1-a3
+<span class="nb">export</span><span class="w"> </span><span class="nv">NAME</span><span class="o">=</span>vllm-ascend
+
+docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--name<span class="w"> </span><span class="nv">$NAME</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--shm-size<span class="o">=</span>1g<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--net<span class="o">=</span>host<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci0<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci1<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci2<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci3<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci4<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci5<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci6<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci7<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci8<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci9<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci10<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci11<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci12<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci13<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci14<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci15<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/davinci_manager<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/devmm_svm<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--device<span class="w"> </span>/dev/hisi_hdc<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/dcmi:/usr/local/dcmi<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/bin/npu-smi:/usr/local/bin/npu-smi<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/etc/ascend_install.info:/etc/ascend_install.info<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/etc/hccn.conf:/etc/hccn.conf<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/root/.cache:/root/.cache<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-it<span class="w"> </span><span class="nv">$IMAGE</span><span class="w"> </span>bash
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+</section>
+<section id="openyuanrong-datasystem">
+<h2>安装 openYuanrong datasystem<a class="headerlink" href="#openyuanrong-datasystem" title="Link to this heading">¶</a></h2>
+<p>根据部署环境的网络情况，选择在线或离线安装方式。</p>
+<section id="id4">
+<h3>在线安装<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h3>离线安装<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>离线安装请参考<a class="reference external" href="https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/deploy/installation.html">安装指南</a></p>
+<p>验证安装：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import yr.datasystem; print(&#39;Yuanrong Datasystem 安装成功&#39;)&quot;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id6">
+<h2>部署openYuanrong datasystem<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<p>本教程为单实例部署方式，etcd 和 Datasystem Worker 均在 vLLM-Ascend 容器内启动。</p>
+<section id="yuanrong">
+<h3>启动 Yuanrong 服务<a class="headerlink" href="#yuanrong" title="Link to this heading">¶</a></h3>
+<p>在每个节点上部署都需要启动 etcd 和 Datasystem Worker，如果是双机部署需要连接同一个etcd。</p>
+<p>创建启动脚本 <code class="docutils literal notranslate"><span class="pre">run_yr.sh</span></code>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/bin/bash</span>
+
+<span class="c1"># 配置参数</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HOST_IP</span><span class="o">=</span><span class="s2">&quot;&lt;您的节点IP地址&gt;&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">ETCD_IP</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">HOST_IP</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">WORKER_PORT</span><span class="o">=</span><span class="m">18481</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">ETCD_PORT</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">ETCD_PORT</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SHM_SIZE</span><span class="o">=</span><span class="m">512000</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">NODE_TIMEOUT</span><span class="o">=</span><span class="m">30</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">NODE_DEAD_TIMEOUT</span><span class="o">=</span><span class="m">60</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LIVENESS_PATH</span><span class="o">=</span>/workspace/liveness
+
+<span class="c1"># 启动 etcd（单实例模式）</span>
+etcd<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--name<span class="w"> </span>etcd-single<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-dir<span class="w"> </span>/tmp/etcd-data<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--listen-client-urls<span class="w"> </span>http://0.0.0.0:<span class="si">${</span><span class="nv">ETCD_PORT</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--advertise-client-urls<span class="w"> </span>http://<span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span>:<span class="si">${</span><span class="nv">ETCD_PORT</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--listen-peer-urls<span class="w"> </span>http://0.0.0.0:2380<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--initial-advertise-peer-urls<span class="w"> </span>http://<span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span>:2380<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--initial-cluster<span class="w"> </span>etcd-single<span class="o">=</span>http://<span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span>:2380<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>&gt;<span class="w"> </span>/tmp/etcd.log<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">&amp;</span>
+
+<span class="c1"># 等待 etcd 启动</span>
+sleep<span class="w"> </span><span class="m">3</span>
+
+<span class="c1"># 验证 etcd 是否正常运行</span>
+etcdctl<span class="w"> </span>--endpoints<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span><span class="s2">:</span><span class="si">${</span><span class="nv">ETCD_PORT</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>put<span class="w"> </span>key<span class="w"> </span><span class="s2">&quot;value&quot;</span>
+etcdctl<span class="w"> </span>--endpoints<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span><span class="s2">:</span><span class="si">${</span><span class="nv">ETCD_PORT</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>get<span class="w"> </span>key
+
+<span class="c1"># 启动 Datasystem Worker</span>
+dscli<span class="w"> </span>start<span class="w"> </span>-w<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--worker_address<span class="w"> </span><span class="si">${</span><span class="nv">HOST_IP</span><span class="si">}</span>:<span class="si">${</span><span class="nv">WORKER_PORT</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--etcd_address<span class="w"> </span><span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span>:<span class="si">${</span><span class="nv">ETCD_PORT</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--shared_memory_size_mb<span class="w"> </span><span class="si">${</span><span class="nv">SHM_SIZE</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--node_timeout_s<span class="w"> </span><span class="si">${</span><span class="nv">NODE_TIMEOUT</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--node_dead_timeout_s<span class="w"> </span><span class="si">${</span><span class="nv">NODE_DEAD_TIMEOUT</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--liveness_check_path<span class="w"> </span><span class="si">${</span><span class="nv">LIVENESS_PATH</span><span class="si">}</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Yuanrong 服务启动完成&quot;</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;etcd 日志: /tmp/etcd.log&quot;</span>
+</pre></div>
+</div>
+<p>如果想要使用多副本模式启动etcd：</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://etcd.io/docs/v3.6/dev-guide/">官方集群指南（Clustering Guide）</a></p></li>
+<li><p><a class="reference external" href="https://github.com/etcd-io/etcd/blob/main/README.md">Github 运维指南（Operation Guide）</a></p></li>
+</ul>
+<p>运行脚本：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>run_yr.sh
+</pre></div>
+</div>
+<blockquote>
+<div><p><strong>参考文档</strong>：<a class="reference external" href="https://etcd.io/docs/">etcd 官方文档</a>，了解更多参数配置。</p>
+<p><strong>生产环境建议</strong>：上述示例为单实例部署，适用于测试和开发环境。对于可靠性要求较高的生产环境，建议部署 etcd 集群（通常 3 或 5 个节点）。集群部署请参考 <a class="reference external" href="https://etcd.io/docs/latest/op-guide/clustering/">etcd 集群部署指南</a>。</p>
+</div></blockquote>
+<section id="datasystem-worker">
+<h4>Datasystem Worker 参数说明<a class="headerlink" href="#datasystem-worker" title="Link to this heading">¶</a></h4>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>worker_address</p></td>
+<td><p>${HOST_IP}:${WORKER_PORT}</p></td>
+<td><p>Worker 服务地址和端口</p></td>
+</tr>
+<tr class="row-odd"><td><p>etcd_address</p></td>
+<td><p>${ETCD_IP}:${ETCD_PORT}</p></td>
+<td><p>etcd 服务发现地址</p></td>
+</tr>
+<tr class="row-even"><td><p>shared_memory_size_mb</p></td>
+<td><p>${SHM_SIZE} (512000)</p></td>
+<td><p>共享内存大小（500 GB）</p></td>
+</tr>
+<tr class="row-odd"><td><p>node_timeout_s</p></td>
+<td><p>${NODE_TIMEOUT} (600)</p></td>
+<td><p>节点超时时间（秒）</p></td>
+</tr>
+<tr class="row-even"><td><p>node_dead_timeout_s</p></td>
+<td><p>${NODE_DEAD_TIMEOUT} (600000)</p></td>
+<td><p>节点死亡超时时间（毫秒）</p></td>
+</tr>
+<tr class="row-odd"><td><p>liveness_check_path</p></td>
+<td><p>${LIVENESS_PATH}</p></td>
+<td><p>存活检查路径</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<div><p><strong>参考文档</strong>：<a class="reference external" href="https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/deploy/deploy_processes/parameters.html#data-system">Yuanrong Datasystem 文档</a>，了解更多 worker 参数和环境变量配置。</p>
+</div></blockquote>
+<p>停止 Worker:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="si">${</span><span class="nv">HOST_IP</span><span class="si">}</span>:<span class="si">${</span><span class="nv">WORKER_PORT</span><span class="si">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="glm-5">
+<h2>部署 GLM-5 模型<a class="headerlink" href="#glm-5" title="Link to this heading">¶</a></h2>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-6" name="sd-tab-set-3" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-6">
+A3 单机部署</label><div class="sd-tab-content docutils">
+<p>创建启动脚本 <code class="docutils literal notranslate"><span class="pre">run_glm5_w4a8_yuanrong_a3.sh</span></code>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/bin/bash</span>
+
+<span class="c1"># NPU 性能优化配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_OP_EXPANSION_MODE</span><span class="o">=</span><span class="s2">&quot;AIV&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OMP_PROC_BIND</span><span class="o">=</span><span class="nb">false</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OMP_NUM_THREADS</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_BUFFSIZE</span><span class="o">=</span><span class="m">200</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTORCH_NPU_ALLOC_CONF</span><span class="o">=</span>expandable_segments:True
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ASCEND_BALANCE_SCHEDULING</span><span class="o">=</span><span class="m">1</span>
+
+<span class="c1"># vLLM 配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_USE_V1</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ENGINE_READY_TIMEOUT_S</span><span class="o">=</span><span class="m">1800</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONHASHSEED</span><span class="o">=</span><span class="m">0</span>
+
+<span class="c1"># Yuanrong Datasystem 配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_WORKER_ADDR</span><span class="o">=</span><span class="s2">&quot;&lt;您的节点IP&gt;:18481&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_H2D_MEMCPY_POLICY</span><span class="o">=</span><span class="s2">&quot;direct&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_D2H_MEMCPY_POLICY</span><span class="o">=</span><span class="s2">&quot;direct&quot;</span>
+<span class="nb">unset</span><span class="w"> </span>GOOGLE_LOGTOSTDERR<span class="w"> </span>GOOGLE_ALSOLOGTOSTDERR
+
+<span class="nv">MODEL_PATH</span><span class="o">=</span><span class="s2">&quot;/home/models/GLM-5-w4a8&quot;</span>
+
+vllm<span class="w"> </span>serve<span class="w"> </span><span class="nv">$MODEL_PATH</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">1025</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-size<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--tensor-parallel-size<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-expert-parallel<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--seed<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--served-model-name<span class="w"> </span>glm-5<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-num-seqs<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-model-len<span class="w"> </span><span class="m">200000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-num-batched-tokens<span class="w"> </span><span class="m">4096</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--trust-remote-code<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--gpu-memory-utilization<span class="w"> </span><span class="m">0</span>.95<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--quantization<span class="w"> </span>ascend<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-chunked-prefill<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-prefix-caching<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--async-scheduling<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--additional-config<span class="w"> </span><span class="s1">&#39;{&quot;multistream_overlap_shared_expert&quot;:true}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--speculative-config<span class="w"> </span><span class="s1">&#39;{&quot;num_speculative_tokens&quot;: 3, &quot;method&quot;: &quot;deepseek_mtp&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--compilation-config<span class="w"> </span><span class="s1">&#39;{&quot;cudagraph_mode&quot;: &quot;FULL_DECODE_ONLY&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--kv-transfer-config<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">      &quot;kv_connector&quot;: &quot;AscendStoreConnector&quot;,</span>
+<span class="s1">      &quot;kv_role&quot;: &quot;kv_both&quot;,</span>
+<span class="s1">      &quot;kv_connector_extra_config&quot;: {</span>
+<span class="s1">          &quot;lookup_rpc_port&quot;: &quot;0&quot;,</span>
+<span class="s1">          &quot;backend&quot;: &quot;yuanrong&quot;</span>
+<span class="s1">      }</span>
+<span class="s1">  }&#39;</span><span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span>./glm-5_yuanrong.log
+</pre></div>
+</div>
+</div>
+<input id="sd-tab-item-7" name="sd-tab-set-3" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-7">
+A2 双机部署</label><div class="sd-tab-content docutils">
+<p>在两个节点上分别创建启动脚本。</p>
+<p><strong>节点 0</strong> 创建 <code class="docutils literal notranslate"><span class="pre">run_glm5_w4a8_yuanrong_a2_node0.sh</span></code>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/bin/bash</span>
+
+<span class="c1"># 网络配置 - 根据实际环境修改</span>
+<span class="nv">nic_name</span><span class="o">=</span><span class="s2">&quot;bond0&quot;</span>
+<span class="nv">local_ip</span><span class="o">=</span><span class="s2">&quot;100.100.135.173&quot;</span>
+<span class="nv">node0_ip</span><span class="o">=</span><span class="s2">&quot;100.100.135.173&quot;</span>
+
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_OP_EXPANSION_MODE</span><span class="o">=</span><span class="s2">&quot;AIV&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_IF_IP</span><span class="o">=</span><span class="nv">$local_ip</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">GLOO_SOCKET_IFNAME</span><span class="o">=</span><span class="nv">$nic_name</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TP_SOCKET_IFNAME</span><span class="o">=</span><span class="nv">$nic_name</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_SOCKET_IFNAME</span><span class="o">=</span><span class="nv">$nic_name</span>
+
+<span class="c1"># NPU 性能优化配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OMP_PROC_BIND</span><span class="o">=</span><span class="nb">false</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OMP_NUM_THREADS</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_BUFFSIZE</span><span class="o">=</span><span class="m">200</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ASCEND_BALANCE_SCHEDULING</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTORCH_NPU_ALLOC_CONF</span><span class="o">=</span>expandable_segments:True
+
+<span class="c1"># vLLM 配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_USE_V1</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ENGINE_READY_TIMEOUT_S</span><span class="o">=</span><span class="m">1800</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONHASHSEED</span><span class="o">=</span><span class="m">0</span>
+
+<span class="c1"># Yuanrong Datasystem 配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_WORKER_ADDR</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">local_ip</span><span class="si">}</span><span class="s2">:18481&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_H2D_MEMCPY_POLICY</span><span class="o">=</span><span class="s2">&quot;direct&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_D2H_MEMCPY_POLICY</span><span class="o">=</span><span class="s2">&quot;direct&quot;</span>
+<span class="nb">unset</span><span class="w"> </span>GOOGLE_LOGTOSTDERR<span class="w"> </span>GOOGLE_ALSOLOGTOSTDERR
+
+<span class="nv">MODEL_PATH</span><span class="o">=</span><span class="s2">&quot;/home/models/GLM-5-w4a8&quot;</span>
+
+vllm<span class="w"> </span>serve<span class="w"> </span><span class="nv">$MODEL_PATH</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">1025</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-size<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-size-local<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-address<span class="w"> </span><span class="nv">$node0_ip</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-rpc-port<span class="w"> </span><span class="m">12890</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--tensor-parallel-size<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--quantization<span class="w"> </span>ascend<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--seed<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--served-model-name<span class="w"> </span>glm-5<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-expert-parallel<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-num-seqs<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-model-len<span class="w"> </span><span class="m">131072</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-num-batched-tokens<span class="w"> </span><span class="m">4096</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--trust-remote-code<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--gpu-memory-utilization<span class="w"> </span><span class="m">0</span>.95<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--compilation-config<span class="w"> </span><span class="s1">&#39;{&quot;cudagraph_mode&quot;: &quot;FULL_DECODE_ONLY&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--additional-config<span class="w"> </span><span class="s1">&#39;{&quot;multistream_overlap_shared_expert&quot;:true}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--speculative-config<span class="w"> </span><span class="s1">&#39;{&quot;num_speculative_tokens&quot;: 3, &quot;method&quot;: &quot;deepseek_mtp&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-chunked-prefill<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-prefix-caching<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--async-scheduling<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--kv-transfer-config<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">      &quot;kv_connector&quot;: &quot;AscendStoreConnector&quot;,</span>
+<span class="s1">      &quot;kv_role&quot;: &quot;kv_both&quot;,</span>
+<span class="s1">      &quot;kv_connector_extra_config&quot;: {</span>
+<span class="s1">          &quot;lookup_rpc_port&quot;: &quot;0&quot;,</span>
+<span class="s1">          &quot;backend&quot;: &quot;yuanrong&quot;</span>
+<span class="s1">      }</span>
+<span class="s1">  }&#39;</span><span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span>./glm-5_yuanrong.log
+</pre></div>
+</div>
+<p><strong>节点 1</strong> 创建 <code class="docutils literal notranslate"><span class="pre">run_glm5_w4a8_yuanrong_a2_node1.sh</span></code>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/bin/bash</span>
+
+<span class="c1"># 网络配置 - 根据实际环境修改</span>
+<span class="nv">nic_name</span><span class="o">=</span><span class="s2">&quot;enp61s0f2&quot;</span>
+<span class="nv">local_ip</span><span class="o">=</span><span class="s2">&quot;100.100.135.190&quot;</span>
+<span class="nv">node0_ip</span><span class="o">=</span><span class="s2">&quot;100.100.135.173&quot;</span>
+
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_OP_EXPANSION_MODE</span><span class="o">=</span><span class="s2">&quot;AIV&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_IF_IP</span><span class="o">=</span><span class="nv">$local_ip</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">GLOO_SOCKET_IFNAME</span><span class="o">=</span><span class="nv">$nic_name</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TP_SOCKET_IFNAME</span><span class="o">=</span><span class="nv">$nic_name</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_SOCKET_IFNAME</span><span class="o">=</span><span class="nv">$nic_name</span>
+
+<span class="c1"># NPU 性能优化配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OMP_PROC_BIND</span><span class="o">=</span><span class="nb">false</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OMP_NUM_THREADS</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_BUFFSIZE</span><span class="o">=</span><span class="m">200</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ASCEND_BALANCE_SCHEDULING</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTORCH_NPU_ALLOC_CONF</span><span class="o">=</span>expandable_segments:True
+
+<span class="c1"># vLLM 配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_USE_V1</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ENGINE_READY_TIMEOUT_S</span><span class="o">=</span><span class="m">1800</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONHASHSEED</span><span class="o">=</span><span class="m">0</span>
+
+<span class="c1"># Yuanrong Datasystem 配置</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_WORKER_ADDR</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">local_ip</span><span class="si">}</span><span class="s2">:18481&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_H2D_MEMCPY_POLICY</span><span class="o">=</span><span class="s2">&quot;direct&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DS_D2H_MEMCPY_POLICY</span><span class="o">=</span><span class="s2">&quot;direct&quot;</span>
+<span class="nb">unset</span><span class="w"> </span>GOOGLE_LOGTOSTDERR<span class="w"> </span>GOOGLE_ALSOLOGTOSTDERR
+
+<span class="nv">MODEL_PATH</span><span class="o">=</span><span class="s2">&quot;/home/models/GLM-5-w4a8&quot;</span>
+
+vllm<span class="w"> </span>serve<span class="w"> </span><span class="nv">$MODEL_PATH</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">1026</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--headless<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-size<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-size-local<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-start-rank<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-address<span class="w"> </span><span class="nv">$node0_ip</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-parallel-rpc-port<span class="w"> </span><span class="m">12890</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--tensor-parallel-size<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--quantization<span class="w"> </span>ascend<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--seed<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--served-model-name<span class="w"> </span>glm-5<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-expert-parallel<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-num-seqs<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-model-len<span class="w"> </span><span class="m">131072</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-num-batched-tokens<span class="w"> </span><span class="m">4096</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--trust-remote-code<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--gpu-memory-utilization<span class="w"> </span><span class="m">0</span>.95<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--compilation-config<span class="w"> </span><span class="s1">&#39;{&quot;cudagraph_mode&quot;: &quot;FULL_DECODE_ONLY&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--additional-config<span class="w"> </span><span class="s1">&#39;{&quot;multistream_overlap_shared_expert&quot;:true}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--speculative-config<span class="w"> </span><span class="s1">&#39;{&quot;num_speculative_tokens&quot;: 3, &quot;method&quot;: &quot;deepseek_mtp&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-chunked-prefill<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--enable-prefix-caching<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--async-scheduling<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--kv-transfer-config<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">      &quot;kv_connector&quot;: &quot;AscendStoreConnector&quot;,</span>
+<span class="s1">      &quot;kv_role&quot;: &quot;kv_both&quot;,</span>
+<span class="s1">      &quot;kv_connector_extra_config&quot;: {</span>
+<span class="s1">          &quot;lookup_rpc_port&quot;: &quot;1&quot;,</span>
+<span class="s1">          &quot;backend&quot;: &quot;yuanrong&quot;</span>
+<span class="s1">      }</span>
+<span class="s1">  }&#39;</span><span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span>-a<span class="w"> </span>./glm-5_yuanrong.log
+</pre></div>
+</div>
+</div>
+</div>
+<section id="id7">
+<h3>配置参数说明<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-8" name="sd-tab-set-4" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-8">
+A3 单机参数</label><div class="sd-tab-content docutils">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>tensor-parallel-size</p></td>
+<td><p>16</p></td>
+<td><p>使用 16 张 NPU 卡</p></td>
+</tr>
+<tr class="row-odd"><td><p>data-parallel-size</p></td>
+<td><p>1</p></td>
+<td><p>数据并行大小</p></td>
+</tr>
+<tr class="row-even"><td><p>max-model-len</p></td>
+<td><p>200000</p></td>
+<td><p>最大上下文长度</p></td>
+</tr>
+<tr class="row-odd"><td><p>max-num-batched-tokens</p></td>
+<td><p>4096</p></td>
+<td><p>最大批处理 token 数</p></td>
+</tr>
+<tr class="row-even"><td><p>max-num-seqs</p></td>
+<td><p>8</p></td>
+<td><p>最大并发序列数</p></td>
+</tr>
+<tr class="row-odd"><td><p>gpu-memory-utilization</p></td>
+<td><p>0.95</p></td>
+<td><p>GPU 显存利用率</p></td>
+</tr>
+<tr class="row-even"><td><p>quantization</p></td>
+<td><p>ascend</p></td>
+<td><p>使用 Ascend 量化</p></td>
+</tr>
+<tr class="row-odd"><td><p>enable-expert-parallel</p></td>
+<td><p>(标志)</p></td>
+<td><p>启用 MoE 专家并行</p></td>
+</tr>
+<tr class="row-even"><td><p>enable-chunked-prefill</p></td>
+<td><p>(标志)</p></td>
+<td><p>启用分块预填充</p></td>
+</tr>
+<tr class="row-odd"><td><p>enable-prefix-caching</p></td>
+<td><p>(标志)</p></td>
+<td><p>启用前缀缓存</p></td>
+</tr>
+<tr class="row-even"><td><p>async-scheduling</p></td>
+<td><p>(标志)</p></td>
+<td><p>启用异步调度</p></td>
+</tr>
+<tr class="row-odd"><td><p>kv_connector</p></td>
+<td><p>AscendStoreConnector</p></td>
+<td><p>使用 AscendStoreConnector</p></td>
+</tr>
+<tr class="row-even"><td><p>kv_role</p></td>
+<td><p>kv_both</p></td>
+<td><p>同时支持生产和消费</p></td>
+</tr>
+<tr class="row-odd"><td><p>backend</p></td>
+<td><p>yuanrong</p></td>
+<td><p>使用 Yuanrong 后端</p></td>
+</tr>
+<tr class="row-even"><td><p>lookup_rpc_port</p></td>
+<td><p>0</p></td>
+<td><p>RPC 查找端口</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<input id="sd-tab-item-9" name="sd-tab-set-4" type="radio">
+<label class="sd-tab-label" for="sd-tab-item-9">
+A2 双机参数</label><div class="sd-tab-content docutils">
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>tensor-parallel-size</p></td>
+<td><p>8</p></td>
+<td><p>每节点使用 8 张 NPU 卡</p></td>
+</tr>
+<tr class="row-odd"><td><p>data-parallel-size</p></td>
+<td><p>2</p></td>
+<td><p>数据并行大小（2 节点）</p></td>
+</tr>
+<tr class="row-even"><td><p>data-parallel-size-local</p></td>
+<td><p>1</p></td>
+<td><p>本地数据并行大小</p></td>
+</tr>
+<tr class="row-odd"><td><p>max-model-len</p></td>
+<td><p>131072</p></td>
+<td><p>最大上下文长度</p></td>
+</tr>
+<tr class="row-even"><td><p>max-num-batched-tokens</p></td>
+<td><p>4096</p></td>
+<td><p>最大批处理 token 数</p></td>
+</tr>
+<tr class="row-odd"><td><p>max-num-seqs</p></td>
+<td><p>2</p></td>
+<td><p>最大并发序列数</p></td>
+</tr>
+<tr class="row-even"><td><p>gpu-memory-utilization</p></td>
+<td><p>0.95</p></td>
+<td><p>GPU 显存利用率</p></td>
+</tr>
+<tr class="row-odd"><td><p>quantization</p></td>
+<td><p>ascend</p></td>
+<td><p>使用 Ascend 量化</p></td>
+</tr>
+<tr class="row-even"><td><p>enable-expert-parallel</p></td>
+<td><p>(标志)</p></td>
+<td><p>启用 MoE 专家并行</p></td>
+</tr>
+<tr class="row-odd"><td><p>lookup_rpc_port (node0)</p></td>
+<td><p>0</p></td>
+<td><p>节点 0 RPC 查找端口</p></td>
+</tr>
+<tr class="row-even"><td><p>lookup_rpc_port (node1)</p></td>
+<td><p>1</p></td>
+<td><p>节点 1 RPC 查找端口</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</section>
+<section id="id8">
+<h3>环境变量说明<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>环境变量</p></th>
+<th class="head"><p>值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HCCL_OP_EXPANSION_MODE</span></code></p></td>
+<td><p>AIV</p></td>
+<td><p>HCCL 算子扩展模式（AI Vector 优化）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">OMP_PROC_BIND</span></code></p></td>
+<td><p>false</p></td>
+<td><p>OpenMP 线程绑定配置</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">OMP_NUM_THREADS</span></code></p></td>
+<td><p>1</p></td>
+<td><p>OpenMP 线程数</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">HCCL_BUFFSIZE</span></code></p></td>
+<td><p>200</p></td>
+<td><p>HCCL 缓冲区大小</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">PYTORCH_NPU_ALLOC_CONF</span></code></p></td>
+<td><p>expandable_segments:True</p></td>
+<td><p>NPU 显存分配策略（减少碎片）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">VLLM_ASCEND_BALANCE_SCHEDULING</span></code></p></td>
+<td><p>1</p></td>
+<td><p>启用平衡调度</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">VLLM_USE_V1</span></code></p></td>
+<td><p>1</p></td>
+<td><p>启用 vLLM v1 架构</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">VLLM_ENGINE_READY_TIMEOUT_S</span></code></p></td>
+<td><p>1800</p></td>
+<td><p>引擎就绪超时时间（秒）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">PYTHONHASHSEED</span></code></p></td>
+<td><p>0</p></td>
+<td><p>Python 哈希种子，确保 KV Cache 键一致性</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_WORKER_ADDR</span></code></p></td>
+<td><p>${HOST_IP}:18481</p></td>
+<td><p>Yuanrong Worker 地址，必须与 dscli 启动参数一致</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_MEMCPY_POLICY</span></code></p></td>
+<td><p>direct</p></td>
+<td><p>Host-to-Device 内存拷贝策略</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_MEMCPY_POLICY</span></code></p></td>
+<td><p>direct</p></td>
+<td><p>Device-to-Host 内存拷贝策略</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="id9">
+<h2>功能验证<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
+<p>服务启动后，验证部署是否成功：</p>
+<section id="id10">
+<h3>检查服务状态<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>http://localhost:1025/health
+</pre></div>
+</div>
+</section>
+<section id="id11">
+<h3>测试推理<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Accept: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;model&quot;: &quot;glm-5&quot;, </span>
+<span class="s1">        &quot;messages&quot;: [{ </span>
+<span class="s1">            &quot;role&quot;: &quot;user&quot;, </span>
+<span class="s1">            &quot;content&quot;: &quot;你好，请介绍一下人工智能的未来发展趋势。&quot; </span>
+<span class="s1">        }], </span>
+<span class="s1">        &quot;stream&quot;: false, </span>
+<span class="s1">        &quot;ignore_eos&quot;: false, </span>
+<span class="s1">        &quot;temperature&quot;: 0, </span>
+<span class="s1">        &quot;max_tokens&quot;: 200 </span>
+<span class="s1">    }&#39;</span><span class="w"> </span>http://localhost:1025/v1/chat/completions
+</pre></div>
+</div>
+</section>
+<section id="kv-cache">
+<h3>测试 KV Cache 复用<a class="headerlink" href="#kv-cache" title="Link to this heading">¶</a></h3>
+<p>发送相同的提示词两次，验证 KV Cache 是否被复用：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 第一次请求 - 填充 KV Cache</span>
+curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Accept: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;model&quot;: &quot;glm-5&quot;, </span>
+<span class="s1">        &quot;messages&quot;: [{ </span>
+<span class="s1">            &quot;role&quot;: &quot;user&quot;, </span>
+<span class="s1">            &quot;content&quot;: &quot;请详细解释机器学习的概念和基本原理。&quot; </span>
+<span class="s1">        }], </span>
+<span class="s1">        &quot;stream&quot;: false, </span>
+<span class="s1">        &quot;temperature&quot;: 0, </span>
+<span class="s1">        &quot;max_tokens&quot;: 100 </span>
+<span class="s1">    }&#39;</span><span class="w"> </span>http://localhost:1025/v1/chat/completions
+
+<span class="c1"># 第二次请求 - 命中 KV Cache（TTFT 更快）</span>
+curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Accept: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<span class="s1">        &quot;model&quot;: &quot;glm-5&quot;, </span>
+<span class="s1">        &quot;messages&quot;: [{ </span>
+<span class="s1">            &quot;role&quot;: &quot;user&quot;, </span>
+<span class="s1">            &quot;content&quot;: &quot;请详细解释机器学习的概念和基本原理。&quot; </span>
+<span class="s1">        }], </span>
+<span class="s1">        &quot;stream&quot;: false, </span>
+<span class="s1">        &quot;temperature&quot;: 0, </span>
+<span class="s1">        &quot;max_tokens&quot;: 100 </span>
+<span class="s1">    }&#39;</span><span class="w"> </span>http://localhost:1025/v1/chat/completions
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id12">
+<h2>缓存命中率监控<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h2>
+<section id="vllm">
+<h3>查看 vLLM 日志<a class="headerlink" href="#vllm" title="Link to this heading">¶</a></h3>
+<p>日志文件命名格式：<code class="docutils literal notranslate"><span class="pre">glm-5_yuanrong.log</span></code></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 查看最新日志</span>
+tail<span class="w"> </span>-f<span class="w"> </span>glm-5_yuanrong.log
+
+<span class="c1"># 实时监控关键指标</span>
+tail<span class="w"> </span>-f<span class="w"> </span>glm-5_yuanrong.log<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;hit_rate|cache|KV&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="prefix-cache">
+<h3>查看 Prefix Cache 命中率<a class="headerlink" href="#prefix-cache" title="Link to this heading">¶</a></h3>
+<p>vLLM 内置的 prefix cache 命中率统计：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 方法一：通过日志查看</span>
+grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;prefix cache hit|cache hit rate&quot;</span><span class="w"> </span>glm-5_yuanrong.log
+
+<span class="c1"># 方法二：通过 metrics API 查看（如果启用了）</span>
+curl<span class="w"> </span>http://localhost:1025/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;vllm_prefix_cache|cache_hit&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="yuanrong-kv-cache">
+<h3>查看 Yuanrong KV Cache 命中率<a class="headerlink" href="#yuanrong-kv-cache" title="Link to this heading">¶</a></h3>
+<p>Yuanrong 后端的缓存命中率通过日志输出：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 查看 Yuanrong 相关日志</span>
+grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;yuanrong|YuanrongBackend|kv_cache|hit_rate&quot;</span><span class="w"> </span>glm-5_yuanrong.log
+
+<span class="c1"># 查看详细的缓存操作日志</span>
+grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;get|put|exists|HeteroClient&quot;</span><span class="w"> </span>glm-5_yuanrong.log
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h3>缓存命中率指标说明<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>指标</p></th>
+<th class="head"><p>说明</p></th>
+<th class="head"><p>统计方式</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Prefix Cache Hit Rate</p></td>
+<td><p>**HBM（本地显存）**命中率</p></td>
+<td><p><strong>滑动窗口</strong>：最近 1000 个请求</p></td>
+</tr>
+<tr class="row-odd"><td><p>External Cache Hit Rate</p></td>
+<td><p>**Yuanrong（外部 KV Cache）**命中率</p></td>
+<td><p><strong>累计统计</strong>：从服务启动到当前时刻</p></td>
+</tr>
+<tr class="row-even"><td><p>TTFT (Time to First Token)</p></td>
+<td><p>首个 token 延迟</p></td>
+<td><p>单次请求指标，命中率高时 TTFT 显著降低</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>统计周期说明</strong>：</p>
+<ul class="simple">
+<li><p><strong>HBM 命中率</strong>：来自 vLLM 上游 <code class="docutils literal notranslate"><span class="pre">CachingMetrics</span></code> 模块，使用滑动窗口统计最近 1000 个请求</p></li>
+<li><p><strong>Yuanrong 命中率</strong>：来自 Prometheus Counter 指标，<strong>累计统计</strong>从服务启动到当前时刻的总命中数和查询数</p></li>
+<li><p>日志每 <strong>10 秒</strong> 输出一次 HBM 命中率</p></li>
+<li><p>HBM 命中率计算公式：<code class="docutils literal notranslate"><span class="pre">hit_rate</span> <span class="pre">=</span> <span class="pre">window_hits</span> <span class="pre">/</span> <span class="pre">window_queries</span></code></p></li>
+<li><p>Yuanrong 命中率计算公式：<code class="docutils literal notranslate"><span class="pre">hit_rate</span> <span class="pre">=</span> <span class="pre">total_hits</span> <span class="pre">/</span> <span class="pre">total_queries</span></code></p></li>
+</ul>
+<p><strong>查看 Yuanrong 外部缓存命中率</strong>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 通过 Prometheus metrics 查看外部缓存统计</span>
+curl<span class="w"> </span>http://localhost:1025/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>external_prefix_cache
+
+<span class="c1"># 输出示例：</span>
+<span class="c1"># vllm:external_prefix_cache_queries_total{...} 10000</span>
+<span class="c1"># vllm:external_prefix_cache_hits_total{...} 8500</span>
+<span class="c1"># 命中率 = hits / queries = 85%</span>
+</pre></div>
+</div>
+<p><strong>注意</strong>：外部缓存指标为 Prometheus Counter 类型，表示从服务启动以来的累计值。</p>
+<p><strong>如何查看单次请求是否命中</strong>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 查看单个请求的缓存命中情况</span>
+grep<span class="w"> </span><span class="s2">&quot;num_computed_tokens&quot;</span><span class="w"> </span>glm-5_yuanrong.log
+
+<span class="c1"># 如果 num_computed_tokens &gt; 0，表示该请求命中了缓存</span>
+<span class="c1"># num_computed_tokens 表示从缓存中复用的 token 数量</span>
+</pre></div>
+</div>
+</section>
+<section id="prometheus">
+<h3>使用 Prometheus 监控（可选）<a class="headerlink" href="#prometheus" title="Link to this heading">¶</a></h3>
+<p>如果需要持续监控，可以启用 vLLM 的 Prometheus metrics：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 启动时添加 metrics 端口</span>
+vllm<span class="w"> </span>serve<span class="w"> </span>...<span class="w"> </span>--enable-metrics<span class="w"> </span>--metrics-port<span class="w"> </span><span class="m">8001</span>
+</pre></div>
+</div>
+<p>然后通过 Prometheus 抓取 <code class="docutils literal notranslate"><span class="pre">http://localhost:8001/metrics</span></code>。</p>
+</section>
+</section>
+<section id="id14">
+<h2>性能测试<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h2>
+<section id="id15">
+<h3>选项一：快速测试<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<p>使用 vLLM Benchmark 进行快速性能测试：</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>vllm<span class="w"> </span>bench<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--backend<span class="w"> </span>vllm<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--dataset-name<span class="w"> </span>prefix_repetition<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--prefix-repetition-prefix-len<span class="w"> </span><span class="m">8192</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--prefix-repetition-suffix-len<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--prefix-repetition-output-len<span class="w"> </span><span class="m">256</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--num-prompts<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--prefix-repetition-num-prefixes<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--ignore-eos<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model<span class="w"> </span>glm-5<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--tokenizer<span class="w"> </span>/home/models/GLM-5-w4a8<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--seed<span class="w"> </span><span class="m">1000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--port<span class="w"> </span><span class="m">1025</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--endpoint<span class="w"> </span>/v1/completions<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-concurrency<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--request-rate<span class="w"> </span><span class="m">1</span>
+</pre></div>
+</div>
+</section>
+<section id="id16">
+<h3>选项二：深度测试<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<p>使用 AISBench 进行深度性能测试：</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>ais_bench<span class="w"> </span>--models<span class="w"> </span>vllm_api_stream_chat<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--datasets<span class="w"> </span>gsm8k_gen_0_shot_cot_str_perf<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--debug<span class="w"> </span>--summarizer<span class="w"> </span>default_perf<span class="w"> </span>--mode<span class="w"> </span>perf
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id17">
+<h2>故障排除<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h2>
+<section id="id18">
+<h3>常见问题<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<ol class="arabic">
+<li><p><strong>etcd 连接失败</strong></p>
+<p>确保 etcd 正在运行且可访问：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>etcdctl<span class="w"> </span>--endpoints<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">ETCD_IP</span><span class="si">}</span><span class="s2">:2379&quot;</span><span class="w"> </span>endpoint<span class="w"> </span>health
+</pre></div>
+</div>
+</li>
+<li><p><strong>Worker 注册失败</strong></p>
+<p>检查 Worker 地址是否正确配置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>netstat<span class="w"> </span>-tlnp<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">18481</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>KV Cache 未找到</strong></p>
+<p>验证 <code class="docutils literal notranslate"><span class="pre">PYTHONHASHSEED</span></code> 设置一致：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">echo</span><span class="w"> </span><span class="nv">$PYTHONHASHSEED</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>yr.datasystem 导入错误</strong></p>
+<p>确保 <code class="docutils literal notranslate"><span class="pre">openyuanrong-datasystem</span></code> 已安装：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>openyuanrong-datasystem
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from yr.datasystem.hetero_client import HeteroClient; print(&#39;OK&#39;)&quot;</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>内存不足（OOM）</strong></p>
+<p>降低 <code class="docutils literal notranslate"><span class="pre">--max-num-seqs</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--max-model-len</span></code>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--max-model-len<span class="w"> </span><span class="m">65536</span><span class="w"> </span><span class="se">\</span>
+--max-num-seqs<span class="w"> </span><span class="m">4</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>FIA 算子性能问题</strong></p>
+<p>执行 FIA 算子替换脚本：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># A2 系列</span>
+bash<span class="w"> </span>tools/install_flash_infer_attention_score_ops_a2.sh
+
+<span class="c1"># A3 系列</span>
+bash<span class="w"> </span>tools/install_flash_infer_attention_score_ops_a3.sh
+</pre></div>
+</div>
+</li>
+<li><p><strong>多节点通信失败</strong></p>
+<p>检查网络配置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 确认网卡名称和 IP 地址正确</span>
+ifconfig
+
+<span class="c1"># 检查 HCCL 通信</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HCCL_DETERMINISTIC</span><span class="o">=</span><span class="m">1</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>引擎启动超时</strong></p>
+<p>增加 <code class="docutils literal notranslate"><span class="pre">VLLM_ENGINE_READY_TIMEOUT_S</span></code> 的值：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">VLLM_ENGINE_READY_TIMEOUT_S</span><span class="o">=</span><span class="m">3600</span>
+</pre></div>
+</div>
+</li>
+</ol>
+</section>
+<section id="id19">
+<h3>日志查看<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<p>查看 vLLM 日志以获取详细错误信息：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>tail<span class="w"> </span>-f<span class="w"> </span>glm-5_yuanrong.log
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id20">
+<h2>参考资料<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference external" href="https://atomgit.com/openeuler/yuanrong-datasystem">Yuanrong Datasystem 代码仓</a></p></li>
+<li><p><a class="reference external" href="https://etcd.io/docs/">etcd 文档</a></p></li>
+<li><p><a class="reference external" href="https://docs.vllm.ai/projects/ascend/">vLLM Ascend 文档</a></p></li>
+<li><p><a class="reference internal" href="#../../tutorials/models/GLM5.md"><span class="xref myst">GLM-5 教程</span></a></p></li>
+</ul>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="../design_document/index.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">设计文档</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="best_practices_for_rh2d.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">RH2D最佳实践</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, openEuler openYuanrong datasystem
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a><ul>
+<li><a class="reference internal" href="#id1">背景介绍</a><ul>
+<li><a class="reference internal" href="#id2">部署环境准备</a></li>
+<li><a class="reference internal" href="#id3">获取与运行基础环境</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#openyuanrong-datasystem">安装 openYuanrong datasystem</a><ul>
+<li><a class="reference internal" href="#id4">在线安装</a></li>
+<li><a class="reference internal" href="#id5">离线安装</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id6">部署openYuanrong datasystem</a><ul>
+<li><a class="reference internal" href="#yuanrong">启动 Yuanrong 服务</a><ul>
+<li><a class="reference internal" href="#datasystem-worker">Datasystem Worker 参数说明</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#glm-5">部署 GLM-5 模型</a><ul>
+<li><a class="reference internal" href="#id7">配置参数说明</a></li>
+<li><a class="reference internal" href="#id8">环境变量说明</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id9">功能验证</a><ul>
+<li><a class="reference internal" href="#id10">检查服务状态</a></li>
+<li><a class="reference internal" href="#id11">测试推理</a></li>
+<li><a class="reference internal" href="#kv-cache">测试 KV Cache 复用</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id12">缓存命中率监控</a><ul>
+<li><a class="reference internal" href="#vllm">查看 vLLM 日志</a></li>
+<li><a class="reference internal" href="#prefix-cache">查看 Prefix Cache 命中率</a></li>
+<li><a class="reference internal" href="#yuanrong-kv-cache">查看 Yuanrong KV Cache 命中率</a></li>
+<li><a class="reference internal" href="#id13">缓存命中率指标说明</a></li>
+<li><a class="reference internal" href="#prometheus">使用 Prometheus 监控（可选）</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id14">性能测试</a><ul>
+<li><a class="reference internal" href="#id15">选项一：快速测试</a></li>
+<li><a class="reference internal" href="#id16">选项二：深度测试</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id17">故障排除</a><ul>
+<li><a class="reference internal" href="#id18">常见问题</a></li>
+<li><a class="reference internal" href="#id19">日志查看</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id20">参考资料</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
+    </body>
+</html>
