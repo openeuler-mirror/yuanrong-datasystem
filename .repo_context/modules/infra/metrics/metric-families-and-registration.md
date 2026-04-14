@@ -1,5 +1,26 @@
 # Metric Families And Registration
 
+## Document Metadata
+
+- Status:
+  - `active`
+- Doc type:
+  - behavior note | submodule reference
+- Primary code paths:
+  - `src/datasystem/common/metrics/res_metrics.def`
+  - `src/datasystem/common/metrics/metrics_description.def`
+  - `src/datasystem/common/metrics/res_metric_name.h`
+  - `src/datasystem/worker/worker_oc_server.cpp`
+- Last verified against source:
+  - `2026-04-13`
+- Related design docs:
+  - `.repo_context/modules/infra/metrics/design.md`
+  - `.repo_context/modules/infra/metrics/resource-collector.md`
+- Related tests:
+  - `//tests/ut/worker:stream_usagemonitor_test`
+  - `//tests/st/client/stream_cache:sc_metrics_test`
+  - `//tests/st/client/kv_cache:kv_client_log_monitor_test`
+
 ## Scope
 
 - Paths:
@@ -16,6 +37,9 @@
 - `src/datasystem/common/metrics/metrics_description.def`
 - `src/datasystem/common/metrics/res_metric_name.h`
 - `src/datasystem/worker/worker_oc_server.cpp`
+- `tests/ut/worker/BUILD.bazel`
+- `tests/st/client/stream_cache/BUILD.bazel`
+- `tests/st/client/kv_cache/BUILD.bazel`
 
 ## Metric Definitions
 
@@ -74,6 +98,29 @@
 - Practical effect:
   - definition, description, and registration must move together to avoid blank or misleading monitor output.
 
+## Compatibility And Change Notes
+
+- Stability-sensitive behavior:
+  - `res_metrics.def` explicitly marks family order as immutable for compatibility purposes;
+  - `metrics_description.def` is part of the semantic contract for operators reading the output;
+  - runtime registration in `worker_oc_server.cpp` must stay aligned with both definitions and descriptions.
+- Safe change guidance:
+  - do not reorder existing families;
+  - update definitions, descriptions, and registrations in the same change;
+  - review whether downstream parsers, dashboards, or runbooks assume current order or family presence before changing them.
+
+## Verification Hints
+
+- Fast source checks:
+  - confirm family order and new enum entries in `src/datasystem/common/metrics/res_metrics.def`;
+  - confirm descriptions and units in `src/datasystem/common/metrics/metrics_description.def`;
+  - confirm runtime registration in `src/datasystem/worker/worker_oc_server.cpp`.
+- Fast validation targets:
+  - `bazel test //tests/ut/worker:stream_usagemonitor_test`
+  - `bazel test //tests/st/client/stream_cache:sc_metrics_test --test_tag_filters=manual`
+- Manual validation:
+  - run one representative monitor scenario and confirm the new or changed family appears in the expected order with the intended meaning.
+
 ## Bugfix And Review Notes
 
 - Good first files when one family is missing, misordered, or undocumented:
@@ -83,3 +130,9 @@
 - Common risks:
   - reordering enum definitions can corrupt the meaning of existing output columns;
   - registering a handler for the wrong family can produce plausible-looking but semantically wrong metrics.
+
+## Update Rules For This Document
+
+- Keep this file focused on family definitions, semantic descriptions, and runtime registration alignment instead of repeating full collector or exporter architecture from `design.md`.
+- Update this file when family order, family meaning, description units, or major registration points change.
+- If a registration claim depends on a callsite not yet verified, mark it as pending rather than treating it as generally true.

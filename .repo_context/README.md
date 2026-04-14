@@ -77,18 +77,28 @@ Its goals are to:
 │   │   │   ├── trace-and-context.md
 │   │   │   ├── access-recorder.md
 │   │   │   └── log-lifecycle-and-rotation.md
-│   │   └── metrics/
+│   │   ├── metrics/
+│   │   │   ├── README.md
+│   │   │   ├── design.md
+│   │   │   ├── resource-collector.md
+│   │   │   ├── exporters-and-buffering.md
+│   │   │   └── metric-families-and-registration.md
+│   │   └── observability/
 │   │       ├── README.md
-│   │       ├── design.md
-│   │       ├── resource-collector.md
-│   │       ├── exporters-and-buffering.md
-│   │       └── metric-families-and-registration.md
+│   │       ├── diagnosis-and-operations.md
+│   │       ├── signal-map.md
+│   │       ├── performance-troubleshooting.md
+│   │       └── runtime-health-and-runbook.md
 │   └── quality/
 │       ├── README.md
 │       ├── build-test-debug.md
 │       └── tests-and-reproduction.md
 ├── playbooks/
 │   ├── README.md
+│   ├── operations/
+│   │   ├── README.md
+│   │   ├── incident-triage.md
+│   │   └── performance-investigation.md
 │   └── features/
 │       ├── README.md
 │       └── infra/
@@ -121,6 +131,7 @@ The first pass is intentionally coarse. It currently covers:
 - coarse module boundaries across source, SDK, CLI, docs, and tests;
 - build, test, and debug entrypoints already used by this repository;
 - a generated file-tree index to support fast orientation;
-- first-pass domain documents grouped under `overview`, `client`, `runtime`, `infra`, and `quality`.
+- first-pass domain documents grouped under `overview`, `client`, `runtime`, `infra`, and `quality`;
+- cross-module observability and operations guidance for diagnosis, health checks, and performance troubleshooting.
 
 The next recommended deep dives are recorded in `.repo_context/roadmap.md`.

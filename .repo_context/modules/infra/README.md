@@ -17,3 +17,8 @@ Current docs:
 - `metrics/resource-collector.md`: collector lifecycle, handler registration, and interval-driven sampling.
 - `metrics/exporters-and-buffering.md`: exporter buffering, flush threads, and hard-disk output.
 - `metrics/metric-families-and-registration.md`: metric definitions, descriptions, and runtime registration points.
+- `observability/README.md`: observability and operations routing page.
+- `observability/diagnosis-and-operations.md`: cross-module diagnosis, runtime-health, and operations design reference.
+- `observability/signal-map.md`: symptom-to-signal routing for common runtime and DFX issues.
+- `observability/performance-troubleshooting.md`: performance-oriented investigation guidance.
+- `observability/runtime-health-and-runbook.md`: runtime health checks, readiness, liveness, and operator runbook notes.
