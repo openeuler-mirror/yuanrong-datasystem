@@ -67,6 +67,7 @@
 - 所有 worker 节点均已挂载同一份 NFS 目录。
 - 所有 worker 对该目录具有一致的读写可见性。
 - `distributed_disk_path` 在所有 worker 上最终指向同一份共享存储。
+- ETCD 服务保持可用，用于支撑 worker 故障感知和恢复流程。
 
 **配置入口概览**
 
@@ -91,6 +92,19 @@
   `distributed_disk_sync_batch_bytes`、`distributed_disk_compact_interval_s`、`enableL2CacheFallback`
 - `distributed_disk_path` 用于指定所有 worker 共享可见的 NFS 目录，是该模式能够正常工作的前提。
 - 其余可选配置项主要用于调优文件大小、刷盘节奏和 compact 周期；如无特殊吞吐或时延诉求，可先使用默认值。
+
+**ETCD 故障下的可靠性影响与约束**
+
+`distributed_disk` 模式下，worker 故障后的数据恢复需要依赖 ETCD 推进恢复流程，包括发现故障 worker、
+调度其他 worker 接管恢复任务，以及在恢复完成后更新数据访问路径。
+
+ETCD 故障对用户的影响和使用约束如下：
+
+- ETCD 短暂抖动时，故障恢复流程可能出现延迟，依赖故障 worker 恢复的数据可能短暂不可读，相关读请求可能
+  失败或超时。
+- ETCD 长时间不可用时，系统可能无法及时发现 worker 故障、调度恢复任务或更新恢复后的访问路径；即使后续
+  ETCD 服务恢复，也不保证此前受影响的数据恢复流程会自动继续，相关数据可能保持不可读状态。
+- 生产环境使用 `distributed_disk` 时，应将 ETCD 作为可靠性能力的关键依赖进行高可用部署。
 
 **Kubernetes DaemonSet**
 
