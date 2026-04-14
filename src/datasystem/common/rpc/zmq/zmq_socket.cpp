@@ -30,7 +30,10 @@ ZmqSocket::ZmqSocket(const std::shared_ptr<ZmqContext> &ctx, ZmqSocketType type)
 {
 }
 
-ZmqSocket::~ZmqSocket() = default;
+ZmqSocket::~ZmqSocket()
+{
+    Close();
+}
 
 Status ZmqSocket::SetClientCredential(const RpcCredential &cred)
 {
@@ -93,9 +96,12 @@ Status ZmqSocket::Bind(const std::string &endPoint)
 
 void ZmqSocket::Close()
 {
+    if (!sock_.IsValid()) {
+        return;
+    }
     auto ctx = ctx_.lock();
-    // If the context is gone, it is closed already
-    if (ctx == nullptr) {
+    // If the context is gone (or closed), the socket should be considered invalid.
+    if (ctx == nullptr || ctx->GetHandle() == nullptr) {
         sock_ = ZmqSocketRef();
         return;
     }

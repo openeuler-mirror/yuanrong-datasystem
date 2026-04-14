@@ -28,3 +28,18 @@ ds_cc_test(
         "//tests/st:st_common",
     ],
 )
+
+ds_cc_test(
+    name = "zmq_fd_leak_repro_test",
+    srcs = [
+        "zmq_fd_leak_repro_test.cpp",
+    ],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc/zmq:zmq_context",
+        "//src/datasystem/common/rpc/zmq:zmq_stub_conn",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/st:st_common",
+    ],
+)

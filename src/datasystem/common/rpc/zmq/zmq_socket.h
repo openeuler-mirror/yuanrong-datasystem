@@ -61,6 +61,8 @@ public:
     ZmqSocket &operator=(ZmqSocket &&other) noexcept
     {
         if (this != &other) {
+            // Release the currently owned socket before taking over a new one.
+            Close();
             ctx_ = std::move(other.ctx_);
             sock_ = std::move(other.sock_);
         }
