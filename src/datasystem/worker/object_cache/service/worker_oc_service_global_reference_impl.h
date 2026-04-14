@@ -81,7 +81,8 @@ public:
      * @param masterAddr[in] standby worker of scale down worker.
      * @return Status
      */
-    Status GIncreaseMasterRefWithLock(std::function<bool(const std::string &)> matchFunc, std::string masterAddr);
+    Status GIncreaseMasterRefWithLock(std::function<bool(const std::string &)> matchFunc,
+                                      std::vector<std::string> &increaseFailedIds);
 
     /**
      * @brief Forward nested object reference increase calls to multiple masters based on objectKeys
@@ -126,6 +127,27 @@ private:
      */
     Status GIncreaseMasterRef(const GIncreaseReqPb &req, const std::vector<std::string> &firstIncIds,
                               std::vector<std::string> &failIncIds);
+
+    /**
+     * @brief Build master increase-ref request for one target master.
+     * @param[in] objectKeys Object keys that will be sent to master.
+     * @param[in] remoteClientId Remote client id carried by nested increase-ref flow.
+     * @param[out] req Built master request.
+     */
+    void BuildGIncreaseMasterReq(const std::vector<std::string> &objectKeys, const std::string &remoteClientId,
+                                 master::GIncreaseReqPb &req) const;
+
+    /**
+     * @brief Send master increase-ref request to one master.
+     * @param[in] masterAddr Master address.
+     * @param[in] remoteClientId Remote client id carried by nested increase-ref flow.
+     * @param[in] currentIncIds Object keys routed to the target master.
+     * @param[out] failIncIds Object keys that failed on the target master.
+     * @return Status of the rpc call or master response.
+     */
+    Status SendGIncreaseMasterRefToMaster(const HostPort &masterAddr, const std::string &remoteClientId,
+                                          const std::vector<std::string> &currentIncIds,
+                                          std::vector<std::string> &failIncIds);
 
     /**
      * @brief GIncreaseMasterRef

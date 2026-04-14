@@ -376,6 +376,14 @@ public:
     Status PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp) override;
 
     /**
+     * @brief Check whether worker-local object data is still recorded in master metadata.
+     * @param[in] The rpc req protobuf.
+     * @param[out] resp The rpc rsp protobuf.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req, CheckObjectDataLocationRspPb &rsp) override;
+
+    /**
      * @brief Subscribe the p2p receiving event.
      * @param[in] serverApi The unary writer reader.
      * @return K_OK on success; the error code otherwise.

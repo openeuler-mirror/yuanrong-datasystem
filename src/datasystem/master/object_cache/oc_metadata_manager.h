@@ -933,6 +933,14 @@ public:
     Status PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp);
 
     /**
+     * @brief Check whether worker-local object data is still valid according to master metadata.
+     * @param[in] req The request of CheckObjectDataLocation.
+     * @param[out] rsp The response of CheckObjectDataLocation.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req, CheckObjectDataLocationRspPb &rsp);
+
+    /**
      * @brief SaveNestedMigrationMetadata
      * @param[in] objMeta objMeta for nested info.
      */

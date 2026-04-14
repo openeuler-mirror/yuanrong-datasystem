@@ -3163,6 +3163,11 @@ Status OCMetadataManager::RecoverMasterAppRef(std::function<bool(const std::stri
     globalRefTable_->GetRemoteClientIds(remoteClientIds);
     for (const auto &id : remoteClientIds) {
         if (matchFunc(id)) {
+            if (standbyWorker.empty()) {
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GIncreaseRemoteClientIdToMaster(id),
+                                                 "Recover master app ref failed");
+                continue;
+            }
             HostPort addr;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(addr.ParseString(standbyWorker), "master addr parse failed");
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GIncreaseRemoteClientIdToMaster(id, addr),
@@ -4643,6 +4648,40 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
         } else {
             LOG(WARNING) << FormatString("QueryMeta and not found: %s", objectKey);
         }
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req,
+                                                  CheckObjectDataLocationRspPb &rsp)
+{
+    std::vector<std::string> notRedirectObjectKeys;
+    notRedirectObjectKeys.reserve(req.object_versions_size());
+    std::unordered_map<std::string, uint64_t> versionByObjectKey;
+    versionByObjectKey.reserve(req.object_versions_size());
+    for (const auto &objectVersion : req.object_versions()) {
+        notRedirectObjectKeys.emplace_back(objectVersion.object_key());
+        versionByObjectKey[objectVersion.object_key()] = objectVersion.version();
+    }
+    FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    if (rsp.meta_is_moving() || !rsp.info().empty()) {
+        return Status::OK();
+    }
+
+    std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
+    for (const auto &objectKey : notRedirectObjectKeys) {
+        TbbMetaTable::const_accessor accessor;
+        if (!metaTable_.find(accessor, objectKey)) {
+            rsp.add_need_clear_object_keys(objectKey);
+            continue;
+        }
+        auto iter = versionByObjectKey.find(objectKey);
+        if (iter != versionByObjectKey.end() && accessor->second.meta.version() == iter->second
+            && accessor->second.locations.find(req.address()) != accessor->second.locations.end()) {
+            rsp.add_no_need_clear_object_keys(objectKey);
+            continue;
+        }
+        rsp.add_need_clear_object_keys(objectKey);
     }
     return Status::OK();
 }

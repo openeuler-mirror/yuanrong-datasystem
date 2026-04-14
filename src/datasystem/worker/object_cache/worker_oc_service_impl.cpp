@@ -40,6 +40,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -105,6 +107,7 @@
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
@@ -181,6 +184,7 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
         setValue_ = true;
     }
     HashRingEvent::BeforeVoluntaryExit::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
+    clearDataFlow_.reset();
     AddLocalFailedNodeEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     NodeRestartEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     EraseFailedNodeApiEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
@@ -310,14 +314,16 @@ Status WorkerOCServiceImpl::Init()
     getProc_->Init();
     RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, etcdCM_, persistenceApi_, workerMasterApiManager_,
                                                 etcdStore_, metadataRecoveryManager_.get()));
+    clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
+        objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRecoveryManager_.get(),
+        etcdCM_, localAddress_.ToString());
     HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const HostPort &node) { return PushMetadataToMaster(node); });
     NodeRestartEvent::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_IMPL, [this](const std::string &workerAddr, int64_t, bool) {
-            return HandleNodeRestartEvent(workerAddr);
-        });
+        WORKER_OC_SERVICE_IMPL,
+        [this](const std::string &workerAddr, int64_t, bool) { return HandleNodeRestartEvent(workerAddr); });
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL,
                                                          [this](HostPort &node) { EraseFailedWorkerMasterApi(node); });
     StartNodeCheckEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL, [this] { return GiveUpReconciliation(); });
@@ -812,69 +818,6 @@ void WorkerOCServiceImpl::FillRefData(const MetaAddrInfo &targetMetaAddrInfo, st
     }
 }
 
-void WorkerOCServiceImpl::ClearObject(const std::vector<std::string> objKeys, const ClearDataReqPb &req)
-{
-    for (const auto &objectKey : objKeys) {
-        if (std::find(req.objkeys_migrate_finished().begin(), req.objkeys_migrate_finished().end(), objectKey)
-            == req.objkeys_migrate_finished().end()) {
-            std::shared_ptr<SafeObjType> entry;
-            bool isInsert = false;
-            auto status = objectTable_->ReserveGetAndLock(objectKey, entry, isInsert);
-            if (status.IsError()) {
-                LOG(WARNING) << FormatString("objectKey: %s ReserveGetAndLock failed, status: %s", objectKey,
-                                             status.ToString());
-                continue;
-            }
-            Raii unlock([&entry]() { entry->WUnlock(); });
-            ObjectKV objectKV(objectKey, *entry);
-            LOG_IF_ERROR(deleteProc_->ClearObject(objectKV),
-                         FormatString("Failed to erase object %s from object table", objectKey));
-        }
-    }
-}
-
-Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
-{
-    LOG(INFO) << "clear data without meta in worker, standby worker: " << req.standby_worker();
-    HashRange ranges;
-    std::stringstream rangesStr;
-    rangesStr << "ranges: ";
-    for (const auto &range : req.ranges()) {
-        ranges.emplace_back(range.from(), range.end());
-        rangesStr << "[" << range.from() << ", " << range.end() << "],";
-    }
-    if (ranges.empty() && req.worker_ids().empty()) {
-        LOG(INFO) << "range and worker ids all empty";
-        return Status::OK();
-    }
-    std::vector<std::string> uuids;
-    std::function<bool(const std::string &obj)> matchFunc;
-    if (req.worker_ids().empty()) {
-        matchFunc = [this, &ranges](const std::string &objKey) { return etcdCM_->IsInRange(ranges, objKey, ""); };
-    } else {
-        uuids = { req.worker_ids().begin(), req.worker_ids().end() };
-        matchFunc = [this, &ranges, &uuids](const std::string &objKey) {
-            return etcdCM_->NeedToClear(objKey, ranges, uuids);
-        };
-    }
-    LOG(INFO) << rangesStr.str() << ", uuids: " << VectorToString(uuids);
-    bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
-    std::vector<std::string> matchObjIds;
-    GetObjectsMatch(matchFunc, matchObjIds, includeL2CacheIds);
-    std::vector<std::string> failedIds;
-    RETURN_IF_NOT_OK(gRefProc_->GIncreaseMasterRefWithLock(matchFunc, req.standby_worker()));
-    if (FLAGS_enable_metadata_recovery) {
-        auto summary = metadataRecoveryManager_->RecoverMetadataWithSummary(matchObjIds, req.standby_worker());
-        failedIds = std::move(summary.failedIds);
-        ClearObject(failedIds, req);
-    } else {
-        ClearObject(matchObjIds, req);
-    }
-    RETURN_IF_NOT_OK(RecoverMasterAppRefEvent::GetInstance().NotifyAll(matchFunc, req.standby_worker()));
-    LOG(INFO) << "clear data without meta in worker finished";
-    return Status::OK();
-}
-
 Status WorkerOCServiceImpl::RecoverMetadataOfData(const std::vector<std::string> &objectKeys,
                                                   std::vector<std::string> &failedIds, std::string standbyWorker)
 {
@@ -937,6 +880,13 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
                      << ", restartWorker: " << workerAddr;
     }
     return rc;
+}
+
+Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
+{
+    worker::HashRange ranges;
+    clearDataFlow_->SubmitClearDataAsync(req, ranges);
+    return Status::OK();
 }
 
 Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr)

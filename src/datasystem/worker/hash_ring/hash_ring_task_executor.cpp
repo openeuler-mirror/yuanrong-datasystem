@@ -47,6 +47,7 @@
 namespace datasystem {
 namespace worker {
 static constexpr uint32_t MAX_SCALE_TASK_THREAD = 4;
+static const std::string HASH_RING_TASK_EXECUTOR = "HashRingTaskExecutor";
 
 HashRingTaskExecutor::HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid,
                                            EtcdStore *etcdStore, bool isMultiReplicaEnable)
@@ -56,11 +57,17 @@ HashRingTaskExecutor::HashRingTaskExecutor(const std::string &workerAddr, const 
       multiReplicaEnabled_(isMultiReplicaEnable)
 {
     scaleThreadPool_ = std::make_unique<ThreadPool>(0, MAX_SCALE_TASK_THREAD, "HashRingScaleTask");
+    HashRingEvent::LocalClearDataWithoutMetaFinish::GetInstance().AddSubscriber(
+        HASH_RING_TASK_EXECUTOR, [this](const worker::HashRange &clearRanges) {
+            RemoveClearDataSubmitTask(clearRanges);
+            return Status::OK();
+        });
 }
 
 HashRingTaskExecutor::~HashRingTaskExecutor()
 {
     exitFlag_ = true;
+    HashRingEvent::LocalClearDataWithoutMetaFinish::GetInstance().RemoveSubscriber(HASH_RING_TASK_EXECUTOR);
 }
 
 Status HashRingTaskExecutor::SubmitScaleUpTask(const HashRingPb &currRing)
@@ -520,16 +527,18 @@ void HashRingTaskExecutor::GetRemoveNodeKeyWithUuidsInfo(const HashRingPb &currR
     }
 }
 
-void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRingPb &currRing, HashRange &ranges)
+void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRingPb &currRing, HashRange &recoverRanges)
 {
     LOG(INFO) << "clear meta data without meta";
-    std::vector<bool> lostAll;
+    HashRange clearRanges;
     std::vector<std::string> uuids;
     for (const auto &delInfo : currRing.del_node_info()) {
         for (const auto &range : delInfo.second.changed_ranges()) {
+            if (InsertClearDataSubmitTask(range)) {
+                clearRanges.emplace_back(range.from(), range.end());
+            }
             if (range.workerid() == workerAddr_ && InsertClearDataTask(range)) {
-                ranges.emplace_back(range.from(), range.end());
-                lostAll.emplace_back(range.lost_all_range());
+                recoverRanges.emplace_back(range.from(), range.end());
             }
         }
         std::string uuid;
@@ -542,14 +551,16 @@ void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRingPb &currRing, Hash
             tmpRange.set_from(MurmurHash3_32(uuid));
             tmpRange.set_end(MurmurHash3_32(uuid));
             if (InsertClearDataTask(tmpRange)) {
-                ranges.emplace_back(tmpRange.from(), tmpRange.end());
+                recoverRanges.emplace_back(tmpRange.from(), tmpRange.end());
             }
         }
         GetRemoveNodeKeyWithUuidsInfo(currRing, delInfo.first, uuids);
     }
-    if (!ranges.empty()) {
-        ClearDataWithoutMeta(ranges, lostAll, currRing, uuids);
+    if (clearRanges.empty()) {
+        LOG(INFO) << "Skip clear data task submission because all matching clear tasks are already in progress";
+        return;
     }
+    ClearDataWithoutMeta(clearRanges, uuids);
 }
 
 void HashRingTaskExecutor::ClearDevClientMetaForScaledInWorker(const HashRingPb &currRing)
@@ -574,6 +585,17 @@ void HashRingTaskExecutor::RemoveClearDataTask(const HashRange &ranges)
     }
 }
 
+void HashRingTaskExecutor::RemoveClearDataSubmitTask(const HashRange &ranges)
+{
+    std::lock_guard<std::shared_timed_mutex> l(clearDataTaskmutex_);
+    for (const auto &range : ranges) {
+        auto iter = clearDataWithoutMetaSubmitTasks_.find(range);
+        if (iter != clearDataWithoutMetaSubmitTasks_.end()) {
+            clearDataWithoutMetaSubmitTasks_.erase(iter);
+        }
+    }
+}
+
 bool HashRingTaskExecutor::InsertClearDataTask(const datasystem::ChangeNodePb_RangePb &range)
 {
     std::lock_guard<std::shared_timed_mutex> l(clearDataTaskmutex_);
@@ -586,23 +608,22 @@ bool HashRingTaskExecutor::InsertClearDataTask(const datasystem::ChangeNodePb_Ra
     return false;
 }
 
-void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRange &ranges, const std::vector<bool> &lostAllRange,
-                                                const HashRingPb &currRing, const std::vector<std::string> &uuids)
+bool HashRingTaskExecutor::InsertClearDataSubmitTask(const datasystem::ChangeNodePb_RangePb &range)
 {
-    for (const auto &worker : currRing.workers()) {
-        if (currRing.del_node_info().find(worker.first) != currRing.del_node_info().end()) {
-            continue;
-        }
-        HashRange tempRanges;
-        for (size_t i = 0; i < lostAllRange.size(); i++) {
-            if (!lostAllRange[i]) {
-                tempRanges.emplace_back(ranges[i]);
-            }
-        }
-        HASH_RING_LOG_IF_ERROR(
-            HashRingEvent::ClearDataWithoutMeta::GetInstance().NotifyAll(ranges, worker.first, tempRanges, uuids),
-            "ClearData failed.");
+    std::lock_guard<std::shared_timed_mutex> l(clearDataTaskmutex_);
+    Range rangeForCheck = std::make_pair(range.from(), range.end());
+    auto iter = clearDataWithoutMetaSubmitTasks_.find(rangeForCheck);
+    if (iter == clearDataWithoutMetaSubmitTasks_.end()) {
+        clearDataWithoutMetaSubmitTasks_.insert(rangeForCheck);
+        return true;
     }
+    return false;
+}
+
+void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRange &ranges, const std::vector<std::string> &uuids)
+{
+    HASH_RING_LOG_IF_ERROR(HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(ranges, uuids),
+                           "Local ClearData failed.");
     INJECT_POINT("ClearDataDelay", [] { return; });
     INJECT_POINT("notExcuteClearData", [] {
         auto injectSkip = []() {

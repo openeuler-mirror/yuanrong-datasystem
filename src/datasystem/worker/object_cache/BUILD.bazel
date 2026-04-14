@@ -229,6 +229,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache/data_migrator/handler:migrate_data_handler",
         "//src/datasystem/worker/object_cache/device:worker_device_oc_manager_header",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_create_impl",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_clear_data_flow",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_delete_impl_header",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_expire_impl",

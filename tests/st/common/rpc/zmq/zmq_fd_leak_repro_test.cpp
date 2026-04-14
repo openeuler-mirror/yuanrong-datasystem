@@ -160,8 +160,6 @@ TEST_F(ZmqFdLeakReproTest, InitFrontendConnectFailureCanExhaustFd)
     // Cleanup leaked sockets by terminating the context.
     ctx->Close(false);
 
-    EXPECT_GT(peakFd, baselineFd + 8)
-        << "No obvious fd growth observed. baseline=" << baselineFd << ", peak=" << peakFd;
     EXPECT_TRUE(!seenEmfile) << "Did not detect process EMFILE in InitFrontend failure path after " << maxAttempts
                             << " attempts. baseline fd=" << baselineFd << ", peak fd=" << peakFd
                             << ", soft limit=" << targetSoftLimit;

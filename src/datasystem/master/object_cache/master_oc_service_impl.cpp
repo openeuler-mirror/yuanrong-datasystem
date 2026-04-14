@@ -763,6 +763,18 @@ Status MasterOCServiceImpl::PureQueryMeta(const PureQueryMetaReqPb &req, PureQue
     return ocMetadataManager->PureQueryMeta(req, rsp);
 }
 
+Status MasterOCServiceImpl::CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req,
+                                                    CheckObjectDataLocationRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    LOG(INFO) << "Master received CheckObjectDataLocation request, object size: " << req.object_versions_size()
+              << ", address: " << req.address();
+    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+                                     "GetOcMetadataManager failed");
+    return ocMetadataManager->CheckObjectDataLocation(req, rsp);
+}
+
 Status MasterOCServiceImpl::SubscribeReceiveEvent(
     std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb, SubscribeReceiveEventReqPb>> serverApi)
 {

@@ -80,6 +80,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
+#include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 
 namespace datasystem {
@@ -638,13 +639,6 @@ public:
      */
     Status HandleNodeRestartEvent(const std::string &workerAddr);
 
-    /**
-     * @brief ClearObject for scale down worker.
-     * @param objKeys need to clear objectKeys.
-     * @param req clear object req.
-     */
-    void ClearObject(const std::vector<std::string> objKeys, const ClearDataReqPb &req);
-
     /*
      * @brief Put p2p metadata to master.
      * @param[in] req The rpc req protobuf.
@@ -1080,6 +1074,7 @@ private:
     // this class manages list of all masters for our objects
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     std::unique_ptr<MetaDataRecoveryManager> metadataRecoveryManager_{ nullptr };
+    std::unique_ptr<WorkerOcServiceClearDataFlow> clearDataFlow_{ nullptr };
 
     WorkerRequestManager workerRequestManager_;
 
