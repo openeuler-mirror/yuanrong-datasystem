@@ -5,11 +5,11 @@
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="#"><link rel="search" title="Search" href="search.html">
         <link rel="prefetch" href="_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 --><title>Index - openYuanrong datasystem documentation</title>
+    <link rel="shortcut icon" href="_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 --><title>Index - openYuanrong datasystem documentation</title>
 <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="_static/custom.css?v=33406c05" />
@@ -313,6 +313,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l2"><a class="reference internal" href="best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
 <li class="toctree-l2"><a class="reference internal" href="best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -975,6 +976,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
         <li><a href="api_reference/api/cpp/KVClient.html#_CPPv48KVClient">KVClient (C++ class)</a>
 </li>
+        <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t">KVClient::AsyncMGetH2D (C++ function)</a>
+</li>
         <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient6CreateERKNSt6stringE8uint64_tRK8SetParamRNSt10shared_ptrI6BufferEE">KVClient::Create (C++ function)</a>
 </li>
         <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient3DelERKNSt6stringE">KVClient::Del (C++ function)</a>, <a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient3DelERKNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE">[1]</a>
@@ -996,6 +999,8 @@ document.addEventListener('DOMContentLoaded', function() {
         <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient8KVClientERK14ConnectOptions">KVClient::KVClient (C++ function)</a>
 </li>
         <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient7MCreateERKNSt6vectorINSt6stringEEERKNSt6vectorI8uint64_tEERK8SetParamRNSt6vectorINSt10shared_ptrI6BufferEEEE">KVClient::MCreate (C++ function)</a>
+</li>
+        <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t">KVClient::MGetH2D (C++ function)</a>
 </li>
         <li><a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient4MSetERKNSt6vectorINSt10shared_ptrI6BufferEEEE">KVClient::MSet (C++ function)</a>, <a href="api_reference/api/cpp/KVClient.html#_CPPv4N8KVClient4MSetERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERNSt6vectorINSt6stringEEERK9MSetParam">[1]</a>
 </li>
@@ -1472,15 +1477,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="_static/togglebutton.js?v=b8b12719"></script>
     <script src="_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="_static/custom.js?v=f6e2bf52"></script>
