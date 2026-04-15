@@ -82,7 +82,7 @@
   - accept/register clients
   - manage shared-memory or socket-based FD passing for client-worker IPC
   - serve object-cache and stream-cache requests
-  - tick perf manager and monitor config changes
+  - tick perf manager, drive lightweight metrics summary emission, and monitor config changes
 - Shutdown:
   - `PreShutDown` then `ShutDown`
   - tear down runtime services and service threads

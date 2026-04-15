@@ -29,6 +29,7 @@
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -66,6 +67,7 @@ Status KVClient::ShutDown()
 Status KVClient::Init()
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);
@@ -83,6 +85,7 @@ KVClient &KVClient::EmbeddedInstance()
 Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto &instance = KVClient::EmbeddedInstance();
     auto rc = instance.impl_->InitEmbedded(config, needRollbackState);
@@ -102,6 +105,8 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     creatParam.consistencyType = ConsistencyType::CAUSAL;
     creatParam.cacheType = param.cacheType;
     Status rc = impl_->Create(key, size, creatParam, buffer);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
@@ -125,6 +130,8 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     RequestParam reqParam;
     std::string key = (keys.empty() ? "" : keys[0]);
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
@@ -156,6 +163,8 @@ Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
     PerfPoint point(PerfKey::KV_CLIENT_MSET_BUFFERS);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSET);
     Status rc = impl_->MSet(buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     RequestParam reqParam;
     reqParam.objectKey = buffers[0]->bufferInfo_->objectKey;
     accessPoint.Record(rc.GetCode(), std::to_string(buffers.size()), reqParam, rc.GetMsg());
@@ -169,6 +178,8 @@ Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t s
     std::vector<Optional<Buffer>> buffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
@@ -188,6 +199,8 @@ Status KVClient::Get(const std::vector<std::string> &keys,
     std::vector<Optional<Buffer>> tmpBuffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get(keys, subTimeoutMs, buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     RequestParam reqParam;
     reqParam.objectKey = objectKeysToString(keys);
     reqParam.timeout = std::to_string(subTimeoutMs);
@@ -247,6 +260,8 @@ Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
     Status rc = impl_->MSet(keys, vals, param);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     RequestParam reqParam;
     std::string key = (keys.empty() ? "" : keys[0]);
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
@@ -288,6 +303,8 @@ Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs
     size_t dataSize = 0;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->GetWithLatch({ key }, vals, timeoutMs, buffers, dataSize);
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     reqParam.timeout = std::to_string(timeoutMs);
@@ -307,6 +324,8 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::stri
     size_t dataSize = 0;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->GetWithLatch(keys, vals, subTimeoutMs, buffers, dataSize);
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     RequestParam reqParam;
     reqParam.objectKey = objectKeysToString(keys);
     reqParam.timeout = std::to_string(subTimeoutMs);
@@ -322,6 +341,8 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
     std::vector<Optional<Buffer>> buffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
@@ -341,6 +362,8 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
     Status rc = impl_->MSet(keys, vals, param, outFailedKeys);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     RequestParam reqParam;
     std::string key = (keys.empty() ? "" : keys[0]);
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
@@ -360,6 +383,8 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<
     std::vector<Optional<Buffer>> buffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get(keys, subTimeoutMs, buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     int64_t dataSize = 0;
     if (rc.IsOk()) {
         readOnlyBuffers.clear();

@@ -1269,6 +1269,8 @@ private:
 
     void StartPerfThread();
     void ShutdownPerfThread();
+    void StartMetricsThread();
+    void ShutdownMetricsThread(bool dumpSummary);
     /**
      * @brief Memory copy in parallel or serial mode.
      * @param[in] isParallel Enable parallel or not.
@@ -1372,6 +1374,10 @@ private:
     std::condition_variable perfCv_;
     std::atomic<bool> perfExitFlag_{ false };
     std::unique_ptr<Thread> perfThread_{ nullptr };
+    std::mutex metricsMutex_;
+    std::condition_variable metricsCv_;
+    std::atomic<bool> metricsExitFlag_{ false };
+    std::unique_ptr<Thread> metricsThread_{ nullptr };
     std::atomic<bool> shmRefReconcileExitFlag_{ false };
     WaitPost shmRefReconcileExitPost_;
     std::unique_ptr<Thread> shmRefReconcileThread_{ nullptr };

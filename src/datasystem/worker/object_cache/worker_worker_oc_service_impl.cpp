@@ -31,6 +31,7 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -96,6 +97,7 @@ Status WorkerWorkerOCServiceImpl::Init()
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
     PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
     GetObjectRemoteReqPb req;
     GetObjectRemoteRspPb rsp;
@@ -131,6 +133,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                   std::vector<RpcMessage> &payload)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Processing pull object[%s] request[%s] offset[%ld] size[%ld]", req.object_key(),
                               req.request_id(), req.read_offset(), req.read_size());

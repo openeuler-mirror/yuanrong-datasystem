@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
@@ -132,6 +133,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
                                      uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
                                      std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
     LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
                               hostPort_.ToString(), objectKey);
@@ -183,6 +185,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
 Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams,
                                           uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     MultiCreateReqPb req;
     req.set_skip_check_existence(skipCheckExistence);
     req.set_client_id(clientId_);
@@ -279,6 +282,7 @@ uint64_t ClientWorkerRemoteApi::ResolveUBGetSize(const GetParam &getParam, const
 Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
                                   std::vector<RpcMessage> &payloads)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
@@ -349,6 +353,7 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
                                       const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                       int existence)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
 
@@ -384,6 +389,9 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
             []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_),
         "Send Publish request error");
 
+    if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    }
     return Status::OK();
 }
 
@@ -391,6 +399,7 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
                                            const PublishParam &param, MultiPublishRspPb &rsp,
                                            const std::vector<std::vector<uint64_t>> &blobSizes)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_CONSTRUCT);
     MultiPublishReqPb req;
     req.set_client_id(clientId_);
@@ -403,10 +412,12 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
     std::vector<MemView> payloads;
+    uint64_t payloadBytes = 0;
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
         if (bufferInfo[i]->shmId.Empty() || (bufferInfo[i]->ubUrmaDataInfo && !bufferInfo[i]->ubDataSentByMemoryCopy)) {
             payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
+            payloadBytes += bufferInfo[i]->dataSize;
         }
         MultiPublishReqPb::ObjectInfoPb objectInfoPb;
         auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
@@ -435,6 +446,7 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
               StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY, StatusCode::K_SCALING },
             rpcTimeoutMs_),
         "Send multi publish request error");
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
     return Status::OK();
 }
 

@@ -408,7 +408,7 @@ Status AtomicWriteTextFile(const std::string &path, const std::string &content)
             close(fd);
         }
     });
-    constexpr int permission = 0644;
+    constexpr mode_t permission = 0600;
     if (fchmod(fd, permission) != 0) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
                                 FormatString("Change temp file mode failed: %s, errno=%d, errmsg=%s", tmpPath, errno,

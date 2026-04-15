@@ -26,6 +26,7 @@ ds_cc_library(
         "//src/datasystem/common/device/ascend:acl_device_manager",
         "//src/datasystem/common/device/ascend:acl_resource_manager",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:buffer_composer",
         "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/common/parallel:common_parallel",

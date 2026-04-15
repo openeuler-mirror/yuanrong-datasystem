@@ -25,6 +25,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
@@ -75,6 +76,7 @@ int main(int argc, char **argv)
             if (perfManager != nullptr) {
                 perfManager->Tick();
             }
+            metrics::Tick();
             // Check whether the configuration file is updated every 10 seconds.
             flags.MonitorConfigFile(FLAGS_monitor_config_file);
         }
@@ -82,6 +84,7 @@ int main(int argc, char **argv)
     if (perfManager != nullptr) {
         perfManager->PrintPerfLog();
     }
+    metrics::PrintSummary();
 
     rc = Worker::GetInstance()->PreShutDown();
     if (rc.IsError()) {

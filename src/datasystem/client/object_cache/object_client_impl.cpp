@@ -44,7 +44,9 @@
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_helper.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -80,6 +82,8 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
+
+DS_DECLARE_bool(log_monitor);
 
 const size_t MSET_MAX_KEY_COUNT = 8;
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
@@ -222,6 +226,7 @@ ObjectClientImpl::~ObjectClientImpl()
 
 Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 {
+    ShutdownMetricsThread(!isDestruct);
     ShutdownPerfThread();
     ShutdownShmRefReconcileThread();
     INJECT_POINT("ObjClient.ShutDown");
@@ -354,6 +359,7 @@ Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool init
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
     StartShmRefReconcileThread();
     StartPerfThread();
+    StartMetricsThread();
     InitParallelFor();
     return Status::OK();
 }
@@ -3399,6 +3405,27 @@ void ObjectClientImpl::StartPerfThread()
 #endif
 }
 
+void ObjectClientImpl::StartMetricsThread()
+{
+    if (!FLAGS_log_monitor || metricsThread_ != nullptr) {
+        return;
+    }
+    LOG(INFO) << "StartMetricsThread.";
+    metricsExitFlag_ = false;
+    metricsThread_ = std::make_unique<Thread>([this] {
+        constexpr int tickIntervalMs = 1000;
+        while (!metricsExitFlag_) {
+            std::unique_lock<std::mutex> locker(metricsMutex_);
+            bool exit = metricsCv_.wait_for(locker, std::chrono::milliseconds(tickIntervalMs),
+                                            [this] { return metricsExitFlag_.load(); });
+            locker.unlock();
+            if (!exit) {
+                metrics::Tick();
+            }
+        }
+    });
+}
+
 void ObjectClientImpl::StartShmRefReconcileThread()
 {
     if (shmRefReconcileThread_ != nullptr) {
@@ -3481,6 +3508,25 @@ void ObjectClientImpl::ShutdownPerfThread()
         perfThread_->join();
     }
 #endif
+}
+
+void ObjectClientImpl::ShutdownMetricsThread(bool dumpSummary)
+{
+    if (metricsThread_ == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> locker(metricsMutex_);
+        metricsExitFlag_ = true;
+    }
+    metricsCv_.notify_all();
+    if (metricsThread_->joinable()) {
+        metricsThread_->join();
+    }
+    metricsThread_.reset();
+    if (dumpSummary) {
+        metrics::PrintSummary();
+    }
 }
 
 Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryEtcd,

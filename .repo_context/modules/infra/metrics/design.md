@@ -33,7 +33,7 @@
   - `tests/st/client/stream_cache/BUILD.bazel`
   - `bazel/ds_deps.bzl`
 - Last verified against source:
-  - `2026-04-15`
+  - `2026-04-16`
 - Related context docs:
   - `.repo_context/modules/infra/metrics/README.md`
   - `.repo_context/modules/infra/metrics/resource-collector.md`
@@ -129,6 +129,7 @@
 - Current implementation or baseline behavior:
   - metrics are collected as string payloads, not typed numeric objects, and persisted through a single concrete exporter backend named `"harddisk"`.
   - `metrics.h/.cpp` also provide a release-scoped lightweight typed API with fixed-descriptor `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and one multi-line `LOG(INFO)` summary block per monitor interval.
+  - the lightweight typed metrics API does not own a background thread; worker main and client runtime code drive periodic `Tick()`/`PrintSummary()` calls, mirroring the `PerfManager` ownership style.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
   - collector startup is gated by `log_monitor` and exporter initialization;

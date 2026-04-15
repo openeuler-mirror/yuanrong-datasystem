@@ -27,6 +27,7 @@
 
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_common_api.h"
 
 
@@ -57,6 +58,7 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
                                     uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
                                     std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
     LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
                               hostPort_.ToString(), objectKey);
@@ -86,6 +88,7 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
                                      const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                      int existence)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     reqTimeoutDuration.Init(connectTimeoutMs_);
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
@@ -98,6 +101,9 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
     }
     PublishRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCPublish(workerOCService_, req, rsp, std::move(rms)));
+    if (!isShm) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    }
     return Status::OK();
 }
 
@@ -105,6 +111,7 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
                                           const PublishParam &param, MultiPublishRspPb &rsp,
                                           const std::vector<std::vector<uint64_t>> &blobSizes)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     reqTimeoutDuration.Init(connectTimeoutMs_);
     MultiPublishReqPb req;
     req.set_client_id(clientId_);
@@ -117,10 +124,12 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
     std::vector<MemView> mvs;
+    uint64_t payloadBytes = 0;
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
         if (bufferInfo[i]->shmId.Empty()) {
             mvs.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
+            payloadBytes += bufferInfo[i]->dataSize;
         }
         MultiPublishReqPb::ObjectInfoPb objectInfoPb;
         auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
@@ -136,7 +145,9 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     std::vector<RpcMessage> rms;
     RETURN_IF_NOT_OK(MemView2RpcMessage(mvs, rms));
-    return api_->WorkerOCMultiPublish(workerOCService_, req, rsp, std::move(rms));
+    RETURN_IF_NOT_OK(api_->WorkerOCMultiPublish(workerOCService_, req, rsp, std::move(rms)));
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
+    return Status::OK();
 }
 
 Status ClientWorkerLocalApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
@@ -195,6 +206,7 @@ Status ClientWorkerLocalApi::PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp)
 Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
                                  std::vector<RpcMessage> &payloads)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
@@ -493,6 +505,7 @@ Status ClientWorkerLocalApi::GetObjMetaInfo(const std::string &tenantId, const s
 Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams,
                                          uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
 {
+    METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     reqTimeoutDuration.Init(connectTimeoutMs_);
     MultiCreateReqPb req;
     req.set_skip_check_existence(skipCheckExistence);

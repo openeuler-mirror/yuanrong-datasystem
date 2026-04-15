@@ -53,6 +53,7 @@ set(WORKER_TRANSPORT_API_SRCS
 
 set(WORKER_TRANSPORT_API_DEPEND_LIBS
         common_log
+        common_metrics
         common_util
         common_inject
         common_rpc_zmq

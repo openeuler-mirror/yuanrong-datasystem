@@ -26,6 +26,7 @@
 #include <thread>
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/shm_guard.h"
@@ -425,6 +426,7 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
 {
     bool hasCapacity = ubWriteOffset <= ubBufferSize_ && readSize <= ubBufferSize_ - ubWriteOffset;
     if (hasCapacity) {
+        METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
         const uint64_t localObjectAddressBase = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
         uint64_t localSegAddress;
         uint64_t localSegSize;
@@ -436,6 +438,8 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
                                        readSize, metaSize, true, eventKeys);
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
+            METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, readSize);
+            METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
             GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
             SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);
             INJECT_POINT_NO_RETURN("worker.get.urma_write_ok");
@@ -485,7 +489,10 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
     auto curIndex = outPayloads.size();
     LOG(INFO) << FormatString("CopyShmUnitToPayloads, objectKey: %s, read offset: %ld, read size: %ld", objectKeyUri,
                               readOffset, readSize);
+    METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
     RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayloads, readOffset, readSize));
+    METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, readSize);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
     auto lastIndex = outPayloads.size();
     GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
     SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);
