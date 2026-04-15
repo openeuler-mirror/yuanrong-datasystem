@@ -2193,5 +2193,17 @@ void WorkerOCServiceImpl::InitShmRefForClient(const ClientKey &clientId, bool su
     memoryRefTable_->InitShmRefForClient(clientId, supportMultiShmRefCount);
 }
 
+Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
+{
+    std::unordered_set<std::string> objectKeySet(req.object_keys().begin(), req.object_keys().end());
+    QueryMetaMap queryMetas;
+    std::unordered_set<std::string> failedIds;
+    RETURN_IF_NOT_OK(gMigrateProc_->QueryMasterMetadata(objectKeySet, queryMetas, failedIds));
+
+    // Add query-failed objects to response
+    rsp.mutable_failed_object_keys()->Add(failedIds.begin(), failedIds.end());
+
+    return getProc_->NotifyRemoteGet(req, std::move(queryMetas), rsp);
+}
 }  // namespace object_cache
 }  // namespace datasystem

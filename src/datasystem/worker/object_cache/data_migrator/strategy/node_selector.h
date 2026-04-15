@@ -28,6 +28,7 @@
 
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/common/util/wait_post.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
@@ -136,6 +137,8 @@ private:
     Thread workerThread_;
     std::mutex taskMutex_;
     std::condition_variable taskCv_;
+    std::atomic<bool> subSuccess_{ false };
+    WaitPost subReadyPost_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

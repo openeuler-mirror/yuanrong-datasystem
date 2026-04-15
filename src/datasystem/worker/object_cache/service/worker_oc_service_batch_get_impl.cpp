@@ -241,6 +241,8 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     if (!FLAGS_enable_data_replication) {
         return;
     }
+    // If the master is disconnected before updating the location, we have to give up retaining the replica, because the
+    // master will only manage the replica through the location.
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(successIds);
     std::unordered_set<std::string> needSetDeleteObjectKeys;
     needSetDeleteObjectKeys.reserve(successIds.size());
@@ -279,6 +281,49 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
             }
         }
     }
+    if (asyncUpdateLocationParams.empty()) {
+        return;
+    }
+    UpdateLocationTask asyncUpdateTask = UpdateLocationTask(asyncUpdateLocationParams);
+    asyncUpdateLocationManager_->AddTask(std::move(asyncUpdateTask));
+}
+
+void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::string> &successIds,
+                                                       const QueryMetaMap &queryMetas,
+                                                       std::map<ReadKey, LockedEntity> &entries)
+{
+    if (!FLAGS_enable_data_replication) {
+        return;
+    }
+    // If the master is disconnected before updating the location, we have to give up retaining the replica, because the
+    // master will only manage the replica through the location.
+    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(successIds);
+    std::unordered_set<std::string> needSetDeleteObjectKeys;
+    needSetDeleteObjectKeys.reserve(successIds.size());
+    etcdCM_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
+    for (const auto &objectKey : needSetDeleteObjectKeys) {
+        auto it = entries.find(ReadKey(objectKey));
+        if (it != entries.end()) {
+            auto rc = TryLockWithRetry(objectKey, it->second.safeObj);
+            if (rc.IsError()) {
+                continue;
+            }
+            it->second.safeObj->Get()->stateInfo.SetNeedToDelete(true);
+            it->second.safeObj->WUnlock();
+        }
+    }
+    std::vector<UpdateLocationParam> asyncUpdateLocationParams;
+
+    for (const auto &objectKey : successIds) {
+        if (needSetDeleteObjectKeys.find(objectKey) != needSetDeleteObjectKeys.end()) {
+            continue;
+        }
+        const auto &meta = queryMetas.at(objectKey);
+        asyncUpdateLocationParams.emplace_back(
+            UpdateLocationParam{ meta.meta().object_key(), meta.meta().version(),
+                                 static_cast<uint32_t>(meta.meta().config().data_format()) });
+    }
+
     if (asyncUpdateLocationParams.empty()) {
         return;
     }

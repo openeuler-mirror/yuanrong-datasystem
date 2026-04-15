@@ -40,6 +40,8 @@
 namespace datasystem {
 namespace object_cache {
 
+using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
+
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
@@ -175,6 +177,15 @@ public:
      */
     void AsyncUpdateLocationFunc(UpdateLocationTask &&task);
 
+    /**
+     * @brief Migrate data by triggering remote get during voluntary scale down.
+     * @param[in] req rpc request.
+     * @param[in] queryMetas Query meta result from master.
+     * @param[out] rsp rpc response.
+     * @return Status of the call.
+     */
+    Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, QueryMetaMap queryMetas, NotifyRemoteGetRspPb &rsp);
+
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
     using TbbTransportStubTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerRemoteWorkerTransApi>>;
@@ -247,6 +258,15 @@ private:
      */
     void BatchUpdateLocationHelper(const std::vector<std::string> &successIds,
         const std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<ReadKey, LockedEntity> &entries);
+
+    /**
+     * @brief Batch update location helper function.
+     * @param[in] successIds The success objectKeys.
+     * @param[in] queryMetas The query metas.
+     * @param[in] entries The entries.
+     */
+    void BatchUpdateLocationHelper(const std::vector<std::string> &successIds, const QueryMetaMap &queryMetas,
+                                   std::map<ReadKey, LockedEntity> &entries);
 
     /**
      * @brief Get map of objectKeys grouped by master.
@@ -357,14 +377,6 @@ private:
      * @return Status of the call.
      */
     Status ProcessObjectEntryAndSyncMetadata(ReadObjectKV &objectKV, bool isAsyncBatchGet);
-
-    /**
-     * @brief Create a copy object metadata to master.
-     * @param[in/out] objectKV The object to be sealed and its corresponding objectKey.
-     * @param[in] version the version of this object.
-     * @return Status of the call.
-     */
-    Status CreateCopyMetaToMaster(ObjectKV &objectKV, uint64_t version);
 
     /**
      * @brief Update location to master.
@@ -936,6 +948,22 @@ private:
      * @return True if can tolerance does not exist node.
      */
     Status TryReconnectRemoteWorker(const std::string &endPoint, Status &lastResult);
+
+    Status ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req, std::set<ReadKey> objectsNeedGetRemote,
+                                          QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
+
+    Status ProcessRemoteGetInNotificationImpl(
+        std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
+        Status &lastRc, std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
+        std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas);
+
+    Status PostProcessRemoteGetInNotificationImpl(
+        std::map<ReadKey, LockedEntity> &lockedEntries,
+        const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>>
+            &groupedQueryMetas,
+        std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
+        std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
+        Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas);
 
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 

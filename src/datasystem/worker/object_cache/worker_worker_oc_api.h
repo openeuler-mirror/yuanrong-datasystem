@@ -56,6 +56,14 @@ public:
 
     virtual Status BatchGetObjectRemote(
         std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> *clientApi) = 0;
+
+    /**
+     * @brief Migrate data by triggering remote get during voluntary scale down.
+     * @param[in] req rpc request.
+     * @param[out] rsp rpc response.
+     * @return Status of the call.
+     */
+    virtual Status NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) = 0;
 };
 
 class WorkerLocalWorkerOCApi : public WorkerWorkerOCApi {
@@ -98,6 +106,13 @@ public:
         override
     {
         (void)clientApi;
+        RETURN_STATUS(K_RUNTIME_ERROR, "Not supported in local version");
+    }
+
+    Status NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override
+    {
+        (void)req;
+        (void)rsp;
         RETURN_STATUS(K_RUNTIME_ERROR, "Not supported in local version");
     }
 
@@ -174,6 +189,8 @@ public:
     Status MigrateData(MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
 
     Status MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
+    Status NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
 
 private:
     // The HostPort of the remote worker node.

@@ -190,6 +190,14 @@ Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, M
     return Status::OK();
 }
 
+Status WorkerRemoteWorkerOCApi::NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    RETURN_IF_NOT_OK(rpcSession_->NotifyRemoteGet(req, rsp));
+    return Status::OK();
+}
+
 Status CreateRemoteWorkerApi(const std::string &endPoint, const std::shared_ptr<AkSkManager> &akSkManager,
                              std::shared_ptr<WorkerRemoteWorkerOCApi> &workerOcApi)
 {
