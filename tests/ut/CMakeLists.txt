@@ -14,6 +14,7 @@ set(DS_UT_DEPEND_LIBS
         slot_recovery_protos
         common_etcd
         common_log
+        common_metrics
         common_buffer
         common_util_queue
         common_util

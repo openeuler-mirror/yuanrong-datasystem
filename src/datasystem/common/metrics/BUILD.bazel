@@ -23,7 +23,9 @@ ds_cc_library(
     hdrs = glob(["*.h", "*.def"], exclude = ["metrics_exporter.h"]),
     deps = [
         ":metrics_exporter_base",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
     ],
 )
