@@ -517,9 +517,7 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
     if (!skipCheckExistence) {
         CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rsp.exists_size()) == createParams.size(), K_INVALID,
                                  "The size of rspExists is not consistent with createParams");
-        for (int i = 0; i < rsp.exists_size(); i++) {
-            exists[i] = rsp.exists(i);
-        }
+        exists.assign(rsp.exists().begin(), rsp.exists().end());
     }
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_FILL_PARAM);
     PostMultiCreate(skipCheckExistence, rsp, createParams, useShmTransfer, point, version, exists);

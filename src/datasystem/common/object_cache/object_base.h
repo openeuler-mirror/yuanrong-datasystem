@@ -367,6 +367,7 @@ struct ObjectBufferInfo {
     uint64_t dataSize;
     uint64_t metadataSize;
     uint32_t ttlSecond = 0;
+    int existence = 0;
     ModeInfo objectMode;
     bool keep = false;
     bool isSeal = false;
