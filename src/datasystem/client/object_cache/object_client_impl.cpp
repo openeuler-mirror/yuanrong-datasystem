@@ -1360,6 +1360,9 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     bool canUseShm = workerApi->IsShmEnable() && dataSizeSum >= workerApi->shmThreshold_;
     if (canUseShm || IsUrmaEnabled() || !skipCheckExistence) {
+        if (!skipCheckExistence) {
+            exists.assign(objectKeyList.size(), false);
+        }
         // Call MultiCreate if: 1) using shared memory, OR 2) UB enabled (need urma_info), OR 3) need to check existence
         // When shared memory is unavailable but UB is enabled or we need to check existence, MultiCreate will use RPC
         RETURN_IF_NOT_OK(
@@ -1536,14 +1539,16 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
         FormatString("The nestedObjectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     const std::string &objectKey = bufferInfo->objectKey;
     const uint32_t ttlSecond = bufferInfo->ttlSecond;
+    const int existence = bufferInfo->existence;
     VLOG(1) << "Begin to publish object, object_key: " << objectKey << " with ttlSecond = " << ttlSecond;
 
     bufferInfo->isSeal = false;
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond),
-                                     FormatString("Publish object %s", objectKey));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
+        FormatString("Publish object %s", objectKey));
 
     VLOG(1) << "Finished publishing object, object_key: " << objectKey;
     return Status::OK();
@@ -1944,6 +1949,7 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     bufferInfo->dataSize = size;
     bufferInfo->metadataSize = metaSize;
     bufferInfo->ttlSecond = param.ttlSecond;
+    bufferInfo->existence = static_cast<int>(param.existence);
     bufferInfo->objectMode.SetWriteMode(param.writeMode);
     bufferInfo->objectMode.SetConsistencyType(param.consistencyType);
     bufferInfo->objectMode.SetCacheType(param.cacheType);
@@ -2619,7 +2625,8 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
         bufferInfoList[i] = buffer->bufferInfo_;
     }
     const uint32_t ttl = buffers.front()->bufferInfo_->ttlSecond;
-    PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
+    auto existence = static_cast<ExistenceOpt>(buffers.front()->bufferInfo_->existence);
+    PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = existence, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     return HandleShmRefCountAfterMultiPublish(buffers, rsp);

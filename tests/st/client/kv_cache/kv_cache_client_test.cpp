@@ -1375,6 +1375,49 @@ TEST_F(KVCacheClientTest, TestMCreateAndMSetBufferSuccess)
     DS_ASSERT_NOT_OK(client->Get(keys, getBuffers));
 }
 
+TEST_F(KVCacheClientTest, TestMCreateWithNXOnExistingKey)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    std::string existingKey = "mcreate_nx_existing_" + client->GenerateKey();
+    std::string newKey = "mcreate_nx_new_" + client->GenerateKey();
+    std::string existingVal = "existing_value";
+    std::string newVal = "new_value";
+
+    DS_ASSERT_OK(client->Set(existingKey, existingVal));
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::string> keys{ existingKey, newKey };
+    std::vector<uint64_t> sizes{ existingVal.size(), newVal.size() };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(client->MCreate(keys, sizes, param, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    ASSERT_EQ(buffers[0], nullptr);
+    ASSERT_NE(buffers[1], nullptr);
+    ASSERT_EQ(buffers[1]->GetSize(), newVal.size());
+
+    DS_ASSERT_OK(buffers[1]->MemoryCopy(newVal.data(), newVal.size()));
+    std::vector<std::shared_ptr<Buffer>> newBuffers{ buffers[1] };
+    DS_ASSERT_OK(client->MSet(newBuffers));
+
+    std::string getExistingVal;
+    DS_ASSERT_OK(client->Get(existingKey, getExistingVal));
+    ASSERT_EQ(getExistingVal, existingVal);
+
+    std::string getNewVal;
+    DS_ASSERT_OK(client->Get(newKey, getNewVal));
+    ASSERT_EQ(getNewVal, newVal);
+
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client->Del(keys, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+}
+
 TEST_F(KVCacheClientTest, TestMSetEmptyInputFailed)
 {
     std::shared_ptr<KVClient> client;

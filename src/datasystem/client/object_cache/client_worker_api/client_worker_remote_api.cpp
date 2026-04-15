@@ -217,9 +217,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
     if (!skipCheckExistence) {
         CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(rsp.exists_size()) == createParams.size(), K_INVALID,
                                  "The size of rspExists is not consistent with createParams");
-        for (int i = 0; i < rsp.exists_size(); i++) {
-            exists[i] = rsp.exists(i);
-        }
+        exists.assign(rsp.exists().begin(), rsp.exists().end());
     }
     PostMultiCreate(skipCheckExistence, rsp, createParams, useShmTransfer, point, version, exists);
     return Status::OK();
