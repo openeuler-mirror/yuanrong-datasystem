@@ -1,11 +1,13 @@
 package(default_visibility = ["//visibility:public"])
 
+filegroup(
+    name = "all_headers",
+    srcs = glob(["*.h", "*.hpp"]),
+)
+
 cc_library(
     name = "object_headers",
-    hdrs = [
-        "buffer.h",
-        "object_enum.h",
-    ],
+    hdrs = [":all_headers"],
     includes = ["../.."],
     deps = [],
 )

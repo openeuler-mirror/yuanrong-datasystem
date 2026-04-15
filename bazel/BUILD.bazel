@@ -53,7 +53,6 @@ datasystem_sdk_tree(
     build_tpl = ":datasystem_sdk_cpp.BUILD.tpl",
     headers = ["//include/datasystem:headers_srcs"],
     libdatasystem = "//:libdatasystem_file",
-    libds_client_py = "//:libds_client_py_file",
 )
 
 config_setting(
