@@ -16,6 +16,7 @@ SECTIONS = [
     {"name": "tests", "path": "tests", "max_depth": 2},
     {"name": "examples", "path": "example", "max_depth": 2},
     {"name": "docs", "path": "docs/source_zh_cn", "max_depth": 2},
+    {"name": "skills", "path": ".skills", "max_depth": 3},
     {"name": "transfer_engine", "path": "transfer_engine", "max_depth": 2},
 ]
 

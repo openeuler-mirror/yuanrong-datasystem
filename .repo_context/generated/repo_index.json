@@ -1,6 +1,6 @@
 {
   "repo_root": "/Users/marck/workspace/yuanrong-datasystem",
-  "generated_at_utc": "2026-04-13T07:51:42+00:00",
+  "generated_at_utc": "2026-04-15T06:50:15+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -400,6 +400,7 @@
         "  - log_guide.md",
         "- best_practices/",
         "  - best_pracitces_for_ub.md",
+        "  - best_practices_for_kvcache.md",
         "  - best_practices_for_rdma.md",
         "  - best_practices_for_reliabilty.md",
         "  - best_practices_for_rh2d.md",
@@ -421,6 +422,7 @@
         "  - cluster-management-metastore.png",
         "  - deployment.png",
         "  - favicon.png",
+        "  - images_deployment.png",
         "  - introduction.png",
         "  - logical_architecture.png",
         "  - logo-large.png",
@@ -433,6 +435,29 @@
         "  - quick_start.md",
         "- conf.py",
         "- index.rst"
+      ]
+    },
+    {
+      "name": "skills",
+      "path": ".skills",
+      "exists": true,
+      "tree": [
+        "- ds-create-pr/",
+        "  - agents/",
+        "    - openai.yaml",
+        "  - references/",
+        "    - create-pull-request-api.md",
+        "  - scripts/",
+        "    - create_pr.py",
+        "  - SKILL.md",
+        "- ds-refresh-docs/",
+        "  - agents/",
+        "    - openai.yaml",
+        "  - references/",
+        "    - online-docs-refresh.md",
+        "  - scripts/",
+        "    - refresh_online_docs.py",
+        "  - SKILL.md"
       ]
     },
     {

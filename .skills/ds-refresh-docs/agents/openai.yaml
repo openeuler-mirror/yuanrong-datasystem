@@ -1,0 +1,4 @@
+interface:
+  display_name: "刷新在线文档"
+  short_description: "构建并同步openYuanrong在线中文文档流程"
+  default_prompt: "Use $ds-refresh-docs to refresh the online Chinese documentation and open a PR."
