@@ -226,6 +226,7 @@ CPU MHz: 2500
 | `--owner_worker` | 字符串 | 对象元数据所属的worker地址（默认：空） |
 | `--numa` | 字符串 | 绑定测试进程到特定的NUMA节点（例如0-3,10-20,1,2,3），与worker参数的CPU亲和性设置不同（默认：空） |
 | `--concurrent` | 开关 | 启用并发读写工作负载模式。默认模式按顺序执行 set->get->del；并发模式先预填充数据，然后并发执行 set 和 get，最后 del 清理。适用于压测并发读写场景 |
+| `--skip_local` | 开关 | 在执行 get 操作时跳过本地 worker 的数据。启用后，每个 get 任务会跳过 `set_worker_addresses` 中与当前 get worker 地址相同的那一份数据；若当前地址不在 `set_worker_addresses` 中，则不跳过 |
 
 #### 集群配置参数
 

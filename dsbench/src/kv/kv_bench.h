@@ -50,8 +50,8 @@ protected:
     Status Del(KVClient &client, uint64_t threadIndex);
 
 private:
-    void GenerateSetKeys(std::vector<std::string> &keys);
-    void GenerateGetOrDelKeys(std::vector<std::string> &keys);
+    void GenerateSetKeys(std::vector<std::string> &keys) const;
+    void GenerateGetOrDelKeys(std::vector<std::string> &keys) const;
     std::vector<std::vector<std::string>> perThreadKeys_;
     std::vector<std::unique_ptr<KVClient>> clients_;
     KVArgs &args_;

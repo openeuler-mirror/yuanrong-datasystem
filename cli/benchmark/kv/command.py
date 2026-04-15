@@ -253,6 +253,12 @@ class KVCommand(BenchmarkBaseCommand):
             "(set -> get -> del), this mode runs: prefill -> concurrent set/get -> del. "
             "Use this to stress-test concurrent read/write performance on the same data.",
         )
+        parser.add_argument(
+            "--skip_local",
+            action="store_true",
+            help="Skip local worker data when executing get operations. "
+            "When enabled, each get task skips keys written by the same-address worker in set_worker_addresses.",
+        )
 
     def _add_cluster_config_arguments(self, parser: argparse.ArgumentParser):
         """Adds arguments related to cluster setup, authentication, and tools."""
