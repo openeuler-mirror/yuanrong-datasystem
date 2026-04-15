@@ -14,11 +14,12 @@ yum install -y autoconf automake libtool m4
 
 ```bash
 bazel build //bazel:datasystem_sdk
-#输出sdk目录：bazel-bin/bazel/datasystem_sdk/cpp
-#主要内容包括：BUILD.bazel、头文件（统一在 cpp/include/datasystem 目录下）、
-#以及动态库 cpp/lib/libdatasystem.so 和 cpp/lib/libds_client_py.so
-#同时输出压缩包：bazel-bin/bazel/datasystem_sdk.zip
 ```
+
+> 输出sdk目录：bazel-bin/bazel/datasystem_sdk/cpp  \
+> 主要内容包括：BUILD.bazel、头文件（统一在 cpp/include/datasystem 目录下）
+> 以及动态库 cpp/lib/libdatasystem.so 和 cpp/lib/libds_client_py.so  \
+> 同时输出压缩包：bazel-bin/bazel/datasystem_sdk.zip和datasystem_sdk_headers_manifest.txt文件
 
 性能优化的Release版本，需要带上 --config=release，下同
 
@@ -36,8 +37,9 @@ bazel build //bazel:datasystem_sdk --config=debug
 
 ```bash
 bazel build //bazel:datasystem_wheel --config=release
-# 输出wheel包：bazel-bin/bazel/openyuanrong_datasystem-0.7.0-cp311-cp311-manylinux_2_34_x86_64.whl
 ```
+
+> 输出wheel包：bazel-bin/bazel/openyuanrong_datasystem-0.7.0-cp311-cp311-manylinux_2_34_x86_64.whl
 
 **3. 只编译 libdatasystem.so:**
 
@@ -67,16 +69,18 @@ bazel build //src/datasystem/common/rdma:fast_transport_manager_wrapper
 
 ```bash
 bazel build //bazel:datasystem_wheel --config=py39 --config=release
-#可选版本包括：3.9, 3.10, 3.11, 3.12, 3.13
 ```
+
+> 可选版本包括：3.9, 3.10, 3.11, 3.12, 3.13
 
 **2. 指定glibc版本编译：**
 glibc未指定时默认自动读取并使用系统glibc版本；若指定可选版本用以下指令：
 
 ```bash
 bazel build //bazel:datasystem_wheel --define glibc_version=2.35 --config=release
-#可选版本包括：2.34, 2.35, 2.36, 2.37, 2.38
 ```
+
+> 可选版本包括：2.34, 2.35, 2.36, 2.37, 2.38
 
 ## 三，做为第三方组件源码集成
 **1. bazelrc 默认选项：**
