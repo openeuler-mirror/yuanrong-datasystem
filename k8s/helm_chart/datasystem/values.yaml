@@ -12,7 +12,7 @@ global:
   # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
   clusterName: ""
   # Environment variable name used to obtain host id for same-node worker affinity.
-  hostIdEnvName: "NODE_ID"
+  hostIdEnvName: ""
 
   etcd:
     # ETCD configuration
