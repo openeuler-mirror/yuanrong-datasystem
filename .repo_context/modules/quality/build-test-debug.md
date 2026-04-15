@@ -113,8 +113,8 @@ Backed by `CMakeLists.txt`:
 
 Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 
-- `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.zip`;
-- the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and shared libraries under `cpp/lib/`.
+- `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.tar`;
+- the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and `cpp/lib/libdatasystem.so`.
 
 ## Environment Notes
 

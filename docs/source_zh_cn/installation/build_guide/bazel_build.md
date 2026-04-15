@@ -18,8 +18,8 @@ bazel build //bazel:datasystem_sdk
 
 > 输出sdk目录：bazel-bin/bazel/datasystem_sdk/cpp  \
 > 主要内容包括：BUILD.bazel、头文件（统一在 cpp/include/datasystem 目录下）
-> 以及动态库 cpp/lib/libdatasystem.so 和 cpp/lib/libds_client_py.so  \
-> 同时输出压缩包：bazel-bin/bazel/datasystem_sdk.zip和datasystem_sdk_headers_manifest.txt文件
+> 以及动态库 cpp/lib/libdatasystem.so  \
+> 同时输出压缩包：bazel-bin/bazel/datasystem_sdk.tar
 
 性能优化的Release版本，需要带上 --config=release，下同
 

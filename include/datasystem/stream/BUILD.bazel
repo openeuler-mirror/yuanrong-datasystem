@@ -1,13 +1,13 @@
 package(default_visibility = ["//visibility:public"])
 
+filegroup(
+    name = "all_headers",
+    srcs = glob(["*.h", "*.hpp"]),
+)
+
 cc_library(
     name = "stream_headers",
-    hdrs = [
-        "stream_config.h",
-        "element.h",
-        "consumer.h",
-        "producer.h",
-    ],
+    hdrs = [":all_headers"],
     strip_include_prefix = "/include",
     deps = [
         "//include/datasystem/utils:utils_headers",
