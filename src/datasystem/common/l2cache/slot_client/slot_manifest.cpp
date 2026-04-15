@@ -240,10 +240,6 @@ Status SlotManifest::Load(const std::string &slotPath, SlotManifestData &manifes
     std::string content;
     RETURN_IF_NOT_OK(ReadWholeFile(manifestPath, content));
     RETURN_IF_NOT_OK(Decode(content, manifest));
-    auto tmpPath = manifestPath + ".tmp";
-    if (FileExist(tmpPath)) {
-        (void)DeleteFile(tmpPath);
-    }
     VLOG(1) << "Loaded slot manifest, path=" << manifestPath << ", " << ManifestDebugString(manifest);
     return Status::OK();
 }

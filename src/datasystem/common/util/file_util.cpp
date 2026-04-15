@@ -29,9 +29,11 @@
 #include <ios>
 #include <ostream>
 #include <iomanip>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
+#include <vector>
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -384,17 +386,42 @@ Status AtomicWriteTextFile(const std::string &path, const std::string &content)
 {
     auto dirPath = DirName(path);
     RETURN_IF_NOT_OK(CreateDir(dirPath, true));
-    auto tmpPath = path + ".tmp";
-    int fd = -1;
-    RETURN_IF_NOT_OK(OpenFile(tmpPath, O_CREAT | O_TRUNC | O_WRONLY, 0644, &fd));
+
+    auto tmpTemplate = path + ".tmp.XXXXXX";
+    std::vector<char> tmpPathBuffer(tmpTemplate.begin(), tmpTemplate.end());
+    tmpPathBuffer.push_back('\0');
+    int fd = mkstemp(tmpPathBuffer.data());
+    if (fd < 0) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
+                                FormatString("Create temp file failed: %s, errno=%d, errmsg=%s", tmpTemplate, errno,
+                                             StrErr(errno)));
+    }
+    std::string tmpPath(tmpPathBuffer.data());
+    bool renamed = false;
+    Raii cleanupTmpFile([&tmpPath, &renamed]() {
+        if (!renamed && FileExist(tmpPath)) {
+            (void)DeleteFile(tmpPath);
+        }
+    });
     Raii closeFd([fd]() {
         if (fd >= 0) {
             close(fd);
         }
     });
+    constexpr int permission = 0644;
+    if (fchmod(fd, permission) != 0) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
+                                FormatString("Change temp file mode failed: %s, errno=%d, errmsg=%s", tmpPath, errno,
+                                             StrErr(errno)));
+    }
     RETURN_IF_NOT_OK(WriteFile(fd, content.data(), content.size(), 0));
     RETURN_IF_NOT_OK(FsyncFd(fd));
-    RETURN_IF_NOT_OK(RenameFile(tmpPath, path));
+    if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("Rename file from %s to %s failed with errno: %d, errmsg: %s", tmpPath, path, errno,
+                                   StrErr(errno)));
+    }
+    renamed = true;
     RETURN_IF_NOT_OK(FsyncDir(dirPath));
     return Status::OK();
 }
