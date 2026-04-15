@@ -646,7 +646,7 @@ public:
         opts.addNodeTime = SCALE_DOWN_ADD_TIME;
         uint64_t spillSize = 64 * 1024ul * 1024ul;
         opts.workerGflagParams = FormatString(
-            " -v=2 -node_timeout_s=%d -node_dead_timeout_s=%d -auto_del_dead_node=true -spill_size_limit=%ld ",
+            " -v=2 -node_timeout_s=%d -node_dead_timeout_s=%d -auto_del_dead_node=true -spill_size_limit=%ld -enable_urma=false ",
             nodeTimeout_, nodeDeadTimeout_, spillSize);
         opts.waitWorkerReady = false;
         for (size_t i = 0; i < opts.numWorkers; i++) {
@@ -1261,9 +1261,8 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_TestVoluntaryDownMigrateSmallObjectsData
     worker1MasterApi_ = nullptr;
     int waitTimeout = 10;
     int stillAliveWorkers = 2;
-    WaitForVoluntaryDownFinished(waitTimeout, stillAliveWorkers, worker1Address_.ToString());
+    ASSERT_TRUE(WaitForVoluntaryDownFinished(waitTimeout, stillAliveWorkers, worker0Address_.ToString()));
 
-    // Local Get
     std::vector<Optional<Buffer>> buffers;
     DS_ASSERT_OK(client1->Get(noneL2CacheObjects, 0, buffers));
     ASSERT_EQ(buffers.size(), noneL2CacheObjects.size());
@@ -1271,7 +1270,6 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_TestVoluntaryDownMigrateSmallObjectsData
         AssertBufferEqual(*buf, value);
     }
 
-    // Remote Get
     std::vector<Optional<Buffer>> buffers1;
     DS_ASSERT_OK(client2->Get(noneL2CacheObjects, 0, buffers1));
     ASSERT_EQ(buffers1.size(), noneL2CacheObjects.size());

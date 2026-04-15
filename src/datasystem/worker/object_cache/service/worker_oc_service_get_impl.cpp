@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <tuple>
 #include <utility>
@@ -2108,40 +2109,6 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
     return UpdateRequestForSuccess(objectKV, request);
 }
 
-Status WorkerOcServiceGetImpl::CreateCopyMetaToMaster(ObjectKV &objectKV, uint64_t version)
-{
-    INJECT_POINT("worker.CreateCopyMetaToMaster");
-    const auto &objectKey = objectKV.GetObjKey();
-    SafeObjType &entry = objectKV.GetObjEntry();
-    master::CreateCopyMetaReqPb req;
-
-    req.set_object_key(objectKey);
-    req.set_address(localAddress_.ToString());
-    req.set_data_format(static_cast<uint32_t>(entry->stateInfo.GetDataFormat()));
-    req.set_redirect(true);
-    req.set_version(version);
-
-    VLOG(1) << FormatString("Send copy metadata to master for object: %s, address: %s", req.object_key(),
-                            localAddress_.ToString());
-    master::CreateCopyMetaRspPb rsp;
-    PerfPoint point(PerfKey::WORKER_CREATE_COPY_META);
-    VLOG(1) << LogHelper::IgnoreSensitive(req);
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, etcdCM_);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, CreateCopyMetaToMaster failed");
-    std::function<Status(CreateCopyMetaReqPb &, CreateCopyMetaRspPb &)> func =
-        [&workerMasterApi](CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp) {
-            return workerMasterApi->CreateCopyMeta(req, rsp);
-        };
-    RETURN_IF_NOT_OK(RedirectRetryWhenMetaMoving(req, rsp, workerMasterApi, func));
-    point.Record();
-    entry->SetCreateTime(rsp.version());
-    entry->SetLifeState(static_cast<ObjectLifeState>(rsp.life_state()));
-    INJECT_POINT("CreateCopyMetaToMaster.failed");
-    return Status::OK();
-}
-
 void WorkerOcServiceGetImpl::AsyncUpdateLocationFunc(UpdateLocationTask &&task)
 {
     VLOG(1) << "AsyncUpdateLocationFunc, the size is " << task.GetParams().size();
@@ -2689,6 +2656,152 @@ bool WorkerOcServiceGetImpl::ToleranceNotExistNode(bool singleCopy, uint32_t wri
 std::string WorkerOcServiceGetImpl::GetHitInfo()
 {
     return CacheHitInfo::Instance().GetHitInfo();
+}
+
+Status WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
+    std::map<ReadKey, LockedEntity> &lockedEntries,
+    const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
+    std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
+    std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
+    Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas)
+{
+    std::vector<std::string> successIds;
+    successIds.reserve(lockedEntries.size());
+    std::set<ReadKey> needRetryIds;
+    for (uint64_t i = 0; i < groupedQueryMetas.size(); ++i) {
+        if (!tempSuccessIds[i].empty()) {
+            successIds.insert(successIds.end(), std::make_move_iterator(tempSuccessIds[i].begin()),
+                              std::make_move_iterator(tempSuccessIds[i].end()));
+        }
+        if (!tempNeedRetryIds[i].empty()) {
+            needRetryIds.insert(std::make_move_iterator(tempNeedRetryIds[i].begin()),
+                                std::make_move_iterator(tempNeedRetryIds[i].end()));
+        }
+        if (!tempFailedIds[i].empty()) {
+            rsp.mutable_failed_object_keys()->Add(tempFailedIds[i].begin(), tempFailedIds[i].end());
+        }
+    }
+    objectsNeedGetRemote.swap(needRetryIds);
+    if (successIds.size() != lockedEntries.size()) {
+        LOG(ERROR) << "Failed to get object data from remote. " << successIds.size() << " objects pulled success: ["
+                   << VectorToString(successIds) << "], meta data num: " << lockedEntries.size()
+                   << " lastRc: " << lastRc.ToString();
+    }
+    BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
+    std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
+    Status &lastRc, std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
+    std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas)
+{
+    std::vector<std::future<Status>> futures;
+    std::list<GetObjectInfo> failedMetas;
+    std::vector<std::list<GetObjectInfo>> tempFailedMetas(groupedQueryMetas.size());
+    std::vector<std::vector<std::string>> tempSuccessIds(groupedQueryMetas.size());
+    std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
+    std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
+    size_t index = 0;
+    auto traceId = Trace::Instance().GetTraceID();
+    std::shared_ptr<GetRequest> fakeRequest = nullptr;
+    std::mutex lastRcMutex;
+    for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
+        auto &address = queryMeta->first;
+        auto &infoList = queryMeta->second;
+
+        auto func = [this, &lastRc, address, &infoList, &fakeRequest, &tempSuccessIds, &tempNeedRetryIds,
+                     &tempFailedIds, &tempFailedMetas, index, traceId, &lastRcMutex] {
+            Status tmpRc = Status::OK();
+            for (auto &infoPair : infoList) {
+                auto &infos = infoPair.first;
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
+                tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, fakeRequest, tempSuccessIds[index],
+                                                       tempNeedRetryIds[index], tempFailedIds[index],
+                                                       tempFailedMetas[index]);
+            }
+            {
+                std::lock_guard<std::mutex> lock(lastRcMutex);
+                lastRc = tmpRc;
+            }
+            return tmpRc;
+        };
+        if (index + 1 == groupedQueryMetas.size()) {
+            LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
+        } else {
+            futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
+        }
+    }
+    for (auto &fut : futures) {
+        if (!fut.get().IsOk()) {
+            LOG(ERROR) << "BatchGetObjectFromRemoteOnLock failed";
+        }
+    }
+    return PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
+                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas);
+}
+
+Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req,
+                                                              std::set<ReadKey> objectsNeedGetRemote,
+                                                              QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp)
+{
+    do {
+        std::unordered_set<std::string> lockfailedIds;
+        std::map<ReadKey, LockedEntity> lockedEntries;
+        Status lastRc = BatchLockForGet(objectsNeedGetRemote, lockedEntries, lockfailedIds);
+        rsp.mutable_failed_object_keys()->Add(lockfailedIds.begin(), lockfailedIds.end());
+        Raii unlockRaii([this, &lockfailedIds, &lockedEntries]() { BatchUnlockForGet(lockfailedIds, lockedEntries); });
+
+        std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> groupedQueryMetas;
+        for (const auto &obj : objectsNeedGetRemote) {
+            auto iter = lockedEntries.find(obj);
+            if (iter == lockedEntries.end()) {
+                continue;
+            }
+            // Override the address to req.addr() (the leaving worker) so that BatchGetObjectFromRemoteOnLock pulls data
+            // from the leaving worker.
+            auto &queryMeta = queryMetas[obj.objectKey];
+            queryMeta.set_address(req.addr());
+            GetObjectInfo info;
+            info.entry = &(iter->second);
+            info.readKey = &(iter->first);
+            info.queryMeta = &(queryMeta);
+            GroupQueryMeta(info, groupedQueryMetas);
+            SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
+        }
+        ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lastRc, lockedEntries, rsp, objectsNeedGetRemote,
+                                           queryMetas);
+    } while (!objectsNeedGetRemote.empty());
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, QueryMetaMap queryMetas,
+                                               NotifyRemoteGetRspPb &rsp)
+{
+    std::unordered_map<std::string, uint64_t> object2VersionInLeavingWorker;
+    for (int i = 0; i < req.object_keys_size(); ++i) {
+        object2VersionInLeavingWorker[req.object_keys(i)] = req.versions(i);
+    }
+
+    // Check version consistency and build ReadKey set.
+    // If Master's version differs from the leaving worker's version, the object has been
+    // modified and the leaving worker's data is stale. Mark it as success (no need to migrate).
+    std::set<ReadKey> objectsNeedGetRemote;
+    for (const auto &kv : queryMetas) {
+        const auto &objectKey = kv.first;
+        const auto &meta = kv.second;
+        auto versionIt = object2VersionInLeavingWorker.find(objectKey);
+        // Fixme: add verification of location info.
+        if (versionIt != object2VersionInLeavingWorker.end() && meta.meta().version() != versionIt->second) {
+            LOG(INFO) << "[NotifyRemoteGet] Object " << objectKey
+                      << " version mismatch, master version: " << meta.meta().version()
+                      << ", leaving worker version: " << versionIt->second << ", skip migration";
+            continue;
+        }
+        ReadKey readKey(objectKey, 0, meta.meta().data_size());
+        objectsNeedGetRemote.insert(readKey);
+    }
+    return ProcessRemoteGetInNotification(req, std::move(objectsNeedGetRemote), queryMetas, rsp);
 }
 }  // namespace object_cache
 }  // namespace datasystem

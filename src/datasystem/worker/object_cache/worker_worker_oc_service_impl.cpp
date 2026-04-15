@@ -758,5 +758,13 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(BatchGetObjectRemoteReq
 
     return Status::OK();
 }
+
+Status WorkerWorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
+{
+    LOG(INFO) << FormatString("NotifyRemoteGet request, object size: %d", req.object_keys_size());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocClientWorkerSvc_->NotifyRemoteGet(req, rsp), "NotifyRemoteGet failed");
+    LOG(INFO) << "NotifyRemoteGet success";
+    return Status::OK();
+}
 }  // namespace object_cache
 }  // namespace datasystem

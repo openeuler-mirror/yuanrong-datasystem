@@ -35,6 +35,22 @@ ds_cc_library(
 
 # success
 ds_cc_library(
+    name = "fast_migrate_transport2",
+    srcs = [
+        "fast_migrate_transport2.cpp",
+    ],
+    hdrs = [
+        "fast_migrate_transport2.h",
+    ],
+    deps = [
+        "//src/datasystem/common/rpc/zmq:zmq_unary_client_impl",
+        "//src/datasystem/common/util:rpc_util",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:migrate_transport",
+    ],
+)
+
+# success
+ds_cc_library(
     name = "migrate_transport",
     srcs = [],
     hdrs = [

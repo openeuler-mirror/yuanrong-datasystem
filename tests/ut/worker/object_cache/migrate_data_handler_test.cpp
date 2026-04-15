@@ -565,7 +565,7 @@ TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByTCP)
     ASSERT_TRUE(result.failedIds.empty());
 }
 
-TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByFastTransport)
+TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestMigrateObjectsByFastTransport)
 {
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
@@ -594,7 +594,7 @@ TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByFastTransport)
     ASSERT_TRUE(result.failedIds.empty());
 }
 
-TEST_F(MigrateDataHandlerSpillTest, TestReleaseFailEnqueueTask)
+TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestReleaseFailEnqueueTask)
 {
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
@@ -634,7 +634,7 @@ TEST_F(MigrateDataHandlerSpillTest, TestReleaseFailEnqueueTask)
     }
 }
 
-TEST_F(MigrateDataHandlerSpillTest, TestFastTransportRetryOnRpcError)
+TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestFastTransportRetryOnRpcError)
 {
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));

@@ -89,6 +89,16 @@ public:
      */
     Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
 
+    /**
+     * @brief Query metadata from master.
+     * @param[in] objectKeys Need query object key list.
+     * @param[out] queryMetas Query meta list.
+     * @param[out] failedIds Failed object key list.
+     * @return K_OK on success, K_RUNTIME_ERROR on error.
+     */
+    Status QueryMasterMetadata(const std::unordered_set<std::string> &objectKeys, QueryMetaMap &queryMetas,
+                               std::unordered_set<std::string> &failedIds);
+
 #ifdef WITH_TESTS
 public:
 #else
@@ -141,16 +151,6 @@ private:
             entry.second.first->WUnlock();
         }
     }
-
-    /**
-     * @brief Query metadat from master.
-     * @param[in] objectKeys Need query object key list.
-     * @param[out] queryMetas Query meta list.
-     * @param[out] failedIds Failed object key list.
-     * @return K_OK on success, the error otherwise.
-     */
-    Status QueryMasterMetadata(const std::unordered_set<std::string> &objectKeys, QueryMetaMap &queryMetas,
-                               std::unordered_set<std::string> &failedIds);
 
     /**
      * @brief Fill objects in lock state.

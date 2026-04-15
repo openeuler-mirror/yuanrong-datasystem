@@ -163,6 +163,21 @@ message MigrateDataDirectRspPb {
   repeated string failed_object_keys = 2;
 }
 
+message NotifyRemoteGetReqPb {
+  repeated string object_keys = 1;
+  string addr = 2;
+  repeated uint64 versions = 3;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message NotifyRemoteGetRspPb {
+  repeated string failed_object_keys = 1;
+}
+
 service WorkerWorkerTransportService {
   // Named to avoid redefinition of ExchangeUrmaConnectInfoSvcMethod with WorkerOCService in object_posix.proto.
   rpc WorkerWorkerExchangeUrmaConnectInfo(UrmaHandshakeReqPb) returns (UrmaHandshakeRspPb) {}
@@ -187,6 +202,7 @@ service WorkerWorkerOCService {
     option (datasystem.urma_enabled_option) = true;
   }
   rpc MigrateDataDirect(MigrateDataDirectReqPb) returns (MigrateDataDirectRspPb) {}
+  rpc NotifyRemoteGet(NotifyRemoteGetReqPb) returns (NotifyRemoteGetRspPb) {}
 }
 
 message UpdateObjectInfoPb {

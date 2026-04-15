@@ -29,6 +29,7 @@ set(WORKER_OC_SRCS
         data_migrator/strategy/scale_down_node_selector.cpp
         data_migrator/strategy/spill_node_selector.cpp
         data_migrator/transport/fast_migrate_transport.cpp
+        data_migrator/transport/fast_migrate_transport2.cpp
         data_migrator/transport/tcp_migrate_transport.cpp
         data_migrator/data_migrator.cpp
         limiter/data_limiter.cpp

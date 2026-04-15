@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_MIGRATE_TRANSPORT_H
 #define DATASYSTEM_MIGRATE_DATA_MIGRATE_TRANSPORT_H
 
+#include <cstdint>
 #include "datasystem/worker/object_cache/data_migrator/basic/base_data_unit.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_progress.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
@@ -46,10 +47,10 @@ public:
     };
 
     struct Response {
-        uint64_t remainBytes{0};
+        uint64_t remainBytes{ UINT64_MAX };  // UINT64_MAX means the field is not set.
         std::unordered_set<ImmutableString> successKeys;
         std::unordered_set<ImmutableString> failedKeys;
-        uint64_t limitRate{0};
+        uint64_t limitRate{ 0 };
     };
 
     /**
@@ -61,6 +62,23 @@ public:
     virtual Status MigrateDataToRemote(const Request &req, Response &rsp) = 0;
 
 protected:
+    int64_t CalcMigrateDataDirectTimeoutMs(uint64_t totalDataBytes)
+    {
+        constexpr int64_t maxTimeoutMs = 180'000;
+        constexpr int64_t minTimeoutMs = 60'000;
+        constexpr int64_t addTimeoutMs = 5'000;
+        constexpr long double bandwidthBytesPerSecond = 10.0L * 1024.0L * 1024.0L * 1024.0L;
+
+        if (totalDataBytes == 0) {
+            return minTimeoutMs;
+        }
+
+        int64_t transferMs = static_cast<int64_t>(
+            std::ceil(static_cast<long double>(totalDataBytes) * SECS_TO_MS / bandwidthBytesPerSecond));
+        int64_t timeoutMs = transferMs + addTimeoutMs;
+        return std::clamp(timeoutMs, minTimeoutMs, maxTimeoutMs);
+    }
+
     const int maxRetryCount_ = 3;
 };
 

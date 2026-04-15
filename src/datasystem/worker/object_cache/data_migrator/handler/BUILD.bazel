@@ -47,5 +47,6 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport",
         "//src/datasystem/worker/object_cache/data_migrator/transport:migrate_transport",
         "//src/datasystem/worker/object_cache/data_migrator/transport:tcp_migrate_transport",
+        "//src/datasystem/worker/object_cache/data_migrator/transport:fast_migrate_transport2",
     ],
 )

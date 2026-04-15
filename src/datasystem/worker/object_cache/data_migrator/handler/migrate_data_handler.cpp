@@ -25,6 +25,7 @@
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
+#include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport2.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
@@ -53,7 +54,7 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       slotId_(slotId)
 {
     if (ShouldUseFastTransport()) {
-        transport_ = std::make_shared<FastMigrateTransport>();
+        transport_ = std::make_shared<FastMigrateTransport2>();
     } else {
         transport_ = std::make_shared<TcpMigrateTransport>();
     }
@@ -61,7 +62,7 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
 
 bool MigrateDataHandler::ShouldUseFastTransport() const
 {
-    return type_ == MigrateType::SPILL && IsUrmaEnabled();
+    return IsUrmaEnabled();
 }
 
 void MigrateDataHandler::SplitByCacheType(std::vector<std::string> &memoryDataIds,
@@ -213,6 +214,9 @@ Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
 
 void MigrateDataHandler::AdjustMaxBatchSize(uint64_t size)
 {
+    if (size == UINT64_MAX) {
+        return;
+    }
     maxBatchSize_ = std::min<uint64_t>(maxBatchSize_, size);
 }
 

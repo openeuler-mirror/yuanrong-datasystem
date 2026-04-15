@@ -64,6 +64,7 @@ public:
      * @return True if the state is OBJECT_SEALED.
      */
     bool IsSealed() const override;
+
     /**
      * @brief Get object state: OBJECT_PUBLISHED.
      * @return True if the state is OBJECT_PUBLISHED.

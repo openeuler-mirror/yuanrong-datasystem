@@ -28,6 +28,7 @@ namespace datasystem {
 namespace object_cache {
 static const std::string RESOURCE_MONITOR_MASTER = "RESOURCE_MONITOR";
 static const int64_t REPORT_RESOURCE_INTERVAL_TIME_MS = 30 * 1000;
+static const int64_t REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED = 500;
 NodeSelector &NodeSelector::Instance()
 {
     static NodeSelector instance;
@@ -75,6 +76,7 @@ void NodeSelector::Shutdown()
         running_.store(false);
     }
     taskCv_.notify_all();
+    subReadyPost_.Set();
 
     if (workerThread_.joinable()) {
         workerThread_.join();
@@ -163,6 +165,13 @@ Status NodeSelector::GetStandbyWorker(const std::unordered_set<std::string> &exc
 
 size_t NodeSelector::GetAvailableMemory(const std::string &address)
 {
+    const int waitReadyTimeoutMs = 1000;
+    if (!subSuccess_.load() && running_.load()) {
+        subReadyPost_.WaitFor(waitReadyTimeoutMs);
+        if (!subSuccess_.load()) {
+            return 0;
+        }
+    }
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&address](NodeInfo info) {return info.nodeId == address; });
@@ -191,12 +200,17 @@ void NodeSelector::WorkerThread()
         auto rc = CollectClusterInfo();
         if (rc.IsError()) {
             LOG(WARNING) << "Collect cluster info failed, errMsg is " << rc.GetMsg();
+        } else {
+            subSuccess_.store(true);
+            subReadyPost_.Set();
         }
         std::unique_lock<std::mutex> lock(taskMutex_);
         if (!running_.load()) {
             break;
         }
-        (void)taskCv_.wait_for(lock, std::chrono::milliseconds(intervalMs), [this]() { return !running_.load(); });
+        (void)taskCv_.wait_for(
+            lock, std::chrono::milliseconds(subSuccess_ ? intervalMs : REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED),
+            [this]() { return !running_.load(); });
     }
 }
 

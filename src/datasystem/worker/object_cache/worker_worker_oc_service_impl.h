@@ -110,6 +110,14 @@ public:
         std::shared_ptr<::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>>
             serverApi) override;
 
+    /**
+     * @brief Migrate data by triggering remote get during voluntary scale down.
+     * @param[in] req rpc request.
+     * @param[out] rsp rpc response.
+     * @return Status of the call.
+     */
+    Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
+
 private:
     struct AggregateInfo {
         bool canBatchHandler = false;

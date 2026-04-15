@@ -27,24 +27,6 @@
 
 namespace datasystem {
 namespace object_cache {
-
-int64_t CalcMigrateDataDirectTimeoutMs(uint64_t totalDataBytes)
-{
-    constexpr int64_t maxTimeoutMs = 180'000;
-    constexpr int64_t minTimeoutMs = 60'000;
-    constexpr int64_t addTimeoutMs = 5'000;
-    constexpr long double bandwidthBytesPerSecond = 10.0L * 1024.0L * 1024.0L * 1024.0L;
-
-    if (totalDataBytes == 0) {
-        return minTimeoutMs;
-    }
-
-    int64_t transferMs = static_cast<int64_t>(
-        std::ceil(static_cast<long double>(totalDataBytes) * SECS_TO_MS / bandwidthBytesPerSecond));
-    int64_t timeoutMs = transferMs + addTimeoutMs;
-    return std::clamp(timeoutMs, minTimeoutMs, maxTimeoutMs);
-}
-
 void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &reqPb,
                                                   const MigrateDataDirectRspPb &rspPb, const Request &req,
                                                   Response &rsp)

@@ -88,6 +88,8 @@ namespace master {
 class MasterOCServiceImpl;
 }
 namespace object_cache {
+
+using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 static constexpr int MEMCOPY_THREAD_NUM = 16;
 static constexpr int PARALLEL_THREAD_NUM = 8;
 class MasterWorkerOCServiceImpl;
@@ -777,6 +779,14 @@ public:
      * @param[in] supportMultiShmRefCount Whether the client support multiple shared memory references.
      */
     void InitShmRefForClient(const ClientKey &clientId, bool supportMultiShmRefCount);
+
+    /**
+     * @brief Migrate data by triggering remote get during voluntary scale down.
+     * @param[in] req rpc request.
+     * @param[out] rsp rpc response.
+     * @return Status of the call.
+     */
+    Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp);
 
 private:
     friend class MasterWorkerOCServiceImpl;
