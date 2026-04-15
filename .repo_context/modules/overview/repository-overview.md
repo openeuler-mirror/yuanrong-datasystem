@@ -32,6 +32,7 @@ This document captures a coarse, source-backed map of the repository. It is inte
 | `example` | multi-language usage samples | includes C++, Go, Java, Python examples |
 | `transfer_engine` | separate but related transfer subsystem | linked from root build when hetero and NPU-related flags are enabled |
 | `docs` | checked-in docs source and generated docs artifacts | current source docs live under `docs/source_zh_cn` |
+| `.skills` | repository-local official Codex skills | includes reusable workflows for GitCode PR creation and online documentation refresh |
 
 ## Architectural Notes Backed By Current Docs
 
