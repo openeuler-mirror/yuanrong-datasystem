@@ -44,9 +44,9 @@ ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, RpcCredential cred, S
 {
 }
 
-Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs)
+Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
 {
-    RETURN_IF_NOT_OK(ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs));
+    RETURN_IF_NOT_OK(ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize));
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Setting client-worker communication via Unix socket : %s",
