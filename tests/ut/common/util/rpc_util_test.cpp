@@ -94,5 +94,12 @@ TEST_F(RpcUtilTest, TestLastRun)
     int32_t expectTime = 300 + 50 + 300 + 200 + 300 + 100 + 50;
     ExecRpcRetryOneError(timeoutMs, expectTime);
 }
+
+TEST_F(RpcUtilTest, IsRpcTimeoutIncludesUrmaWaitTimeout)
+{
+    ASSERT_TRUE(IsRpcTimeout(Status(StatusCode::K_URMA_WAIT_TIMEOUT, "urma wait")));
+    ASSERT_TRUE(IsRpcTimeoutOrTryAgain(Status(StatusCode::K_URMA_WAIT_TIMEOUT, "urma wait")));
+    ASSERT_FALSE(IsRpcTimeout(Status::OK()));
+}
 }  // namespace ut
 }  // namespace datasystem

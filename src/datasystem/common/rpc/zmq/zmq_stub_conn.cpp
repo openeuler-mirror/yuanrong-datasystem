@@ -218,8 +218,8 @@ Status ZmqFrontend::BackendToFrontend()
                                 meta.client_id(), meta.svc_name(), meta.method_index(), GetGatewayId(), elapsed);
         LOG(INFO) << FormatString("%s. %s", rc.ToString(), msg);
         RETURN_IF_NOT_OK(ZmqBaseStubConn::ReportErrorToClient(
-            meta.client_id(), meta, K_RPC_UNAVAILABLE, FormatString("The service is currently unavailable! %s", msg),
-            backendMgr_));
+            meta.client_id(), meta, K_RPC_UNAVAILABLE,
+            FormatString("[RPC_SERVICE_UNAVAILABLE] The service is currently unavailable! %s", msg), backendMgr_));
         return rc;
     }
     return Status::OK();
@@ -261,7 +261,7 @@ Status ZmqFrontend::SendHeartBeats()
 {
     // One more check to ensure we can send out the message without any blocking
     unsigned int events = static_cast<unsigned int>(frontend_->Get(sockopt::ZmqEvents, 0));
-    CHECK_FAIL_RETURN_STATUS(events & ZMQ_POLLOUT, K_RPC_UNAVAILABLE, "Network unreachable");
+    CHECK_FAIL_RETURN_STATUS(events & ZMQ_POLLOUT, K_RPC_UNAVAILABLE, "[TCP_NETWORK_UNREACHABLE] Network unreachable");
     MetaPb meta = CreateMetaData("", ZMQ_HEARTBEAT_METHOD, ZMQ_INVALID_PAYLOAD_INX, heartBeatID_);
     ZmqMsgFrames p;
     RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, p));
@@ -567,7 +567,8 @@ Status ZmqSockConnHelper::GetEndPoint(const ReconnectInfo &cInfo, std::string &p
     Status rc = mQue.ReceiveMsg(reply, timeout);
     if (rc.GetCode() == K_TRY_AGAIN) {
         rc = Status(StatusCode::K_RPC_UNAVAILABLE,
-                    FormatString("Remote host %s is not available", info->channel_->GetZmqEndPoint()));
+                    FormatString("[RPC_RECV_TIMEOUT] Remote host %s is not available",
+                                 info->channel_->GetZmqEndPoint()));
     }
     RETURN_IF_NOT_OK(rc);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
@@ -1295,9 +1296,10 @@ Status ZmqStubConnMgrImpl::Outbound(const std::string &sender, ZmqMetaMsgFrames 
         auto msg = FormatString("Message que %s service %s method %d. Elapsed: [%.6lf]s", meta.client_id(),
                                 meta.svc_name(), meta.method_index(), elapsed);
         LOG(INFO) << FormatString("%s. %s", rc.ToString(), msg);
-        return ZmqBaseStubConn::ReportErrorToClient(meta.client_id(), meta, K_RPC_UNAVAILABLE,
-                                                    FormatString("The service is currently unavailable! %s", msg),
-                                                    frontend->GetBackendMgr());
+        return ZmqBaseStubConn::ReportErrorToClient(
+            meta.client_id(), meta, K_RPC_UNAVAILABLE,
+            FormatString("[RPC_SERVICE_UNAVAILABLE] The service is currently unavailable! %s", msg),
+            frontend->GetBackendMgr());
     }
     return Status::OK();
 }
@@ -1497,11 +1499,14 @@ Status SockConnEntry::WaitForConnected(int64_t timeout)
 
     auto success = wp_.WaitFor(timeout);
     // Timeout waiting to be connected, so return K_RPC_UNAVAILABLE to client
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(success, K_RPC_UNAVAILABLE, "Timeout waiting for SockConnEntry wait");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(success, K_RPC_UNAVAILABLE,
+                                         "[SOCK_CONN_WAIT_TIMEOUT] Timeout waiting for SockConnEntry wait");
     if (!connInProgress_) {
         return connectRc_;
     }
-    RETURN_STATUS(K_RPC_UNAVAILABLE, FormatString("Remote service is not available within allowable %d ms", timeout));
+    RETURN_STATUS(K_RPC_UNAVAILABLE,
+                  FormatString("[REMOTE_SERVICE_WAIT_TIMEOUT] Remote service is not available within allowable %d ms",
+                               timeout));
 }
 
 void SockConnEntry::GetNextFd(bool forceV2mtp, std::shared_ptr<SockConnEntry::FdConn> &fdConn)

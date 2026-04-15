@@ -249,7 +249,8 @@ inline ZmqMessage ZmqInt64ToMessage(int64_t val)
 inline bool IsRpcError(const Status &status)
 {
     if (status.GetCode() == StatusCode::K_RPC_CANCELLED || status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-        || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
+        || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE
+        || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT) {
         return true;
     }
     return false;

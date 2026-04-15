@@ -17,6 +17,7 @@
 /**
  * Description: Status basic function test.
  */
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -135,6 +136,44 @@ TEST_F(StatusTest, TestMoveAssignment)
         ASSERT_FALSE(another.IsOk());
         ASSERT_EQ(another.GetMsg(), "Morality is a beautiful servant and a dangerous master.");
     }
+}
+
+TEST_F(StatusTest, EventWaitForTimeoutReturnsDeadlineExceeded)
+{
+    auto event = std::make_shared<Event>(1);
+    Status status = event->WaitFor(std::chrono::milliseconds(0));
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    ASSERT_TRUE(status.GetMsg().find("Timed out waiting for request") != std::string::npos);
+}
+
+TEST_F(StatusTest, EventWaitForSucceedsAfterNotify)
+{
+    auto event = std::make_shared<Event>(2);
+    event->NotifyAll();
+    Status status = event->WaitFor(std::chrono::milliseconds(0));
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+}
+
+TEST_F(StatusTest, EventWaitAnyTimeoutReturnsDeadlineExceeded)
+{
+    auto waiter = std::make_shared<EventWaiter>();
+    std::shared_ptr<Event> event;
+    Status status = waiter->WaitAny(std::chrono::milliseconds(0), event);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    ASSERT_TRUE(status.GetMsg().find("Timed out waiting for any event") != std::string::npos);
+}
+
+TEST_F(StatusTest, EventWaitAnySucceedsAfterNotify)
+{
+    auto waiter = std::make_shared<EventWaiter>();
+    auto event = std::make_shared<Event>(3, waiter);
+    event->NotifyAll();
+
+    std::shared_ptr<Event> notifiedEvent;
+    Status status = waiter->WaitAny(std::chrono::milliseconds(0), notifiedEvent);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    ASSERT_NE(notifiedEvent, nullptr);
+    ASSERT_EQ(notifiedEvent->GetRequestId(), 3);
 }
 
 TEST_F(StatusTest, TestOperatorEqual)

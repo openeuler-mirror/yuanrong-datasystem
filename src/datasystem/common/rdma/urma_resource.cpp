@@ -40,6 +40,10 @@
 DS_DECLARE_bool(urma_event_mode);
 
 namespace datasystem {
+namespace {
+constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
+}
+
 std::atomic<uint32_t> UrmaJfs::counter_{ 0 };
 std::atomic<uint32_t> UrmaJfr::counter_{ 0 };
 
@@ -338,7 +342,9 @@ std::shared_ptr<UrmaJfs> UrmaConnection::GetJfs() const
 Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr<UrmaJfs> &failedJfs)
 {
     if (failedJfs == nullptr) {
-        LOG(INFO) << "Failed JFS is null, skipping recreate";
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JFS_SKIP] failedJfs is null, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
         return Status::OK();
     }
     // failedJfs must come from the UrmaEvent that reported the failure.
@@ -352,20 +358,30 @@ Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr
         // only one thread is allowed to mark it invalid and recreate jfs_,
         // while other threads must wait here and observe the recreated state.
         if (!failedJfs->MarkInvalid()) {
-            LOG(INFO) << "JFS " << failedJfs->GetJfsId() << " is already invalid, skipping recreate";
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_RECREATE_JFS_SKIP] JFS " << failedJfs->GetJfsId()
+                << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+                << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
-        LOG(INFO) << "Mark JFS " << failedJfs->GetJfsId() << " to invalid, recreating";
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JFS] Mark JFS " << failedJfs->GetJfsId() << " invalid and recreate, remoteAddress="
+            << urmaJfrInfo_.localAddress.ToString() << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
         CHECK_FAIL_RETURN_STATUS(jfs_ != nullptr, K_RUNTIME_ERROR, "JFS already cleared for connection");
         if (jfs_.get() != failedJfs.get()) {
-            LOG(WARNING) << "Already mark JFS " << failedJfs->GetJfsId()
-                         << " to invalid, but jfs_ is not pointing to it, skipping recreate";
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_RECREATE_JFS_SKIP] JFS " << failedJfs->GetJfsId()
+                << " is invalid but connection points to another JFS, remoteAddress="
+                << urmaJfrInfo_.localAddress.ToString() << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
         std::shared_ptr<UrmaJfs> newJfs;
         RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJfs(newJfs), "Failed to recreate JFS");
         jfs_ = std::move(newJfs);
-        LOG(INFO) << "the connection using new jfs id " << jfs_->GetJfsId();
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JFS] connection switched to newJfsId=" << jfs_->GetJfsId()
+            << ", remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
     }
     return resource.AsyncModifyJfsToError(failedJfs);
 }

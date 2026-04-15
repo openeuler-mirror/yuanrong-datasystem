@@ -79,6 +79,7 @@ namespace datasystem {
 namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
+static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
@@ -932,6 +933,17 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
         return lastResult;
     }
 
+    std::string remoteWorkerId = "UNKNOWN";
+    if (etcdCM_ != nullptr) {
+        auto workerId = etcdCM_->GetWorkerIdByWorkerAddr(endPoint);
+        if (!workerId.empty()) {
+            remoteWorkerId = workerId;
+        }
+    }
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
+        << ", remoteWorkerId=" << remoteWorkerId << ", lastResult=" << lastResult.ToString();
+
     HostPort hostAddress;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddress.ParseString(endPoint), "ParseString failed");
 
@@ -1101,7 +1113,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             },
             []() { return Status::OK(); },
             { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-              StatusCode::K_RPC_UNAVAILABLE }, minRetryOnceRpcMs);
+              StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_WAIT_TIMEOUT }, minRetryOnceRpcMs);
         // In case of changed size, error will be returned as part of response PB and urma wont be written any data
         if (rspPb.error().error_code() == K_OC_REMOTE_GET_NOT_ENOUGH) {
             // If this error happens, remote worker should also sent the changed data size

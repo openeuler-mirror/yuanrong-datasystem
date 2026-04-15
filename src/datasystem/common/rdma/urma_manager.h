@@ -573,7 +573,8 @@ private:
      * @return Status of the call.
      */
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
-                       const std::shared_ptr<UrmaJfs> &jfs, std::shared_ptr<EventWaiter> waiter = nullptr);
+                       const std::shared_ptr<UrmaJfs> &jfs, const std::string &remoteAddress,
+                       UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr);
 
     /**
      * @brief Deletes the UrmaEvent object for the request

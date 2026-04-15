@@ -49,6 +49,9 @@ DS_DECLARE_bool(urma_event_mode);
 
 namespace datasystem {
 namespace {
+constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
+constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
+
 enum class UrmaErrorHandlePolicy {
     DEFAULT,  // just report error
     RECREATE_JFS,
@@ -601,6 +604,11 @@ Status UrmaManager::ServerEventHandleThreadMain()
         std::unordered_map<uint64_t, int> failedCompletedReqs;
         Status rc = PollJfcWait(urmaResource_->GetJfc(), MAX_POLL_JFC_TRY_CNT, successCompletedReqs,
                                 failedCompletedReqs, FLAGS_urma_poll_size);
+        if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN) {
+            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+                << "[URMA_POLL_ERROR] PollJfcWait failed: " << rc.ToString()
+                << ", successCount=" << successCompletedReqs.size() << ", failedCount=" << failedCompletedReqs.size();
+        }
 
         // push it into request set
         // we do not need lock for finishedRequests_ as its accessed only by single thread
@@ -668,11 +676,13 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<UrmaEvent> &eve
         return Status::OK();
     }
     // Can happen if event is not yet inserted by sender thread.
-    RETURN_STATUS(K_NOT_FOUND, FormatString("Request id %d doesnt exist in event map", requestId));
+    const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
+    RETURN_STATUS(K_NOT_FOUND, FormatString("Request id %s doesnt exist in event map", requestIdStr.c_str()));
 }
 
 Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
-                                const std::shared_ptr<UrmaJfs> &jfs, std::shared_ptr<EventWaiter> waiter)
+                                const std::shared_ptr<UrmaJfs> &jfs, const std::string &remoteAddress,
+                                UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter)
 {
     if (!jfs->IsValid()) {
         RETURN_STATUS(K_URMA_ERROR, "Urma jfs is invalid");
@@ -681,9 +691,18 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
     auto res = tbbEventMap_.insert(mapAccessor, requestId);
     if (!res) {
         // If this happens that means requestId is duplicated.
-        RETURN_STATUS_LOG_ERROR(K_DUPLICATED, FormatString("Request id %d already exists in event map", requestId));
+        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
+        RETURN_STATUS_LOG_ERROR(K_DUPLICATED,
+                                FormatString("Request id %s already exists in event map", requestIdStr.c_str()));
     } else {
-        mapAccessor->second = std::make_shared<UrmaEvent>(requestId, connection, jfs, waiter);
+        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            connection != nullptr, K_RUNTIME_ERROR,
+            FormatString("Urma connection is null. requestId=%s, remoteAddress=%s, op=%s", requestIdStr.c_str(),
+                         remoteAddress.c_str(), UrmaEvent::OperationTypeName(operationType)));
+        mapAccessor->second = std::make_shared<UrmaEvent>(requestId, connection, jfs, remoteAddress,
+                                                          connection->GetUrmaJfrInfo().uniqueInstanceId, operationType,
+                                                          waiter);
     }
     return Status::OK();
 }
@@ -692,9 +711,12 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
     INJECT_POINT("UrmaManager.UrmaWaitError",
-                 []() { return Status(K_RPC_DEADLINE_EXCEEDED, "Injcect urma wait error"); });
+                 []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
     if (timeoutMs < 0) {
-        RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED, FormatString("timedout waiting for request: %d", requestId_));
+        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
+        RETURN_STATUS_LOG_ERROR(K_URMA_WAIT_TIMEOUT,
+                                FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s",
+                                             requestIdStr.c_str()));
     }
     std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(GetEvent(requestId, event));
@@ -706,7 +728,11 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     VLOG(1) << "[UrmaEventHandler] Started waiting for the request id: " << requestId;
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     Timer timer;
-    RETURN_IF_NOT_OK(event->WaitFor(std::chrono::milliseconds(timeoutMs)));
+    Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
+    if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
+        return Status(K_URMA_WAIT_TIMEOUT, waitRc.GetMsg());
+    }
+    RETURN_IF_NOT_OK(waitRc);
     workerOperationTimeCost.Append("Urma wait time.", timer.ElapsedMilliSecond());
     waitPoint.Record();
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
@@ -720,16 +746,28 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
 
     const auto statusCode = event->GetStatusCode();
     const auto policy = GetUrmaErrorHandlePolicy(statusCode);
-    auto errMsg = FormatString("Polling failed with an error for requestId: %d, cqe status: %d", requestId, statusCode);
+    const auto opName = UrmaEvent::OperationTypeName(event->GetOperationType());
+    const auto &remoteAddr = event->GetRemoteAddress();
+    const auto &remoteInstanceId = event->GetRemoteInstanceId();
+    const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
+    auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d",
+                               requestIdStr.c_str(), statusCode);
     if (policy == UrmaErrorHandlePolicy::RECREATE_JFS) {
-        LOG(WARNING) << "Recreate JFS for requestId: " << requestId << " due to error status code: " << statusCode;
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JFS] requestId=" << requestId << ", op=" << opName << ", remoteAddress=" << remoteAddr
+            << ", remoteInstanceId=" << remoteInstanceId << ", cqeStatus=" << statusCode;
         auto connection = event->GetConnection().lock();
         auto oldJfs = event->GetJfs().lock();
         if (connection != nullptr) {
+            const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
             LOG_IF_ERROR(connection->ReCreateJfs(*urmaResource_, oldJfs),
-                         FormatString("Recreate JFS for requestId: %d failed", requestId));
+                         FormatString("[URMA_RECREATE_JFS_FAILED] requestId=%s, op=%s, remoteAddress=%s, "
+                                      "remoteInstanceId=%s",
+                                      requestIdStr.c_str(), opName, remoteAddr.c_str(), remoteInstanceId.c_str()));
         } else {
-            LOG(WARNING) << "Event connection expired, cannot recreate JFS for requestId: " << requestId;
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_RECREATE_JFS_SKIP] Event connection expired, requestId=" << requestId << ", op=" << opName
+                << ", remoteAddress=" << remoteAddr << ", remoteInstanceId=" << remoteInstanceId;
         }
     }
 
@@ -788,7 +826,9 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             VLOG(1) << "[UrmaEventHandler] Got event with request id: " << userCtx;
             successCompletedReqs.insert(userCtx);
         } else {
-            LOG(ERROR) << FormatString("Failed to poll jfc requestId: %d CR.status: %d", userCtx, crStatus);
+            const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
+            LOG(ERROR) << FormatString("Failed to poll jfc requestId: %s CR.status: %d", requestIdStr.c_str(),
+                                       crStatus);
             failedCompletedReqs[completeRecords[i].user_ctx] = crStatus;
         }
     }
@@ -1006,6 +1046,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     PerfPoint point(PerfKey::URMA_WRITE_TOTAL);
     const uint64_t segVa = urmaInfo.seg_va();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
+    const std::string remoteAddress = requestAddress.ToString();
     std::string remoteConnectionId = urmaInfo.client_id().empty() ? requestAddress.ToString() : urmaInfo.client_id();
 
     point.RecordAndReset(PerfKey::URMA_WRITE_FIND_CONNECTION);
@@ -1068,7 +1109,8 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         PerfPoint pointWrite(PerfKey::URMA_WRITE_SINGLE);
         INJECT_POINT("UrmaManager.UrmaWriteError",
                      []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, waiter));
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, remoteAddress, UrmaEvent::OperationType::WRITE,
+                                     waiter));
         urma_status_t ret =
             ds_urma_write(jfs->Raw(), tjfr, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
                           segVa + urmaInfo.seg_data_offset() + readOffset + writtenSize,
@@ -1102,6 +1144,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     keys.clear();
     const uint64_t segVa = urmaInfo.seg_va();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
+    const std::string remoteAddress = requestAddress.ToString();
     std::string remoteConnectionId = urmaInfo.client_id().empty() ? requestAddress.ToString() : urmaInfo.client_id();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::const_accessor constAccessor;
@@ -1137,7 +1180,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t key = requestId_.fetch_add(1);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
                                              "Local segment is null");
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs));
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, remoteAddress, UrmaEvent::OperationType::READ));
         urma_status_t ret =
             ds_urma_read(jfs->Raw(), importJfr, localSegAccessor->second->Raw(), remoteSegAccessor->second->Raw(),
                          localObjectAddress + metaDataSize + readOffset,
@@ -1162,6 +1205,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     eventKeys.clear();
     auto segVa = remoteInfo.segAddr;
     const HostPort requestAddress(remoteInfo.host, remoteInfo.port);
+    const std::string remoteAddress = requestAddress.ToString();
     const std::string remoteConnectionId = requestAddress.ToString();
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::const_accessor constAccessor;
@@ -1223,7 +1267,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         wr.user_ctx = key;
         wr.rw = rw;
         wr.next = NULL;
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs));
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, remoteAddress, UrmaEvent::OperationType::WRITE));
         eventKeys.emplace_back(key);
         if (dstSgeIdx > 0) {
             wrList[dstSgeIdx - 1].next = &wrList[dstSgeIdx];
@@ -1294,15 +1338,29 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
     TbbUrmaConnectionMap::const_accessor constAccessor;
     auto res = urmaConnectionMap_.find(constAccessor, hostAddress);
     if (!res) {
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_NEED_CONNECT] No existing connection for remoteAddress: " << hostAddress
+            << ", remoteInstanceId=" << (instanceId.empty() ? "UNKNOWN" : instanceId) << ", requires creation.";
         RETURN_STATUS(K_URMA_NEED_CONNECT, "No existing connection requires creation.");
     }
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor->second != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        constAccessor->second != nullptr, K_RUNTIME_ERROR,
+        FormatString("Urma connection is null. remoteAddress=%s, remoteInstanceId=%s", hostAddress.c_str(),
+                     instanceId.empty() ? "UNKNOWN" : instanceId.c_str()));
     if (!instanceId.empty()) {
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(constAccessor->second->GetUrmaJfrInfo().uniqueInstanceId == instanceId,
-                                             K_URMA_NEED_CONNECT,
-                                             "Urma connect has disconnected and needs to be reconnected!");
+        const auto &cachedInstanceId = constAccessor->second->GetUrmaJfrInfo().uniqueInstanceId;
+        if (cachedInstanceId != instanceId) {
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_NEED_CONNECT] Connection stale for remoteAddress: " << hostAddress
+                << ", cachedRemoteInstanceId=" << cachedInstanceId << ", requestRemoteInstanceId=" << instanceId
+                << ", need reconnect.";
+            RETURN_STATUS(K_URMA_NEED_CONNECT, "Urma connect has disconnected and needs to be reconnected!");
+        }
         return Status::OK();
     }
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_NEED_CONNECT] Connection unstable for remoteAddress: " << hostAddress
+        << ", remoteInstanceId=UNKNOWN, need to reconnect.";
     RETURN_STATUS(K_URMA_NEED_CONNECT, "Urma connect unstable, need to reconnect!");
 }
 

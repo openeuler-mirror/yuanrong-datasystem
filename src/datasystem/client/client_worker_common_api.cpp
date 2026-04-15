@@ -315,7 +315,8 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
 #endif
     RETURN_IF_NOT_OK(CreateConnectionForTransferShmFd(timeoutMs, isConnectSuccess, serverFd, socketFd, shmEnableType));
     if (mustUds && !isConnectSuccess) {
-        return { StatusCode::K_RPC_UNAVAILABLE, "Can not create connection to worker for shm fd transfer." };
+        return { StatusCode::K_RPC_UNAVAILABLE,
+                 "[SHM_FD_TRANSFER_FAILED] Can not create connection to worker for shm fd transfer." };
     }
 
     if (isConnectSuccess) {

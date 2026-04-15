@@ -567,7 +567,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 },
                 []() { return Status::OK(); },
                 { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                  StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED }, minRetryOnceRpcMs));
+                  StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED,
+                  StatusCode::K_URMA_WAIT_TIMEOUT }, minRetryOnceRpcMs));
             return Status::OK();
         };
         PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);
