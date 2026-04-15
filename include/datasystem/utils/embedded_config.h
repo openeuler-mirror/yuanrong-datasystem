@@ -146,6 +146,13 @@ public:
     EmbeddedConfig &VLogLevel(int level);
 
     /**
+     * @brief Set log rate limit (entries per second, 0 = unlimited).
+     * @param[in] limit Equivalent to flag log_rate_limit.
+     * @return Reference to self for chaining.
+     */
+    EmbeddedConfig &LogRateLimit(int limit);
+
+    /**
      * @brief Directory for rocksdb metadata files.
      * @param[in] path Equivalent to flag rocksdb_store_dir.
      * @return Reference to self for chaining.

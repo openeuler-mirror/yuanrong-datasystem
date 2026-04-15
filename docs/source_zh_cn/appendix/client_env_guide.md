@@ -37,6 +37,7 @@
 | 18 | `DATASYSTEM_MAX_LOG_FILE_NUM` | `5` | 日志文件最大数量,默认5。 |
 | 19 | `DATASYSTEM_LOG_COMPRESS` | `true` | 日志文件是否压缩,默认压缩。 |
 | 23 | `DATASYSTEM_MIN_LOG_LEVEL` | `0` | 用于设置日志记录的最低级别,默认是0。 |
+| 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒最大日志条数（0表示不限速）。超出限制后，INFO和WARNING日志将被等间隔采样，日志中标注采样率。ERROR和FATAL不受限速影响。 |
 
 ## 运行时环境配置
 

@@ -24,3 +24,13 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+# 日志速率限制测试
+ds_cc_test(
+    name = "log_rate_limiter_test",
+    srcs = ["log_rate_limiter_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//tests/ut:ut_common",
+    ],
+)

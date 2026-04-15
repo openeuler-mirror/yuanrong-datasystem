@@ -79,13 +79,22 @@ static DsLogger GetMessageLogger()
     if (Provider::IsAlive()) {
         auto lp = Provider::Instance().GetLoggerProvider();
         if (lp) {
-            static auto logger = lp->GetDsLogger();
+            // thread_local cache: store shared_ptr to prevent provider address reuse after free.
+            // When tests swap LoggerProvider in SetUp/TearDown, the old provider stays alive
+            // (held by cachedProvider) until the next call updates the cache.
+            thread_local DsLogger cachedLogger;
+            thread_local std::shared_ptr<LoggerProvider> cachedProvider;
+            if (cachedProvider == lp && cachedLogger) {
+                return cachedLogger;
+            }
+            auto logger = lp->GetDsLogger();
             if (logger) {
+                cachedLogger = logger;
+                cachedProvider = lp;
                 return logger;
             }
         }
     }
-
     return nullptr;
 }
 
@@ -116,6 +125,13 @@ void LogMessageImpl::Init()
     logger_ = GetMessageLogger();
     if (logger_) {
         AppendLogMessageImplPrefix(podName_, logStream_);
+        // Log rate sampling: check after prefix is appended
+        bool wasSampled = false;
+        if (!LogRateLimiter::Instance().ShouldLog(level_, &wasSampled)) {
+            skip_ = true;
+            return;
+        }
+        sampled_ = wasSampled;
     }
 }
 
@@ -148,9 +164,18 @@ void LogMessageImpl::ToStderr()
 
 void LogMessageImpl::Flush()
 {
+    if (skip_) {
+        return;  // Dropped by log rate sampling, skip spdlog formatting and disk I/O
+    }
     PerfPoint point(PerfKey::LOG_MESSAGE_FLUSH);
     msgSize_ = streamBuf_.pcount();
     if (logger_) {
+        // Append sampling rate annotation only for logs kept through uniform-interval sampling fallback
+        if (sampled_) {
+            auto sampleRate = LogRateLimiter::Instance().GetSamplingRate();
+            logStream_ << " [sampled 1/" << sampleRate << "]";
+            msgSize_ = streamBuf_.pcount();
+        }
         ToSpdlog();
     } else {
         ToStderr();

@@ -138,6 +138,10 @@ global:
     # Compress old log files in .gz format.
     # This parameter takes effect only when the size of the generated log is greater than max log size.
     logCompress: true
+    # Maximum log entries per second (0 = unlimited).
+    # When exceeded, INFO and WARNING logs are sampled at uniform intervals.
+    # ERROR and FATAL are never sampled.
+    logRateLimit: 0
     # Prefix of log filename, default is program invocation short name. Use standard characters only.
     logFilename: ""
     # Interval between logging stream metrics

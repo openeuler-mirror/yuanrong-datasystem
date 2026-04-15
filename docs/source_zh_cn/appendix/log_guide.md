@@ -105,3 +105,26 @@ openYuanrong datasystem 的日志分为以下类型：
 | 外部组件 | 请求类型 | 关键请求参数 | 描述 |
 |------|--------|----------|------|
 | ETCD | GRPC | key | 将Key字段获取并打印。|
+
+---
+
+## 日志采样
+
+大流量场景下，可通过 `log_rate_limit` 参数限制每秒最大日志条数，避免高频路径上的 INFO/WARNING 日志产生过多磁盘 I/O。
+
+### 工作原理
+
+- 采用令牌桶算法 + 等间隔采样策略
+- 当日志速率超出设定值时，INFO 和 WARNING 日志会被等间隔采样，被保留的日志末尾会追加 `[sampled 1/N]` 标注，表示当前采样率
+- **ERROR 和 FATAL 始终全量输出，不受限速影响**
+
+### 配置方式
+
+| 场景 | 配置方式 | 示例 |
+|------|----------|------|
+| Worker 命令行 | `--log_rate_limit=N` 启动参数 | `./datasystem_worker --log_rate_limit=1000` |
+| Embedded Worker | `EmbeddedConfig::LogRateLimit(N)` | `config.LogRateLimit(1000)` |
+| Standalone Client | 环境变量 `DATASYSTEM_LOG_RATE_LIMIT` | `export DATASYSTEM_LOG_RATE_LIMIT=500` |
+| 运行时动态修改 | 修改 `datasystem.config` 中 `log_rate_limit` 值 | — |
+
+默认值为 `0`（不限速），完全向后兼容。

@@ -25,6 +25,7 @@
 #include <string>
 
 #include "datasystem/common/log/spdlog/log_param.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/logger_provider.h"
 
 namespace datasystem {
@@ -81,6 +82,8 @@ private:
     LogStreamBuf streamBuf_;
     std::ostream logStream_;
     size_t msgSize_;
+    bool skip_ = false;    // Log rate sampling: dropped by limiter
+    bool sampled_ = false; // Log rate sampling: kept through uniform-interval sampling fallback
 };
 
 }  // namespace datasystem

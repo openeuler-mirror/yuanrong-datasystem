@@ -176,6 +176,7 @@ private:
     const std::unordered_set<std::string> flagNameTrustList_{ "v",
                                                               "log_async_queue_size",
                                                               "log_compress",
+                                                              "log_rate_limit",
                                                               "max_log_file_num",
                                                               "arena_per_tenant",
                                                               "node_dead_timeout_s",

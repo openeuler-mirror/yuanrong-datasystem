@@ -119,6 +119,12 @@ EmbeddedConfig &EmbeddedConfig::VLogLevel(int level)
     return *this;
 }
 
+EmbeddedConfig &EmbeddedConfig::LogRateLimit(int limit)
+{
+    extraArgs["log_rate_limit"] = std::to_string(limit);
+    return *this;
+}
+
 EmbeddedConfig &EmbeddedConfig::RocksdbStoreDir(const std::string &path)
 {
     extraArgs["rocksdb_store_dir"] = path;

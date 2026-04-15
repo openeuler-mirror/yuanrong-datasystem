@@ -25,6 +25,7 @@ ds_cc_library(
         ":common_util_gflag_header",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
         "//src/datasystem/common/util:validator",
         "@securec",
     ],
