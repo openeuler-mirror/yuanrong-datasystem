@@ -120,6 +120,156 @@ bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, bool *wasSamp
     return false;
 }
 
+bool LogRateLimiter::WhitelistContains(uint64_t h) const
+{
+    uint64_t idx = h & (TRACE_WHITELIST_SIZE - 1);
+    for (int i = 0; i < TRACE_WHITELIST_PROBE; ++i) {
+        uint64_t slotHash = whitelist_[idx].hash.load(std::memory_order_relaxed);
+        if (slotHash == h) {
+            return true;
+        }
+        if (slotHash == 0) {
+            return false;
+        }
+        idx = (idx + 1) & (TRACE_WHITELIST_SIZE - 1);
+    }
+    return false;
+}
+
+void LogRateLimiter::WhitelistAdd(uint64_t h)
+{
+    uint64_t startIdx = h & (TRACE_WHITELIST_SIZE - 1);
+    for (int i = 0; i < TRACE_WHITELIST_PROBE; ++i) {
+        uint64_t idx = (startIdx + i) & (TRACE_WHITELIST_SIZE - 1);
+        uint64_t expected = 0;
+        if (whitelist_[idx].hash.compare_exchange_strong(expected, h, std::memory_order_relaxed)) {
+            return;
+        }
+        if (expected == h) {
+            return;
+        }
+    }
+    // Full → evict last probed position
+    uint64_t evictIdx = (startIdx + TRACE_WHITELIST_PROBE - 1) & (TRACE_WHITELIST_SIZE - 1);
+    whitelist_[evictIdx].hash.store(h, std::memory_order_relaxed);
+    whitelist_[evictIdx].miniTokens.store(0, std::memory_order_relaxed);
+    whitelist_[evictIdx].lastMiniRefillMs.store(0, std::memory_order_relaxed);
+}
+
+void LogRateLimiter::MiniBucketRefill(TraceSlot &slot)
+{
+    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now().time_since_epoch())
+                     .count();
+    auto lastMs = slot.lastMiniRefillMs.load(std::memory_order_relaxed);
+    if (lastMs == 0) {
+        slot.lastMiniRefillMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed);
+        return;
+    }
+    auto elapsed = nowMs - lastMs;
+    if (elapsed <= 0) {
+        return;
+    }
+    if (!slot.lastMiniRefillMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed)) {
+        return;
+    }
+    int32_t r = rate_.load(std::memory_order_relaxed);
+    int32_t miniRate = std::min(r, TRACE_MINI_BUCKET_RATE);
+    if (miniRate <= 0) {
+        return;
+    }
+    int64_t newTokens = elapsed * static_cast<int64_t>(miniRate) / 1000;
+    if (newTokens <= 0) {
+        return;
+    }
+    int64_t current = slot.miniTokens.load(std::memory_order_relaxed);
+    int64_t desired;
+    do {
+        desired = std::min(current + newTokens, static_cast<int64_t>(miniRate));
+        if (desired <= current) {
+            break;
+        }
+    } while (!slot.miniTokens.compare_exchange_weak(current, desired, std::memory_order_relaxed));
+}
+
+bool LogRateLimiter::MiniBucketConsume(TraceSlot &slot)
+{
+    MiniBucketRefill(slot);
+    int64_t t = slot.miniTokens.load(std::memory_order_relaxed);
+    while (t > 0) {
+        if (slot.miniTokens.compare_exchange_weak(t, t - 1, std::memory_order_relaxed)) {
+            totalLogged_.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+    }
+    return false;
+}
+
+int LogRateLimiter::FindWhitelistSlot(uint64_t traceHash) const
+{
+    uint64_t startIdx = traceHash & (TRACE_WHITELIST_SIZE - 1);
+    for (int i = 0; i < TRACE_WHITELIST_PROBE; ++i) {
+        uint64_t idx = (startIdx + i) & (TRACE_WHITELIST_SIZE - 1);
+        uint64_t slotHash = whitelist_[idx].hash.load(std::memory_order_relaxed);
+        if (slotHash == traceHash) {
+            return static_cast<int>(idx);
+        }
+        if (slotHash == 0) {
+            break;
+        }
+    }
+    return -1;
+}
+
+bool LogRateLimiter::SamplingFallback(int32_t rate, bool *wasSampled)
+{
+    int64_t divisor = std::max(static_cast<int64_t>(rate), INT64_C(2));
+    int64_t dropped = totalDropped_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (divisor > 0 && dropped % divisor == 0) {
+        totalLogged_.fetch_add(1, std::memory_order_relaxed);
+        if (wasSampled) {
+            *wasSampled = true;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash, bool *wasSampled)
+{
+    if (wasSampled) {
+        *wasSampled = false;
+    }
+    int32_t r = rate_.load(std::memory_order_relaxed);
+    if (r <= 0 || level >= ds_spdlog::level::err) {
+        return true;
+    }
+    if (traceHash == 0) {
+        return ShouldLog(level, wasSampled);
+    }
+
+    // Whitelist hit → mini-bucket → sampling fallback
+    int slotIdx = FindWhitelistSlot(traceHash);
+    if (slotIdx >= 0) {
+        return MiniBucketConsume(whitelist_[slotIdx]) || SamplingFallback(r, wasSampled);
+    }
+
+    // Not in whitelist → global token bucket
+    Refill();
+    int64_t t = tokens_.load(std::memory_order_relaxed);
+    while (t > 0) {
+        if (tokens_.compare_exchange_weak(t, t - 1, std::memory_order_relaxed)) {
+            totalLogged_.fetch_add(1, std::memory_order_relaxed);
+            WhitelistAdd(traceHash);
+            return true;
+        }
+    }
+
+    // Global tokens exhausted → sampling fallback
+    WhitelistAdd(traceHash);
+    return SamplingFallback(r, wasSampled);
+}
+
 void LogRateLimiter::SetRate(int32_t ratePerSecond)
 {
     // Clamp negative values to 0 (no limit)
@@ -153,6 +303,11 @@ void LogRateLimiter::Reset()
     rate_.store(0, std::memory_order_relaxed);
     totalLogged_.store(0, std::memory_order_relaxed);
     totalDropped_.store(0, std::memory_order_relaxed);
+    for (int i = 0; i < TRACE_WHITELIST_SIZE; ++i) {
+        whitelist_[i].hash.store(0, std::memory_order_relaxed);
+        whitelist_[i].miniTokens.store(0, std::memory_order_relaxed);
+        whitelist_[i].lastMiniRefillMs.store(0, std::memory_order_relaxed);
+    }
 }
 
 }  // namespace datasystem

@@ -27,6 +27,17 @@
 
 namespace datasystem {
 
+static constexpr int TRACE_WHITELIST_SIZE = 1024;    // 2^10, for bitwise modulo
+static constexpr int TRACE_WHITELIST_PROBE = 4;      // Open addressing max probes
+static constexpr int TRACE_MINI_BUCKET_RATE = 20;    // Per-trace mini-bucket cap (logs/sec)
+static constexpr int CACHE_LINE_SIZE = 64;           // Cache line size for false-sharing avoidance
+
+struct alignas(CACHE_LINE_SIZE) TraceSlot {
+    std::atomic<uint64_t> hash{ 0 };           // FNV-1a hash of trace ID, 0 = empty
+    std::atomic<int64_t> miniTokens{ 0 };      // Mini-bucket tokens
+    std::atomic<int64_t> lastMiniRefillMs{ 0 }; // Mini-bucket last refill timestamp
+};
+
 class LogRateLimiter {
 public:
     static LogRateLimiter &Instance();
@@ -42,6 +53,20 @@ public:
      * - Other levels use token bucket + uniform-interval sampling.
      */
     bool ShouldLog(ds_spdlog::level::level_enum level, bool *wasSampled = nullptr);
+
+    /**
+     * @brief Trace-aware version of ShouldLog.
+     * @param level spdlog log level.
+     * @param traceHash FNV-1a hash of the current trace ID (0 = no trace).
+     * @param wasSampled Output: true if log was kept through sampling fallback.
+     * @return true to allow, false to drop.
+     *
+     * Rules (in addition to non-trace version):
+     * - When traceHash != 0 and trace is in whitelist, consume from mini-bucket.
+     * - Mini-bucket rate = min(rate_, 20) tokens/sec per trace.
+     * - When mini-bucket exhausted, fall through to global sampling.
+     */
+    bool ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash, bool *wasSampled = nullptr);
 
     /**
      * @brief Update the per-second log rate limit. 0 = unlimited.
@@ -73,11 +98,32 @@ private:
      */
     void Refill();
 
+    bool WhitelistContains(uint64_t h) const;
+
+    void WhitelistAdd(uint64_t h);
+
+    void MiniBucketRefill(TraceSlot &slot);
+
+    bool MiniBucketConsume(TraceSlot &slot);
+
+    /**
+     * @brief Probe whitelist for traceHash. Returns slot index if found, -1 if not found.
+     */
+    int FindWhitelistSlot(uint64_t traceHash) const;
+
+    /**
+     * @brief Uniform-interval sampling fallback when tokens exhausted.
+     * @return true if this log is the sampled survivor.
+     */
+    bool SamplingFallback(int32_t rate, bool *wasSampled);
+
     std::atomic<int64_t> tokens_{ 0 };
     std::atomic<int64_t> lastRefillMs_{ 0 };
     std::atomic<int32_t> rate_{ 0 };          // 0 = no rate limiting
     std::atomic<int64_t> totalLogged_{ 0 };   // Total allowed (including sampled)
     std::atomic<int64_t> totalDropped_{ 0 };  // Total dropped
+
+    TraceSlot whitelist_[TRACE_WHITELIST_SIZE];
 };
 
 }  // namespace datasystem

@@ -21,6 +21,7 @@
 #ifndef DATASYSTEM_COMMON_LOG_TRACE_H
 #define DATASYSTEM_COMMON_LOG_TRACE_H
 
+#include <cstdint>
 #include <string>
 
 namespace datasystem {
@@ -76,6 +77,24 @@ public:
     std::string GetTraceID();
 
     /**
+     * @brief Get the cached FNV-1a hash of the current trace ID.
+     * @return 64-bit hash value, 0 if trace ID is empty.
+     */
+    uint64_t GetCachedHash() const
+    {
+        return cachedHash_;
+    }
+
+    /**
+     * @brief Get raw pointer to internal trace ID buffer (zero-copy).
+     * @return Pointer to null-terminated trace ID string.
+     */
+    const char *GetTraceIDPtr() const
+    {
+        return traceID_;
+    }
+
+    /**
      * @brief Clear the trace ID stored in thread_local.
      */
     void Invalidate();
@@ -105,6 +124,8 @@ private:
     char traceID_[TRACEID_MAX_SIZE + 1] = { 0 };
 
     int16_t subPosition_ = -1;
+
+    uint64_t cachedHash_ = 0;
 };
 
 enum class TraceGuardType : int { INVALID = -1, CLEAR_TRACE_ID = 0, CLEAR_SUB_TRACE_ID };

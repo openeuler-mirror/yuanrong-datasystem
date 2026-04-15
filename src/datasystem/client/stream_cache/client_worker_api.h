@@ -44,6 +44,7 @@ namespace client {
 namespace stream_cache {
 class ClientWorkerApi : public ClientWorkerRemoteCommonApi {
 public:
+    using ClientWorkerRemoteCommonApi::Init;
     /**
      * @brief Construct ClientWorkerApi.
      * @param[in] hostPort The address of the worker node.
