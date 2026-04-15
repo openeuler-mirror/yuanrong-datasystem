@@ -33,6 +33,7 @@
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
@@ -82,6 +83,10 @@ DS_DEFINE_uint32(stderrthreshold, 2,
                  "addition to logfiles.  This flag obsoletes --alsologtostderr.");
 DS_DEFINE_int32(minloglevel, 0, "Messages logged at a lower level than this don't actually get logged anywhere.");
 DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of async logger's message queue.");
+DS_DEFINE_int32(log_rate_limit, 0,
+    "Maximum log entries per second (0 = unlimited). "
+    "When exceeded, INFO and WARNING logs are sampled at uniform intervals. "
+    "ERROR and FATAL are never sampled.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(cluster_name);
@@ -183,6 +188,9 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
     if (logger == nullptr) {
         return false;
     }
+
+    // Sync log rate limit to the rate limiter
+    LogRateLimiter::Instance().SetRate(FLAGS_log_rate_limit);
 
     if (loggerParam.logAsync) {
         LOG(INFO) << "Async logging buffer duration: " << globalLogParam.logBufSecs << " s";
@@ -297,6 +305,10 @@ void Logging::InitClientAdvancedConfig()
     }
 
     FLAGS_log_monitor = GetBoolFromEnv(LOG_MONITOR_ENABLE.c_str(), DEFAULT_CLIENT_LOG_MONITOR);
+
+    if (FLAGS_log_rate_limit == 0) {
+        FLAGS_log_rate_limit = GetInt32FromEnv(LOG_RATE_LIMIT_ENV.c_str(), 0);
+    }
 }
 
 void Logging::InitClientConfig()
@@ -351,7 +363,8 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
                       << ", max_log_size: " << FLAGS_max_log_size << ", max_log_file_num: " << FLAGS_max_log_file_num
                       << ", log_compress: " << FLAGS_log_compress << ", log_retention_day: " << FLAGS_log_retention_day
                       << ", log_async: " << FLAGS_log_async << ", log_async_queue_size: " << FLAGS_log_async_queue_size
-                      << ", log_v: " << FLAGS_v << std::endl;
+                      << ", log_v: " << FLAGS_v
+                      << ", log_rate_limit: " << FLAGS_log_rate_limit << std::endl;
         }
     } else {
         FLAGS_log_monitor = false;

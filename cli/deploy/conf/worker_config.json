@@ -447,6 +447,10 @@
         "value": "0",
         "description": "Vlog level, a larger value indicates more detailed logs. The value is between 0-3."
     },
+    "log_rate_limit": {
+        "value": "0",
+        "description": "Maximum log entries per second (0 = unlimited). When exceeded, INFO and WARNING logs are sampled at uniform intervals. ERROR and FATAL are never sampled."
+    },
     "enable_curve_zmq": {
         "value": "false",
         "description": "Whether to enable Curve ZMQ for authentication and authorization between components."

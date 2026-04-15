@@ -28,6 +28,8 @@
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
+
 #include <securec.h>
 
 #include "datasystem/common/log/log.h"
@@ -340,6 +342,14 @@ void Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::strin
             std::string errMsg;
             if (!SetCommandLineOption(flagName.c_str(), newVal, errMsg)) {
                 LOG(ERROR) << errMsg;
+            }
+            // Sync log rate limit to the rate limiter singleton
+            if (flagName == "log_rate_limit") {
+                try {
+                    LogRateLimiter::Instance().SetRate(std::stoi(newVal));
+                } catch (const std::exception &e) {
+                    LOG(ERROR) << "Failed to sync log_rate_limit: " << e.what();
+                }
             }
 #ifdef WITH_TESTS
             if (flagName == "inject_actions") {

@@ -8,6 +8,7 @@ data:
     -v={{ .Values.global.logLevel }}
     -log_async_queue_size={{ .Values.global.log.logAsyncQueueSize }}
     -log_compress={{ .Values.global.log.logCompress }}
+    -log_rate_limit={{ .Values.global.log.logRateLimit }}
     -max_log_file_num={{ .Values.global.log.maxLogFileNum }}
     -arena_per_tenant={{ .Values.global.performance.arenaPerTenant }}
     -node_dead_timeout_s={{ .Values.global.reliability.nodeDeadTimeoutS }}

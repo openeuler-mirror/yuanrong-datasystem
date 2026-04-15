@@ -96,6 +96,7 @@ spec:
         - -log_async={{ $.Values.global.log.logAsync }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
+        - -log_rate_limit=$(LOG_RATE_LIMIT)
         - -logfile_mode=416
         - -shared_memory_size_mb=$(SHARE_MEMORY_SIZE)
         - -sc_local_cache_memory_size_mb={{ $.Values.global.resources.datasystemWorker.scLocalCacheMemorySizeMb }}
@@ -344,6 +345,8 @@ spec:
             value: "/home/yuanrong/datasystem/rocksdb"
           - name: SHARE_MEMORY_SIZE
             value: "{{ $spec.workerResources.sharedMemory }}"
+          - name: LOG_RATE_LIMIT
+            value: "{{ $.Values.global.log.logRateLimit }}"
           - name: CURVE_KEY_DIR
             value: {{ $.Values.global.rpc.curveKeyDir }}
           - name: ENABLE_CURVE_ZMQ

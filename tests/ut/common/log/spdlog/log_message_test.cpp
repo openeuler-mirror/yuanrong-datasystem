@@ -120,8 +120,11 @@ TEST_F(LogMessageTest, BasicLogging)
     LOG(WARNING) << warningLog << 42;  // WARNING_DISK_FULL 42
     LOG(ERROR) << errorLog << 404;     // HTTP-like "not found" error 404
 
-    for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
+    auto files = GetFilesInDirectory(FLAGS_log_dir);
+    int filesChecked = 0;
+    for (const auto &filename : files) {
         if (filename.find("ds_llt") != std::string::npos) {
+            filesChecked++;
             if (filename.find(".INFO.log") != std::string::npos) {
                 ASSERT_TRUE(FileContains(filename, infoLog));
                 ASSERT_TRUE(FileContains(filename, warningLog));
@@ -137,6 +140,8 @@ TEST_F(LogMessageTest, BasicLogging)
             }
         }
     }
+    ASSERT_GT(filesChecked, 0) << "No log files found in: " << FLAGS_log_dir
+                                << ", total entries: " << files.size();
 }
 
 TEST_F(LogMessageTest, ConditionalLogging)
@@ -211,6 +216,7 @@ TEST_F(LogMessageTest, DebugOnlyLogging)
     DLOG(WARNING) << warningLog << 42;            // WARNING_DISK_FULL 42
     DLOG(ERROR) << errorLog << 404 << std::endl;  // HTTP-like "not found" error 404
 
+#if DCHECK_IS_ON()
     for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
         if (filename.find("ds_llt") != std::string::npos) {
             if (filename.find(".INFO.log") != std::string::npos) {
@@ -228,6 +234,7 @@ TEST_F(LogMessageTest, DebugOnlyLogging)
             }
         }
     }
+#endif
 }
 
 TEST_F(LogMessageTest, FrequencyLogging)

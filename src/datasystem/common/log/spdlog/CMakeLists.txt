@@ -1,4 +1,5 @@
 set(SPDLOG_SRCS
+        log_rate_limiter.cpp
         logger_context.cpp
         logger_provider.cpp
         log_message_impl.cpp
