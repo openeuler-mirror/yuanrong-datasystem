@@ -33,7 +33,6 @@
 
 #include <gtest/gtest.h>
 
-#include "../../../common/binmock/binmock.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/slot_client/slot_compactor.h"
@@ -57,9 +56,6 @@ DS_DECLARE_uint64(distributed_disk_sync_batch_bytes);
 
 namespace datasystem {
 namespace ut {
-using testing::_;
-using testing::Return;
-
 namespace {
 constexpr char TARGET_WORKER_ADDRESS[] = "127.0.0.1:31501";
 constexpr char SOURCE_WORKER_ADDRESS_A[] = "127.0.0.1:31502";
@@ -83,15 +79,6 @@ std::string MakeTempDir()
     auto *dir = mkdtemp(buffer.data());
     EXPECT_NE(dir, nullptr);
     return dir == nullptr ? "" : std::string(dir);
-}
-
-bool IsBinMockSupported()
-{
-#if defined(__arm__) || defined(__aarch64__) || defined(__ARM_ARCH)
-    return false;
-#else
-    return true;
-#endif
 }
 
 std::string GetSlotRootPath(const std::string &baseDir, const std::string &workerAddress = {})
@@ -585,7 +572,7 @@ TEST_F(SlotStoreTest, SlotManifestDecodeRejectsMalformedFields)
               StatusCode::K_INVALID);
 }
 
-TEST_F(SlotStoreTest, SlotManifestLoadRemovesTmpFile)
+TEST_F(SlotStoreTest, SlotManifestLoadKeepsTmpFile)
 {
     auto dir = MakeTempDir() + "/manifest_tmp";
     SlotManifestData manifest;
@@ -594,8 +581,27 @@ TEST_F(SlotStoreTest, SlotManifestLoadRemovesTmpFile)
 
     SlotManifestData loaded;
     ASSERT_TRUE(SlotManifest::Load(dir, loaded).IsOk());
-    ASSERT_FALSE(FileExist(dir + "/manifest.tmp"));
+    ASSERT_TRUE(FileExist(dir + "/manifest.tmp"));
     (void)RemoveAll(dir.substr(0, dir.find("/manifest_tmp")));
+}
+
+TEST_F(SlotStoreTest, SlotManifestLoadMustNotBreakConcurrentAtomicStore)
+{
+    auto dir = MakeTempDir() + "/manifest_tmp_race";
+    SlotManifestData manifest;
+    ASSERT_TRUE(SlotManifest::StoreAtomic(dir, manifest).IsOk());
+
+    const auto manifestPath = JoinPath(dir, "manifest");
+    const auto tmpPath = manifestPath + ".tmp";
+    ASSERT_TRUE(AtomicWriteTextFile(tmpPath, SlotManifest::Encode(manifest)).IsOk());
+    ASSERT_TRUE(FileExist(tmpPath));
+
+    SlotManifestData loaded;
+    ASSERT_TRUE(SlotManifest::Load(dir, loaded).IsOk());
+
+    auto renameRc = RenameFile(tmpPath, manifestPath);
+    EXPECT_TRUE(renameRc.IsOk()) << renameRc.ToString();
+    (void)RemoveAll(dir.substr(0, dir.find("/manifest_tmp_race")));
 }
 
 TEST_F(SlotStoreTest, PersistenceApiAggregateSaveGetDelete)
@@ -816,15 +822,15 @@ TEST_F(SlotStoreTest, FileUtilErrorPathsReturnFailure)
     ASSERT_TRUE(AtomicWriteTextFile(parentFile + "/child", "x").IsError());
 }
 
-TEST_F(SlotStoreTest, AtomicWriteTextFileReturnsErrorWhenOpenFails)
+TEST_F(SlotStoreTest, AtomicWriteTextFileCleansTmpFileWhenRenameFails)
 {
-    if (!IsBinMockSupported()) {
-        GTEST_SKIP() << "binmock is not supported on this architecture";
-    }
-    BINEXPECT_CALL((Status(*)(const std::string &, int, mode_t, int *))OpenFile, (_, _, _, _))
-        .WillRepeatedly(Return(Status(StatusCode::K_IO_ERROR, __LINE__, __FILE__, "mock open failure")));
-    ASSERT_EQ(AtomicWriteTextFile(baseDir_ + "/mock_manifest", "abc").GetCode(), StatusCode::K_IO_ERROR);
-    RELEASE_STUBS
+    auto targetDir = baseDir_ + "/rename_target_dir";
+    ASSERT_TRUE(CreateDir(targetDir, true).IsOk());
+    ASSERT_EQ(AtomicWriteTextFile(targetDir, "abc").GetCode(), StatusCode::K_RUNTIME_ERROR);
+
+    std::vector<std::string> tmpFiles;
+    ASSERT_TRUE(Glob(targetDir + ".tmp.*", tmpFiles).IsOk());
+    ASSERT_TRUE(tmpFiles.empty());
 }
 
 TEST_F(SlotStoreTest, SlotSnapshotDeleteAndFindLatest)
