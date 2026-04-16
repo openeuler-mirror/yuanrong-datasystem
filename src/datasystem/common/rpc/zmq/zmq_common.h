@@ -40,6 +40,7 @@
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/rpc/zmq/zmq_message.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -75,7 +76,11 @@ inline Status ParseFromZmqMessage(const ZmqMessage &msg, T &pb)
 {
     PerfPoint point(PerfKey::ZMQ_COM_PARSE_FROM_ZMQ_MESSAGE);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(msg.Size()), K_INVALID, "Parse out of range.");
-    bool rc = pb.ParseFromArray(msg.Data(), msg.Size());
+    bool rc = false;
+    {
+        METRIC_TIMER(metrics::KvMetricId::ZMQ_RPC_DESERIALIZE_LATENCY);
+        rc = pb.ParseFromArray(msg.Data(), msg.Size());
+    }
     point.Record();
     RETURN_OK_IF_TRUE(rc);
     const google::protobuf::Descriptor *descriptor = pb.GetDescriptor();
@@ -97,7 +102,11 @@ inline Status SerializeToZmqMessage(const T &pb, ZmqMessage &dest)
     auto sz = pb.ByteSizeLong();
     RETURN_IF_NOT_OK(dest.AllocMem(sz));
     auto *p = dest.Data();
-    bool rc = pb.SerializeToArray(p, sz);
+    bool rc = false;
+    {
+        METRIC_TIMER(metrics::KvMetricId::ZMQ_RPC_SERIALIZE_LATENCY);
+        rc = pb.SerializeToArray(p, sz);
+    }
     CHECK_FAIL_RETURN_STATUS(rc, K_RUNTIME_ERROR, "Serialization error");
     point.Record();
     return Status::OK();

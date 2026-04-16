@@ -75,9 +75,11 @@ Status ZmqSocket::ZmqRecvMsg(ZmqMessage &msg, ZmqRecvFlags flags)
     auto endTick = std::chrono::steady_clock::now();
     // Adjust the return code for blocking mode
     if (status.GetCode() == K_TRY_AGAIN && blocking) {
-        int64_t ms = std::chrono::duration_cast<std::chrono::seconds>(endTick - startTick).count();
+        int64_t waitSec = std::chrono::duration_cast<std::chrono::seconds>(endTick - startTick).count();
+        LOG(WARNING) << FormatString("[ZMQ_RECV_TIMEOUT] Blocking recv timed out after %d seconds", waitSec);
         RETURN_STATUS(K_RPC_UNAVAILABLE,
-                      FormatString("Waited for %d seconds. Didn't receive any response from server", ms));
+                      FormatString("[ZMQ_RECV_TIMEOUT] Waited %d seconds. Didn't receive any response from server",
+                                   waitSec));
     }
     return status;
 }

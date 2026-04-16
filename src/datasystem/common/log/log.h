@@ -31,8 +31,47 @@
 
 DS_DECLARE_int32(v);
 DS_DECLARE_int32(minloglevel);
+DS_DECLARE_int32(log_monitor_interval_ms);
 
 namespace datasystem {
+
+// Default when FLAGS_log_monitor_interval_ms <= 0 (must match gflag default in res_metric_collector.cpp).
+static constexpr int DEFAULT_LOG_MONITOR_INTERVAL_MS = 10000;
+
+// Thread-safe throttle for LOG_FIRST_EVERY_N: first log after each monitor interval,
+// then every n hits (relaxed atomics; ordering is best-effort for log spam control).
+inline bool LogFirstEveryNShouldEmit(int n, int intervalMs, std::atomic<int64_t> &lastNs,
+    std::atomic<int> &counter)
+{
+    if (n < 1) {
+        return false;
+    }
+    namespace ch = std::chrono;
+    const auto now = ch::steady_clock::now();
+    const int64_t nowNs = ch::duration_cast<ch::nanoseconds>(now.time_since_epoch()).count();
+
+    int64_t last = lastNs.load(std::memory_order_relaxed);
+    if (last == 0) {
+        lastNs.store(nowNs, std::memory_order_relaxed);
+        last = nowNs;
+    }
+
+    const int iv = intervalMs > 0 ? intervalMs : DEFAULT_LOG_MONITOR_INTERVAL_MS;
+    const int64_t intervalNs = static_cast<int64_t>(iv) * 1000000LL;
+
+    // Single CAS attempt: on contention, do not spin; fall through to fetch_add (best-effort throttle).
+    last = lastNs.load(std::memory_order_relaxed);
+    if (nowNs - last >= intervalNs) {
+        if (lastNs.compare_exchange_weak(last, nowNs, std::memory_order_release, std::memory_order_relaxed)) {
+            counter.store(n - 1, std::memory_order_relaxed);
+            return true;
+        }
+    }
+
+    const int prev = counter.fetch_add(1, std::memory_order_relaxed);
+    return ((prev + 1) % n == 0);
+}
+
 #define DS_LOGS_LEVEL_INFO datasystem::LogSeverity::INFO
 #define DS_LOGS_LEVEL_WARNING datasystem::LogSeverity::WARNING
 #define DS_LOGS_LEVEL_ERROR datasystem::LogSeverity::ERROR
@@ -91,6 +130,15 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 #define LOG_FIRST_AND_EVERY_N(severity, n)                                                                  \
     static std::atomic<uint64_t> DS_LOG_PP_CAT(LOG_FIRST_AND_EVERY_N_COUNTER_, __LINE__){ 0 };             \
     if (datasystem::ShouldLogFirstAndEveryN((n), DS_LOG_PP_CAT(LOG_FIRST_AND_EVERY_N_COUNTER_, __LINE__))) \
+    LOG(severity)
+
+// First log each monitor interval, then every N calls in that interval (see LogFirstEveryNShouldEmit).
+// Style matches LOG_IF_EVERY_N: static state per __LINE__, then if (...) LOG(...).
+#define LOG_FIRST_EVERY_N(severity, n)                                                                      \
+    static std::atomic<int64_t> DS_LOG_FTE_LAST_NS_##__LINE__{ 0 };                                          \
+    static std::atomic<int> DS_LOG_FTE_CTR_##__LINE__{ (n) - 1 };                                            \
+    if (datasystem::LogFirstEveryNShouldEmit(                                                                \
+            (n), FLAGS_log_monitor_interval_ms, DS_LOG_FTE_LAST_NS_##__LINE__, DS_LOG_FTE_CTR_##__LINE__))   \
     LOG(severity)
 
 // Verbose Logging Macros

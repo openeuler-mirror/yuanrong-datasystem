@@ -30,6 +30,28 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "zmq_metrics_fault_test",
+    srcs = [
+        "zmq_metrics_fault_test.cpp",
+        "zmq_test.h",
+    ],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/rdma:fast_transport_base",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "//src/datasystem/common/rpc/zmq:zmq_common",
+        "//src/datasystem/common/rpc/zmq:zmq_context",
+        "//src/datasystem/common/rpc/zmq:zmq_service",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:zmq_test_zmq_cc_proto",
+    ],
+)
+
+ds_cc_test(
     name = "zmq_fd_leak_repro_test",
     srcs = [
         "zmq_fd_leak_repro_test.cpp",

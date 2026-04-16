@@ -328,6 +328,21 @@ cc_proto_library(
     deps = [":zmq_perf_proto"],
 )
 
+proto_library(
+    name = "zmq_test_proto",
+    srcs = ["zmq_test.proto"],
+    strip_import_prefix = PROTO_ROOT,
+    deps = [
+        ":rpc_option_proto",
+        ":utils_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "zmq_test_cc_proto",
+    deps = [":zmq_test_proto"],
+)
+
 zmq_cc_proto_library(
     name = "share_memory_zmq_cc_proto",
     extra_protos = [
@@ -496,5 +511,6 @@ zmq_cc_proto_library(
     deps = [
         ":rpc_option_cc_proto",
         ":utils_cc_proto",
+        ":zmq_test_cc_proto",
     ],
 )
