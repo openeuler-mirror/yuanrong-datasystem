@@ -262,16 +262,30 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
             listenWorker_[i]->StopListenWorker(true);
         }
     }
-    // Step2: Send notice to worker before disconnection.
+    // Step2: keep the local worker disconnect under the shutdown lock because it shares
+    // the same shutdown-synchronized shm ref cleanup path. Other worker disconnects can
+    // be deferred until after the lock is released.
+    std::vector<std::shared_ptr<IClientWorkerApi>> deferredDisconnectApis;
     {
         std::lock_guard<std::shared_timed_mutex> lck(shutdownMux_);
+        deferredDisconnectApis.reserve(workerApi_.size());
         for (size_t i = 0; i < workerApi_.size(); i++) {
             if (workerApi_[i] != nullptr && CheckConnection(static_cast<WorkerNode>(i)).IsOk()) {
-                auto curRc = workerApi_[i]->Disconnect(isDestruct);
-                if (curRc.IsError()) {
-                    rc = std::move(curRc);
+                if (i == LOCAL_WORKER) {
+                    auto curRc = workerApi_[i]->Disconnect(isDestruct);
+                    if (curRc.IsError()) {
+                        rc = std::move(curRc);
+                    }
+                    continue;
                 }
+                deferredDisconnectApis.push_back(workerApi_[i]);
             }
+        }
+    }
+    for (const auto &api : deferredDisconnectApis) {
+        auto curRc = api->Disconnect(isDestruct);
+        if (curRc.IsError()) {
+            rc = std::move(curRc);
         }
     }
 
