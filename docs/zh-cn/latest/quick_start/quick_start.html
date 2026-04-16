@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="安装" href="../installation/index.html"><link rel="prev" title="概述" href="../index.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>入门 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -255,7 +255,6 @@
 <div class="sidebar-version-switcher">
   <select id="version-selector" onchange="switchVersion(this.value)">
     <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/">Latest</option>
-    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.8.0/">0.8.0</option>
     <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.7.0/">0.7.0</option>
     <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.6.0/">0.6.0</option>
   </select>
@@ -780,7 +779,7 @@ C++</label><div class="sd-tab-content docutils">
 <span class="w">    </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">();</span>
 
 <span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="nb">nullptr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
 <span class="w">    </span><span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceIdx</span><span class="p">);</span>
 
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keyList</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;key1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key2&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key3&quot;</span><span class="w"> </span><span class="p">};</span>
@@ -791,7 +790,7 @@ C++</label><div class="sd-tab-content docutils">
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">keyList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="o">++</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Blob</span><span class="o">&gt;</span><span class="w"> </span><span class="n">tmpBatchList</span><span class="p">;</span>
 <span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
 <span class="w">            </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">dataSize</span><span class="p">,</span><span class="w"> </span><span class="n">aclrtMemMallocPolicy</span><span class="o">::</span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
 <span class="w">            </span><span class="n">aclrtMemcpy</span><span class="p">(</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">dataSize</span><span class="p">,</span><span class="w"> </span><span class="n">testValue</span><span class="p">.</span><span class="n">c_str</span><span class="p">(),</span><span class="w"> </span><span class="n">testValue</span><span class="p">.</span><span class="n">length</span><span class="p">(),</span><span class="w"> </span><span class="n">ACL_MEMCPY_HOST_TO_DEVICE</span><span class="p">);</span>
 <span class="w">            </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="p">;</span>
@@ -819,7 +818,7 @@ C++</label><div class="sd-tab-content docutils">
 <span class="w">    </span><span class="n">client</span><span class="o">-&gt;</span><span class="n">Init</span><span class="p">();</span>
 
 <span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">deviceIdx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="nb">nullptr</span><span class="p">);</span>
+<span class="w">    </span><span class="n">aclInit</span><span class="p">(</span><span class="k">nullptr</span><span class="p">);</span>
 <span class="w">    </span><span class="n">aclrtSetDevice</span><span class="p">(</span><span class="n">deviceIdx</span><span class="p">);</span>
 
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">keyList</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;key1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key2&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key3&quot;</span><span class="w"> </span><span class="p">};</span>
@@ -829,7 +828,7 @@ C++</label><div class="sd-tab-content docutils">
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">keyList</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="o">++</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Blob</span><span class="o">&gt;</span><span class="w"> </span><span class="n">tmpBatchList</span><span class="p">;</span>
 <span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="n">devPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
 <span class="w">            </span><span class="n">aclrtMalloc</span><span class="p">(</span><span class="o">&amp;</span><span class="n">devPtr</span><span class="p">,</span><span class="w"> </span><span class="n">dataSize</span><span class="p">,</span><span class="w"> </span><span class="n">aclrtMemMallocPolicy</span><span class="o">::</span><span class="n">ACL_MEM_MALLOC_HUGE_FIRST</span><span class="p">);</span>
 <span class="w">            </span><span class="n">Blob</span><span class="w"> </span><span class="n">blob</span><span class="p">;</span>
 <span class="w">            </span><span class="n">blob</span><span class="p">.</span><span class="n">pointer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">devPtr</span><span class="p">;</span>
@@ -1124,15 +1123,15 @@ C++</label><div class="sd-tab-content docutils">
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
