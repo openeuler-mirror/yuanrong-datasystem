@@ -306,7 +306,7 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
                 FormatString("[ObjectKey %s] CopyAndSplitBuffer failed.", meta.object_key()));
             ObjectKV objectKV(meta.object_key(), *entry);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_),
+                SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_, false),
                 FormatString("[ObjectKey %s] SaveBinaryObjectToMemory failed.", meta.object_key()));
             (*entry)->stateInfo.SetCacheInvalid(false);
             (*entry)->stateInfo.SetIncompleted(false);

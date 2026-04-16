@@ -217,7 +217,9 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
         FormatString("The size is overflow, size:%d + add:%d > UINT64_MAX:%d", dataSize, metadataSize, UINT64_MAX));
     uint64_t needSize = dataSize + metadataSize;
     PerfPoint point(PerfKey::WORKER_MEMORY_ALLOCATE);
-    (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, ServiceType::OBJECT, cacheType);
+    if (retryOnOOM) {
+        (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, ServiceType::OBJECT, cacheType);
+    }
     // Allocate some memory into this shmUnit
     auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
     static const std::vector<int> WAIT_MSECOND = { 1, 10, 50, 100, 200, 400, 800, 1600, 3200 };
@@ -400,7 +402,7 @@ Status LoadSpilledObjectToMemory(ReadObjectKV &objectKV, std::shared_ptr<WorkerO
  */
 Status SaveBinaryObjectToMemory(ObjectKV &objectKV, const std::vector<RpcMessage> &payloads,
                                 std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                                const std::shared_ptr<ThreadPool> &threadPool)
+                                const std::shared_ptr<ThreadPool> &threadPool, bool retryOnOOM)
 {
     INJECT_POINT("SaveBinaryObjectToMemory.error");
     const auto &objectKey = objectKV.GetObjKey();
@@ -421,7 +423,7 @@ Status SaveBinaryObjectToMemory(ObjectKV &objectKV, const std::vector<RpcMessage
     if (szChanged) {
         auto shmUnit = std::make_shared<ShmUnit>();
         RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, payloadSz, metaSz, false, evictionManager, *shmUnit,
-                                                 entry->modeInfo.GetCacheType()));
+                                                 entry->modeInfo.GetCacheType(), retryOnOOM));
         shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }

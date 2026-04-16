@@ -22,6 +22,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -38,6 +39,7 @@
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
@@ -649,6 +651,8 @@ public:
     void SetUp() override
     {
         FLAGS_l2_cache_type = "distributed_disk";
+        BINEXPECT_CALL(&datasystem::memory::Allocator::GetMemoryAvailToHighWater, ())
+            .WillRepeatedly(Return(std::numeric_limits<uint64_t>::max()));
     }
 
     void TearDown() override
