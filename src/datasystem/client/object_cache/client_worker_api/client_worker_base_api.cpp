@@ -19,6 +19,8 @@
  */
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
 
+#include "datasystem/common/metrics/kv_metrics.h"
+
 #include <cstdint>
 #include <shared_mutex>
 #include <utility>
@@ -266,6 +268,7 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
                                          FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
         bufferInfo->ubDataSentByMemoryCopy = true;
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
         INJECT_POINT_NO_RETURN("client.set.urma_write_ok", [] {});
         VLOG(DEBUG_LOG_LEVEL) << "[UB Put] UrmaWritePayload done (single buffer), dataSize = " << bufferInfo->dataSize;
         return Status::OK();
@@ -273,6 +276,7 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
 
     // Use pipeline transfer for large data
     RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize));
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
     return Status::OK();
 #else
     return Status(K_INVALID, "Failed to send buffer via UB");

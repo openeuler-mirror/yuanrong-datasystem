@@ -25,6 +25,7 @@
 
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -106,6 +107,7 @@ Status WorkerRemoteMasterOCApi::Init()
 
 Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_CREATE_META_LATENCY);
     RpcOptions opts;
     // seal operation can't been retry.
     if (request.meta().life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
@@ -251,6 +253,7 @@ Status WorkerRemoteMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaR
 Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout,
                                           master::QueryMetaRspPb &response, std::vector<RpcMessage> &payloads)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY);
     INJECT_POINT("worker.remote_query_meta");
     PerfPoint point(PerfKey::WORKER_QUERY_META);
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
@@ -946,6 +949,7 @@ Status WorkerLocalMasterOCApi::Init()
 
 Status WorkerLocalMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_CREATE_META_LATENCY);
     // Although this is not an RPC call, the timeout field in the CreateMetaReqPb itself has associated actions on the
     // server side.
     int64_t remainingTime_ = reqTimeoutDuration.CalcRemainingTime();
@@ -1019,6 +1023,7 @@ Status WorkerLocalMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaRe
 Status WorkerLocalMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout,
                                          master::QueryMetaRspPb &response, std::vector<RpcMessage> &payloads)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY);
     INJECT_POINT("worker.query_meta");
     PerfPoint point(PerfKey::WORKER_QUERY_META);
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();

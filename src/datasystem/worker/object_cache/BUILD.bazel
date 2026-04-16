@@ -29,6 +29,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_constants",
@@ -69,6 +70,7 @@ ds_cc_library(
         ":cache_hit_info",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:object_ref_info",
@@ -188,6 +190,7 @@ ds_cc_library(
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/l2cache:slot_client",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:object_ref_info",
@@ -269,6 +272,7 @@ ds_cc_library(
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:object_ref_info",
         "//src/datasystem/common/object_cache:safe_table",
@@ -505,6 +509,7 @@ ds_cc_library(
     deps = [
         ":worker_oc_service_impl",
         ":worker_worker_oc_service_impl_header",
+        "//src/datasystem/common/metrics:common_metrics",
     ],
     alwayslink = True,
 )

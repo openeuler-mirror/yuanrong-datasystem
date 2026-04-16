@@ -56,6 +56,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
@@ -143,6 +144,26 @@ using namespace datasystem::worker;
 namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
+
+uint64_t PayloadBytes(const std::vector<RpcMessage> &payloads)
+{
+    uint64_t bytes = 0;
+    for (const auto &payload : payloads) {
+        bytes += payload.Size();
+    }
+    return bytes;
+}
+
+void UpdateWorkerObjectGauge(const std::shared_ptr<ObjectTable> &objectTable)
+{
+    if (objectTable != nullptr) {
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_OBJECT_COUNT)).Set(objectTable->GetSize());
+    }
+    memory::ShmMemStat stat;
+    memory::Allocator::Instance()->GetMemStat(stat);
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_ALLOCATED_MEMORY_SIZE))
+        .Set(stat.objectMemoryUsage);
+}
 static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
 static constexpr int OLD_VERSION_DEL_THREAD_MAX_NUM = 1;
 static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
@@ -387,20 +408,31 @@ std::string WorkerOCServiceImpl::GetHitInfo() const
 
 Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp, std::vector<RpcMessage> payloads)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
+    uint64_t payloadBytes = PayloadBytes(payloads);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
-    return publishProc_->Publish(req, resp, payloads);
+    Status rc = publishProc_->Publish(req, resp, payloads);
+    if (rc.IsOk()) {
+        METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TOTAL_BYTES, payloadBytes);
+        UpdateWorkerObjectGauge(objectTable_);
+    }
+    return rc;
 }
 
 Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
                                          std::vector<RpcMessage> payloads)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
+    uint64_t payloadBytes = PayloadBytes(payloads);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
     auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads, clientId));
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TOTAL_BYTES, payloadBytes);
+    UpdateWorkerObjectGauge(objectTable_);
     if (req.auto_release_memory_ref()) {
         std::set<std::string> failedSet{ resp.failed_object_keys().begin(), resp.failed_object_keys().end() };
         std::vector<ShmKey> shmIds;
@@ -936,14 +968,20 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
 
 Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
-    return createProc_->Create(req, resp);
+    Status rc = createProc_->Create(req, resp);
+    if (rc.IsOk()) {
+        UpdateWorkerObjectGauge(objectTable_);
+    }
+    return rc;
 }
 
 Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     Status returnStatus;
     AccessRecorder accessPoint(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
     Raii raii([&returnStatus, &accessPoint, &req]() {
@@ -958,6 +996,9 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
         return returnStatus;
     }
     returnStatus = createProc_->MultiCreate(req, resp);
+    if (returnStatus.IsOk()) {
+        UpdateWorkerObjectGauge(objectTable_);
+    }
     return returnStatus;
 }
 
@@ -1078,6 +1119,7 @@ Status WorkerOCServiceImpl::ReconciliationDecrRef(
 
 Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");

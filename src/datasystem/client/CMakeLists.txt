@@ -44,6 +44,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_buffer
         common_event_loop
         common_log
+        common_metrics
         common_perf
         common_sc
         common_shm_unit_info

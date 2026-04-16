@@ -1,6 +1,7 @@
 add_library(metrics_exporter_base STATIC metrics_exporter.cpp)
 
 set(METRICS_SRCS
+        kv_metrics.cpp
         metrics.cpp
         res_metric_collector.cpp
         )

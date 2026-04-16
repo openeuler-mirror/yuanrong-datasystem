@@ -10,6 +10,7 @@ ds_cc_library(
         "//include/datasystem/object:object_headers",
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:format",

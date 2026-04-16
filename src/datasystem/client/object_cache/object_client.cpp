@@ -22,6 +22,7 @@
 
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -52,6 +53,7 @@ Status ObjectClient::ShutDown()
 Status ObjectClient::Init()
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);

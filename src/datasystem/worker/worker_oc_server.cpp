@@ -40,6 +40,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_health.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/safe_table.h"
@@ -1179,6 +1180,7 @@ Status WorkerOCServer::Start()
         }
     }
     RETURN_IF_NOT_OK_APPEND_MSG(ReadinessProbe(), "\nWorker Start failed.");
+    RETURN_IF_NOT_OK(metrics::InitKvMetrics());
     RETURN_IF_NOT_OK(ResMetricCollector::Instance().Init());
     RegisteringAllResourceCollectionCallbackFunc();
     ResMetricCollector::Instance().Start();
