@@ -2,7 +2,6 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-#pass
 ds_cc_library(
     name = "sc_metadata_manager",
     srcs = [

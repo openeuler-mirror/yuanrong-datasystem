@@ -5,21 +5,14 @@ package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
     name = "common_encrypt",
-    srcs = [
-        "encrypt_kit.cpp",
-        "phrase_pem_tls.cpp",
-        "secret_manager.cpp",
-    ],
-    hdrs = [
-        "encrypt_kit.h",
-        "iphrase_tls.h",
-        "phrase_pem_tls.h",
-        "secret_manager.h",
-    ],
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     deps = [
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:common_util_impl",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
         "@boringssl//:ssl",
     ],
 )

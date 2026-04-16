@@ -124,15 +124,15 @@ ds_cc_library(
 ds_cc_library(
     name = "device_resource_manager",
     srcs = [
-        ":device_resource_manager.cpp",
+        "device_resource_manager.cpp",
     ],
     hdrs = [
-        ":device_manager_factory.h",
-        ":device_resource_manager.h",
+        "device_resource_manager.h",
     ],
     deps = [
         ":device_helper",
         ":device_manager_base",
+        ":device_manager_factory",
         "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/common/device/ascend:acl_device_manager",

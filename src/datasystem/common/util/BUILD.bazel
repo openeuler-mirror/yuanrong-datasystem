@@ -3,104 +3,17 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-ds_cc_library(
-    name = "bitmask_enum",
-    hdrs = ["bitmask_enum.h"],
-)
-
+# Base target: format (kept separate to break cycle with common_log_header)
 ds_cc_library(
     name = "format",
     srcs = ["format.cpp"],
     hdrs = ["format.h"],
 )
 
-ds_cc_library(
-    name = "event_subscribers",
-    hdrs = ["event_subscribers.h"],
-    deps = [
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)
-
-ds_cc_library(
-    name = "raii",
-    hdrs = ["raii.h"],
-)
-
-ds_cc_library(
-    name = "rpc_util",
-    hdrs = ["rpc_util.h"],
-    deps = [
-        "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:sensitive_value",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)
-
-ds_cc_library(
-    name = "file_util",
-    srcs = [
-        "file_util.cpp",
-    ],
-    hdrs = [
-        "file_util.h",
-    ],
-    deps = [
-        ":raii",
-        ":uri",
-        "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:strings_util",
-        "@securec",
-        "@zlib",
-    ],
-)
-
-ds_cc_library(
-    name = "status_helper",
-    srcs = [
-        "status.cpp",
-    ],
-    hdrs = [
-        "status_code.def",
-        "status_helper.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":format",
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/log:log_base",
-    ],
-    alwayslink = True,
-)
-
-ds_cc_library(
-    name = "thread_pool",
-    srcs = [
-        "thread_pool.cpp",
-    ],
-    hdrs = ["thread_pool.h"],
-    deps = [
-        ":common_util_base",
-        ":format",
-        ":thread",
-        ":timer",
-        "//src/datasystem/common/log:common_log_header",
-    ] + select({
-        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
-        "//conditions:default": [],
-    }),
-)
-
+# Second base: strings_util (kept separate to break cycle with common_inject)
 ds_cc_library(
     name = "strings_util",
-    srcs = [
-        "string_util.cpp",
-    ],
+    srcs = ["string_util.cpp"],
     hdrs = ["strings_util.h"],
     deps = [
         ":format",
@@ -112,417 +25,135 @@ ds_cc_library(
     ],
 )
 
+# Main glob-based target: all util sources except alwayslink files and cycle-sensitive files
 ds_cc_library(
-    name = "hash_algorithm",
-    srcs = [
-        "hash_algorithm.cpp",
-    ],
-    hdrs = [
-        "hash_algorithm.h",
-    ],
+    name = "common_util_impl",
+    srcs = glob(
+        ["*.cpp"],
+        exclude = [
+            "format.cpp",
+            "string_util.cpp",
+            "status.cpp",
+            "meta_route_tool.cpp",
+            "deadlock_util.cpp",
+        ],
+    ),
+    hdrs = glob(
+        ["*.h", "*.def"],
+        exclude = [
+            "format.h",
+            "strings_util.h",
+        ],
+    ),
     deps = [
-        ":meta_route_tool_header",
-        ":strings_util",
-        "//src/datasystem/common/inject:common_inject",  # Add dependency for injection point support
-    ],
-)
-
-ds_cc_library(
-    name = "meta_route_tool_header",
-    hdrs = [
-        "meta_route_tool.h",
-    ],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-    ],
-)
-
-ds_cc_library(
-    name = "meta_route_tool",
-    srcs = [
-        ":meta_route_tool.cpp",
-    ],
-    hdrs = [
-        "meta_route_tool.h",
-    ],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/iam:common_iam",
-        "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/util:container_util",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:validator",
-    ],
-    alwayslink = True,
-)
-
-ds_cc_library(
-    name = "validator",
-    hdrs = [
-        "validator.h",
-    ],
-    deps = [
-        ":common_util_base",
-        ":file_util",
         ":format",
         ":strings_util",
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log_header",
-        "@re2",
-    ],
-)
-
-ds_cc_library(
-    name = "common_util_base",
-    hdrs = [
-        "format.h",
-        "net_util.h",
-        "thread.h",
-        "uri.h",
-        "wait_post.h",
-    ],
-    deps = [
         "//include/datasystem/utils:utils_headers",
-    ],
-)
-
-ds_cc_library(
-    name = "timer",
-    hdrs = ["timer.h"],
-    deps = [],
-)
-
-ds_cc_library(
-    name = "locks",
-    srcs = [
-        "locks.cpp",
-    ],
-    hdrs = [
-        "lock_map.h",
-        "locks.h",
-    ],
-    deps = [
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log_header",
-    ],
-)
-
-ds_cc_library(
-    name = "thread",
-    hdrs = [
-        "thread.h",
-    ],
-)
-
-ds_cc_library(
-    name = "random_data",
-    srcs = [
-        "random_data.cpp",
-    ],
-    hdrs = [
-        "random_data.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/log:log_base",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/common/util:thread_pool",
-        "//src/datasystem/common/util:timer",
-    ],
-)
-
-ds_cc_library(
-    name = "uuid_generator",
-    srcs = [
-        "uuid_generator.cpp",
-    ],
-    hdrs = [
-        "uuid_generator.h",
-    ],
-    deps = [
-        ":random_data",
-        ":status_helper",
-        "//src/datasystem/common/log:common_log_header",
-        "@securec",
-    ],
-)
-
-ds_cc_library(
-    name = "net_util",
-    srcs = [
-        "net_util.cpp",
-    ],
-    hdrs = [
-        "net_util.h",
-    ],
-    deps = [
-        ":validator",
-        ":status_helper",
-        #"//src/datasystem/common/log:common_log_header",
-    ],
-)
-
-ds_cc_library(
-    name = "template_util",
-    hdrs = [
-        "template_util.h",
-    ],
-    deps = [
-    ],
-)
-
-ds_cc_library(
-    name = "wait_post",
-    srcs = [
-        "wait_post.cpp",
-    ],
-    hdrs = [
-        "wait_post.h",
-    ],
-    deps = [
-        ":status_helper",
-        "//src/datasystem/common/log:common_log_header",
-    ],
-)
-
-ds_cc_library(
-    name = "fd_pass",
-    srcs = [
-        "fd_pass.cpp",
-    ],
-    hdrs = [
-        "fd_pass.h",
-    ],
-    deps = [
-        ":status_helper",
-        ":strings_util",
-        "//src/datasystem/common/log:common_log_header",
-    ],
-)
-
-ds_cc_library(
-    name = "fd_manager",
-    srcs = [
-        "fd_manager.cpp",
-    ],
-    hdrs = [
-        "fd_manager.h",
-    ],
-    deps = [
-        ":status_helper",
-        ":strings_util",
-        "//src/datasystem/common/log:common_log_header",
-    ],
-)
-
-ds_cc_library(
-    name = "memory",
-    srcs = [
-        "memory.cpp",
-    ],
-    hdrs = [
-        "memory.h",
-    ],
-    deps = [
-        ":status_helper",
-        ":strings_util",
-        ":thread_pool",
-        "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/perf:common_perf",
-        "@securec",
-    ],
-)
-
-ds_cc_library(
-    name = "version",
-    srcs = [
-        "version.cpp",
-    ],
-    hdrs = [
-        "version.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log_header",
-        "@re2",
-    ],
-)
-
-ds_cc_library(
-    name = "uri",
-    srcs = [
-        "uri.cpp",
-    ],
-    hdrs = [
-        "uri.h",
-    ],
-    deps = [
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:strings_util",
-        "@re2",
-    ] + select({
-        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
-        "//conditions:default": [],
-    }),
-)
-
-ds_cc_library(
-    name = "thread_local",
-    srcs = [
-        "thread_local.cpp",
-    ],
-    hdrs = [
-        "thread_local.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/rpc:timeout_duration",
         "//src/datasystem/common/rpc/zmq:zmq_message",
-    ],
-)
-
-ds_cc_library(
-    name = "dlutils",
-    hdrs = [
-        "dlutils.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log_header",
-    ],
-)
-
-ds_cc_library(
-    name = "sensitive_value",
-    srcs = [
-        "sensitive_value.cpp",
-    ],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/log:common_log_header",
-        "@securec",
-    ],
-)
-
-ds_cc_library(
-    name = "ssl_authorization",
-    srcs = [
-        "ssl_authorization.cpp",
-    ],
-    hdrs = [
-        "ssl_authorization.h",
-    ],
-    deps = [
-        ":raii",
-        ":sensitive_value",
-        ":status_helper",
-        ":strings_util",
-        "//src/datasystem/common/log:common_log_header",
         "@boringssl//:ssl",
+        "@com_google_protobuf//:protobuf",
+        "@re2",
+        "@securec",
+        "@zlib",
     ],
 )
 
-ds_cc_library(
-    name = "safe_shm_lock",
-    srcs = [
-        "safe_shm_lock.cpp",
-    ],
-    hdrs = [
-        "safe_shm_lock.h",
-    ],
-    deps = [
-        ":format",
-        ":status_helper",
-        ":strings_util",
-        ":timer",
-        "//src/datasystem/common/log:common_log_header",
-    ] + select({
-        "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
-        "//conditions:default": [],
-    }),
-)
-
-ds_cc_library(
-    name = "skip_list",
-    hdrs = ["skip_list.h"],
-)
-
-ds_cc_library(
-    name = "common_util",
-    deps = [
-        ":format",
-        ":safe_shm_lock",
-        ":ssl_authorization",
-        ":status_helper",
-        ":strings_util",
-        ":thread_local",
-        ":timer",
-        ":validator",
-        ":version",
-        ":wait_post",
-    ],
-)
-
-ds_cc_library(
-    name = "request_counter",
-    hdrs = ["request_counter.h"],
-    deps = [
-        "//src/datasystem/common/log:common_log_header",
-        "//src/datasystem/common/util:timer",
-    ],
-)
-
-# TODO
-ds_cc_library(
-    name = "container_util",
-    srcs = [],
-    hdrs = [
-        "container_util.h",
-    ],
-    deps = [
-    ],
-)
-
-ds_cc_library(
-    name = "request_table",
-    hdrs = [
-        "request_table.h",
-    ],
-)
-
+# Separate target: deadlock_util (needs common_log, would create cycle in common_util_impl)
 ds_cc_library(
     name = "deadlock_util",
-    srcs = [
-        "deadlock_util.cpp",
-    ],
+    srcs = ["deadlock_util.cpp"],
     hdrs = ["deadlock_util.h"],
     deps = [
-        ":random_data",
-        ":status_helper",
-        ":strings_util",
-        ":thread_local",
+        ":common_util_impl",
         "//src/datasystem/common/log:common_log",
     ],
 )
 
+# alwayslink target for status registration
 ds_cc_library(
-    name = "lock_helper",
-    hdrs = ["lock_helper.h"],
+    name = "status_helper",
+    srcs = ["status.cpp"],
+    hdrs = ["status_helper.h", "status_code.def"],
     deps = [
+        ":format",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/log:log_base",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:timer",
+    ],
+    alwayslink = True,
+)
+
+# alwayslink target for meta route registration
+ds_cc_library(
+    name = "meta_route_tool",
+    srcs = ["meta_route_tool.cpp"],
+    hdrs = ["meta_route_tool.h"],
+    deps = [
+        ":common_util_impl",
+        ":status_helper",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/perf:common_perf",
+    ],
+    alwayslink = True,
+)
+
+# Header-only target for downstream targets that only need meta_route_tool.h
+ds_cc_library(
+    name = "meta_route_tool_header_impl",
+    hdrs = ["meta_route_tool.h"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
     ],
 )
 
+# Umbrella target (backward compatible)
 ds_cc_library(
-    name = "protobuf_util",
-    hdrs = ["protobuf_util.h"],
+    name = "common_util",
     deps = [
-        "//src/datasystem/common/log:common_log_header",
-        "@com_google_protobuf//:protobuf",
+        ":common_util_impl",
+        ":status_helper",
+        ":meta_route_tool",
     ],
 )
+
+# Backward-compatible aliases for all former leaf targets
+alias(name = "bitmask_enum", actual = ":common_util_impl")
+alias(name = "event_subscribers", actual = ":common_util_impl")
+alias(name = "raii", actual = ":common_util_impl")
+alias(name = "rpc_util", actual = ":common_util_impl")
+alias(name = "file_util", actual = ":common_util_impl")
+alias(name = "thread_pool", actual = ":common_util_impl")
+alias(name = "hash_algorithm", actual = ":common_util_impl")
+alias(name = "meta_route_tool_header", actual = ":meta_route_tool_header_impl")
+alias(name = "validator", actual = ":common_util_impl")
+alias(name = "common_util_base", actual = ":common_util_impl")
+alias(name = "timer", actual = ":common_util_impl")
+alias(name = "locks", actual = ":common_util_impl")
+alias(name = "thread", actual = ":common_util_impl")
+alias(name = "random_data", actual = ":common_util_impl")
+alias(name = "uuid_generator", actual = ":common_util_impl")
+alias(name = "net_util", actual = ":common_util_impl")
+alias(name = "template_util", actual = ":common_util_impl")
+alias(name = "wait_post", actual = ":common_util_impl")
+alias(name = "fd_pass", actual = ":common_util_impl")
+alias(name = "fd_manager", actual = ":common_util_impl")
+alias(name = "memory", actual = ":common_util_impl")
+alias(name = "version", actual = ":common_util_impl")
+alias(name = "uri", actual = ":common_util_impl")
+alias(name = "thread_local", actual = ":common_util_impl")
+alias(name = "dlutils", actual = ":common_util_impl")
+alias(name = "sensitive_value", actual = ":common_util_impl")
+alias(name = "ssl_authorization", actual = ":common_util_impl")
+alias(name = "safe_shm_lock", actual = ":common_util_impl")
+alias(name = "skip_list", actual = ":common_util_impl")
+alias(name = "request_counter", actual = ":common_util_impl")
+alias(name = "container_util", actual = ":common_util_impl")
+alias(name = "request_table", actual = ":common_util_impl")
+alias(name = "lock_helper", actual = ":common_util_impl")
+alias(name = "protobuf_util", actual = ":common_util_impl")

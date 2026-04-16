@@ -3,143 +3,56 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Main common-layer target (no alwayslink, no client deps)
 ds_cc_library(
-    name = "object_base",
-    hdrs = [
-        "object_base.h",
-        "object_bitmap.h",
-    ],
+    name = "common_object_cache",
+    srcs = glob(
+        ["*.cpp"],
+        exclude = ["buffer.cpp", "device_buffer.cpp"],
+    ),
+    hdrs = glob(["*.h"]),
     deps = [
         "//include/datasystem:headers",
+        "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/client/mmap:mmap_table",
         "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rdma/npu:remote_h2d_manager",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/rpc/zmq:zmq_message",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:bitmask_enum",
-        "//src/datasystem/protos:meta_transport_cc_proto",
-    ],
-)
-
-ds_cc_library(
-    name = "buffer_composer",
-    srcs = [
-        "buffer_composer.cpp",
-    ],
-    hdrs = [
-        "buffer_composer.h",
-    ],
-    deps = [
-        "//include/datasystem/hetero:hetero_headers",
-        "//include/datasystem/object:object_headers",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)
-
-ds_cc_library(
-    name = "lock",
-    srcs = [
-        "lock.cpp",
-    ],
-    hdrs = [
-        "lock.h",
-    ],
-    deps = [
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/common/util:timer",
-    ],
-)
-
-ds_cc_library(
-    name = "object_ref_info",
-    srcs = ["object_ref_info.cpp"],
-    hdrs = ["object_ref_info.h"],
-    deps = [
-        "safe_object",
-        ":object_base",
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/immutable_string",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/rpc:rpc_message",
-        "//src/datasystem/common/rpc/zmq:zmq_message",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:memory",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:template_util",
         "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/protos:meta_transport_cc_proto",
         "@tbb",
     ],
 )
 
-ds_cc_library(
-    name = "shm_guard",
-    srcs = [
-        "shm_guard.cpp",
-    ],
-    hdrs = [
-        "shm_guard.h",
-    ],
-    deps = [
-        ":lock",
-        "//src/datasystem/common/rpc:rpc_message",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-    ],
-)
-
-ds_cc_library(
-    name = "safe_object",
-    hdrs = [
-        "safe_object.h",
-    ],
-    deps = [
-        "//src/datasystem/common/util:locks",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:template_util",
-        "//src/datasystem/common/util:thread_local",
-        "//src/datasystem/common/util:timer",
-    ],
-)
-
-ds_cc_library(
-    name = "safe_table",
-    hdrs = [
-        "safe_table.h",
-    ],
-    deps = [
-        ":safe_object",
-        "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/util:locks",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:raii",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:template_util",
-        "//src/datasystem/common/util:thread_local",
-        "//src/datasystem/common/util:timer",
-    ],
-)
-
-ds_cc_library(
-    name = "node_info",
-    hdrs = [
-        "node_info.h",
-    ],
-)
-
+# alwayslink target for buffer and device_buffer (heavy client deps)
 ds_cc_library(
     name = "buffer",
-    srcs = [
-        "buffer.cpp",
-    ],
+    srcs = ["buffer.cpp", "device_buffer.cpp"],
     deps = [
+        "//include/datasystem/utils:utils_headers",
         "//src/datasystem/client/object_cache:object_client_impl",
-        # "//src/datasystem/common/inject:inject_point",
+        "//src/datasystem/client/object_cache/device:device_memory_unit",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/common/object_cache:object_base",
@@ -147,25 +60,19 @@ ds_cc_library(
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/rdma/npu:remote_h2d_manager",
         "//src/datasystem/common/util:memory",
+        "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
-        "//include/datasystem/utils:utils_headers",
     ],
     alwayslink = True,
 )
 
-ds_cc_library(
-    name = "device_buffer",
-    srcs = ["device_buffer.cpp"],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/client/object_cache:object_client_impl",
-        "//src/datasystem/client/object_cache/device:device_memory_unit",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/object_cache:object_base",
-        "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/util:raii",
-        "//src/datasystem/common/util:status_helper",
-    ],
-    alwayslink = True,
-)
+alias(name = "device_buffer", actual = ":buffer")
+alias(name = "object_base", actual = ":common_object_cache")
+alias(name = "buffer_composer", actual = ":common_object_cache")
+alias(name = "lock", actual = ":common_object_cache")
+alias(name = "object_ref_info", actual = ":common_object_cache")
+alias(name = "shm_guard", actual = ":common_object_cache")
+alias(name = "safe_object", actual = ":common_object_cache")
+alias(name = "safe_table", actual = ":common_object_cache")
+alias(name = "node_info", actual = ":common_object_cache")

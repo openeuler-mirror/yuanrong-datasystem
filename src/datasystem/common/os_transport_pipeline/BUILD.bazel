@@ -10,25 +10,11 @@ exports_files(
 ds_cc_library(
     name = "os_transport_pipeline",
     srcs = select({
-        "//:enable_pipeline_h2d": [
-            "chunk_manager.cpp",
-            "cuda_ipc.cpp",
-            "mock_ipc.cpp",
-            "dlopen_util.cpp",
-            "os_transport_pipeline_api_impl.cpp",
-        ],
+        "//:enable_pipeline_h2d": glob(["*.cpp"]),
         "//conditions:default": [],
     }),
     hdrs = select({
-        "//:enable_pipeline_h2d": [
-            "chunk_manager.h",
-            "cuda_ipc.h",
-            "mock_ipc.h",
-            "dlopen_util.h",
-            "os_transport_pipeline_types.h",
-            "os_transport_pipeline_common_api.h",
-            "os_transport_pipeline_worker_api.h",
-        ],
+        "//:enable_pipeline_h2d": glob(["*.h"]),
         "//conditions:default": [],
     }),
     copts = select({
@@ -52,14 +38,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "os_transport_pipeline_api",
-    hdrs = [
-        "chunk_manager.h",
-        "cuda_ipc.h",
-        "dlopen_util.h",
-        "os_transport_pipeline_types.h",
-        "os_transport_pipeline_common_api.h",
-        "os_transport_pipeline_worker_api.h",
-    ],
+    hdrs = glob(["*.h"], exclude = ["mock_ipc.h"]),
     copts = select({
         "//:enable_pipeline_h2d": ["-DBUILD_PIPLN_H2D"],
         "//conditions:default": [],

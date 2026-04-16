@@ -3,6 +3,7 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Keep separate: hard_disk_exporter (used by common_log) depends on this target
 ds_cc_library(
     name = "metrics_exporter_base",
     srcs = ["metrics_exporter.cpp"],
@@ -10,7 +11,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:log_base",
-        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:common_util_impl",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
     ],
@@ -18,16 +19,8 @@ ds_cc_library(
 
 ds_cc_library(
     name = "common_metrics",
-    srcs = [
-        "res_metric_collector.cpp",
-    ],
-    hdrs = [
-        "res_metric_collector.h",
-        "res_metric_name.h",
-        # "metrics_key.def",
-        "metrics_description.def",
-        "res_metrics.def",
-    ],
+    srcs = glob(["*.cpp"], exclude = ["metrics_exporter.cpp"]),
+    hdrs = glob(["*.h", "*.def"], exclude = ["metrics_exporter.h"]),
     deps = [
         ":metrics_exporter_base",
         "//src/datasystem/common/inject:common_inject",

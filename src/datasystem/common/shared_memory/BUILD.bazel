@@ -19,8 +19,8 @@ config_setting(
 
 ds_cc_library(
     name = "common_shm_unit_info",
-    srcs = ["shm_unit_info.cpp"],
-    hdrs = ["shm_unit_info.h"],
+    srcs = glob(["shm_unit_info.cpp"]),
+    hdrs = glob(["shm_unit_info.h"]),
     deps = [
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/log:common_log_header",
@@ -33,34 +33,14 @@ ds_cc_library(
 
 ds_cc_library(
     name = "common_shared_memory",
-    srcs = [
-        "allocator.cpp",
-        "arena.cpp",
-        "jemalloc.cpp",
-        "mmap/base_mmap.cpp",
-        "mmap/disk_mmap.cpp",
-        "mmap/flexible_mmap.cpp",
-        "mmap/mem_mmap.cpp",
-        "resource_pool.cpp",
-        "shared_disk_detecter.cpp",
-        "shm_unit.cpp",
-    ],
-    hdrs = [
-        "allocator.h",
-        "arena.h",
-        "arena_group_key.h",
-        "jemalloc.h",
-        "memstat.h",
-        "mmap/allocation.h",
-        "mmap/base_mmap.h",
-        "mmap/disk_mmap.h",
-        "mmap/flexible_mmap.h",
-        "mmap/immap.h",
-        "mmap/mem_mmap.h",
-        "resource_pool.h",
-        "shared_disk_detecter.h",
-        "shm_unit.h",
-    ],
+    srcs = glob(
+        ["*.cpp", "mmap/*.cpp"],
+        exclude = ["shm_unit_info.cpp"],
+    ),
+    hdrs = glob(
+        ["*.h", "mmap/*.h"],
+        exclude = ["shm_unit_info.h"],
+    ),
     linkopts = ["-ldl"],
     deps = [
         ":common_shm_unit_info",
@@ -75,8 +55,8 @@ ds_cc_library(
         "//src/datasystem/common/util:validator",
         "@re2",
     ] + select({
-        "//:with_tests": ["@jemalloc_kvc//:jemalloc_shared"],  # Test builds use dynamic linking
+        "//:with_tests": ["@jemalloc_kvc//:jemalloc_shared"],
         ":jemalloc_dynamic_config": ["@jemalloc_kvc//:jemalloc_shared"],
-        "//conditions:default": ["@jemalloc_kvc//:jemalloc"],  # Default use static library
+        "//conditions:default": ["@jemalloc_kvc//:jemalloc"],
     }),
 )
