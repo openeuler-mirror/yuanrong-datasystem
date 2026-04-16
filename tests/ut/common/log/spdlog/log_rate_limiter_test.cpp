@@ -205,5 +205,136 @@ TEST_F(LogRateLimiterTest, SamplingFallbackSetsWasSampled)
     EXPECT_GT(passedCount, 0);
 }
 
+TEST_F(LogRateLimiterTest, TraceWhitelistPreservesChain)
+{
+    auto &limiter = LogRateLimiter::Instance();
+    limiter.SetRate(100);  // High enough to get initial tokens through sampling
+
+    uint64_t traceHash = 1001;
+
+    // Get the trace into the whitelist through repeated calls (sampling or token bucket)
+    bool enteredWhitelist = false;
+    for (int i = 0; i < 200; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, traceHash)) {
+            enteredWhitelist = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(enteredWhitelist);
+
+    // Now in whitelist, subsequent calls should pass via mini-bucket
+    int passed = 0;
+    for (int i = 0; i < 100; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, traceHash)) {
+            ++passed;
+        }
+    }
+    EXPECT_GT(passed, 0);
+}
+
+TEST_F(LogRateLimiterTest, DifferentTracesIsolated)
+{
+    auto &limiter = LogRateLimiter::Instance();
+    limiter.SetRate(100);
+
+    // Get trace A into the whitelist
+    uint64_t traceA = 1001;
+    bool enteredA = false;
+    for (int i = 0; i < 200; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, traceA)) {
+            enteredA = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(enteredA);
+
+    // Trace B should be independently judged (not in whitelist)
+    uint64_t traceB = 2002;
+    int passedB = 0;
+    for (int i = 0; i < 100; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, traceB)) {
+            ++passedB;
+        }
+    }
+    // Trace B not in whitelist, should be rate-limited
+    EXPECT_LT(passedB, 100);
+}
+
+TEST_F(LogRateLimiterTest, EmptyTraceUsesOriginalLogic)
+{
+    auto &limiter = LogRateLimiter::Instance();
+    limiter.SetRate(10);
+
+    // Empty trace hash = 0 → original token bucket logic
+    int passed = 0;
+    for (int i = 0; i < 200; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, uint64_t(0))) {
+            ++passed;
+        }
+    }
+    EXPECT_LT(passed, 200);
+    EXPECT_GT(passed, 0);
+}
+
+TEST_F(LogRateLimiterTest, MiniBucketLimitsPerTrace)
+{
+    auto &limiter = LogRateLimiter::Instance();
+    limiter.SetRate(100);  // Moderate rate, sampling divisor=100
+
+    // Get trace into whitelist through sampling (every 100th drop passes)
+    uint64_t traceHash = 3003;
+    bool entered = false;
+    for (int i = 0; i < 300; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, traceHash)) {
+            entered = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(entered);
+
+    // Mini-bucket cap 20/sec, in short window most should be limited
+    int passed = 0;
+    for (int i = 0; i < 1000; ++i) {
+        if (limiter.ShouldLog(ds_spdlog::level::info, traceHash)) {
+            ++passed;
+        }
+    }
+    // Mini-bucket limits to min(100, 20)=20/sec, should not pass all
+    EXPECT_LT(passed, 1000);
+}
+
+TEST_F(LogRateLimiterTest, MultiThreadTraceSafety)
+{
+    auto &limiter = LogRateLimiter::Instance();
+    limiter.SetRate(100);
+
+    constexpr int kNumThreads = 8;
+    constexpr int kMessagesPerThread = 200;
+    std::atomic<int> totalPassed{ 0 };
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kNumThreads; ++t) {
+        threads.emplace_back([&limiter, &totalPassed, t]() {
+            // Each thread uses different trace hash
+            uint64_t traceHash = 5000 + t;
+            int localPassed = 0;
+            for (int i = 0; i < kMessagesPerThread; ++i) {
+                if (limiter.ShouldLog(ds_spdlog::level::info, traceHash)) {
+                    ++localPassed;
+                }
+            }
+            totalPassed.fetch_add(localPassed, std::memory_order_relaxed);
+        });
+    }
+
+    for (auto &t : threads) {
+        t.join();
+    }
+
+    int passed = totalPassed.load();
+    EXPECT_GT(passed, 0);
+    EXPECT_LT(passed, kNumThreads * kMessagesPerThread);
+}
+
 }  // namespace ut
 }  // namespace datasystem

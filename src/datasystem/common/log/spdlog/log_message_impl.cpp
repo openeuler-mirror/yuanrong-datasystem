@@ -124,14 +124,15 @@ void LogMessageImpl::Init()
     PerfPoint point(PerfKey::LOG_MESSAGE_INIT);
     logger_ = GetMessageLogger();
     if (logger_) {
-        AppendLogMessageImplPrefix(podName_, logStream_);
-        // Log rate sampling: check after prefix is appended
+        // Log rate sampling: check before formatting to avoid wasted work on dropped logs
         bool wasSampled = false;
-        if (!LogRateLimiter::Instance().ShouldLog(level_, &wasSampled)) {
+        uint64_t traceHash = Trace::Instance().GetCachedHash();
+        if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash, &wasSampled)) {
             skip_ = true;
             return;
         }
         sampled_ = wasSampled;
+        AppendLogMessageImplPrefix(podName_, logStream_);
     }
 }
 

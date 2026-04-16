@@ -28,6 +28,18 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+namespace {
+uint64_t FNV1aHash(const std::string &s)
+{
+    uint64_t h = 14695981039346656037ULL;
+    for (char c : s) {
+        h ^= static_cast<uint8_t>(c);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+}  // namespace
+
 const int Trace::TRACEID_MAX_SIZE;
 const int Trace::TRACEID_PREFIX_SIZE;
 const int Trace::SHORT_UUID_SIZE;
@@ -81,6 +93,7 @@ TraceGuard Trace::SetTraceUUID()
     if (ret != EOK) {
         LOG(ERROR) << "copy uuid to trace id failed: " << ret;
     }
+    cachedHash_ = FNV1aHash(traceID_);
     return TraceGuard(TraceGuardType::CLEAR_TRACE_ID);
 }
 
@@ -105,6 +118,7 @@ TraceGuard Trace::SetTraceNewID(const std::string &traceID, bool keep)
     if (ret != EOK) {
         LOG(ERROR) << "Error number of strcpy_s: " << ret;
     }
+    cachedHash_ = FNV1aHash(traceID_);
     return TraceGuard(keep ? TraceGuardType::INVALID : TraceGuardType::CLEAR_TRACE_ID);
 }
 
@@ -116,6 +130,7 @@ std::string Trace::GetTraceID()
 void Trace::Invalidate()
 {
     traceID_[0] = '\0';
+    cachedHash_ = 0;
 }
 
 TraceGuard Trace::SetSubTraceID(const std::string &subTraceID)
@@ -132,6 +147,7 @@ TraceGuard Trace::SetSubTraceID(const std::string &subTraceID)
     if (ret != EOK) {
         LOG(ERROR) << "Error number of strcpy_s: " << ret;
     }
+    cachedHash_ = FNV1aHash(traceID_);
     return TraceGuard(TraceGuardType::CLEAR_SUB_TRACE_ID);
 }
 
@@ -141,5 +157,6 @@ void Trace::InvalidateSubTraceID()
         traceID_[subPosition_ > TRACEID_MAX_SIZE ? TRACEID_MAX_SIZE : subPosition_] = '\0';
     }
     subPosition_ = -1;
+    cachedHash_ = FNV1aHash(traceID_);
 }
 }  // namespace datasystem
