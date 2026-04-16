@@ -1111,6 +1111,37 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, RestoreObjectWithTtl)
     ASSERT_EQ(client1->Get(objKey0, val).GetCode(), K_NOT_FOUND);
 }
 
+TEST_F(SlotEndToEndPassiveScaleDownTest, VoluntaryToPassiveScaleDown)
+{
+    std::shared_ptr<KVClient> client0;
+    InitTestKVClient(0, client0);
+
+    std::vector<std::string> keys;
+    std::string value = "value_" + GenRandomString(128);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    for (int i = 0; i < 10; ++i) {
+        std::string key = "slot_voluntary_to_passive_" + std::to_string(i);
+        keys.push_back(key);
+        DS_ASSERT_OK(client0->Set(key, value, param));
+    }
+    client0.reset();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "VoluntaryScaledown.MigrateData.Delay", "sleep(3000)"));
+    VoluntaryScaleDownInject(0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(S2MS));
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+
+    WaitAllNodesJoinIntoHashRingFast(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(1, client1);
+    for (const auto &key : keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value);
+    }
+}
+
 class SlotEndToEndScaleUpTest : public SlotEndToEndTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

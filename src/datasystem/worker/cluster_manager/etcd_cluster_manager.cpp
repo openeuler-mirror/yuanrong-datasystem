@@ -556,42 +556,53 @@ Status EtcdClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, s
         LOG(INFO) << "worker has received remove event, no need HandleNodeRemoveEvent again";
         return Status::OK();
     }
-    std::string workerAddr = eventNodeKey.ToString();
     if (foundNode->NodeWasExiting()) {
-        // If the voluntary scale down node still in the hash ring which means the node is removed because of network
-        // failure or sudden crashing, then begin the passive scale down process.
-        if (workerAddr == workerAddress_.ToString()) {
-            LOG(INFO) << "The timeout voluntary scale down node is local worker, ready to shutdown";
-            foundNode->SetFailed();
-            return Status::OK();
-        }
-        if ((!isLeaving_ && hashRing_->IsPreLeaving(eventNodeKey.ToString()))
-            || hashRing_->IsLeaving(eventNodeKey.ToString())) {
-            LOG(INFO) << "The voluntary scale down node " << workerAddr << " crush, Processworkertimeout";
-            LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, true, false),
-                         "Error occurs when voluntary scale down node mark timeout: "
-                             + (eventNode == nullptr ? "" : eventNode->ToString(eventNodeKey)));
-            foundNode->SetFailed();
-            return Status::OK();
-        }
-        // If the voluntary scale down node finish all the process and shut down normally, then just remove the node.
-        LOG(INFO) << "The voluntary scale down node finish, try remove worker " << workerAddr
-                  << " from cluster node table";
-        LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, false, true, false),
-                     "Node timeout event process failed");
-        ChangePrimaryCopy::GetInstance().NotifyAll(workerAddr, true);
-        RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
-        (void)clusterNodeTable_.erase(accessor);
-        HostPort addr = eventNodeKey;
-        ClearWorkerMeta::GetInstance().NotifyAll(addr);
-        EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
-        return Status::OK();
+        return HandleExitingNodeRemoveEvent(eventNodeKey, eventNode.get(), foundNode, accessor);
     }
 
+    std::string workerAddr = eventNodeKey.ToString();
     LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, false, false),
                  "Node timeout event process failed");
     LOG(INFO) << FormatString("Mark %s as timeout.", eventNodeKey.ToString());
     foundNode->SetTimedOut();
+    return Status::OK();
+}
+
+Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNodeKey, const ClusterNode *eventNode,
+                                                        ClusterNode *foundNode, TbbNodeTable::const_accessor &accessor)
+{
+    // If the voluntary scale down node still in the hash ring which means the node is removed because of network
+    // failure or sudden crashing, then begin the passive scale down process.
+    std::string workerAddr = eventNodeKey.ToString();
+    if (workerAddr == workerAddress_.ToString()) {
+        LOG(INFO) << "The timeout voluntary scale down node is local worker, ready to shutdown";
+        foundNode->SetFailed();
+        return Status::OK();
+    }
+
+    if ((!isLeaving_ && hashRing_->IsPreLeaving(workerAddr)) || hashRing_->IsLeaving(workerAddr)) {
+        LOG(INFO) << "The voluntary scale down node " << workerAddr << " crush, Processworkertimeout";
+        LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, true, false),
+                     "Error occurs when voluntary scale down node mark timeout: "
+                         + (eventNode == nullptr ? "" : eventNode->ToString(eventNodeKey)));
+        // Trigger slot recovery for the crashed voluntary scale down node.
+        if (IsCurrentNodeMaster()) {
+            LOG_IF_ERROR(SlotRecoveryFailedWorkersEvent::GetInstance().NotifyAll(std::vector<HostPort>{ eventNodeKey }),
+                         "Failed to notify slot recovery for crashed voluntary scale down worker.");
+        }
+        foundNode->SetFailed();
+        return Status::OK();
+    }
+
+    LOG(INFO) << "The voluntary scale down node finish, try remove worker " << workerAddr << " from cluster node table";
+    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, false, true, false),
+                 "Node timeout event process failed");
+    ChangePrimaryCopy::GetInstance().NotifyAll(workerAddr, true);
+    RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
+    (void)clusterNodeTable_.erase(accessor);
+    HostPort addr = eventNodeKey;
+    ClearWorkerMeta::GetInstance().NotifyAll(addr);
+    EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
     return Status::OK();
 }
 
