@@ -662,9 +662,15 @@ bool ObjectClientImpl::TrySwitchBackToLocalWorker()
 
 bool ObjectClientImpl::RediscoverLocalWorker()
 {
-    std::lock_guard<std::mutex> lock(switchNodeMutex_);
-    if (currentNode_ == LOCAL_WORKER) {
-        return false;
+    WorkerNode nodeSnapshot;
+    HostPort ipSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER) {
+            return false;
+        }
+        nodeSnapshot = currentNode_;
+        ipSnapshot = ipAddress_;
     }
 
     std::string workerIp;
@@ -681,11 +687,24 @@ bool ObjectClientImpl::RediscoverLocalWorker()
     }
 
     HostPort newAddress(workerIp, workerPort);
-    if (newAddress == ipAddress_) {
+    if (newAddress == ipSnapshot) {
         return false;
     }
 
-    LOG(INFO) << "[Switch] Local worker IP changed: " << ipAddress_.ToString() << " -> " << newAddress.ToString();
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER) {
+            return false;
+        }
+        if (newAddress == ipAddress_) {
+            return false;
+        }
+        if (currentNode_ != nodeSnapshot || ipAddress_ != ipSnapshot) {
+            return false;
+        }
+    }
+
+    LOG(INFO) << "[Switch] Local worker IP changed: " << ipSnapshot.ToString() << " -> " << newAddress.ToString();
     return ReconnectLocalWorkerAt(newAddress);
 }
 
