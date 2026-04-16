@@ -96,6 +96,7 @@ ds_cc_library(
         "urma_info.h",
         "urma_manager.h",
         "urma_resource.h",
+        "rdma_util.h",
     ],
     deps = [
         ":fast_transport_base_header",
