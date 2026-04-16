@@ -64,7 +64,7 @@ DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to work
 DS_DEFINE_bool(enable_transport_fallback, true, "Enable the fast transport fallback to tcp transport.");
 DS_DEFINE_uint32(
     eviction_reserve_mem_threshold_mb, 10240,
-    "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb). "
+    "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). "
     "Eviction begins when memory drops below this threshold.The valid range is 100-102400.");
 DS_DEFINE_uint32(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
 DS_DEFINE_uint64(stream_idle_time_s, 5 * 60, "stream idle time. default 300s (5 minutes)");

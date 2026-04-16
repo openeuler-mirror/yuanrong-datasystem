@@ -253,4 +253,4 @@ global:
 | global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
-| global.performance.evictionReserveMemThresholdMB | int | `10240` | 内存驱逐阈值（MB），由 min(shared_memory_size_mb*0.2, eviction_reserve_mem_threshold_mb) 决定。当内存低于此阈值时，驱逐操作开始。有效范围为 100-102400。 |
+| global.performance.evictionReserveMemThresholdMB | int | `10240` | 内存驱逐阈值（MB），由 min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb) 决定。当内存低于此阈值时，驱逐操作开始。有效范围为 100-102400。 |

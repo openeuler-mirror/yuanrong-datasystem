@@ -62,7 +62,7 @@ Status ValidateSharedMemoryPopulateFlags(bool populate)
 }  // namespace
 
 const int HUNDRED_PERCENT = 100;
-const double HIGH_WATER_MARK_RATIO = 0.8;
+const double HIGH_WATER_MARK_RATIO = 0.9;
 
 void DeallocateForZmqFree(void *data, void *hint)
 {
