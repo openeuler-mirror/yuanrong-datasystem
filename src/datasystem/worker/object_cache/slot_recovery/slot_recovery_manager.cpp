@@ -230,8 +230,15 @@ Status SlotRecoveryPlanner::BuildInitialTasks(const std::string &failedWorker, u
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!activeWorkers.empty(), K_INVALID, "No active workers for slot recovery.");
     std::unordered_map<std::string, int> tasksByOwner;
     tasksByOwner.reserve(activeWorkers.size());
+    // Randomize activeWorkers order but make it deterministic per incident (failedWorker)
+    // so multiple planners produce the same shuffled order for the same incident.
+    std::vector<std::string> shuffledWorkers = activeWorkers;
+    const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(failedWorker));
+    std::mt19937 gen(seed);
+    std::shuffle(shuffledWorkers.begin(), shuffledWorkers.end(), gen);
+
     for (uint32_t slot = 0; slot < totalSlots; ++slot) {
-        const auto &owner = activeWorkers[slot % activeWorkers.size()];
+        const auto &owner = shuffledWorkers[slot % shuffledWorkers.size()];
         auto found = tasksByOwner.find(owner);
         if (found == tasksByOwner.end()) {
             auto *task = info.add_recovery_tasks();
