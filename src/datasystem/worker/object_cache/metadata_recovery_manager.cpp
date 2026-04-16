@@ -456,12 +456,18 @@ bool MetaDataRecoveryManager::InitRecoverApi(const MetaAddrInfo &metaAddrInfo,
                                              DispatchResult &result) const
 {
     addr = metaAddrInfo.GetAddressAndSaveDbName();
+    if (addr.Empty()) {
+        result.failedIds.insert(result.failedIds.end(), objectKeys.begin(), objectKeys.end());
+        result.status = Status(K_RPC_UNAVAILABLE, "master address is empty");
+        LOG(ERROR) << "failed to get worker master api, master addr is empty";
+        return false;
+    }
     workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(addr);
     if (workerMasterApi != nullptr) {
         return true;
     }
     result.failedIds.insert(result.failedIds.end(), objectKeys.begin(), objectKeys.end());
-    result.status = Status(K_RUNTIME_ERROR, "get worker master api failed");
+    result.status = Status(K_RPC_UNAVAILABLE, "get worker master api failed");
     LOG(ERROR) << "failed to get worker master api, master addr: " << addr.ToString();
     return false;
 }
@@ -539,14 +545,13 @@ MetaDataRecoveryManager::DispatchResult MetaDataRecoveryManager::SendRecoverRequ
 {
     DispatchResult result;
     result.requestedCount = metas.size();
-    auto addr = metaAddrInfo.GetAddressAndSaveDbName();
-    std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(addr);
-    if (workerMasterApi == nullptr) {
+    std::vector<std::string> emptyObjectKeys;
+    HostPort addr;
+    std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi;
+    if (!InitRecoverApi(metaAddrInfo, emptyObjectKeys, addr, workerMasterApi, result)) {
         for (const auto &meta : metas) {
             result.failedIds.emplace_back(meta.object_key());
         }
-        result.status = Status(K_RUNTIME_ERROR, "get worker master api failed");
-        LOG(ERROR) << "Failed to get worker master api, master addr: " << addr.ToString();
         return result;
     }
 

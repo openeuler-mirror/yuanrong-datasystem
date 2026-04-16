@@ -32,17 +32,20 @@
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
+DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem {
 namespace object_cache {
 namespace {
 constexpr size_t SLOT_PREVIEW_LIMIT = 6;
 constexpr int32_t SLOT_PRELOAD_RETRY_TIMEOUT_MS = 30 * 60 * 1000;
+constexpr uint32_t META_RETRY_WORKER_THREAD_NUM = 1;
 
 const char *TaskStatusName(RecoveryTaskPb_TaskStatus status)
 {
@@ -356,6 +359,7 @@ Status SlotRecoveryManager::Init(
     RETURN_IF_NOT_OK(store_->Init());
     constexpr uint32_t maxTaskThreadNum = 4;
     recoveryTaskThreadPool_ = std::make_shared<ThreadPool>(0, maxTaskThreadNum, "SlotRecoveryTask");
+    deferredMetaRetryThreadPool_ = std::make_shared<ThreadPool>(0, META_RETRY_WORKER_THREAD_NUM, "SlotMetaRetry");
     SlotRecoveryFailedWorkersEvent::GetInstance().AddSubscriber(
         "SLOT_RECOVERY_MANAGER",
         [this](const std::vector<HostPort> &failedWorkers) { return HandleFailedWorkers(failedWorkers); });
@@ -369,6 +373,12 @@ void SlotRecoveryManager::Shutdown()
     }
     SlotRecoveryFailedWorkersEvent::GetInstance().RemoveSubscriber("SLOT_RECOVERY_MANAGER");
     recoveryTaskThreadPool_ = nullptr;
+    deferredMetaRetryThreadPool_ = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(deferredMetaRetryMutex_);
+        deferredMetaRetryQueue_.clear();
+        deferredMetaRetryDraining_ = false;
+    }
 }
 
 std::vector<std::string> SlotRecoveryManager::GetStableActiveWorkers() const
@@ -1035,8 +1045,8 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
                                          "MetaDataRecoveryManager is null");
     std::vector<ObjectMetaPb> recoveredMetas;
     const auto sourceWorker = task.source_worker().empty() ? task.failed_worker() : task.source_worker();
-    SlotPreloadCallback callback = [this, &recoveredMetas](
-                                       const SlotPreloadMeta &meta, const std::shared_ptr<std::stringstream> &content) {
+    SlotPreloadCallback callback = [this, &recoveredMetas](const SlotPreloadMeta &meta,
+                                                           const std::shared_ptr<std::stringstream> &content) {
         auto recoveredMeta = BuildRecoveredMetadata(meta, localAddress_.ToString());
         recoveredMetas.emplace_back(recoveredMeta);
 
@@ -1067,11 +1077,121 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
     INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecoverMeta");
     std::vector<std::string> failedIds;
     auto recoverRc = metadataRecoveryManager_->RecoverMetadata(recoveredMetas, failedIds);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(recoverRc.IsOk() && failedIds.empty(),
-                                         recoverRc.IsOk() ? K_RUNTIME_ERROR : recoverRc.GetCode(),
-                                         FormatString("Recover metadata failed. status=%s failedIds=%s",
-                                                      recoverRc.ToString(), VectorToString(failedIds)));
+    if (!recoverRc.IsOk() || !failedIds.empty()) {
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            EnqueueDeferredMetaRetry(task.failed_worker(), task, recoveredMetas, failedIds, recoverRc).IsOk(),
+            recoverRc.IsOk() ? K_RUNTIME_ERROR : recoverRc.GetCode(),
+            FormatString("Recover metadata failed. status=%s failedIds=%s", recoverRc.ToString(),
+                         VectorToString(failedIds)));
+    }
     return Status::OK();
+}
+
+bool SlotRecoveryManager::ShouldDeferMetaRetry(const Status &recoverRc, const std::vector<std::string> &failedIds) const
+{
+    if (failedIds.empty() && recoverRc.IsOk()) {
+        return false;
+    }
+    const auto code = recoverRc.GetCode();
+    if (code == StatusCode::K_RPC_UNAVAILABLE || code == StatusCode::K_RPC_DEADLINE_EXCEEDED
+        || code == StatusCode::K_RPC_CANCELLED || code == StatusCode::K_TRY_AGAIN) {
+        return true;
+    }
+    return false;
+}
+
+Status SlotRecoveryManager::EnqueueDeferredMetaRetry(const std::string &incidentKey, const RecoveryTaskPb &task,
+                                                     const std::vector<ObjectMetaPb> &recoveredMetas,
+                                                     const std::vector<std::string> &failedIds, const Status &recoverRc)
+{
+    if (!ShouldDeferMetaRetry(recoverRc, failedIds)) {
+        return Status(K_INVALID, "not eligible for deferred metadata retry");
+    }
+    if (shuttingDown_.load()) {
+        return Status(K_SHUTTING_DOWN, "SlotRecoveryManager is shutting down");
+    }
+    DeferredMetaRetryTask retryTask;
+    retryTask.incidentKey = incidentKey;
+    retryTask.failedWorker = task.failed_worker();
+    retryTask.ownerWorker = task.owner_worker();
+    retryTask.sourceWorker = GetTaskSourceWorker(task);
+    retryTask.slotsSummary = SlotsSummary(task.slots());
+    retryTask.pendingMetas = recoveredMetas;
+    retryTask.failedIds = failedIds;
+    retryTask.firstStatus = recoverRc;
+    retryTask.enqueueTimeMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+
+    bool shouldScheduleDrainer = false;
+    {
+        std::lock_guard<std::mutex> lock(deferredMetaRetryMutex_);
+        deferredMetaRetryQueue_.emplace_back(std::move(retryTask));
+        if (!deferredMetaRetryDraining_) {
+            deferredMetaRetryDraining_ = true;
+            shouldScheduleDrainer = true;
+        }
+    }
+    if (shouldScheduleDrainer && deferredMetaRetryThreadPool_ != nullptr) {
+        deferredMetaRetryThreadPool_->Execute([this]() { DrainDeferredMetaRetryQueue(); });
+    }
+    LOG(WARNING) << FormatString(
+        "action=execute_recovery_task_defer_meta_retry local_worker=%s task={%s} status=%s "
+        "failedIds=%s",
+        localAddress_.ToString(), TaskSummary(task), recoverRc.ToString(), VectorToString(failedIds));
+    return Status::OK();
+}
+
+void SlotRecoveryManager::DrainDeferredMetaRetryQueue()
+{
+    while (!shuttingDown_.load()) {
+        DeferredMetaRetryTask retryTask;
+        {
+            std::lock_guard<std::mutex> lock(deferredMetaRetryMutex_);
+            if (deferredMetaRetryQueue_.empty()) {
+                deferredMetaRetryDraining_ = false;
+                return;
+            }
+            retryTask = std::move(deferredMetaRetryQueue_.front());
+            deferredMetaRetryQueue_.pop_front();
+        }
+        auto rc = RetryDeferredMetaTask(retryTask);
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString(
+                "action=deferred_meta_retry_finish incident_key=%s failed_worker=%s owner_worker=%s "
+                "source_worker=%s slots_summary={%s} attempt=%lu status=%s remaining_failed_ids=%zu",
+                retryTask.incidentKey, retryTask.failedWorker, retryTask.ownerWorker, retryTask.sourceWorker,
+                retryTask.slotsSummary, retryTask.attempt, rc.ToString(), retryTask.failedIds.size());
+        }
+    }
+}
+
+Status SlotRecoveryManager::RetryDeferredMetaTask(DeferredMetaRetryTask &retryTask)
+{
+    CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
+    constexpr uint64_t maxRetryWindowFactor = 2;
+    const int32_t timeoutMs =
+        static_cast<int32_t>(maxRetryWindowFactor * FLAGS_node_dead_timeout_s * static_cast<uint64_t>(SECS_TO_MS));
+    return RetryOnError(
+        timeoutMs,
+        [this, &retryTask](int32_t) {
+            if (shuttingDown_.load()) {
+                return Status(K_SHUTTING_DOWN, "SlotRecoveryManager is shutting down");
+            }
+            ++retryTask.attempt;
+            std::vector<std::string> failedIds;
+            auto rc = metadataRecoveryManager_->RecoverMetadata(retryTask.pendingMetas, failedIds);
+            if (rc.IsOk() && failedIds.empty()) {
+                retryTask.failedIds.clear();
+                return Status::OK();
+            }
+            retryTask.failedIds = std::move(failedIds);
+            if (ShouldDeferMetaRetry(rc, retryTask.failedIds)) {
+                return Status(StatusCode::K_TRY_AGAIN,
+                              FormatString("Deferred metadata retry pending: %s", rc.ToString()));
+            }
+            return rc.IsOk() ? Status(StatusCode::K_RUNTIME_ERROR, "Deferred metadata retry failed with failedIds")
+                             : rc;
+        },
+        []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
 }
 
 std::shared_ptr<SlotRecoveryStore> SlotRecoveryManager::CreateStore(datasystem::EtcdStore *etcdStore) const

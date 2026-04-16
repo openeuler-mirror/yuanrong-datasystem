@@ -207,7 +207,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataShouldReturnAllFailedIdsWhenM
     HostPort unreachableMaster("127.0.0.1", 18502);
     auto result = manager_->SendRecoverRequest(MetaAddrInfo(unreachableMaster, ""), objectKeys);
     DS_ASSERT_NOT_OK(result.status);
-    EXPECT_EQ(result.status.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(result.status.GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(result.failedIds.size(), objectKeys.size());
 }
 

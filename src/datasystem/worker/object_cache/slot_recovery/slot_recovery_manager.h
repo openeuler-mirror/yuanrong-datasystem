@@ -21,6 +21,8 @@
 #define DATASYSTEM_WORKER_OBJECT_CACHE_SLOT_RECOVERY_MANAGER_H
 
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <memory>
 #include <set>
 #include <string>
@@ -118,6 +120,19 @@ public:
 };
 
 class SlotRecoveryManager {
+    struct DeferredMetaRetryTask {
+        std::string incidentKey;
+        std::string failedWorker;
+        std::string ownerWorker;
+        std::string sourceWorker;
+        std::string slotsSummary;
+        std::vector<ObjectMetaPb> pendingMetas;
+        std::vector<std::string> failedIds;
+        Status firstStatus = Status::OK();
+        uint64_t enqueueTimeMs{ 0 };
+        uint64_t attempt{ 0 };
+    };
+
 public:
     SlotRecoveryManager() = default;
     ~SlotRecoveryManager();
@@ -329,6 +344,39 @@ protected:
     Status ExecuteRecoveryTask(const RecoveryTaskPb &task);
 
     /**
+     * @brief Enqueue async metadata retry when master access fails in the fast recovery path.
+     * @param[in] incidentKey The incident key.
+     * @param[in] task The recovery task context.
+     * @param[in] recoveredMetas Recovered metadata candidates.
+     * @param[in] failedIds Failed object ids from the first attempt.
+     * @param[in] recoverRc Status returned by the first attempt.
+     * @return OK if the failure is accepted for deferred retry and handled asynchronously.
+     */
+    Status EnqueueDeferredMetaRetry(const std::string &incidentKey, const RecoveryTaskPb &task,
+                                    const std::vector<ObjectMetaPb> &recoveredMetas,
+                                    const std::vector<std::string> &failedIds, const Status &recoverRc);
+
+    /**
+     * @brief Drain async metadata retry queue in single-threaded retry worker.
+     */
+    void DrainDeferredMetaRetryQueue();
+
+    /**
+     * @brief Retry one deferred metadata task in bounded retry window.
+     * @param[in,out] retryTask Deferred task.
+     * @return Status of the call.
+     */
+    Status RetryDeferredMetaTask(DeferredMetaRetryTask &retryTask);
+
+    /**
+     * @brief Detect whether metadata recovery failure is likely caused by master access or routing instability.
+     * @param[in] recoverRc Recovery status.
+     * @param[in] failedIds Failed ids from recovery.
+     * @return True if failure should be retried asynchronously.
+     */
+    bool ShouldDeferMetaRetry(const Status &recoverRc, const std::vector<std::string> &failedIds) const;
+
+    /**
      * @brief Create slot-recovery store instance.
      * @param[in] etcdStore EtcdStore pointer used by concrete store.
      * @return Slot-recovery store instance.
@@ -349,6 +397,10 @@ private:
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };
     std::shared_ptr<SlotRecoveryStore> store_;
     std::shared_ptr<ThreadPool> recoveryTaskThreadPool_{ nullptr };
+    std::shared_ptr<ThreadPool> deferredMetaRetryThreadPool_{ nullptr };
+    mutable std::mutex deferredMetaRetryMutex_;
+    std::deque<DeferredMetaRetryTask> deferredMetaRetryQueue_;
+    bool deferredMetaRetryDraining_{ false };
     std::atomic<bool> shuttingDown_{ false };
 };
 

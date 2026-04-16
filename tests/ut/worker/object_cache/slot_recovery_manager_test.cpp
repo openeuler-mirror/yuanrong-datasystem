@@ -19,6 +19,7 @@
  */
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -46,9 +47,9 @@ namespace datasystem {
 namespace ut {
 using datasystem::RecoveryTaskPb;
 using datasystem::SlotRecoveryInfoPb;
+using datasystem::object_cache::MetaDataRecoveryManager;
 using datasystem::object_cache::SlotRecoveryIncidentState;
 using datasystem::object_cache::SlotRecoveryManager;
-using datasystem::object_cache::MetaDataRecoveryManager;
 using datasystem::object_cache::SlotRecoveryPlanner;
 using datasystem::object_cache::SlotRecoveryStore;
 using namespace ::testing;
@@ -107,6 +108,44 @@ public:
 private:
     PreloadHandler handler_;
 };
+
+using RecoverLocalEntriesMethod = Status (MetaDataRecoveryManager::*)(
+    const std::vector<ObjectMetaPb> &, const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
+    std::vector<std::string> &) const;
+using RecoverMetadataMethod = Status (MetaDataRecoveryManager::*)(const std::vector<ObjectMetaPb> &,
+                                                                  std::vector<std::string> &, std::string);
+
+std::shared_ptr<FakePersistenceApi> BuildSingleMetaPreloadApi(const std::string &expectedSourceWorker,
+                                                              uint32_t expectedSlot, const std::string &objectKey,
+                                                              uint64_t version)
+{
+    return std::make_shared<FakePersistenceApi>(
+        [expectedSourceWorker, expectedSlot, objectKey, version](const std::string &sourceWorkerAddress,
+                                                                 uint32_t slotId, const SlotPreloadCallback &callback) {
+            EXPECT_EQ(sourceWorkerAddress, expectedSourceWorker);
+            EXPECT_EQ(slotId, expectedSlot);
+            SlotPreloadMeta meta{ objectKey, version, WriteMode::WRITE_THROUGH_L2_CACHE, 11 };
+            auto content = std::make_shared<std::stringstream>();
+            (*content) << "payload";
+            return callback(meta, content);
+        });
+}
+
+void ExpectRecoverLocalEntriesAlwaysOk()
+{
+    BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
+        .WillRepeatedly(Invoke([](const std::vector<ObjectMetaPb> &,
+                                  const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
+                                  std::vector<std::string> &) { return Status::OK(); }));
+}
+
+RecoveryTaskPb BuildSingleSlotTask(const std::string &failedWorker, uint32_t slotId)
+{
+    RecoveryTaskPb task;
+    task.set_failed_worker(failedWorker);
+    task.add_slots(slotId);
+    return task;
+}
 }  // namespace
 
 TEST(SlotRecoveryIncidentStateTest, DetectsTerminalStates)
@@ -965,12 +1004,10 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldRecoverEntriesObjectByObjectDu
 {
     LOG(INFO) << "Scenario: preload callback recovers local entries one object at a time.";
     using RecoverLocalEntriesMethod = Status (MetaDataRecoveryManager::*)(
-        const std::vector<ObjectMetaPb> &,
-        const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
+        const std::vector<ObjectMetaPb> &, const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
         std::vector<std::string> &) const;
     using RecoverMetadataMethod =
-        Status (MetaDataRecoveryManager::*)(const std::vector<ObjectMetaPb> &, std::vector<std::string> &,
-                                            std::string);
+        Status (MetaDataRecoveryManager::*)(const std::vector<ObjectMetaPb> &, std::vector<std::string> &, std::string);
     auto store = std::make_shared<FakeSlotRecoveryStore>();
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7101), store);
     auto persistApi = std::make_shared<FakePersistenceApi>(
@@ -996,31 +1033,31 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldRecoverEntriesObjectByObjectDu
     MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7101), nullptr, nullptr, nullptr);
 
     std::vector<std::vector<std::string>> localRecoverKeys;
-    BINEXPECT_CALL((RecoverLocalEntriesMethod) & MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
+    BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
         .Times(3)
-        .WillRepeatedly(Invoke([&localRecoverKeys](const std::vector<ObjectMetaPb> &recoverMetas,
-                                                   const std::unordered_map<std::string,
-                                                                            std::shared_ptr<std::stringstream>>
-                                                       &recoveredContents,
-                                                   std::vector<std::string> &recoveredObjectKeys) {
-            EXPECT_EQ(recoverMetas.size(), 1U);
-            if (recoverMetas.size() != 1U || recoveredContents.size() != 1U) {
-                ADD_FAILURE() << "RecoverLocalEntries should receive exactly one object per callback.";
-                return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "invalid recover inputs");
-            }
-            const auto &meta = recoverMetas.front();
-            auto found = recoveredContents.find(meta.object_key());
-            if (found == recoveredContents.end() || found->second == nullptr) {
-                ADD_FAILURE() << "Recovered content should exist for each callback object.";
-                return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "missing recovered content");
-            }
-            recoveredObjectKeys.emplace_back(meta.object_key());
-            localRecoverKeys.emplace_back(recoveredObjectKeys);
-            return Status::OK();
-        }));
+        .WillRepeatedly(
+            Invoke([&localRecoverKeys](
+                       const std::vector<ObjectMetaPb> &recoverMetas,
+                       const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &recoveredContents,
+                       std::vector<std::string> &recoveredObjectKeys) {
+                EXPECT_EQ(recoverMetas.size(), 1U);
+                if (recoverMetas.size() != 1U || recoveredContents.size() != 1U) {
+                    ADD_FAILURE() << "RecoverLocalEntries should receive exactly one object per callback.";
+                    return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "invalid recover inputs");
+                }
+                const auto &meta = recoverMetas.front();
+                auto found = recoveredContents.find(meta.object_key());
+                if (found == recoveredContents.end() || found->second == nullptr) {
+                    ADD_FAILURE() << "Recovered content should exist for each callback object.";
+                    return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "missing recovered content");
+                }
+                recoveredObjectKeys.emplace_back(meta.object_key());
+                localRecoverKeys.emplace_back(recoveredObjectKeys);
+                return Status::OK();
+            }));
 
     std::vector<ObjectMetaPb> finalRecoveredMetas;
-    BINEXPECT_CALL((RecoverMetadataMethod) & MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
         .Times(1)
         .WillOnce(Invoke([&finalRecoveredMetas](const std::vector<ObjectMetaPb> &metas,
                                                 std::vector<std::string> &failedIds, std::string standbyMasterAddr) {
@@ -1117,6 +1154,66 @@ TEST_F(SlotRecoveryTest, RestartShouldRecoverAfterTransientIoFailure)
     EXPECT_EQ(deleted.failed_slots(), 0);
     EXPECT_EQ(finalRecoveredMetas.size(), DISTRIBUTED_DISK_SLOT_NUM);
 
+    manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskDeferOnRpcUnavailable)
+{
+    LOG(INFO) << "Scenario: defer metadata retry asynchronously when master access is temporarily unavailable.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
+    auto persistApi = BuildSingleMetaPreloadApi("127.0.0.1:7200", 1, "tenant/object_a", 1);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr, nullptr, nullptr);
+    ExpectRecoverLocalEntriesAlwaysOk();
+
+    std::atomic<int> recoverMetadataCalls{ 0 };
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([&recoverMetadataCalls](const std::vector<ObjectMetaPb> &metas,
+                                                       std::vector<std::string> &failedIds, std::string) {
+            ++recoverMetadataCalls;
+            EXPECT_EQ(metas.size(), 1U);
+            if (recoverMetadataCalls.load() == 1) {
+                failedIds = { "tenant/object_a" };
+                return Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__, "master unavailable");
+            }
+            failedIds.clear();
+            return Status::OK();
+        }));
+
+    auto task = BuildSingleSlotTask("127.0.0.1:7200", 1);
+
+    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7201), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    DS_ASSERT_OK(manager.ExecuteRecoveryTask(task));
+    ASSERT_TRUE(WaitUntil([&recoverMetadataCalls]() { return recoverMetadataCalls.load() >= 2; }));
+    manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskFailOnInvalidMeta)
+{
+    LOG(INFO) << "Scenario: fail fast when metadata recovery returns non-retryable error.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7211), store);
+    auto persistApi = BuildSingleMetaPreloadApi("127.0.0.1:7210", 2, "tenant/object_b", 2);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7211), nullptr, nullptr, nullptr);
+    ExpectRecoverLocalEntriesAlwaysOk();
+
+    std::atomic<int> recoverMetadataCalls{ 0 };
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([&recoverMetadataCalls](const std::vector<ObjectMetaPb> &,
+                                                       std::vector<std::string> &failedIds, std::string) {
+            ++recoverMetadataCalls;
+            failedIds = { "tenant/object_b" };
+            return Status(K_INVALID, __LINE__, __FILE__, "invalid metadata");
+        }));
+
+    auto task = BuildSingleSlotTask("127.0.0.1:7210", 2);
+
+    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7211), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    auto rc = manager.ExecuteRecoveryTask(task);
+    DS_ASSERT_NOT_OK(rc);
+    EXPECT_EQ(rc.GetCode(), K_INVALID);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(recoverMetadataCalls.load(), 1);
     manager.Shutdown();
 }
 
