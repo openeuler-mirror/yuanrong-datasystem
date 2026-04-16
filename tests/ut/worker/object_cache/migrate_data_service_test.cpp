@@ -506,7 +506,7 @@ TEST_F(MigrateDataServiceTest, TestSaveDataWithSpillType)
         std::make_shared<SafeObjType>(std::make_unique<object_cache::ObjCacheShmUnit>());
     MigrateDataReqPb::ObjectInfoPb info;
     info.set_object_key("object1");
-    constexpr uint64_t dataSize = 26 * 1024 * 1024;  // 26 MB is larger than memory high water for spill type
+    constexpr uint64_t dataSize = 30 * 1024 * 1024;  // 30 MB is larger than memory high water for spill type
     info.set_data_size(dataSize);
     info.add_part_index(0);
     std::vector<RpcMessage> payloads(1);

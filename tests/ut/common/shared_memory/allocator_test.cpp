@@ -1398,7 +1398,7 @@ TEST_F(AllocatorTest, TestGetMemoryAvailToHighWater)
 {
     uint64_t maxSize = 100UL * 1024UL * 1024UL; // 100 MB
     DS_ASSERT_OK(Init(maxSize));
-    constexpr double factor = 0.8;
+    constexpr double factor = 0.9;
     uint64_t exceptVal = static_cast<uint64_t>(maxSize * factor);
     uint64_t avail = datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater();
     EXPECT_EQ(exceptVal, avail);
