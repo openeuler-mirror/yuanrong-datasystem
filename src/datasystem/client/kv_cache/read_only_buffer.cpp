@@ -26,7 +26,7 @@ namespace datasystem {
 int64_t ReadOnlyBuffer::GetSize() const
 {
     if (buffer_ == nullptr) {
-        LOG(ERROR) << "buffer is not initialized";
+        LOG(INFO) << "buffer is not initialized";
         return 0;
     }
     return buffer_->GetSize();
@@ -35,7 +35,7 @@ int64_t ReadOnlyBuffer::GetSize() const
 const void *ReadOnlyBuffer::ImmutableData()
 {
     if (buffer_ == nullptr) {
-        LOG(ERROR) << "buffer is not initialized";
+        LOG(INFO) << "buffer is not initialized";
         return nullptr;
     }
     return buffer_->ImmutableData();

@@ -40,7 +40,7 @@ struct LogTime {
         auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(
             now.time_since_epoch()) % 1000000;
         // UTC
-        gmtime_r(&time_t, &tm);
+        localtime_r(&time_t, &tm);
         usec = static_cast<int>(microseconds.count());
     }
 
