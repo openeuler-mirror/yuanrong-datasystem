@@ -1,6 +1,6 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
-package(default_visibility = ["//src/datasystem:__subpackages__"])
+package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
     name = "perf_client_lib",

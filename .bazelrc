@@ -57,6 +57,7 @@ build:coverage --linkopt=-fprofile-arcs --linkopt=-ftest-coverage --linkopt=-lgc
 build:coverage --cxxopt=-DBUILD_COVERAGE
 
 build --cxxopt=-UENABLE_PERF
+build:perf --cxxopt=-DENABLE_PERF
 build:hetero --cxxopt=-DBUILD_HETERO
 
 build --copt="-Wno-error"
