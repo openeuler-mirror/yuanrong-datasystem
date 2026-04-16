@@ -59,10 +59,12 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 
 /**
  * @brief Initialize Fast Transport Manager.
- * @param[in] hostport Local ds worker ip address.
+ * @param[in] hostport Local address for device lookup and identity. When empty (default),
+ *            only local URMA resources are initialized without binding to a specific address.
+ *            The empty form is used on the client side for early warmup.
  * @return Status of the call.
  */
-Status InitializeFastTransportManager(const HostPort &hostport);
+Status InitializeFastTransportManager(const HostPort &hostport = HostPort());
 
 /**
  * @brief Remove remote fast transport node in urma and ucp.
