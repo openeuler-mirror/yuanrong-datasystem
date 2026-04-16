@@ -954,10 +954,10 @@ private:
 
     Status ProcessRemoteGetInNotificationImpl(
         std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
-        Status &lastRc, std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
+        std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
         std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas);
 
-    Status PostProcessRemoteGetInNotificationImpl(
+    void PostProcessRemoteGetInNotificationImpl(
         std::map<ReadKey, LockedEntity> &lockedEntries,
         const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>>
             &groupedQueryMetas,

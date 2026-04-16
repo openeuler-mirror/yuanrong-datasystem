@@ -2245,7 +2245,31 @@ Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, Not
     // Add query-failed objects to response
     rsp.mutable_failed_object_keys()->Add(failedIds.begin(), failedIds.end());
 
-    return getProc_->NotifyRemoteGet(req, std::move(queryMetas), rsp);
+    Status rc = getProc_->NotifyRemoteGet(req, std::move(queryMetas), rsp);
+
+    // Set remain_bytes based on current available memory
+    // If any object was successfully processed, set remain_bytes even if there were some failures
+    // This allows the client to continue sending more data based on the remaining memory
+    uint64_t originalFailedCount = rsp.failed_object_keys_size();
+    bool hasSuccess = false;
+    if (originalFailedCount < static_cast<uint64_t>(req.object_keys_size())) {
+        hasSuccess = true;
+    }
+
+    if (hasSuccess || rc.GetCode() != StatusCode::K_OUT_OF_MEMORY) {
+        rsp.set_remain_bytes(memory::Allocator::Instance()->GetMemoryAvailToHighWater());
+    } else {
+        rsp.set_remain_bytes(0);
+    }
+
+    // Return the last error code encountered
+    // If some objects succeeded but later ones failed due to OOM, we still want to return OK
+    // so the caller knows which objects succeeded (they're not in failed_object_keys)
+    // But if all objects failed due to OOM, return K_OUT_OF_MEMORY
+    if (!hasSuccess || rc.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+        return rc;
+    }
+    return Status::OK();
 }
 }  // namespace object_cache
 }  // namespace datasystem

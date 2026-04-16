@@ -195,9 +195,19 @@ Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, M
 
 Status WorkerRemoteWorkerOCApi::NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
+    RpcOptions opts;
+    int64_t remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("Request timeout (%ld ms).", -remainingTime));
+
+    // Prevent waiting too long when network errors.
+    constexpr int64_t maxTimeoutMs = 180'000;
+    remainingTime = std::min(remainingTime, maxTimeoutMs);
+    opts.SetTimeout(static_cast<int32_t>(remainingTime));
+
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->NotifyRemoteGet(req, rsp));
+    RETURN_IF_NOT_OK(rpcSession_->NotifyRemoteGet(opts, req, rsp));
     return Status::OK();
 }
 

@@ -209,7 +209,9 @@ void NodeSelector::WorkerThread()
             break;
         }
         (void)taskCv_.wait_for(
-            lock, std::chrono::milliseconds(subSuccess_ ? intervalMs : REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED),
+            lock,
+            std::chrono::milliseconds((subSuccess_ && !rankList_.empty()) ? intervalMs
+                                                                          : REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED),
             [this]() { return !running_.load(); });
     }
 }
