@@ -1,0 +1,43 @@
+{
+  "id": "client.client-sdk",
+  "title": "Client SDK",
+  "status": "active",
+  "domain": "client",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/client/client-sdk.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "include/datasystem",
+    "src/datasystem/client",
+    "src/datasystem/pybind_api",
+    "python/yr/datasystem"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.worker-runtime",
+      "quality.tests-and-reproduction"
+    ],
+    "split_signals": []
+  },
+  "retrieval": {
+    "keywords": [
+      "client sdk",
+      "public api",
+      "python binding"
+    ],
+    "intent_examples": [
+      "understand public SDK APIs and Python bindings"
+    ]
+  }
+}

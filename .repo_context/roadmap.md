@@ -110,6 +110,10 @@ Candidates:
 - Add a glossary for repository-specific terms.
 - Decide whether to expose `.repo_context/` in the published docs site.
 - Evaluate whether external tooling should supplement the generated index later.
+- Formalize automatic module-identification heuristics so explicit context-generation tasks split modules at the right
+  granularity by default.
+- Evaluate whether `.repo_context/` should gain machine-readable module metadata to support deterministic routing and
+  module splitting.
 
 ## Change Policy
 

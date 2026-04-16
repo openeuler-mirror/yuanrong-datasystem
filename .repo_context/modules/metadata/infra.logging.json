@@ -1,0 +1,56 @@
+{
+  "id": "infra.logging",
+  "title": "Logging",
+  "status": "active",
+  "domain": "infra",
+  "module_type": "composite",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/infra/logging/README.md",
+    "design": ".repo_context/modules/infra/logging/design.md",
+    "details": [
+      ".repo_context/modules/infra/logging/trace-and-context.md",
+      ".repo_context/modules/infra/logging/access-recorder.md",
+      ".repo_context/modules/infra/logging/log-lifecycle-and-rotation.md"
+    ]
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/infra/logging/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/common/log",
+    "src/datasystem/common/metrics/hard_disk_exporter",
+    "include/datasystem/context",
+    "src/datasystem/client/context"
+  ],
+  "key_tests": [
+    "tests/ut/common/log",
+    "tests/st/common/log"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "infra.metrics",
+      "infra.observability"
+    ],
+    "split_signals": [
+      "dfx_workflow",
+      "config_surface"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "logging",
+      "trace",
+      "access log",
+      "rotation"
+    ],
+    "intent_examples": [
+      "understand logging architecture before adding a feature"
+    ]
+  }
+}

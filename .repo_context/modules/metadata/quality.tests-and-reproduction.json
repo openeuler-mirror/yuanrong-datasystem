@@ -1,0 +1,43 @@
+{
+  "id": "quality.tests-and-reproduction",
+  "title": "Tests And Reproduction",
+  "status": "active",
+  "domain": "quality",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/quality/tests-and-reproduction.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [
+      ".repo_context/playbooks/operations/incident-triage.md",
+      ".repo_context/playbooks/operations/performance-investigation.md"
+    ],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "tests",
+    "build.sh"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "quality.build-test-debug"
+    ],
+    "split_signals": []
+  },
+  "retrieval": {
+    "keywords": [
+      "tests",
+      "reproduction",
+      "bug repro"
+    ],
+    "intent_examples": [
+      "choose tests or reproduce a bug"
+    ]
+  }
+}

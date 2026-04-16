@@ -1,0 +1,45 @@
+{
+  "id": "infra.common-infra",
+  "title": "Common Infrastructure",
+  "status": "active",
+  "domain": "infra",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/infra/common-infra.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/common"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "infra.l2cache",
+      "infra.slot",
+      "infra.logging",
+      "infra.metrics",
+      "infra.observability"
+    ],
+    "split_signals": [
+      "cross_module_plumbing"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "common infra",
+      "shared infrastructure",
+      "common"
+    ],
+    "intent_examples": [
+      "understand shared infra used across modules"
+    ]
+  }
+}

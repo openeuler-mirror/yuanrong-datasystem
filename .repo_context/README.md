@@ -11,12 +11,24 @@ Its goals are to:
 - reduce repeated prompt tokens by centralizing durable repository context;
 - support later generation of official documentation from the same curated context.
 
+`.repo_context/` should converge toward one formal, complete, canonical context set for the current repository state.
+It is not a place for long-lived compatibility shims, redirect stubs, or partial patch notes.
+
 ## Ground Rules
 
 - Source code is the final source of truth. `.repo_context/` is an index and working memory layer, not a replacement for reading code.
 - When `.repo_context/` conflicts with code, trust the code and update `.repo_context/` in the same change when practical.
 - Keep the context coarse first, then deepen module-by-module. Avoid writing broad claims that have not been verified against source.
 - Every module document should record what it knows, what files back it, and what still needs confirmation.
+- For explicit repo-context generation or backfill tasks, do not stop at a patch-style note. Produce a formal,
+  current-state module context package that can stand on its own.
+- When a module area is created or substantially deepened, explicitly assess whether it also needs a module `design.md`
+  and a matching feature playbook; for shared infra or compatibility-sensitive areas, treat both as required unless a
+  narrow source-backed reason says otherwise.
+- If a sub-area has its own persisted format, recovery lifecycle, availability or reliability model, or DFX workflow,
+  split it into a sibling module context instead of burying it only inside a parent module note.
+- Do not keep compatibility redirect docs inside `.repo_context/`. When a module split or canonical path changes,
+  update navigation and delete obsolete context files instead of preserving old placeholders.
 - When an implementation changes a touched module's responsibilities, entrypoints, or test path, update the relevant context files before finishing.
 
 ## Who Reads What
@@ -32,6 +44,7 @@ Its goals are to:
 - `.repo_context/roadmap.md`: staged rollout plan and persistent backlog.
 - `.repo_context/generated/repo_index.md`: generated coarse repository index.
 - `.repo_context/modules/<domain>/*.md`: curated module context, grouped by stable domain.
+- `.repo_context/modules/metadata/*.json`: machine-readable canonical module registry and routing metadata.
 - `.repo_context/playbooks/<category>/...`: task-oriented guidance for feature work, bugfix, review, and upkeep.
 
 ## Structure Model
@@ -64,6 +77,20 @@ Its goals are to:
 │   ├── client/
 │   │   ├── README.md
 │   │   └── client-sdk.md
+│   ├── metadata/
+│   │   ├── README.md
+│   │   ├── client.client-sdk.json
+│   │   ├── infra.common-infra.json
+│   │   ├── infra.l2cache.json
+│   │   ├── infra.logging.json
+│   │   ├── infra.metrics.json
+│   │   ├── infra.observability.json
+│   │   ├── infra.slot.json
+│   │   ├── overview.repository-overview.json
+│   │   ├── quality.build-test-debug.json
+│   │   ├── quality.tests-and-reproduction.json
+│   │   ├── runtime.cluster-management.json
+│   │   └── runtime.worker-runtime.json
 │   ├── runtime/
 │   │   ├── README.md
 │   │   ├── worker-runtime.md
@@ -71,6 +98,13 @@ Its goals are to:
 │   ├── infra/
 │   │   ├── README.md
 │   │   ├── common-infra.md
+│   │   ├── l2cache/
+│   │   │   ├── README.md
+│   │   │   ├── design.md
+│   │   │   ├── l2-cache-type.md
+│   │   ├── slot/
+│   │   │   ├── README.md
+│   │   │   └── design.md
 │   │   ├── logging/
 │   │   │   ├── README.md
 │   │   │   ├── design.md
@@ -99,16 +133,26 @@ Its goals are to:
 │   │   ├── README.md
 │   │   ├── incident-triage.md
 │   │   └── performance-investigation.md
+│   ├── upkeep/
+│   │   ├── README.md
+│   │   └── module-context-generation.md
 │   └── features/
 │       ├── README.md
 │       └── infra/
 │           ├── README.md
+│           ├── l2cache/
+│           │   ├── README.md
+│           │   └── implementation.md
+│           ├── slot/
+│           │   ├── README.md
+│           │   └── implementation.md
 │           └── logging/
 │               ├── README.md
 │               └── implementation.md
 └── templates/
     ├── module-template.md
     ├── module-design-template.md
+    ├── module-metadata-template.json
     └── feature-playbook-template.md
 ```
 
@@ -132,6 +176,10 @@ The first pass is intentionally coarse. It currently covers:
 - build, test, and debug entrypoints already used by this repository;
 - a generated file-tree index to support fast orientation;
 - first-pass domain documents grouped under `overview`, `client`, `runtime`, `infra`, and `quality`;
+- a machine-readable module metadata layer describing canonical module ids, entry docs, source roots, and split signals;
+- secondary-storage parent routing, backend selection, and a standalone slot storage and recovery module;
+- an upkeep playbook for formal module-context generation and backfill;
+- feature workflow guidance for l2 cache and secondary-storage changes;
 - cross-module observability and operations guidance for diagnosis, health checks, and performance troubleshooting.
 
 The next recommended deep dives are recorded in `.repo_context/roadmap.md`.
