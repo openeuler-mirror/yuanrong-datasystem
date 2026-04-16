@@ -21,6 +21,7 @@
 #define DATASYSTEM_CLIENT_MMAP_MANAGER_H
 
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -93,6 +94,8 @@ private:
     std::shared_ptr<IClientWorkerCommonApi> clientWorker_;
     std::unique_ptr<IMmapTable> mmapTable_;
     mutable std::shared_timed_mutex mutex_;  // protect mmapTable_.
+    // The fd transfer channel behind GetClientFd() is single-consumer on each client-worker connection.
+    std::mutex fdTransferMutex_;
     bool enableEmbeddedClient_;
 };
 }  // namespace client

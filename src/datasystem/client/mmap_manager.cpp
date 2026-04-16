@@ -53,55 +53,68 @@ Status MmapManager::LookupUnitsAndMmapFds(const std::string &tenantId, std::vect
     std::vector<int> toRecvFdInUnitIdx;
     std::vector<uint64_t> mmapSizes;
     std::vector<int> clientFds;
-
-    // Loop all units and find the ummap fd.
-    std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    int pageIdx = 0;
-    for (auto &unit : units) {
-        if (mmapTable_->FindFd(unit->fd)) {
-            uint8_t *pointer = nullptr;
-            RETURN_IF_NOT_OK(mmapTable_->LookupFdPointer(unit->fd, &pointer));
-            CHECK_FAIL_RETURN_STATUS(pointer != nullptr, StatusCode::K_RUNTIME_ERROR,
-                                     "The pointer which is looked up from mmap table is nullptr!");
-            unit->pointer = (void *)pointer;
-        } else {
-            auto it = find(toRecvFds.begin(), toRecvFds.end(), unit->fd);
-            // The unit fd is not in mmapTable and not in toRecvFds, just append to the toRecvFds.
-            if (it == toRecvFds.end()) {
-                toRecvFds.emplace_back(unit->fd);
-                mmapSizes.emplace_back(unit->mmapSize);
+    auto classifyUnits = [&](bool fillExistingPointers) -> Status {
+        std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+        int pageIdx = 0;
+        for (auto &unit : units) {
+            if (mmapTable_->FindFd(unit->fd)) {
+                if (fillExistingPointers) {
+                    uint8_t *pointer = nullptr;
+                    RETURN_IF_NOT_OK(mmapTable_->LookupFdPointer(unit->fd, &pointer));
+                    CHECK_FAIL_RETURN_STATUS(pointer != nullptr, StatusCode::K_RUNTIME_ERROR,
+                                             "The pointer which is looked up from mmap table is nullptr!");
+                    unit->pointer = static_cast<void *>(pointer);
+                }
+            } else {
+                auto it = find(toRecvFds.begin(), toRecvFds.end(), unit->fd);
+                if (it == toRecvFds.end()) {
+                    toRecvFds.emplace_back(unit->fd);
+                    mmapSizes.emplace_back(unit->mmapSize);
+                }
+                toRecvFdInUnitIdx.emplace_back(pageIdx);
             }
-            // Record every unit index to toRecvFdInUnitIdx.
-            toRecvFdInUnitIdx.emplace_back(pageIdx);
+            ++pageIdx;
         }
-        ++pageIdx;
-    }
+        return Status::OK();
+    };
 
+    // Phase 1: fast lookup path under a shared manager lock.
+    RETURN_IF_NOT_OK(classifyUnits(true));
+
+    // Phase 2: serialize fd transfer on the shared socket path, then re-check missed fds
+    // to avoid duplicate fd requests and unsafe concurrent RecvFdAfterNotify waits.
     if (!toRecvFds.empty()) {
+        std::lock_guard<std::mutex> fdTransferLock(fdTransferMutex_);
+        toRecvFds.clear();
+        toRecvFdInUnitIdx.clear();
+        mmapSizes.clear();
+        RETURN_IF_NOT_OK(classifyUnits(true));
+
         // Notify worker to send fds and receive the client fd.
-        if (!enableEmbeddedClient_) {
-            RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
-            // Mmap the new client fd.
-            for (size_t i = 0; i < clientFds.size(); i++) {
-                RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i], tenantId));
+        if (!toRecvFds.empty()) {
+            if (!enableEmbeddedClient_) {
+                RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
+                // Mmap the new client fd.
+                for (size_t i = 0; i < clientFds.size(); i++) {
+                    RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i], tenantId));
+                }
+            } else {
+                for (size_t i = 0; i < toRecvFds.size(); i++) {
+                    static const int unusedClientFd = 0; // for embeddedclient, no need mmap client fd.
+                    RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(unusedClientFd, toRecvFds[i], mmapSizes[i], tenantId));
+                }
             }
-        } else {
-            for (size_t i = 0; i < toRecvFds.size(); i++) {
-                static const int unusedClientFd = 0; // for embeddedclient, no need mmap client fd.
-                RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(unusedClientFd, toRecvFds[i], mmapSizes[i], tenantId));
+
+            std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+            for (auto &idx : toRecvFdInUnitIdx) {
+                auto unit = units[idx];
+                uint8_t *pointer = nullptr;
+                RETURN_IF_NOT_OK(mmapTable_->LookupFdPointer(unit->fd, &pointer));
+                CHECK_FAIL_RETURN_STATUS(pointer != nullptr, StatusCode::K_RUNTIME_ERROR,
+                                         "The pointer which is looked up from mmap table is nullptr!");
+                unit->pointer = static_cast<void *>(pointer);
             }
         }
-    }
-
-    // Loop the units for needing to update pointer and fill the share memory pointer value.
-    for (auto &idx : toRecvFdInUnitIdx) {
-        // fill the share memory pointer in the client mmap file.
-        auto unit = units[idx];
-        uint8_t *pointer = nullptr;
-        RETURN_IF_NOT_OK(mmapTable_->LookupFdPointer(unit->fd, &pointer));
-        CHECK_FAIL_RETURN_STATUS(pointer != nullptr, StatusCode::K_RUNTIME_ERROR,
-                                 "The pointer which is looked up from mmap table is nullptr!");
-        unit->pointer = static_cast<void *>(pointer);
     }
 
     return Status::OK();
