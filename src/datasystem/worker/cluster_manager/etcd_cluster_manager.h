@@ -1207,6 +1207,10 @@ protected:
     }
 
     using TbbNodeTable = tbb::concurrent_hash_map<HostPort, std::unique_ptr<ClusterNode>, HashCompare>;
+
+    Status HandleExitingNodeRemoveEvent(const HostPort &eventNodeKey, const ClusterNode *eventNode,
+                                        ClusterNode *foundNode, TbbNodeTable::const_accessor &accessor);
+
     HostPort workerAddress_;
     HostPort masterAddress_;
     TbbNodeTable clusterNodeTable_;       // Tracks node states of the cluster nodes
