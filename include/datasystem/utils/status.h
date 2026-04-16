@@ -76,6 +76,7 @@ enum StatusCode : uint32_t {
     K_RDMA_NEED_CONNECT = 1007,
     K_URMA_TRY_AGAIN = 1008,
     K_URMA_CONNECT_FAILED = 1009,
+    K_URMA_WAIT_TIMEOUT = 1010,
 
     // object error code, range: [2000, 3000)
     K_OC_ALREADY_SEALED = 2000,

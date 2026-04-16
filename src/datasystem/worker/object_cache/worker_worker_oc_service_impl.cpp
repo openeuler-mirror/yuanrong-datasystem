@@ -52,6 +52,10 @@ DS_DECLARE_uint64(oc_worker_aggregate_single_max);
 DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
+namespace {
+constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
+}
+
 inline std::ostream &operator<<(std::ostream &os, const GetObjectRemoteReqPb &req)
 {
     os << "(";
@@ -577,7 +581,21 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
         port = req.ucp_info().remote_ip_addr().port();
     }
     const HostPort requestAddress(host, port);
-    return CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
+    auto rc = CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
+    if (rc.IsError() && rc.GetCode() == K_URMA_NEED_CONNECT) {
+        std::string remoteWorkerId = "UNKNOWN";
+        if (etcdCm_ != nullptr) {
+            auto workerId = etcdCm_->GetWorkerIdByWorkerAddr(requestAddress.ToString());
+            if (!workerId.empty()) {
+                remoteWorkerId = workerId;
+            }
+        }
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddress.ToString()
+            << ", remoteWorkerId=" << remoteWorkerId << ", remoteInstanceId="
+            << (req.urma_instance_id().empty() ? "UNKNOWN" : req.urma_instance_id()) << ", rc=" << rc.ToString();
+    }
+    return rc;
 }
 
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(

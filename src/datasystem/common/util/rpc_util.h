@@ -40,7 +40,8 @@ namespace datasystem {
 inline bool IsRpcTimeout(const Status &status)
 {
     return status.GetCode() == StatusCode::K_RPC_CANCELLED || status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-           || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE;
+           || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE
+           || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT;
 }
 
 inline bool IsRpcTimeoutOrTryAgain(const Status &status)
@@ -208,7 +209,8 @@ Status RetryOnRPCErrorByTime(int64_t timeoutMs, Function &&func, bool repent = f
 {
     return RetryOnError(
         timeoutMs, func, []() { return Status::OK(); },
-        { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE },
+        { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE,
+          StatusCode::K_URMA_WAIT_TIMEOUT },
         MAX_RPC_TIMEOUT_MS, {}, repent);
 }
 

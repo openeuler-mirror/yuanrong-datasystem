@@ -1582,6 +1582,25 @@ TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetFailed)
     DS_ASSERT_NOT_OK(client2->Get({ key1, key2 }, getValues));
 }
 
+TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetWaitTimeoutReturnsUrmaWaitTimeout)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWaitError", "return()"));
+
+    std::string key = "UrmaKeyWaitTimeout";
+    std::string value = "UrmaValueWaitTimeout";
+    DS_ASSERT_OK(client1->Set(key, value));
+
+    std::vector<std::string> getValues;
+    Status status = client2->Get({ key }, getValues);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_WAIT_TIMEOUT) << status.ToString();
+}
+
 TEST_F(UrmaDisableFallbackTest, UrmaRemoteGetReconnectAfterWorkerRestart)
 {
     std::shared_ptr<KVClient> client1;

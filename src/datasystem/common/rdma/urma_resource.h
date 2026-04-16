@@ -21,6 +21,7 @@
 #ifndef DATASYSTEM_COMMON_RDMA_URMA_RESOURCE_H
 #define DATASYSTEM_COMMON_RDMA_URMA_RESOURCE_H
 
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
@@ -44,6 +45,12 @@ class UrmaConnection;
 class UrmaJfs;
 class UrmaEvent : public Event {
 public:
+    enum class OperationType : uint8_t {
+        UNKNOWN = 0,
+        READ = 1,
+        WRITE = 2
+    };
+
     /**
      * @brief Construct an Urma event for an in-flight request.
      * @param[in] requestId Unique request id.
@@ -51,8 +58,14 @@ public:
      * @param[in] waiter Optional waiter used for notification.
      */
     UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaConnection> connection, std::weak_ptr<UrmaJfs> jfs,
+              std::string remoteAddress, std::string remoteInstanceId, OperationType operationType,
               std::shared_ptr<EventWaiter> waiter = nullptr)
-        : Event(requestId, std::move(waiter)), connection_(std::move(connection)), jfs_(std::move(jfs))
+        : Event(requestId, std::move(waiter)),
+          connection_(std::move(connection)),
+          jfs_(std::move(jfs)),
+          remoteAddress_(std::move(remoteAddress)),
+          remoteInstanceId_(std::move(remoteInstanceId)),
+          operationType_(operationType)
     {
     }
 
@@ -95,10 +108,40 @@ public:
         return statusCode_;
     }
 
+    const std::string &GetRemoteAddress() const
+    {
+        return remoteAddress_;
+    }
+
+    const std::string &GetRemoteInstanceId() const
+    {
+        return remoteInstanceId_;
+    }
+
+    OperationType GetOperationType() const
+    {
+        return operationType_;
+    }
+
+    static const char *OperationTypeName(OperationType type)
+    {
+        switch (type) {
+            case OperationType::READ:
+                return "READ";
+            case OperationType::WRITE:
+                return "WRITE";
+            default:
+                return "UNKNOWN";
+        }
+    }
+
 private:
     int statusCode_{ 0 };
     std::weak_ptr<UrmaConnection> connection_;
     std::weak_ptr<UrmaJfs> jfs_;
+    std::string remoteAddress_;
+    std::string remoteInstanceId_;
+    OperationType operationType_{ OperationType::UNKNOWN };
 };
 
 class UrmaContext {

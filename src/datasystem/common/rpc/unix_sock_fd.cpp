@@ -58,7 +58,8 @@ Status UnixSockFd::ErrnoToStatus(int err, int fd)
         RETURN_STATUS(K_TRY_AGAIN, FormatString("Socket receive error. err %s", StrErr(err)));
     }
     if (err == ECONNRESET || err == EPIPE) {
-        RETURN_STATUS(StatusCode::K_RPC_UNAVAILABLE, FormatString("Connect reset. fd %d. err %s", fd, StrErr(err)));
+        RETURN_STATUS(StatusCode::K_RPC_UNAVAILABLE,
+                      FormatString("[TCP_CONNECT_RESET] Connect reset. fd %d. err %s", fd, StrErr(err)));
     }
     RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Socket receive error. err %s", StrErr(err)));
 }
@@ -433,7 +434,7 @@ Status UnixSockFd::Connect(struct sockaddr_un &addr) const
                             std::string(addr.sun_path), errno);
         const int interval = 100;
         VLOG_EVERY_N(RPC_KEY_LOG_LEVEL, interval) << oss.str();
-        return { K_RPC_UNAVAILABLE, oss.str() };
+        return { K_RPC_UNAVAILABLE, std::string("[UDS_CONNECT_FAILED] ") + oss.str() };
     }
     return Status::OK();
 }
@@ -474,7 +475,7 @@ Status UnixSockFd::ConnectTcp(struct addrinfo *servInfo)
 
     // If end of the servInfo list was reached and no success, then fail with error
     CHECK_FAIL_RETURN_STATUS(currServInfo != nullptr, K_RPC_UNAVAILABLE,
-                             FormatString("Tcpip Connect failed. Last Error: %s", errMsg));
+                             FormatString("[TCP_CONNECT_FAILED] Tcpip Connect failed. Last Error: %s", errMsg));
 
     RETURN_IF_NOT_OK(SetNoDelay());
     RETURN_IF_NOT_OK(KeepAlive());

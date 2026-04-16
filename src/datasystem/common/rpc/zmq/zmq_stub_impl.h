@@ -140,7 +140,7 @@ public:
             if (flags == ZmqRecvFlags::DONTWAIT) {
                 return rc;
             }
-            rc = Status(StatusCode::K_RPC_UNAVAILABLE, rc.GetMsg());
+            rc = Status(StatusCode::K_RPC_UNAVAILABLE, std::string("[RPC_RECV_TIMEOUT] ") + rc.GetMsg());
             // Drop the connection as we don't know the state of the server.
             LOG(WARNING) << "Rpc service for client " << clientId << " has not responded within the allowed time.";
             mQue->Close();
