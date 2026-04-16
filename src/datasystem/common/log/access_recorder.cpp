@@ -91,7 +91,7 @@ void AccessRecorder::Record(int code, const std::string &dataSize, const Request
 AccessRecorder::~AccessRecorder()
 {
     if (!isRecord_) {
-        LOG(ERROR) << handleName_ << " Not call AccessRecorder::Record()";
+        LOG(INFO) << handleName_ << " Not call AccessRecorder::Record()";
     }
 }
 
