@@ -90,6 +90,7 @@ cc_shared_library(
         "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
         "//src/datasystem/client/stream_cache:stream_cache_impl",
         "//src/datasystem/client/stream_cache:stream_client",
+        "//src/datasystem/client/perf_client:perf_client_lib",
     ],
     user_link_flags = [
         "-Wl,--exclude-libs,ALL",
@@ -128,6 +129,7 @@ cc_shared_library(
         "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
         "//src/datasystem/client/stream_cache:stream_cache_impl",
         "//src/datasystem/client/stream_cache:stream_client",
+        "//src/datasystem/client/perf_client:perf_client_lib",
         "//src/datasystem/common/object_cache:buffer",
         "@com_google_protobuf//upb:wire",
     ],

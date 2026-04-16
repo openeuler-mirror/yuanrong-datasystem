@@ -59,6 +59,11 @@ function _bazel_build_configs() {
     echo "--config=pipeline_h2d"
   fi
 
+  # Perf
+  if is_on "${ENABLE_PERF}"; then
+    echo "--config=perf"
+  fi
+
   # URMA
   if is_on "${BUILD_WITH_URMA}"; then
     echo "--config=urma"
@@ -83,9 +88,6 @@ function build_datasystem_bazel() {
   fi
   if is_on "${DOWNLOAD_UB}"; then
     echo -e "-- [INFO] bazel mode: ignoring -D (download UB) option."
-  fi
-  if is_on "${ENABLE_PERF}"; then
-    echo -e "-- [INFO] bazel mode: -p (perf) not yet supported."
   fi
   if is_on "${SUPPORT_JEPROF}"; then
     echo -e "-- [INFO] bazel mode: -x (jemalloc profiling) not yet supported."
@@ -144,6 +146,11 @@ function _bazel_install_outputs() {
 
   # Copy SDK headers from source tree
   mkdir -p "${INSTALL_DIR}/datasystem/sdk/cpp/include"
+  # Copy public headers from include/
+  if [[ -d "${DATASYSTEM_DIR}/include/datasystem" ]]; then
+    cp -r "${DATASYSTEM_DIR}/include/datasystem" "${INSTALL_DIR}/datasystem/sdk/cpp/include/"
+  fi
+  # Copy internal headers from src/
   if [[ -d "${DATASYSTEM_DIR}/src" ]]; then
     find "${DATASYSTEM_DIR}/src" -name "*.h" -path "*/datasystem/*" | while read -r hdr; do
       local rel_path
@@ -156,7 +163,7 @@ function _bazel_install_outputs() {
   # Copy Python wheel if built
   if is_on "${PACKAGE_PYTHON}"; then
     local wheel_file
-    wheel_file=$(find "${bazel_bin}" -name "openyuanrong_datasystem-*.whl" -type f 2>/dev/null | head -1)
+    wheel_file=$(find -L "${bazel_bin}" -name "openyuanrong_datasystem-*.whl" -type f 2>/dev/null | head -1)
     if [[ -n "${wheel_file}" ]]; then
       cp -f "${wheel_file}" "${INSTALL_DIR}/"
       echo -e "-- copied wheel: $(basename "${wheel_file}")"
