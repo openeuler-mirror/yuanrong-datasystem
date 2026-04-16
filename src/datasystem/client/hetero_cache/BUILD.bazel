@@ -17,9 +17,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "hetero_client",
-    srcs = [
-        "hetero_client.cpp",
-    ],
+    srcs = glob(["*.cpp"]),
     visibility = ["//visibility:public"],
     deps = [
         ":hetero_cache_headers",

@@ -1,16 +1,16 @@
-# BUILD file for src/datasystem/common/agc
+# BUILD file for src/datasystem/common/token
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
     name = "client_access_token",
-    srcs = ["client_access_token.cpp"],
-    hdrs = ["client_access_token.h"],
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:fd_manager",
         "//src/datasystem/common/util:rpc_util",
-        "//src/datasystem/common/eventloop:common_event_loop",
     ],
 )

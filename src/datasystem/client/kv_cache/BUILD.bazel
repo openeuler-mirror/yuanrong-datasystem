@@ -3,33 +3,30 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
 ds_cc_library(
-    name = "kv_client",
-    srcs = [
-        "kv_client.cpp",
-    ],
-    visibility = ["//visibility:public"],
+    name = "kv_cache",
+    srcs = glob(["*.cpp"]),
     deps = [
-        ":read_only_buffer",
         "//include/datasystem:headers",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "@tbb",
     ],
     alwayslink = True,
 )
 
-ds_cc_library(
+alias(
     name = "read_only_buffer",
-    srcs = [
-        "read_only_buffer.cpp",
-    ],
+    actual = "kv_cache",
     visibility = ["//visibility:public"],
-    deps = [
-        "//include/datasystem:headers",
-        "//include/datasystem/object:object_headers",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:common_util",
-    ],
-    alwayslink = True,
+)
+
+alias(
+    name = "kv_client",
+    actual = "kv_cache",
+    visibility = ["//visibility:public"],
 )

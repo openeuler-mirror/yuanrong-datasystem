@@ -5,31 +5,86 @@ package(default_visibility = [
     "//tests:__subpackages__",
 ])
 
+# Header-only target: needed by common_shared_memory (breaks cycle)
 ds_cc_library(
     name = "fast_transport_base_header",
-    hdrs = [
-        "fast_transport_base.h",
+    hdrs = ["fast_transport_base.h"],
+)
+
+# Keep urma_dlopen_util separate due to special copts/linkopts
+ds_cc_library(
+    name = "urma_dlopen_util",
+    srcs = ["urma_dlopen_util.cpp"],
+    hdrs = ["urma_dlopen_util.h"],
+    copts = ["-DUSE_URMA"],
+    includes = [
+        "/usr/include",
+        "/usr/local/include",
+    ],
+    linkopts = [
+        "-lurma",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
     ],
 )
 
+# Main merged target: only non-URMA, non-UCP sources
+# URMA files (urma_*) require URMA SDK headers; UCP files (ucp_*) require UCP SDK headers.
+# Both are kept out of the glob and handled via select() conditional deps.
 ds_cc_library(
-    name = "fast_transport_base",
+    name = "common_rdma",
     srcs = [
         "fast_transport_base.cpp",
+        "fast_transport_manager_wrapper.cpp",
+        "rdma_util.cpp",
     ],
+    hdrs = glob(
+        ["*.h"],
+        exclude = [
+            "fast_transport_base.h",
+            "urma_dlopen_util.h",
+            "urma_info.h",
+            "urma_manager.h",
+            "urma_resource.h",
+            "ucp_dlopen_util.h",
+            "ucp_endpoint.h",
+            "ucp_manager.h",
+            "ucp_segment.h",
+            "ucp_worker.h",
+            "ucp_worker_pool.h",
+        ],
+    ),
     deps = [
         ":fast_transport_base_header",
+        "//include/datasystem/hetero:hetero_headers",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
+        "//src/datasystem/common/device/ascend:acl_device_manager_header",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rdma/npu:remote_h2d_manager_header",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_constants",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:common_util_impl",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
         "//src/datasystem/common/util/gflag:common_util_gflag_header",
+        "//src/datasystem/common/util/queue",
+        "//src/datasystem/protos:meta_transport_cc_proto",
+        "//src/datasystem/protos:utils_cc_proto",
     ] + select({
-        "//:enable_urma": [
-            ":urma_manager",
-        ],
+        "//:enable_urma": [":urma_dlopen_util", ":urma_manager"],
         "//conditions:default": [],
     }),
 )
 
+# URMA sources kept separate: require urma_api.h which is only available with URMA SDK
 ds_cc_library(
     name = "urma_manager",
     srcs = [
@@ -44,10 +99,10 @@ ds_cc_library(
     ],
     deps = [
         ":fast_transport_base_header",
+        ":urma_dlopen_util",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/rdma:rdma_util",
         "//src/datasystem/common/rpc:rpc_channel",
         "//src/datasystem/common/rpc:rpc_constants",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
@@ -60,88 +115,9 @@ ds_cc_library(
         "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/protos:meta_transport_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
-    ] + select({
-        "//:enable_urma": [":urma_dlopen_util"],
-        "//conditions:default": [],
-    }),
-)
-
-ds_cc_library(
-    name = "fast_transport_manager_wrapper",
-    srcs = [
-        "fast_transport_manager_wrapper.cpp",
-    ],
-    hdrs = [
-        "fast_transport_manager_wrapper.h",
-    ],
-    deps = [
-        ":fast_transport_base",
-        "//include/datasystem/hetero:hetero_headers",
-        "//include/datasystem/object:object_headers",
-        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
-        "//src/datasystem/common/device/ascend:acl_device_manager_header",
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/rdma:rdma_util",
-        "//src/datasystem/common/rdma/npu:remote_h2d_manager_header",
-        "//src/datasystem/common/rpc:rpc_constants",
-        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/common/util:common_util",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:raii",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:thread_local",
-        "//src/datasystem/common/util:uri",
-        "//src/datasystem/common/util:wait_post",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
-        "//src/datasystem/common/util/gflag:common_util_gflag_header",
-        "//src/datasystem/protos:meta_transport_cc_proto",
-        "//src/datasystem/protos:utils_cc_proto",
-        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
-    ] + select({
-        "//:enable_urma": [":urma_manager"],
-        "//conditions:default": [],
-    }),
-)
-
-ds_cc_library(
-    name = "rdma_util",
-    srcs = [
-        "rdma_util.cpp",
-    ],
-    hdrs = [
-        "rdma_util.h",
-    ],
-    deps = [
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
     ],
 )
 
-ds_cc_library(
-    name = "urma_dlopen_util",
-    srcs = [
-        "urma_dlopen_util.cpp",
-    ],
-    hdrs = [
-        "urma_dlopen_util.h",
-    ],
-    copts = ["-DUSE_URMA"],
-    includes = [
-        "/usr/include",
-        "/usr/local/include",
-    ],
-    linkopts = [
-        "-lurma",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log",
-    ],
-)
+alias(name = "rdma_util", actual = ":common_rdma")
+alias(name = "fast_transport_manager_wrapper", actual = ":common_rdma")
+alias(name = "fast_transport_base", actual = ":common_rdma")

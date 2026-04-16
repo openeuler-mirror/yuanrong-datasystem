@@ -3,25 +3,9 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
-    name = "meta_async_queue",
-    srcs = ["meta_async_queue.cpp"],
-    hdrs = [
-        "meta_async_queue.h",
-    ],
-    deps = [
-        "//src/datasystem/common/util:common_util",
-        "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/log:common_log",
-    ],
-)
-
-ds_cc_library(
     name = "object_meta_store",
-    srcs = ["object_meta_store.cpp"],
-    hdrs = [
-        "object_meta_store.h",
-    ],
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     deps = [
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/inject:common_inject",
@@ -30,7 +14,6 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/kvstore/rocksdb:rocks_store",
         "//src/datasystem/common/object_cache:object_base",
-        ":meta_async_queue",
         "//src/datasystem/protos:master_object_zmq_cc_proto",
         "//src/datasystem/protos:master_object_cc_proto",
         "//src/datasystem/common/kvstore/rocksdb:replica",
@@ -38,4 +21,9 @@ ds_cc_library(
         "//src/datasystem/common/util:request_counter",
         "//src/datasystem/worker/hash_ring:hash_ring_allocator",
     ],
+)
+
+alias(
+    name = "meta_async_queue",
+    actual = "object_meta_store",
 )

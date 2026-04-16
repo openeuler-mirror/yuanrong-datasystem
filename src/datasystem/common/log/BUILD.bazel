@@ -3,6 +3,7 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Lightweight header-only target for log macros (used by 30+ packages)
 ds_cc_library(
     name = "common_log_header",
     hdrs = [
@@ -17,6 +18,7 @@ ds_cc_library(
     ],
 )
 
+# Lightweight header-only target for log_time and trace (no deps)
 ds_cc_library(
     name = "log_base",
     hdrs = [
@@ -25,26 +27,15 @@ ds_cc_library(
     ],
 )
 
+# Full logging implementation (excludes failure_handler which has separate absl deps)
 ds_cc_library(
     name = "common_log",
-    srcs = [
-        "log_manager.cpp",
-        "logging.cpp",
-        "access_recorder.cpp",
-        "trace.cpp",
-        #"failure_handler.cpp",
-    ],
-    hdrs = [
-        "log_manager.h",
-        "logging.h",
-        "access_recorder.h",
-        #"failure_handler.h",
-        "access_point.def",
-        "log_time.h",
-    ],
+    srcs = glob(["*.cpp"], exclude = ["failure_handler.cpp"]),
+    hdrs = glob(["*.h", "*.def"], exclude = ["failure_handler.h"]),
     linkopts = ["-pthread"],
     deps = [
         ":common_log_header",
+        ":log_base",
         "//src/datasystem/common:common_constants",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
@@ -59,17 +50,14 @@ ds_cc_library(
     alwayslink = 1,
 )
 
+# Failure handler with absl deps (used only by worker and tests)
 ds_cc_library(
     name = "failure_handler",
-    srcs = [
-        "failure_handler.cpp",
-    ],
-    hdrs = [
-        "failure_handler.h",
-    ],
+    srcs = ["failure_handler.cpp"],
+    hdrs = ["failure_handler.h"],
     deps = [
         "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log",
+        ":common_log",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
         "@com_google_absl//absl/debugging:failure_signal_handler",
         "@com_google_absl//absl/debugging:symbolize",

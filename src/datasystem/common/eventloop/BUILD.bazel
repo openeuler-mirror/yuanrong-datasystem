@@ -5,18 +5,13 @@ package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
     name = "common_event_loop",
-    srcs = [
-        "event_loop.cpp",
-        "timer_queue.cpp",
-    ],
-    hdrs = [
-        "event_loop.h",
-        "timer_queue.h",
-    ],
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     deps = [
         "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:fd_manager",
-        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:common_util_impl",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
         "@securec",
     ],
 )

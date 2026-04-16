@@ -3,37 +3,15 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
-    name = "iam",
-    hdrs = [
-        "iam.h",
-    ],
-    linkopts = select({
-        "//:with_tests": [],
-        "//conditions:default": ["-Wl,--whole-archive", "-Wl,--no-whole-archive"],
-    }),
-    deps = [
-        "//src/datasystem/common/util:sensitive_value",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)
-
-ds_cc_library(
     name = "common_iam",
-    srcs = [
-        "tenant_auth_manager.cpp",
-        "yuanrong_iam.cpp",
-    ],
-    hdrs = [
-        "tenant_auth_manager.h",
-        "yuanrong_iam.h",
-    ],
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     alwayslink = True,
     linkopts = select({
         "//:with_tests": [],
         "//conditions:default": ["-Wl,--whole-archive", "-Wl,--no-whole-archive"],
     }),
     deps = [
-        ":iam",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/ak_sk:hasher",
         "//src/datasystem/common/ak_sk:signature",
@@ -59,3 +37,5 @@ ds_cc_library(
         "@tbb",
     ],
 )
+
+alias(name = "iam", actual = ":common_iam")

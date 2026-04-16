@@ -1,12 +1,12 @@
 # BUILD file for src/datasystem/common/signal
+load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
-load("//bazel:build_defs.bzl", "ds_cc_library")
 
 ds_cc_library(
     name = "signal",
-    srcs = ["signal.cpp"],
-    hdrs = ["signal.h"],
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     deps = [
         "//src/datasystem/common/log:common_log_header",
     ],

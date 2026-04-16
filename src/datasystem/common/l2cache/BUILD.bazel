@@ -42,31 +42,8 @@ ds_cc_library(
 
 ds_cc_library(
     name = "slot_client",
-    srcs = [
-        "slot_client/slot_compactor.cpp",
-        "slot_client/slot_file_util.cpp",
-        "slot_client/slot_index_codec.cpp",
-        "slot_client/slot_manifest.cpp",
-        "slot_client/slot.cpp",
-        "slot_client/slot_snapshot.cpp",
-        "slot_client/slot_takeover_planner.cpp",
-        "slot_client/slot_client.cpp",
-        "slot_client/slot_writer.cpp",
-    ],
-    hdrs = [
-        "storage_client.h",
-        "slot_client/slot_compactor.h",
-        "slot_client/slot_file_util.h",
-        "slot_client/slot_index_codec.h",
-        "slot_client/slot_manifest.h",
-        "slot_client/slot.h",
-        "slot_client/slot_snapshot.h",
-        "slot_client/slot_takeover_planner.h",
-        "slot_client/slot_client.h",
-        "slot_client/slot_transfer.h",
-        "slot_client/slot_writer.h",
-        "slot_client/slot_internal_config.h",
-    ],
+    srcs = glob(["slot_client/*.cpp"]),
+    hdrs = glob(["storage_client.h", "slot_client/*.h"]),
     deps = [
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
@@ -83,16 +60,8 @@ ds_cc_library(
 
 ds_cc_library(
     name = "persistence_api",
-    srcs = [
-        "aggregated_persistence_api.cpp",
-        "object_persistence_api.cpp",
-        "persistence_api.cpp",
-    ],
-    hdrs = [
-        "aggregated_persistence_api.h",
-        "object_persistence_api.h",
-        "persistence_api.h",
-    ],
+    srcs = glob(["aggregated_persistence_api.cpp", "object_persistence_api.cpp", "persistence_api.cpp"]),
+    hdrs = glob(["aggregated_persistence_api.h", "object_persistence_api.h", "persistence_api.h"]),
     deps = [
         ":l2cache_client",
         ":l2cache_object_info_header",

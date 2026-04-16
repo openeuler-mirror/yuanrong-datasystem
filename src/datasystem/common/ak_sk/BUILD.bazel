@@ -1,60 +1,46 @@
+# BUILD file for src/datasystem/common/ak_sk
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
-    name = "ak_sk_manager",
-    srcs = [
-        "ak_sk_manager.cpp",
-    ],
-    hdrs = [
-        "ak_sk_manager.h",
-    ],
+    name = "common_ak_sk",
+    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h"]),
     defines = select({
         "//:with_tests": ["WITH_TESTS=1"],
         "//conditions:default": [],
     }),
     deps = [
-        ":hasher",
-        ":signature",
         "//src/datasystem/common/encrypt:common_encrypt",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:raii",
-    ],
-)
-
-ds_cc_library(
-    name = "signature",
-    srcs = [
-        "signature.cpp",
-    ],
-    hdrs = ["signature.h"],
-    deps = [
-        ":hasher",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/rpc/zmq:zmq_message",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:sensitive_value",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_local",
         "@boringssl//:ssl",
+        "@securec",
     ] + select({
         "//:with_tests": ["//src/datasystem/common/inject:common_inject"],
         "//conditions:default": [],
     }),
 )
 
-ds_cc_library(
+alias(
+    name = "ak_sk_manager",
+    actual = ":common_ak_sk",
+)
+
+alias(
+    name = "signature",
+    actual = ":common_ak_sk",
+)
+
+alias(
     name = "hasher",
-    srcs = [
-        "hasher.cpp",
-    ],
-    hdrs = ["hasher.h"],
-    deps = [
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:sensitive_value",
-        "//src/datasystem/common/util:status_helper",
-        "@boringssl//:ssl",
-        "@securec",
-    ],
+    actual = ":common_ak_sk",
 )
