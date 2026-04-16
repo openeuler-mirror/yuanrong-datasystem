@@ -11,6 +11,8 @@
   - collect periodic resource usage metrics from worker/master/runtime components and flush them to monitor logs.
 - Primary source files to verify against:
   - `src/datasystem/common/metrics/CMakeLists.txt`
+  - `src/datasystem/common/metrics/metrics.h`
+  - `src/datasystem/common/metrics/metrics.cpp`
   - `src/datasystem/common/metrics/metrics_exporter.h`
   - `src/datasystem/common/metrics/metrics_exporter.cpp`
   - `src/datasystem/common/metrics/res_metric_collector.h`
@@ -43,6 +45,7 @@
   - `ResMetricCollector` is a singleton periodic collector that emits resource metrics when `log_monitor` is enabled.
   - metrics are not auto-discovered; they are registered explicitly through `RegisterCollectHandler`.
   - `worker_oc_server.cpp` is a major registration point for many resource metrics.
+  - `metrics.h/.cpp` now provide a lightweight typed `datasystem::metrics` API with `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and a periodic `LOG(INFO)` summary writer for release-scoped request-path instrumentation.
 - Pending verification:
   - whether any additional registration points outside `WorkerOCServer` should get their own context note;
   - whether a non-harddisk exporter backend is planned but not yet implemented.
@@ -65,6 +68,7 @@
 | `MetricsExporter` | abstract buffered exporter | `exporters-and-buffering.md` |
 | `HardDiskExporter` | concrete file exporter | `exporters-and-buffering.md` |
 | `ResMetricCollector` | singleton periodic collector | `resource-collector.md` |
+| `datasystem::metrics` typed API | lightweight Counter/Gauge/Histogram and summary writer | `design.md` |
 | `res_metrics.def` | metric-name enumeration source | `metric-families-and-registration.md` |
 | `metrics_description.def` | human-facing metric descriptions and units | `metric-families-and-registration.md` |
 | `metrics_vector/*` | metric helper structures/vectors | this file plus future follow-up docs if needed |

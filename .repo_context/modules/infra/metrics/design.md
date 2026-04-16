@@ -14,6 +14,8 @@
 - Primary source-of-truth files:
   - `src/datasystem/common/metrics/CMakeLists.txt`
   - `src/datasystem/common/metrics/BUILD.bazel`
+  - `src/datasystem/common/metrics/metrics.h`
+  - `src/datasystem/common/metrics/metrics.cpp`
   - `src/datasystem/common/metrics/metrics_exporter.h`
   - `src/datasystem/common/metrics/metrics_exporter.cpp`
   - `src/datasystem/common/metrics/res_metric_collector.h`
@@ -31,7 +33,7 @@
   - `tests/st/client/stream_cache/BUILD.bazel`
   - `bazel/ds_deps.bzl`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-04-15`
 - Related context docs:
   - `.repo_context/modules/infra/metrics/README.md`
   - `.repo_context/modules/infra/metrics/resource-collector.md`
@@ -126,6 +128,7 @@
 
 - Current implementation or baseline behavior:
   - metrics are collected as string payloads, not typed numeric objects, and persisted through a single concrete exporter backend named `"harddisk"`.
+  - `metrics.h/.cpp` also provide a release-scoped lightweight typed API with fixed-descriptor `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and one multi-line `LOG(INFO)` summary block per monitor interval.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
   - collector startup is gated by `log_monitor` and exporter initialization;
@@ -240,6 +243,7 @@
 | `MetricsExporter` | bounded buffering and flush-thread lifecycle | `src/datasystem/common/metrics/metrics_exporter.h/.cpp` | abstract base |
 | `HardDiskExporter` | concrete file writer, rolling, pruning, and prefix formatting | `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h/.cpp` | shared with logging-side access output |
 | `ResMetricCollector` | periodic sampling and exporter submission | `src/datasystem/common/metrics/res_metric_collector.h/.cpp` | singleton |
+| `datasystem::metrics` typed API | fixed-id Counter/Gauge/Histogram updates and periodic `LOG(INFO)` summaries | `src/datasystem/common/metrics/metrics.h/.cpp` | no exporter, no buckets, no dynamic labels |
 | `ResMetricName` families | stable family identity and iteration order | `src/datasystem/common/metrics/res_metric_name.h`, `src/datasystem/common/metrics/res_metrics.def` | order-sensitive |
 | `metrics_description.def` | family descriptions and units | `src/datasystem/common/metrics/metrics_description.def` | human-readable semantic contract |
 | runtime registration code | binds families to live handler lambdas | `src/datasystem/worker/worker_oc_server.cpp` | major current site |

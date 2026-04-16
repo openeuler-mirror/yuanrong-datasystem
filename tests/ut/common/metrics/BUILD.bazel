@@ -1,0 +1,14 @@
+# tests/ut/common/metrics/BUILD.bazel
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "metrics_test",
+    srcs = ["metrics_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//tests/ut:ut_common",
+    ],
+)
