@@ -16,14 +16,21 @@
 
 #include "datasystem/common/rpc/zmq/zmq_socket_ref.h"
 
+#include <atomic>
 #include <limits>
 #include <unordered_map>
 
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/zmq/zmq_constants.h"
+#include "datasystem/common/rpc/zmq/zmq_network_errno.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
+namespace {
+constexpr int LOG_ZMQ_ERROR_FREQUENCY = 100;
+}  // namespace
+
 const std::unordered_map<uint64_t, std::string> ZMQ_OPTION_MAPPINGS{
     { ZMQ_IMMEDIATE, "ZMQ_IMMEDIATE" },
     { ZMQ_LINGER, "ZMQ_LINGER" },
@@ -92,7 +99,7 @@ Status ZmqSocketRef::GetOption(int option, void *val, size_t *len) const
 Status ZmqSocketRef::Bind(const std::string &endPoint)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(sock_ != nullptr, K_INVALID, "Null reference pointer");
-    int rc;
+    int rc = -1;
     if (RpcChannel::IsTcpipEndPointIPv6(endPoint)) {
         int optV6 = 1;
         VLOG(RPC_LOG_LEVEL) << "ZmqSocketRef Bind is setting the ipv6 socket option for endpoint: " << endPoint;
@@ -111,7 +118,7 @@ Status ZmqSocketRef::Bind(const std::string &endPoint)
 Status ZmqSocketRef::Connect(const std::string &endPoint, bool isIPv6)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(sock_ != nullptr, K_INVALID, "Null reference pointer");
-    int rc;
+    int rc = -1;
     // Check the endpoint name for IPv6 format
     if (isIPv6) {
         int optV6 = 1;
@@ -140,9 +147,32 @@ void ZmqSocketRef::Close()
 Status ZmqSocketRef::RecvMsg(ZmqMessage &msg, ZmqRecvFlags flags)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(sock_ != nullptr, K_INVALID, "Null reference pointer");
-    int rc = zmq_msg_recv(msg.GetHandle(), sock_, static_cast<int>(flags));
+    int rc = -1;
+    {
+        METRIC_TIMER(metrics::KvMetricId::ZMQ_RECEIVE_IO_LATENCY);
+        rc = zmq_msg_recv(msg.GetHandle(), sock_, static_cast<int>(flags));
+    }
     if (rc == -1) {
-        return ZmqErrnoToStatus(errno, "ZMQ recv msg unsuccessful", K_RPC_UNAVAILABLE);
+        int e = errno;
+        if (e == EAGAIN) {
+            if (flags == ZmqRecvFlags::NONE) {
+                METRIC_INC(metrics::KvMetricId::ZMQ_RECEIVE_TRY_AGAIN_TOTAL);
+            }
+        } else if (e != EINTR) {
+            METRIC_INC(metrics::KvMetricId::ZMQ_RECEIVE_FAILURE_TOTAL);
+            metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(e);
+            if (IsZmqSocketNetworkErrno(e)) {
+                METRIC_INC(metrics::KvMetricId::ZMQ_NETWORK_ERROR_TOTAL);
+            }
+            const auto logMsg = FormatString("[ZMQ_RECEIVE_FAILURE_TOTAL] errno=%d(%s)", e, zmq_strerror(e));
+            static std::atomic<int64_t> zmqRecvFailLogLastNs{0};
+            static std::atomic<int> zmqRecvFailLogCtr{LOG_ZMQ_ERROR_FREQUENCY - 1};
+            if (LogFirstEveryNShouldEmit(LOG_ZMQ_ERROR_FREQUENCY, FLAGS_log_monitor_interval_ms, zmqRecvFailLogLastNs,
+                                         zmqRecvFailLogCtr)) {
+                LOG(WARNING) << logMsg;
+            }
+        }
+        return ZmqErrnoToStatus(e, "ZMQ recv msg unsuccessful", K_RPC_UNAVAILABLE);
     }
     static const auto maxInt = std::numeric_limits<int>::max();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc == maxInt || static_cast<size_t>(rc) == msg.Size(), K_RUNTIME_ERROR,
@@ -155,9 +185,30 @@ Status ZmqSocketRef::SendMsg(ZmqMessage &msg, ZmqSendFlags flags)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(sock_ != nullptr, K_INVALID, "Null reference pointer");
     // Get the message size before it is sent. Once sent, the message will be nullified.
     const auto msgSize = msg.Size();
-    int rc = zmq_msg_send(msg.GetHandle(), sock_, static_cast<int>(flags));
+    int rc = -1;
+    {
+        METRIC_TIMER(metrics::KvMetricId::ZMQ_SEND_IO_LATENCY);
+        rc = zmq_msg_send(msg.GetHandle(), sock_, static_cast<int>(flags));
+    }
     if (rc == -1) {
-        return ZmqErrnoToStatus(errno, "ZMQ send msg unsuccessful", K_RPC_CANCELLED);
+        int e = errno;
+        if (e == EAGAIN) {
+            METRIC_INC(metrics::KvMetricId::ZMQ_SEND_TRY_AGAIN_TOTAL);
+        } else if (e != EINTR) {
+            METRIC_INC(metrics::KvMetricId::ZMQ_SEND_FAILURE_TOTAL);
+            metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(e);
+            if (IsZmqSocketNetworkErrno(e)) {
+                METRIC_INC(metrics::KvMetricId::ZMQ_NETWORK_ERROR_TOTAL);
+            }
+            const auto logMsg = FormatString("[ZMQ_SEND_FAILURE_TOTAL] errno=%d(%s)", e, zmq_strerror(e));
+            static std::atomic<int64_t> zmqSendFailLogLastNs{0};
+            static std::atomic<int> zmqSendFailLogCtr{LOG_ZMQ_ERROR_FREQUENCY - 1};
+            if (LogFirstEveryNShouldEmit(LOG_ZMQ_ERROR_FREQUENCY, FLAGS_log_monitor_interval_ms, zmqSendFailLogLastNs,
+                                         zmqSendFailLogCtr)) {
+                LOG(WARNING) << logMsg;
+            }
+        }
+        return ZmqErrnoToStatus(e, "ZMQ send msg unsuccessful", K_RPC_CANCELLED);
     }
     static const auto maxInt = std::numeric_limits<int>::max();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc == maxInt || static_cast<size_t>(rc) == msgSize, K_RUNTIME_ERROR,

@@ -25,6 +25,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/rpc_service_method.h"
 #include "datasystem/common/rpc/zmq/zmq_context.h"
@@ -379,6 +380,7 @@ Status ZmqFrontend::WorkerEntry()
                 ResetLiveness();
                 ffd_ = frontend_->GetEventFd();
                 LOG(INFO) << FormatString("New gateway created %s", GetGatewayId());
+                METRIC_INC(metrics::KvMetricId::ZMQ_GATEWAY_RECREATE_TOTAL);
             }
         }
     }

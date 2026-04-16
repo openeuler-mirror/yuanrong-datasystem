@@ -49,6 +49,13 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "zmq_network_errno",
+    hdrs = [
+        "zmq_network_errno.h",
+    ],
+)
+
+ds_cc_library(
     name = "work_agent2",
     srcs = [
         "work_agent.cpp",
@@ -139,6 +146,8 @@ ds_cc_library(
     ],
     deps = [
         ":zmq_constants",
+        ":zmq_network_errno",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:rpc_channel",
         "//src/datasystem/common/util:format",
@@ -157,6 +166,7 @@ ds_cc_library(
     deps = [
         ":zmq_constants",
         ":zmq_message",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:mem_view",
@@ -239,6 +249,7 @@ ds_cc_library(
     deps = [
         ":rpc_service_method",
         ":zmq_common",
+        "//src/datasystem/common/metrics:common_metrics",
         ":zmq_context",
         ":zmq_epoll",
         ":zmq_msg_decoder",
@@ -428,6 +439,7 @@ ds_cc_library(
     ],
     deps = [
         ":zmq_context",
+        "//src/datasystem/common/metrics:common_metrics",
         ":zmq_socket",
         ":zmq_stub_conn",
         "//src/datasystem/common/util:thread",

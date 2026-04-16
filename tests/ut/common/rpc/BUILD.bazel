@@ -1,0 +1,13 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "zmq_metrics_test",
+    srcs = ["zmq_metrics_test.cpp"],
+    deps = [
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/rpc/zmq:zmq_network_errno",
+        "//tests/ut:ut_common",
+    ],
+)

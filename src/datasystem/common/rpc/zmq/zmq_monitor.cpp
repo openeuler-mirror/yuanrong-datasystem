@@ -21,6 +21,7 @@
 #include "datasystem/common/rpc/zmq/zmq_monitor.h"
 
 #include <utility>
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 
 DS_DEFINE_int32(zmq_monitor_interval_s, 3, "Default interval to report the same event.");
@@ -138,23 +139,27 @@ void ZmqMonitor::OnEventCloseFailed(const Event &t, const std::string &addr, con
 void ZmqMonitor::OnEventDisconnected(const Event &t, const std::string &addr, const std::string &gatewayId)
 {
     LOG(WARNING) << FormatString("Gateway %s socket disconnected. fd %d. %s", gatewayId, t.value_, addr);
+    METRIC_INC(metrics::KvMetricId::ZMQ_EVENT_DISCONNECT_TOTAL);
 }
 
 void ZmqMonitor::OnEventHandshakeFailedNoDetail(const Event &t, const std::string &addr, const std::string &gatewayId)
 {
     LOG(WARNING) << FormatString("Gateway %s handshake failed. Errno %d. %s %s", gatewayId, t.value_,
                                  zmq_strerror(t.value_), addr);
+    METRIC_INC(metrics::KvMetricId::ZMQ_EVENT_HANDSHAKE_FAILURE_TOTAL);
 }
 
 void ZmqMonitor::OnEventHandshakeFailedProtocol(const Event &t, const std::string &addr, const std::string &gatewayId)
 {
     LOG(WARNING) << FormatString("Gateway %s handshake protocol failed. Protocol %d. %s", gatewayId, t.value_, addr);
+    METRIC_INC(metrics::KvMetricId::ZMQ_EVENT_HANDSHAKE_FAILURE_TOTAL);
 }
 
 void ZmqMonitor::OnEventHandshakeFailedAuth(const Event &t, const std::string &addr, const std::string &gatewayId)
 {
     LOG(WARNING) << FormatString("Gateway %s handshake auth failed. Status code returned by ZAP handler %d. %s",
                                  gatewayId, t.value_, addr);
+    METRIC_INC(metrics::KvMetricId::ZMQ_EVENT_HANDSHAKE_FAILURE_TOTAL);
 }
 
 void ZmqMonitor::OnEventHandshakeSucceeded(const Event &t, const std::string &addr, const std::string &gatewayId)

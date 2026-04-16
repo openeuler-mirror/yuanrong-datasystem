@@ -26,6 +26,22 @@
 
 namespace arbitrary {
 namespace workspace {
+
+// CRC-32 (IEEE 802.3) reflected polynomial; used by bit-serial CalcCrc32 below.
+static constexpr uint32_t CRC32_POLYNOMIAL = 0xEDB88320U;
+
+inline uint32_t CalcCrc32(const void *buf, size_t sz, uint32_t checksumbase = 0)
+{
+    uint32_t crc = checksumbase;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(buf);
+    for (size_t i = 0; i < sz; ++i) {
+        crc ^= bytes[i];
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc & 1U) ? (crc >> 1U) ^ CRC32_POLYNOMIAL : (crc >> 1U);
+        }
+    }
+    return crc;
+}
 /**
  * This are demo service classes to implement the DemoService service in datasystem/protos/zmq_test.proto
  */
@@ -112,9 +128,8 @@ public:
         if (hello.msg() == "Hello") {
             ReplyHelloPb.set_reply("World");
         } else if (hello.msg() == "World") {
-            std::cout << "Sleep 1 second. Client will timeout" << std::endl;
-            const int zzz = 1;
-            std::this_thread::sleep_for(std::chrono::seconds(zzz));
+            std::cout << "Sleep (slow path). Client will timeout" << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
             ReplyHelloPb.set_reply("Hello");
         } else {
             ReplyHelloPb.set_reply(hello.msg());
@@ -218,7 +233,7 @@ public:
                 p += msg.Size();
                 size -= msg.Size();
             }
-            crc32 = datasystem::st::GetCrc32(buf.get(), static_cast<int64_t>(payload_len));
+            crc32 = CalcCrc32(buf.get(), static_cast<int64_t>(payload_len));
         }
         checksum.set_crc32(crc32);
         return datasystem::Status::OK();
@@ -237,7 +252,7 @@ public:
         std::ifstream ifs("/dev/urandom", std::ios_base::in | std::ios_base::binary);
         ifs.read(static_cast<char *>(buffer.Data()), len);
         ifs.close();
-        uint32_t checksum = datasystem::st::GetCrc32(buffer.Data(), len);
+        uint32_t checksum = CalcCrc32(buffer.Data(), len);
         checksumPb.set_crc32(checksum);
         outPayload.push_back(std::move(buffer));
         return datasystem::Status();
@@ -404,7 +419,7 @@ public:
         ChecksumPb reply;
         uint32_t checksum = 0;
         for (auto &buf : payload) {
-            checksum = datasystem::st::GetCrc32(buf.Data(), buf.Size(), checksum);
+            checksum = CalcCrc32(buf.Data(), buf.Size(), checksum);
         }
         reply.set_crc32(checksum);
         RETURN_IF_NOT_OK(serverApi->Write(reply));

@@ -46,6 +46,19 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 20, "worker_from_client_total_bytes", MetricType::COUNTER, "bytes" },
     { 21, "worker_object_count", MetricType::GAUGE, "count" },
     { 22, "worker_allocated_memory_size", MetricType::GAUGE, "bytes" },
+    { 23, "zmq_send_failure_total", MetricType::COUNTER, "count" },
+    { 24, "zmq_receive_failure_total", MetricType::COUNTER, "count" },
+    { 25, "zmq_send_try_again_total", MetricType::COUNTER, "count" },
+    { 26, "zmq_receive_try_again_total", MetricType::COUNTER, "count" },
+    { 27, "zmq_network_error_total", MetricType::COUNTER, "count" },
+    { 28, "zmq_last_error_number", MetricType::GAUGE, "" },
+    { 29, "zmq_gateway_recreate_total", MetricType::COUNTER, "count" },
+    { 30, "zmq_event_disconnect_total", MetricType::COUNTER, "count" },
+    { 31, "zmq_event_handshake_failure_total", MetricType::COUNTER, "count" },
+    { 32, "zmq_send_io_latency", MetricType::HISTOGRAM, "us" },
+    { 33, "zmq_receive_io_latency", MetricType::HISTOGRAM, "us" },
+    { 34, "zmq_rpc_serialize_latency", MetricType::HISTOGRAM, "us" },
+    { 35, "zmq_rpc_deserialize_latency", MetricType::HISTOGRAM, "us" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0])
               == static_cast<size_t>(KvMetricId::KV_METRIC_END));
