@@ -455,7 +455,7 @@ void ZmqFrontend::UpdateLiveness(int32_t timeoutMs)
         return;
     }
     const int32_t minLiveness = 3;
-    const int32_t minInterval = 200;     // 200ms.
+    const int32_t minInterval = 500;     // 500ms.
     const int32_t maxInterval = 30'000;  // 30s.
     auto interval = std::max(minInterval, std::min(timeoutMs / (minLiveness + 1), maxInterval));
     auto realTimeoutMs = std::max<int32_t>(timeoutMs - interval, timeoutMs * 0.9);
