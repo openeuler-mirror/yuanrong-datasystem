@@ -1,4 +1,4 @@
-load("@datasystem_version//:version.bzl", "DATASYSTEM_VERSION")
+load("//:version.bzl", "DATASYSTEM_VERSION")
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
