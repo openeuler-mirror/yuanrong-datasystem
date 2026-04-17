@@ -173,7 +173,7 @@ class Command(BaseCommand):
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as f:
                 raw_cmdline = f.read()
-        except (FileNotFoundError, PermissionError, OSError):
+        except OSError:
             return None
 
         if not raw_cmdline:
