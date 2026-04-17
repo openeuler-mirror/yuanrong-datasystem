@@ -299,8 +299,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l1 has-children"><a class="reference internal" href="../installation/index.html">安装</a><input aria-label="Toggle navigation of 安装" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../installation/installation_linux.html">安装指南</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/cmake_build.html">基于Cmake自定义编译</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/bazel_build.html">基于Bazel自定义编译</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/build_for_bazel.html">Bazel编译源码集成SDK</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/bazel_build.html">基于 Bazel 自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/build_for_bazel.html">Bazel二进制集成SDK</a></li>
 </ul>
 </li>
 <li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">部署</a><input aria-label="Toggle navigation of 部署" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
@@ -1221,6 +1221,8 @@ modprobe<span class="w"> </span>ums
 </tbody>
 </table>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">stop</span></code> 会先向 worker 发送 <code class="docutils literal notranslate"><span class="pre">SIGTERM</span></code>，等待超时后再发送 <code class="docutils literal notranslate"><span class="pre">SIGKILL</span></code>。等待超时时间按以下公式动态计算（单位：秒）：</p>
+<p><code class="docutils literal notranslate"><span class="pre">180</span> <span class="pre">+</span> <span class="pre">shared_memory_size_mb</span> <span class="pre">/</span> <span class="pre">data_migrate_rate_limit_mb</span></code></p>
 </section>
 <section id="dscli-up">
 <h3>dscli up<a class="headerlink" href="#dscli-up" title="Link to this heading">¶</a></h3>

@@ -3,11 +3,11 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="Bazel编译源码集成SDK" href="build_for_bazel.html"><link rel="prev" title="基于Cmake自定义编译" href="cmake_build.html">
+<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="Bazel二进制集成SDK" href="build_for_bazel.html"><link rel="prev" title="基于Cmake自定义编译" href="cmake_build.html">
         <link rel="prefetch" href="../../_static/logo-small.png" as="image">
 
     <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
-        <title>基于Bazel自定义编译 - openYuanrong datasystem documentation</title>
+        <title>基于 Bazel 自定义编译 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
@@ -299,8 +299,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">安装</a><input aria-label="Toggle navigation of 安装" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="../installation_linux.html">安装指南</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cmake_build.html">基于Cmake自定义编译</a></li>
-<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">基于Bazel自定义编译</a></li>
-<li class="toctree-l2"><a class="reference internal" href="build_for_bazel.html">Bazel编译源码集成SDK</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">基于 Bazel 自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="build_for_bazel.html">Bazel二进制集成SDK</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../deployment/index.html">部署</a><input aria-label="Toggle navigation of 部署" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -570,81 +570,379 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="bazel">
-<h1>基于Bazel自定义编译<a class="headerlink" href="#bazel" title="Link to this heading">¶</a></h1>
+<h1>基于 Bazel 自定义编译<a class="headerlink" href="#bazel" title="Link to this heading">¶</a></h1>
+<p>DataSystem 支持通过 <code class="docutils literal notranslate"><span class="pre">bash</span> <span class="pre">build.sh</span></code> 一键 Bazel 编译，也支持直接使用 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">build</span></code> 命令进行精细控制。</p>
 <section id="id1">
-<h2>一，环境依赖<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<h2>一、环境依赖<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <section id="openeuler-os">
 <h3>OpenEuler OS<a class="headerlink" href="#openeuler-os" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>yum<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>autoconf<span class="w"> </span>automake<span class="w"> </span>libtool<span class="w"> </span>m4
 </pre></div>
 </div>
 </section>
-</section>
 <section id="id2">
-<h2>二，常用构建命令<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
-<p><strong>1. sdk 包构建：</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk
-</pre></div>
-</div>
-<blockquote>
-<div><p>输出sdk目录：bazel-bin/bazel/datasystem_sdk/cpp  <br />
-主要内容包括：BUILD.bazel、头文件（统一在 cpp/include/datasystem 目录下）
-以及动态库 cpp/lib/libdatasystem.so  <br />
-同时输出压缩包：bazel-bin/bazel/datasystem_sdk.tar</p>
-</div></blockquote>
-<p>性能优化的Release版本，需要带上 –config=release，下同</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>release
-</pre></div>
-</div>
-<p>Debug版本，需要带上 –config=debug</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>debug
-</pre></div>
-</div>
-<p><strong>2. wheel包构建：</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>release
-</pre></div>
-</div>
-<blockquote>
-<div><p>输出wheel包：bazel-bin/bazel/openyuanrong_datasystem-0.7.0-cp311-cp311-manylinux_2_34_x86_64.whl</p>
-</div></blockquote>
-<p><strong>3. 只编译 libdatasystem.so:</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//:datasystem<span class="w"> </span>--config<span class="o">=</span>release
-</pre></div>
-</div>
-<p><strong>4. 开启URMA选项编译:</strong>
-添加选项 –config=urma</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>--config<span class="o">=</span>urma<span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>//bazel:datasystem_sdk
-bazel<span class="w"> </span>build<span class="w"> </span>--config<span class="o">=</span>urma<span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>//bazel:datasystem_wheel
-</pre></div>
-</div>
-<p><strong>5. 编译单个target:</strong>
-新增源码文件时需要在对应目录的BUILD.bazel中补充依赖关系。
-如果需要编译单个target，可以指定目录+target名，例如：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//src/datasystem/common/rdma:fast_transport_manager_wrapper
-</pre></div>
-</div>
+<h3>安装 Bazel<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>参考 <a class="reference external" href="https://bazel.build/install">Bazel 官方文档</a> 安装 Bazel 7.4 及以上版本。</p>
 </section>
+</section>
+<section id="build-sh">
+<h2>二、通过 build.sh 编译（推荐）<a class="headerlink" href="#build-sh" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">build.sh</span></code> 已支持 Bazel 构建系统，通过 <code class="docutils literal notranslate"><span class="pre">-b</span> <span class="pre">bazel</span></code> 参数切换。编译产物输出到 <code class="docutils literal notranslate"><span class="pre">output/</span></code> 目录，与 CMake 编译结构对齐。</p>
 <section id="id3">
-<h2>二，构建指定版本<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
-<p><strong>1. 指定python版本编译：</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>py39<span class="w"> </span>--config<span class="o">=</span>release
+<h3>基础用法<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Release 编译（默认）</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel
+
+<span class="c1"># Debug 编译</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-d
+
+<span class="c1"># 指定编译线程数</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-j<span class="w"> </span><span class="m">16</span>
 </pre></div>
 </div>
-<blockquote>
-<div><p>可选版本包括：3.9, 3.10, 3.11, 3.12, 3.13</p>
-</div></blockquote>
-<p><strong>2. 指定glibc版本编译：</strong>
-glibc未指定时默认自动读取并使用系统glibc版本；若指定可选版本用以下指令：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--define<span class="w"> </span><span class="nv">glibc_version</span><span class="o">=</span><span class="m">2</span>.35<span class="w"> </span>--config<span class="o">=</span>release
-</pre></div>
-</div>
-<blockquote>
-<div><p>可选版本包括：2.34, 2.35, 2.36, 2.37, 2.38</p>
-</div></blockquote>
 </section>
 <section id="id4">
-<h2>三，做为第三方组件源码集成<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
-<p><strong>1. bazelrc 默认选项：</strong></p>
+<h3>编译产物<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<p>编译完成后 <code class="docutils literal notranslate"><span class="pre">output/</span></code> 目录结构：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
+├── yr-datasystem-v0.7.7.tar.gz          # 部署包
+├── cpp/                                  # 外部 SDK（find_package / Bazel 集成）
+│   ├── BUILD.bazel                       # Bazel 外部项目模板
+│   ├── include/datasystem/               # C++ 头文件
+│   └── lib/
+│       ├── libdatasystem.so              # SDK 动态库
+│       └── cmake/Datasystem/             # CMake find_package 配置
+└── openyuanrong_datasystem-*.whl         # Python wheel（-P on 时）
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">yr-datasystem-v*.tar.gz</span></code> 解压内容：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>datasystem/
+├── sdk/cpp/                 # C++ SDK
+│   ├── include/datasystem/  # 头文件
+│   └── lib/
+│       ├── libdatasystem.so
+│       └── cmake/Datasystem/
+├── service/                 # 服务端
+│   ├── datasystem_worker    # Worker 进程
+│   ├── lib/
+│   │   ├── libdatasystem_worker.so
+│   │   └── libjemalloc.so.2
+│   ├── worker_config.json
+│   └── cluster_config.json
+├── cli/                     # CLI 工具
+├── tools/                   # 附加工具（仅 -t build/run 时）
+├── VERSION
+├── README.md
+└── .commit_id
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h3>常用参数<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>说明</p></th>
+<th class="head"><p>默认值</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-b</span> <span class="pre">bazel</span></code></p></td>
+<td><p>使用 Bazel 构建</p></td>
+<td><p>cmake</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-r</span></code></p></td>
+<td><p>Release 模式</p></td>
+<td><p>默认</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-d</span></code></p></td>
+<td><p>Debug 模式</p></td>
+<td><p>-</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-j</span> <span class="pre">&lt;N&gt;</span></code></p></td>
+<td><p>编译线程数</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-s</span> <span class="pre">on|off</span></code></p></td>
+<td><p>Strip 符号表</p></td>
+<td><p>on</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-P</span> <span class="pre">on|off</span></code></p></td>
+<td><p>构建 Python wheel</p></td>
+<td><p>on</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-t</span> <span class="pre">build|run|off</span></code></p></td>
+<td><p>测试构建/运行</p></td>
+<td><p>off</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-u</span> <span class="pre">&lt;N&gt;</span></code></p></td>
+<td><p>测试并行度</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-S</span> <span class="pre">address|thread|undefined|off</span></code></p></td>
+<td><p>Sanitizer</p></td>
+<td><p>off</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-c</span> <span class="pre">on|off</span></code></p></td>
+<td><p>覆盖率</p></td>
+<td><p>off</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id6">
+<h3>使用示例<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Release 编译 + 生成 wheel</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span><span class="w"> </span>-P<span class="w"> </span>on
+
+<span class="c1"># 编译并运行测试</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span><span class="w"> </span>-t<span class="w"> </span>run
+
+<span class="c1"># 仅编译测试（不运行）</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span><span class="w"> </span>-t<span class="w"> </span>build
+
+<span class="c1"># 开启 ASan</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-S<span class="w"> </span>address
+
+<span class="c1"># 开启 URMA</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-M<span class="w"> </span>on
+
+<span class="c1"># 开启覆盖率</span>
+bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> </span>bazel<span class="w"> </span>-r<span class="w"> </span>-c<span class="w"> </span>on
+</pre></div>
+</div>
+</section>
+<section id="id7">
+<h3>参数兼容性说明<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<p>以下参数在 Bazel 模式下不支持或自动忽略：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>Bazel 模式行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-n</span></code> (Ninja)</p></td>
+<td><p>忽略，Bazel 有自己的调度器</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-i</span></code> (增量)</p></td>
+<td><p>忽略，Bazel 默认增量编译</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-D</span></code> (下载 UB)</p></td>
+<td><p>忽略</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-x</span></code> (jemalloc profiling)</p></td>
+<td><p>暂不支持</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-J</span></code> (Java API)</p></td>
+<td><p>暂不支持</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-G</span></code> (Go SDK)</p></td>
+<td><p>暂不支持</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">-A</span></code> (RDMA/UCX)</p></td>
+<td><p>暂不支持</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="bazel-build">
+<h2>三、bazel build 高级用法<a class="headerlink" href="#bazel-build" title="Link to this heading">¶</a></h2>
+<p>直接使用 <code class="docutils literal notranslate"><span class="pre">bazel</span> <span class="pre">build</span></code> 命令可以对编译目标进行精细控制。</p>
+<section id="id8">
+<h3>常用构建目标<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 构建 SDK 包（头文件 + libdatasystem.so + cmake config）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 构建 Python wheel</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 仅编译 libdatasystem.so</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//:datasystem<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 编译 worker 进程</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//src/datasystem/worker:datasystem_worker<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 编译 worker 共享库</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//src/datasystem/worker:datasystem_worker_shared<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 编译单个 target（调试时常用）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//src/datasystem/common/rdma:fast_transport_manager_wrapper<span class="w"> </span>--config<span class="o">=</span>release
+</pre></div>
+</div>
+</section>
+<section id="id9">
+<h3>编译配置选项<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h4>构建类型<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Release 版本（-O2 优化，strip 符号）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># Debug 版本（-O0，-ggdb，保留符号）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>debug
+</pre></div>
+</div>
+</section>
+<section id="id11">
+<h4>功能开关<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 开启 URMA 支持</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>urma<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 开启 Pipeline H2D（自动启用 URMA）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>pipeline_h2d<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 开启异构计算</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>hetero<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 开启 Perf 日志</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>perf<span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 编译测试目标</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span><span class="nb">test</span><span class="w"> </span>--config<span class="o">=</span>release
+</pre></div>
+</div>
+</section>
+<section id="sanitizer">
+<h4>Sanitizer（内存/线程错误检测）<a class="headerlink" href="#sanitizer" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Address Sanitizer（内存越界、泄漏）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>asan
+
+<span class="c1"># Thread Sanitizer（数据竞争）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>tsan
+
+<span class="c1"># Undefined Behavior Sanitizer（未定义行为）</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_sdk<span class="w"> </span>--config<span class="o">=</span>ubsan
+</pre></div>
+</div>
+</section>
+<section id="id12">
+<h4>覆盖率<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span>coverage<span class="w"> </span>--config<span class="o">=</span>release
+</pre></div>
+</div>
+</section>
+<section id="python">
+<h4>指定 Python 版本<a class="headerlink" href="#python" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>py39<span class="w"> </span>--config<span class="o">=</span>release
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>py310<span class="w"> </span>--config<span class="o">=</span>release
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>py311<span class="w"> </span>--config<span class="o">=</span>release
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>py312<span class="w"> </span>--config<span class="o">=</span>release
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>py313<span class="w"> </span>--config<span class="o">=</span>release
+</pre></div>
+</div>
+<blockquote>
+<div><p>可选版本：3.9, 3.10, 3.11, 3.12, 3.13</p>
+</div></blockquote>
+</section>
+<section id="glibc">
+<h4>指定 glibc 版本<a class="headerlink" href="#glibc" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--define<span class="w"> </span><span class="nv">glibc_version</span><span class="o">=</span><span class="m">2</span>.34<span class="w"> </span>--config<span class="o">=</span>release
+</pre></div>
+</div>
+<blockquote>
+<div><p>可选版本：2.34, 2.35, 2.36, 2.37, 2.38。未指定时自动使用系统 glibc 版本。</p>
+</div></blockquote>
+</section>
+<section id="id13">
+<h4>运行测试<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 运行所有测试</span>
+bazel<span class="w"> </span><span class="nb">test</span><span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span><span class="nb">test</span><span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>--jobs<span class="o">=</span><span class="m">8</span>
+
+<span class="c1"># 运行指定包下的测试</span>
+bazel<span class="w"> </span><span class="nb">test</span><span class="w"> </span>//tests/st/...<span class="w"> </span>--config<span class="o">=</span><span class="nb">test</span><span class="w"> </span>--config<span class="o">=</span>release
+
+<span class="c1"># 设置超时时间（秒）</span>
+bazel<span class="w"> </span><span class="nb">test</span><span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span><span class="nb">test</span><span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>--test_timeout<span class="o">=</span><span class="m">120</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id14">
+<h3>配置选项完整参考<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置</p></th>
+<th class="head"><p>说明</p></th>
+<th class="head"><p>对应 .bazelrc</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=release</span></code></p></td>
+<td><p>Release 构建 (-O2)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-O2</span> <span class="pre">-DNDEBUG</span> <span class="pre">-fstack-protector-strong</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=debug</span></code></p></td>
+<td><p>Debug 构建 (-O0)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-O0</span> <span class="pre">-ggdb</span> <span class="pre">-ftrapv</span> <span class="pre">-fstack-check</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=urma</span></code></p></td>
+<td><p>启用 URMA</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-DUSE_URMA</span> <span class="pre">-DURMA_OVER_UB</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=pipeline_h2d</span></code></p></td>
+<td><p>启用 Pipeline H2D</p></td>
+<td><p>自动启用 URMA</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=hetero</span></code></p></td>
+<td><p>启用异构计算</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-DBUILD_HETERO</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=perf</span></code></p></td>
+<td><p>启用 Perf 日志</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-DENABLE_PERF</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=test</span></code></p></td>
+<td><p>编译测试目标</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-DWITH_TESTS</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=asan</span></code></p></td>
+<td><p>Address Sanitizer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-fsanitize=address</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=tsan</span></code></p></td>
+<td><p>Thread Sanitizer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-fsanitize=thread</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=ubsan</span></code></p></td>
+<td><p>UBSan</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-fsanitize=undefined</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--config=coverage</span></code></p></td>
+<td><p>覆盖率</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-fprofile-arcs</span> <span class="pre">-ftest-coverage</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--config=py39</span></code>~<code class="docutils literal notranslate"><span class="pre">py313</span></code></p></td>
+<td><p>Python 版本</p></td>
+<td><p>rules_python 版本选择</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id15">
+<h3>组合示例<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Release + URMA + 测试</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>--config<span class="o">=</span>urma<span class="w"> </span>--config<span class="o">=</span><span class="nb">test</span><span class="w"> </span>-j<span class="w"> </span><span class="m">16</span>
+
+<span class="c1"># Debug + ASan + 覆盖率</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//...<span class="w"> </span>--config<span class="o">=</span>debug<span class="w"> </span>--config<span class="o">=</span>asan<span class="w"> </span>--config<span class="o">=</span>coverage<span class="w"> </span>-j<span class="w"> </span><span class="m">8</span>
+
+<span class="c1"># Release wheel for Python 3.11 + glibc 2.34</span>
+bazel<span class="w"> </span>build<span class="w"> </span>//bazel:datasystem_wheel<span class="w"> </span>--config<span class="o">=</span>release<span class="w"> </span>--config<span class="o">=</span>py311<span class="w"> </span>--define<span class="w"> </span><span class="nv">glibc_version</span><span class="o">=</span><span class="m">2</span>.34
+</pre></div>
+</div>
+</section>
+</section>
+<section id="id16">
+<h2>四、源码编译安装<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h2>
+<section id="bazelrc">
+<h3>1. bazelrc 默认选项<a class="headerlink" href="#bazelrc" title="Link to this heading">¶</a></h3>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>common --enable_bzlmod=false   # 关闭 bzlmod
 build --cxxopt=-std=c++17    # 使用 c++17编译
 # 关闭 RDMA 支持
@@ -659,15 +957,16 @@ build:urma --copt=-DUSE_URMA
 build:urma --copt=-DURMA_OVER_UB
 </pre></div>
 </div>
-<p>使用 –config=urma 支持urma</p>
-<p><strong>2. WORKSPACE 配置</strong></p>
+</section>
+<section id="workspace">
+<h3>2. WORKSPACE 配置<a class="headerlink" href="#workspace" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;@yuanrong-datasystem//bazel:ds_deps.bzl&quot;</span><span class="p">,</span> <span class="s2">&quot;ds_deps&quot;</span><span class="p">,</span> <span class="s2">&quot;setup_grpc&quot;</span><span class="p">)</span>
 
-<span class="n">ds_deps</span><span class="p">()</span>    <span class="c1">#加载datasystem默认依赖</span>
+<span class="n">ds_deps</span><span class="p">()</span>    <span class="c1"># 加载 datasystem 默认依赖</span>
 
 <span class="n">load</span><span class="p">(</span><span class="s2">&quot;@com_google_googleapis//:repository_rules.bzl&quot;</span><span class="p">,</span> <span class="s2">&quot;switched_rules_by_language&quot;</span><span class="p">)</span>
 
-<span class="c1"># 关闭grpc对部分语言支持</span>
+<span class="c1"># 关闭 grpc 对部分语言支持</span>
 <span class="n">switched_rules_by_language</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;com_google_googleapis_imports&quot;</span><span class="p">,</span>
     <span class="n">cc</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
@@ -677,11 +976,10 @@ build:urma --copt=-DURMA_OVER_UB
     <span class="n">python</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="c1"># 加载grpc依赖</span>
+<span class="c1"># 加载 grpc 依赖</span>
 <span class="n">setup_grpc</span><span class="p">()</span>
 
-
-<span class="c1"># 配置python构建环境</span>
+<span class="c1"># 配置 python 构建环境</span>
 <span class="n">load</span><span class="p">(</span><span class="s2">&quot;@com_github_grpc_grpc//third_party/py:python_configure.bzl&quot;</span><span class="p">,</span> <span class="s2">&quot;python_configure&quot;</span><span class="p">)</span>
 
 <span class="n">python_configure</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;local_config_python&quot;</span><span class="p">)</span>
@@ -691,8 +989,10 @@ build:urma --copt=-DURMA_OVER_UB
 <span class="n">py_repositories</span><span class="p">()</span>
 </pre></div>
 </div>
-<p><strong>3. BUILD 添加client依赖关系</strong>
-依赖关系添加：&#64;yuanrong-datasystem//src/datasystem/client:datasystem</p>
+</section>
+<section id="build-client">
+<h3>3. BUILD 添加 client 依赖关系<a class="headerlink" href="#build-client" title="Link to this heading">¶</a></h3>
+<p>依赖关系添加：<code class="docutils literal notranslate"><span class="pre">&#64;yuanrong-datasystem//src/datasystem/client:datasystem</span></code></p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">cc_binary</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;datasystem_example&quot;</span><span class="p">,</span>
     <span class="n">srcs</span> <span class="o">=</span> <span class="p">[</span>
@@ -704,11 +1004,29 @@ build:urma --copt=-DURMA_OVER_UB
 <span class="p">)</span>
 </pre></div>
 </div>
-<p><strong>4. C++ 代码</strong>
-添加 数据系统头文件，使用接口</p>
+</section>
+<section id="c">
+<h3>4. C++ 代码<a class="headerlink" href="#c" title="Link to this heading">¶</a></h3>
+<p>添加 datasystem 头文件，使用接口：</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;datasystem/datasystem.h&quot;</span>
 
 <span class="k">using</span><span class="w"> </span><span class="n">datasystem</span><span class="o">::</span><span class="n">KVClient</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cmake-find-package">
+<h2>五、CMake find_package 集成<a class="headerlink" href="#cmake-find-package" title="Link to this heading">¶</a></h2>
+<p>Bazel 编译的 SDK 同时提供 CMake 配置文件，支持通过 <code class="docutils literal notranslate"><span class="pre">find_package</span></code> 集成：</p>
+<div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">cmake_minimum_required</span><span class="p">(</span><span class="s">VERSION</span><span class="w"> </span><span class="s">3.14</span><span class="p">)</span>
+<span class="nb">project</span><span class="p">(</span><span class="s">my_project</span><span class="w"> </span><span class="s">LANGUAGES</span><span class="w"> </span><span class="s">CXX</span><span class="p">)</span>
+
+<span class="c"># 指向 Bazel 输出的 cpp/ 目录</span>
+<span class="nb">set</span><span class="p">(</span><span class="s">CMAKE_PREFIX_PATH</span><span class="w"> </span><span class="s2">&quot;/path/to/output/cpp&quot;</span><span class="p">)</span>
+<span class="nb">find_package</span><span class="p">(</span><span class="s">Datasystem</span><span class="w"> </span><span class="s">REQUIRED</span><span class="p">)</span>
+
+<span class="nb">add_executable</span><span class="p">(</span><span class="s">my_app</span><span class="w"> </span><span class="s">main.cpp</span><span class="p">)</span>
+<span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_app</span><span class="w"> </span><span class="s">datasystem</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -724,7 +1042,7 @@ build:urma --copt=-DURMA_OVER_UB
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Bazel编译源码集成SDK</div>
+                <div class="title">Bazel二进制集成SDK</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -769,14 +1087,44 @@ build:urma --copt=-DURMA_OVER_UB
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">基于Bazel自定义编译</a><ul>
-<li><a class="reference internal" href="#id1">一，环境依赖</a><ul>
+<li><a class="reference internal" href="#">基于 Bazel 自定义编译</a><ul>
+<li><a class="reference internal" href="#id1">一、环境依赖</a><ul>
 <li><a class="reference internal" href="#openeuler-os">OpenEuler OS</a></li>
+<li><a class="reference internal" href="#id2">安装 Bazel</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id2">二，常用构建命令</a></li>
-<li><a class="reference internal" href="#id3">二，构建指定版本</a></li>
-<li><a class="reference internal" href="#id4">三，做为第三方组件源码集成</a></li>
+<li><a class="reference internal" href="#build-sh">二、通过 build.sh 编译（推荐）</a><ul>
+<li><a class="reference internal" href="#id3">基础用法</a></li>
+<li><a class="reference internal" href="#id4">编译产物</a></li>
+<li><a class="reference internal" href="#id5">常用参数</a></li>
+<li><a class="reference internal" href="#id6">使用示例</a></li>
+<li><a class="reference internal" href="#id7">参数兼容性说明</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#bazel-build">三、bazel build 高级用法</a><ul>
+<li><a class="reference internal" href="#id8">常用构建目标</a></li>
+<li><a class="reference internal" href="#id9">编译配置选项</a><ul>
+<li><a class="reference internal" href="#id10">构建类型</a></li>
+<li><a class="reference internal" href="#id11">功能开关</a></li>
+<li><a class="reference internal" href="#sanitizer">Sanitizer（内存/线程错误检测）</a></li>
+<li><a class="reference internal" href="#id12">覆盖率</a></li>
+<li><a class="reference internal" href="#python">指定 Python 版本</a></li>
+<li><a class="reference internal" href="#glibc">指定 glibc 版本</a></li>
+<li><a class="reference internal" href="#id13">运行测试</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id14">配置选项完整参考</a></li>
+<li><a class="reference internal" href="#id15">组合示例</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id16">四、源码编译安装</a><ul>
+<li><a class="reference internal" href="#bazelrc">1. bazelrc 默认选项</a></li>
+<li><a class="reference internal" href="#workspace">2. WORKSPACE 配置</a></li>
+<li><a class="reference internal" href="#build-client">3. BUILD 添加 client 依赖关系</a></li>
+<li><a class="reference internal" href="#c">4. C++ 代码</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cmake-find-package">五、CMake find_package 集成</a></li>
 </ul>
 </li>
 </ul>
