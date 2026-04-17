@@ -20,6 +20,7 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -37,6 +38,10 @@ Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress
 {
     LOG(INFO) << FormatString("Init RpcStubCacheMgr for %s, max cache num: %d", localAddress.ToString(), maxStubCount);
     std::lock_guard<std::mutex> lck(initMutex_);
+
+    // Pre-warm ZmqStubConnMgr singleton to avoid initialization delay on first use
+    (void)ZmqStubConnMgr::Instance();
+
     auto policy = std::make_unique<LruCountPolicy>();
     policy->SetCacheCount(maxStubCount);
     RETURN_IF_NOT_OK(LruForRpcStubCacheMgr::Builder()
@@ -176,12 +181,11 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
 {
     PerfPoint point(PerfKey::WORKER_RPC_STUB_CACHE_LOOKUP);
     std::shared_ptr<RpcStubCacheMgrObj> encapsulatedData = nullptr;
-    while (lruCache_->Lookup(HashKeyForRpcStubCacheMgr(hostPort, type), &encapsulatedData).IsOk()) {
+    if (lruCache_->Lookup(HashKeyForRpcStubCacheMgr(hostPort, type), &encapsulatedData).IsOk()) {
         rpcStub = encapsulatedData->GetData();
         if (rpcStub != nullptr) {
             return Status::OK();
         }
-        encapsulatedData.reset();
     }
     point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_FIND_CREATOR);
     LOG(INFO) << "Start to create stub, destAddr: " << hostPort.ToString() << ", type: " << static_cast<int>(type);

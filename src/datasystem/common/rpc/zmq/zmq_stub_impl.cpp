@@ -161,8 +161,8 @@ Status ZmqStubImpl::InitConn(datasystem::ZmqStub *stub)
                                         channel_->GetZmqEndPoint());
     Timer timer;
     auto initFunc = [this, &stub]() -> Status {
-        RETURN_IF_NOT_OK(ZmqStubConnMgr::Instance()->GetConn(stub, handle_, channel_, timeoutMs_, conn_, sockConn_));
-        return Status::OK();
+        auto mgr = ZmqStubConnMgr::Instance();
+        return mgr->GetConn(stub, handle_, channel_, timeoutMs_, conn_, sockConn_);
     };
     proxyRc_ = initFunc();
     if (proxyRc_.IsOk()) {
