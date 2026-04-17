@@ -12,6 +12,7 @@ load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("@datasystem_version//:version.bzl", "DATASYSTEM_VERSION")
 load("//bazel:datasystem_sdk.bzl", "datasystem_sdk_tree")
+load("//bazel:datasystem_sdk_cmake_config.bzl", "datasystem_cmake_config")
 
 licenses(["notice"])
 
@@ -51,8 +52,14 @@ py_package(
 datasystem_sdk_tree(
     name = "datasystem_sdk",
     build_tpl = ":datasystem_sdk_cpp.BUILD.tpl",
+    cmake_config = [":cmake_config_files"],
     headers = ["//include/datasystem:headers_srcs"],
     libdatasystem = "//:libdatasystem_file",
+)
+
+datasystem_cmake_config(
+    name = "cmake_config_files",
+    version = DATASYSTEM_VERSION,
 )
 
 config_setting(
@@ -165,10 +172,14 @@ py_wheel(
         "//:cluster_config_file",
         "//:commit_id_file",
         "//:cpp_template_files",
+        "//:curve_keygen_file",
         "//:datasystem_worker_file",
+        "//:datasystem_worker_sym_file",
         "//:dockerentry_files",
         "//:dsbench_file",
+        "//:hashring_parser_file",
         "//:helm_chart_files",
+        "//:libdatasystem_sym_file",
         "//:libjemalloc_shared_file",
         "//:readme_file",
         "//:version_file",

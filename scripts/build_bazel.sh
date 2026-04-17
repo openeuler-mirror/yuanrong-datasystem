@@ -114,9 +114,23 @@ function build_datasystem_bazel() {
   done < <(_bazel_build_configs "yes")
 
   # Build targets
-  local -a targets=("//:datasystem")
+  local -a targets=(
+    "//bazel:datasystem_sdk"                           # SDK tar (headers + cmake + stripped lib)
+    "//src/datasystem/worker:datasystem_worker_shared"  # worker shared library
+    "//:libjemalloc_shared_file"                        # jemalloc
+  )
   if is_on "${PACKAGE_PYTHON}"; then
     targets+=("//bazel:datasystem_wheel")
+  fi
+  # Tools (only when tests enabled, matching CMake behavior)
+  if [[ "${RUN_TESTS}" != "off" ]]; then
+    targets+=("//:hashring_parser_file" "//:curve_keygen_file")
+  fi
+  # Strip/sym artifacts (only for non-debug builds)
+  if [[ "${BUILD_TYPE}" != "Debug" ]] && is_on "${ENABLE_STRIP}"; then
+    targets+=("//:libdatasystem_sym" "//:datasystem_worker_stripped" "//:datasystem_worker_sym")
+  else
+    targets+=("//src/datasystem/worker:datasystem_worker")
   fi
 
   local baseTime_s
@@ -131,36 +145,113 @@ function build_datasystem_bazel() {
   _bazel_install_outputs
 }
 
-# Copy bazel build outputs to INSTALL_DIR.
+# Copy bazel build outputs to INSTALL_DIR, matching CMake output structure.
 function _bazel_install_outputs() {
   echo -e "-- installing bazel outputs to ${INSTALL_DIR}..."
-  mkdir -p "${INSTALL_DIR}"
 
   local bazel_bin="${DATASYSTEM_DIR}/bazel-bin"
 
-  # Copy main library
-  if [[ -f "${bazel_bin}/libdatasystem.so" ]]; then
-    mkdir -p "${INSTALL_DIR}/datasystem/sdk/cpp/lib"
-    cp -f "${bazel_bin}/libdatasystem.so" "${INSTALL_DIR}/datasystem/sdk/cpp/lib/"
+  # Clean and create output dir
+  if [[ "${BUILD_INCREMENT}" == "off" && -d "${INSTALL_DIR}" ]]; then
+    rm -rf "${INSTALL_DIR}"
+    echo -e "-- [Warning] Removed output folder ${INSTALL_DIR}"
+  fi
+  mkdir -p "${INSTALL_DIR}"
+
+  local DS_DIR="${INSTALL_DIR}/datasystem"
+
+  # --- 1. SDK from datasystem_sdk tar ---
+  local sdk_tar="${bazel_bin}/bazel/datasystem_sdk.tar"
+  if [[ -f "${sdk_tar}" ]]; then
+    local sdk_tmp
+    sdk_tmp=$(mktemp -d)
+    tar -xf "${sdk_tar}" -C "${sdk_tmp}" || go_die "-- failed to extract SDK tar"
+
+    # Verify expected structure
+    if [[ ! -d "${sdk_tmp}/datasystem_sdk/cpp" ]]; then
+      rm -rf "${sdk_tmp}"
+      go_die "-- SDK tar did not contain expected datasystem_sdk/cpp directory"
+    fi
+
+    # Copy to output/datasystem/sdk/cpp/ (for deployment)
+    mkdir -p "${DS_DIR}/sdk"
+    cp -rL "${sdk_tmp}/datasystem_sdk/cpp" "${DS_DIR}/sdk/cpp"
+
+    # Copy to output/cpp/ (external SDK for find_package)
+    cp -rL "${sdk_tmp}/datasystem_sdk/cpp" "${INSTALL_DIR}/cpp"
+
+    rm -rf "${sdk_tmp}"
+  else
+    echo -e "-- [WARN] SDK tar not found: ${sdk_tar}"
   fi
 
-  # Copy SDK headers from source tree
-  mkdir -p "${INSTALL_DIR}/datasystem/sdk/cpp/include"
-  # Copy public headers from include/
-  if [[ -d "${DATASYSTEM_DIR}/include/datasystem" ]]; then
-    cp -r "${DATASYSTEM_DIR}/include/datasystem" "${INSTALL_DIR}/datasystem/sdk/cpp/include/"
-  fi
-  # Copy internal headers from src/
-  if [[ -d "${DATASYSTEM_DIR}/src" ]]; then
-    find "${DATASYSTEM_DIR}/src" -name "*.h" -path "*/datasystem/*" | while read -r hdr; do
-      local rel_path
-      rel_path=$(echo "${hdr}" | sed "s|${DATASYSTEM_DIR}/||")
-      mkdir -p "$(dirname "${INSTALL_DIR}/datasystem/sdk/cpp/${rel_path}")"
-      cp -f "${hdr}" "${INSTALL_DIR}/datasystem/sdk/cpp/${rel_path}"
-    done
+  # --- 2. Symbol files for libdatasystem ---
+  if [[ -f "${bazel_bin}/libdatasystem.so.sym" ]]; then
+    # SDK syms at sdk/DATASYSTEM_SYM (sibling of cpp/), matching CMake strip_symbols layout
+    mkdir -p "${DS_DIR}/sdk/DATASYSTEM_SYM"
+    cp -f "${bazel_bin}/libdatasystem.so.sym" "${DS_DIR}/sdk/DATASYSTEM_SYM/"
+    # External SDK syms at cpp/DATASYSTEM_SYM (sibling of lib/)
+    mkdir -p "${INSTALL_DIR}/cpp/DATASYSTEM_SYM"
+    cp -f "${bazel_bin}/libdatasystem.so.sym" "${INSTALL_DIR}/cpp/DATASYSTEM_SYM/"
   fi
 
-  # Copy Python wheel if built
+  # --- 3. Service ---
+  mkdir -p "${DS_DIR}/service/lib"
+  mkdir -p "${DS_DIR}/service/DATASYSTEM_SYM"
+
+  # Worker binary (stripped if available)
+  if [[ -f "${bazel_bin}/datasystem_worker.stripped" ]]; then
+    cp -f "${bazel_bin}/datasystem_worker.stripped" "${DS_DIR}/service/datasystem_worker"
+  elif [[ -f "${bazel_bin}/src/datasystem/worker/datasystem_worker" ]]; then
+    cp -f "${bazel_bin}/src/datasystem/worker/datasystem_worker" "${DS_DIR}/service/datasystem_worker"
+  fi
+
+  # Worker symbol file
+  if [[ -f "${bazel_bin}/datasystem_worker.sym" ]]; then
+    cp -f "${bazel_bin}/datasystem_worker.sym" "${DS_DIR}/service/DATASYSTEM_SYM/"
+  fi
+
+  # Worker shared library (rename to match CMake output name)
+  if [[ -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" ]]; then
+    cp -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" "${DS_DIR}/service/lib/libdatasystem_worker.so"
+  fi
+
+  # jemalloc
+  if [[ -f "${bazel_bin}/yr/datasystem/lib/libjemalloc.so.2" ]]; then
+    cp -f "${bazel_bin}/yr/datasystem/lib/libjemalloc.so.2" "${DS_DIR}/service/lib/"
+  fi
+
+  # --- 4. Config files ---
+  cp -f "${DATASYSTEM_DIR}/cli/deploy/conf/worker_config.json" "${DS_DIR}/service/"
+  cp -f "${DATASYSTEM_DIR}/cli/deploy/conf/cluster_config.json" "${DS_DIR}/service/"
+
+  # --- 5. Tools (only when tests enabled, matching CMake behavior) ---
+  if [[ "${RUN_TESTS}" != "off" ]]; then
+    mkdir -p "${DS_DIR}/tools"
+    if [[ -f "${bazel_bin}/yr/datasystem/tools/hashring_parser" ]]; then
+      cp -f "${bazel_bin}/yr/datasystem/tools/hashring_parser" "${DS_DIR}/tools/"
+    fi
+    if [[ -f "${bazel_bin}/yr/datasystem/tools/curve_keygen" ]]; then
+      cp -f "${bazel_bin}/yr/datasystem/tools/curve_keygen" "${DS_DIR}/tools/"
+    fi
+  fi
+
+  # --- 6. CLI ---
+  mkdir -p "${DS_DIR}/cli"
+  if [[ -d "${DATASYSTEM_DIR}/cli" ]]; then
+    cp -rL "${DATASYSTEM_DIR}/cli/." "${DS_DIR}/cli/"
+  fi
+
+  # --- 7. Misc ---
+  cp -f "${DATASYSTEM_DIR}/VERSION" "${DS_DIR}/VERSION"
+  cp -f "${DATASYSTEM_DIR}/README.md" "${DS_DIR}/README.md"
+
+  # Commit ID
+  local git_hash
+  git_hash=$(cd "${DATASYSTEM_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  echo "${git_hash}" > "${DS_DIR}/.commit_id"
+
+  # --- 8. Python wheel ---
   if is_on "${PACKAGE_PYTHON}"; then
     local wheel_file
     wheel_file=$(find -L "${bazel_bin}" -name "openyuanrong_datasystem-*.whl" -type f 2>/dev/null | head -1)
@@ -170,21 +261,13 @@ function _bazel_install_outputs() {
     fi
   fi
 
-  # Copy worker binary
-  if [[ -f "${bazel_bin}/src/datasystem/worker/datasystem_worker" ]]; then
-    mkdir -p "${INSTALL_DIR}/datasystem/service"
-    cp -f "${bazel_bin}/src/datasystem/worker/datasystem_worker" "${INSTALL_DIR}/datasystem/service/"
-  fi
-
-  # Create tarball
+  # --- 9. Create tarball ---
   local version
   version=$(cat "${DATASYSTEM_DIR}/VERSION")
-  if [[ -d "${INSTALL_DIR}/datasystem" ]]; then
-    local orig_dir
-    orig_dir=$(pwd)
+  if [[ -d "${DS_DIR}" ]]; then
     cd "${INSTALL_DIR}"
-    tar -zcf "yr-datasystem-v${version}.tar.gz" datasystem
-    cd "${orig_dir}"
+    tar --remove-files -zcf "yr-datasystem-v${version}.tar.gz" datasystem || go_die "-- failed to create deployment tarball"
+    cd "${DATASYSTEM_DIR}"
   fi
 
   echo -e "-- bazel install done."

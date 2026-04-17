@@ -135,10 +135,44 @@ cc_shared_library(
     ],
 )
 
+# --- Strip + Symbol for datasystem_worker ---
+genrule(
+    name = "datasystem_worker_sym",
+    srcs = ["//src/datasystem/worker:datasystem_worker"],
+    outs = ["datasystem_worker.sym"],
+    cmd = "objcopy --only-keep-debug $(location //src/datasystem/worker:datasystem_worker) $@",
+    output_to_bindir = True,
+)
+
+genrule(
+    name = "datasystem_worker_stripped",
+    srcs = [
+        "//src/datasystem/worker:datasystem_worker",
+        ":datasystem_worker_sym",
+    ],
+    outs = ["datasystem_worker.stripped"],
+    cmd = """
+cp $(location //src/datasystem/worker:datasystem_worker) $@
+chmod +w $@
+objcopy --add-gnu-debuglink=$(location :datasystem_worker_sym) $@
+objcopy --strip-all $@
+""",
+    output_to_bindir = True,
+)
+
 copy_file(
     name = "datasystem_worker_file",
-    src = "//src/datasystem/worker:datasystem_worker",
+    src = ":datasystem_worker_stripped",
     out = "yr/datasystem/datasystem_worker",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
+copy_file(
+    name = "datasystem_worker_sym_file",
+    src = ":datasystem_worker_sym",
+    out = "yr/datasystem/service/DATASYSTEM_SYM/datasystem_worker.sym",
     visibility = [
         "//bazel:__pkg__",
     ],
@@ -151,6 +185,16 @@ copy_file(
     visibility = [
         "//bazel:__pkg__",
         "//python:__subpackages__",
+    ],
+)
+
+# --- Worker shared library ---
+copy_file(
+    name = "libdatasystem_worker_shared_file",
+    src = "//src/datasystem/worker:datasystem_worker_shared",
+    out = "yr/datasystem/service/libdatasystem_worker.so",
+    visibility = [
+        "//bazel:__pkg__",
     ],
 )
 
@@ -173,10 +217,44 @@ copy_file(
     ],
 )
 
+# --- Strip + Symbol for libdatasystem.so ---
+genrule(
+    name = "libdatasystem_sym",
+    srcs = ["//:datasystem"],
+    outs = ["libdatasystem.so.sym"],
+    cmd = "objcopy --only-keep-debug $(location //:datasystem) $@",
+    output_to_bindir = True,
+)
+
+genrule(
+    name = "libdatasystem_stripped",
+    srcs = [
+        "//:datasystem",
+        ":libdatasystem_sym",
+    ],
+    outs = ["libdatasystem.so.stripped"],
+    cmd = """
+cp $(location //:datasystem) $@
+chmod +w $@
+objcopy --add-gnu-debuglink=$(location :libdatasystem_sym) $@
+objcopy --strip-all $@
+""",
+    output_to_bindir = True,
+)
+
 copy_file(
     name = "libdatasystem_file",
-    src = "//:datasystem",
+    src = ":libdatasystem_stripped",
     out = "yr/datasystem/lib/libdatasystem.so",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
+copy_file(
+    name = "libdatasystem_sym_file",
+    src = ":libdatasystem_sym",
+    out = "yr/datasystem/DATASYSTEM_SYM/libdatasystem.so.sym",
     visibility = [
         "//bazel:__pkg__",
     ],
@@ -243,6 +321,26 @@ copy_file(
 
 copy_file(
     name = "worker_config_file",
-    src = "cli/deploy/conf/worker_config_bazel.json",
+    src = "cli/deploy/conf/worker_config.json",
     out = "yr/datasystem/worker_config.json",
 )
+
+# --- Tools ---
+copy_file(
+    name = "hashring_parser_file",
+    src = "//tests/st:hashring_parser",
+    out = "yr/datasystem/tools/hashring_parser",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
+copy_file(
+    name = "curve_keygen_file",
+    src = "//tests/st/common/rpc:curvekey_generator",
+    out = "yr/datasystem/tools/curve_keygen",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
