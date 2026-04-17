@@ -62,6 +62,13 @@ cc_shared_library(
     name = "datasystem",
     additional_linker_inputs = ["export_datasystem_symbols.lds"],
     exports_filter = [
+        # Required for dynamic_deps consumers (libds_client_py.so):
+        # these transitive deps must be declared as exported so Bazel
+        # knows their symbols are available from the shared library.
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
         "//src/datasystem/client:client_flags_monitor",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:datasystem",
@@ -91,6 +98,7 @@ cc_shared_library(
         "//src/datasystem/client/stream_cache:stream_cache_impl",
         "//src/datasystem/client/stream_cache:stream_client",
         "//src/datasystem/client/perf_client:perf_client_lib",
+        "@tbb//:tbb",
     ],
     user_link_flags = [
         "-Wl,--exclude-libs,ALL",
@@ -198,9 +206,34 @@ copy_file(
     ],
 )
 
+# --- Strip for libds_client_py.so ---
+genrule(
+    name = "libds_client_py_sym",
+    srcs = ["//src/datasystem/pybind_api:libds_client_py"],
+    outs = ["libds_client_py.so.sym"],
+    cmd = "objcopy --only-keep-debug $(location //src/datasystem/pybind_api:libds_client_py) $@",
+    output_to_bindir = True,
+)
+
+genrule(
+    name = "libds_client_py_stripped",
+    srcs = [
+        "//src/datasystem/pybind_api:libds_client_py",
+        ":libds_client_py_sym",
+    ],
+    outs = ["libds_client_py.so.stripped"],
+    cmd = """
+cp $(location //src/datasystem/pybind_api:libds_client_py) $@
+chmod +w $@
+objcopy --add-gnu-debuglink=$(location :libds_client_py_sym) $@
+objcopy --strip-all $@
+""",
+    output_to_bindir = True,
+)
+
 copy_file(
     name = "libds_client_py_file",
-    src = "//src/datasystem/pybind_api:libds_client_py",
+    src = ":libds_client_py_stripped",
     out = "yr/datasystem/lib/libds_client_py.so",
     visibility = [
         "//bazel:__pkg__",
@@ -208,9 +241,34 @@ copy_file(
     ],
 )
 
+# --- Strip for dsbench_cpp ---
+genrule(
+    name = "dsbench_cpp_sym",
+    srcs = ["//dsbench/src:dsbench_cpp"],
+    outs = ["dsbench_cpp.sym"],
+    cmd = "objcopy --only-keep-debug $(location //dsbench/src:dsbench_cpp) $@",
+    output_to_bindir = True,
+)
+
+genrule(
+    name = "dsbench_cpp_stripped",
+    srcs = [
+        "//dsbench/src:dsbench_cpp",
+        ":dsbench_cpp_sym",
+    ],
+    outs = ["dsbench_cpp.stripped"],
+    cmd = """
+cp $(location //dsbench/src:dsbench_cpp) $@
+chmod +w $@
+objcopy --add-gnu-debuglink=$(location :dsbench_cpp_sym) $@
+objcopy --strip-all $@
+""",
+    output_to_bindir = True,
+)
+
 copy_file(
     name = "dsbench_file",
-    src = "//dsbench/src:dsbench_cpp",
+    src = ":dsbench_cpp_stripped",
     out = "yr/datasystem/dsbench_cpp",
     visibility = [
         "//bazel:__pkg__",

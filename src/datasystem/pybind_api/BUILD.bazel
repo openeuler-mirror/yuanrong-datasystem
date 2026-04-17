@@ -6,6 +6,7 @@ package(default_visibility = ["//visibility:public"])
 pybind_extension_jemalloc(
     name = "libds_client_py",
     additional_linker_inputs = ["export_symbols.lds"],
+    dynamic_deps = ["//:datasystem"],
     jemalloc_dynamic = True,
     linkopts = [
         "-Wl,--version-script,$(location export_symbols.lds)",
