@@ -11,6 +11,11 @@ def _datasystem_sdk_tree_impl(ctx):
         header_args.append(header.path)
         header_args.append(rel)
 
+    cmake_args = []
+    for cmake_file in ctx.files.cmake_config:
+        cmake_args.append(cmake_file.path)
+        cmake_args.append(cmake_file.basename)
+
     command = """
 set -euo pipefail
 
@@ -18,24 +23,33 @@ out_dir="$1"
 build_tpl="$2"
 libdatasystem="$3"
 out_tar="$4"
-shift 4
+header_count="$5"
+shift 5
 
 mkdir -p "$out_dir/cpp/lib"
 cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
 cp -f "$libdatasystem" "$out_dir/cpp/lib/libdatasystem.so"
 
-while [ "$#" -ge 2 ]; do
+# Copy headers (header_count pairs of src,rel)
+i=0
+while [ "$i" -lt "$header_count" ] && [ "$#" -ge 2 ]; do
   src="$1"
   rel="$2"
   shift 2
+  i=$((i + 1))
   mkdir -p "$out_dir/cpp/include/datasystem/$(dirname "$rel")"
   cp -f "$src" "$out_dir/cpp/include/datasystem/$rel"
 done
 
-if [ "$#" -ne 0 ]; then
-  echo "Invalid header arg list." >&2
-  exit 1
-fi
+# Copy cmake config files (remaining pairs)
+cmake_dir="$out_dir/cpp/lib/cmake/Datasystem"
+mkdir -p "$cmake_dir"
+while [ "$#" -ge 2 ]; do
+  src="$1"
+  name="$2"
+  shift 2
+  cp -f "$src" "$cmake_dir/$name"
+done
 
 parent_dir="$(dirname "$out_dir")"
 base_name="$(basename "$out_dir")"
@@ -47,19 +61,24 @@ tar_name="$(basename "$out_tar")"
 )
 """
 
+    all_args = [
+        out_dir.path,
+        ctx.file.build_tpl.path,
+        ctx.file.libdatasystem.path,
+        out_tar.path,
+        str(len(header_args) // 2),
+    ] + header_args + cmake_args
+
+    inputs = depset(
+        [ctx.file.build_tpl, ctx.file.libdatasystem],
+        transitive = [depset(ctx.files.headers), depset(ctx.files.cmake_config)],
+    )
+
     ctx.actions.run_shell(
-        inputs = depset(
-            [ctx.file.build_tpl, ctx.file.libdatasystem],
-            transitive = [depset(ctx.files.headers)],
-        ),
+        inputs = inputs,
         outputs = [out_dir, out_tar],
         command = command,
-        arguments = [
-            out_dir.path,
-            ctx.file.build_tpl.path,
-            ctx.file.libdatasystem.path,
-            out_tar.path,
-        ] + header_args,
+        arguments = all_args,
         mnemonic = "BuildDatasystemSdkTree",
         progress_message = "Packaging datasystem SDK tree for %s" % ctx.label,
     )
@@ -72,5 +91,6 @@ datasystem_sdk_tree = rule(
         "headers": attr.label_list(allow_files = True, mandatory = True),
         "build_tpl": attr.label(allow_single_file = True, mandatory = True),
         "libdatasystem": attr.label(allow_single_file = True, mandatory = True),
+        "cmake_config": attr.label_list(allow_files = True, default = []),
     },
 )

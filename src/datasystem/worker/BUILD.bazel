@@ -408,3 +408,27 @@ cc_binary(
         "//conditions:default": [],
     })
 )
+
+cc_shared_library(
+    name = "datasystem_worker_shared",
+    exports_filter = [
+        "//src/datasystem/worker:worker",
+        "//src/datasystem/worker:worker_service_impl",
+        "//src/datasystem/worker:worker_oc_server",
+        "//src/datasystem/worker:worker_cli",
+        "//src/datasystem/worker:worker_flags",
+    ],
+    user_link_flags = [
+        "-Wl,-rpath,$$ORIGIN",
+        "-Wl,-rpath,$$ORIGIN/lib",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":worker_main",
+    ] + select({
+        "//:enable_pipeline_h2d": [
+            "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline",
+        ],
+        "//conditions:default": [],
+    }),
+)
