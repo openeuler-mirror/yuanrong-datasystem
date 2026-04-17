@@ -65,6 +65,7 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
+#include "datasystem/common/shared_memory/allocator.h"
 
 DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
@@ -2670,7 +2671,7 @@ std::string WorkerOcServiceGetImpl::GetHitInfo()
     return CacheHitInfo::Instance().GetHitInfo();
 }
 
-Status WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
+void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     std::map<ReadKey, LockedEntity> &lockedEntries,
     const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
     std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
@@ -2700,14 +2701,14 @@ Status WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
                    << " lastRc: " << lastRc.ToString();
     }
     BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
-    return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
-    Status &lastRc, std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
-    std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas)
+    std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp, std::set<ReadKey> &objectsNeedGetRemote,
+    const QueryMetaMap &queryMetas)
 {
+    Status lastRc;
     std::vector<std::future<Status>> futures;
     std::list<GetObjectInfo> failedMetas;
     std::vector<std::list<GetObjectInfo>> tempFailedMetas(groupedQueryMetas.size());
@@ -2716,51 +2717,64 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
     size_t index = 0;
     auto traceId = Trace::Instance().GetTraceID();
+    Timer timer;
+    int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     std::shared_ptr<GetRequest> fakeRequest = nullptr;
-    std::mutex lastRcMutex;
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
-
-        auto func = [this, &lastRc, address, &infoList, &fakeRequest, &tempSuccessIds, &tempNeedRetryIds,
-                     &tempFailedIds, &tempFailedMetas, index, traceId, &lastRcMutex] {
-            Status tmpRc = Status::OK();
+        auto func = [this, address, &infoList, &fakeRequest, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
+                     &tempFailedMetas, index, traceId, realTimeoutMs, &timer] {
+            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+            reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
+            Status lastRc;
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
-                tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, fakeRequest, tempSuccessIds[index],
-                                                       tempNeedRetryIds[index], tempFailedIds[index],
-                                                       tempFailedMetas[index]);
+                auto rc = BatchGetObjectFromRemoteOnLock(address, infos, fakeRequest, tempSuccessIds[index],
+                                                         tempNeedRetryIds[index], tempFailedIds[index],
+                                                         tempFailedMetas[index]);
+                if (rc.IsError()) {
+                    LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
+                    lastRc = std::move(rc);
+                }
             }
-            {
-                std::lock_guard<std::mutex> lock(lastRcMutex);
-                lastRc = tmpRc;
-            }
-            return tmpRc;
+            return lastRc;
         };
         if (index + 1 == groupedQueryMetas.size()) {
-            LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
+            auto rc = func();
+            if (rc.IsError()) {
+                LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
+                lastRc = std::move(rc);
+            }
         } else {
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
     for (auto &fut : futures) {
-        if (!fut.get().IsOk()) {
-            LOG(ERROR) << "BatchGetObjectFromRemoteOnLock failed";
+        auto rc = fut.get();
+        if (rc.IsError()) {
+            LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
+            lastRc = std::move(rc);
         }
     }
-    return PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
-                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas);
+    PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
+                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas);
+    return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req,
                                                               std::set<ReadKey> objectsNeedGetRemote,
                                                               QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp)
 {
+    Status lastRc;
     do {
         std::unordered_set<std::string> lockfailedIds;
         std::map<ReadKey, LockedEntity> lockedEntries;
-        Status lastRc = BatchLockForGet(objectsNeedGetRemote, lockedEntries, lockfailedIds);
+        auto lockRc = BatchLockForGet(objectsNeedGetRemote, lockedEntries, lockfailedIds);
+        if (lockRc.IsError()) {
+            lastRc = std::move(lockRc);
+        }
         rsp.mutable_failed_object_keys()->Add(lockfailedIds.begin(), lockfailedIds.end());
         Raii unlockRaii([this, &lockfailedIds, &lockedEntries]() { BatchUnlockForGet(lockfailedIds, lockedEntries); });
 
@@ -2781,10 +2795,18 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             GroupQueryMeta(info, groupedQueryMetas);
             SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
         }
-        ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lastRc, lockedEntries, rsp, objectsNeedGetRemote,
-                                           queryMetas);
-    } while (!objectsNeedGetRemote.empty());
-    return Status::OK();
+        auto remoteGetRc =
+            ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas);
+        if (remoteGetRc.IsError()) {
+            LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
+            lastRc = std::move(remoteGetRc);
+        }
+
+    } while (!objectsNeedGetRemote.empty() && reqTimeoutDuration.CalcRealRemainingTime() > 0);
+    for (const auto &obj : objectsNeedGetRemote) {
+        rsp.add_failed_object_keys(obj.objectKey);
+    }
+    return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, QueryMetaMap queryMetas,

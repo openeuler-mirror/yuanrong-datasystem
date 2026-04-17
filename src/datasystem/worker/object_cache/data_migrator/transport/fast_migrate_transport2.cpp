@@ -61,6 +61,7 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
                                        },
                                        {});
     if (rc.IsOk()) {
+        rsp.remainBytes = rspPb.remain_bytes();
         rsp.failedKeys.insert(rspPb.failed_object_keys().begin(), rspPb.failed_object_keys().end());
         for (const auto &key : reqPb.object_keys()) {
             if (rsp.failedKeys.find(key) == rsp.failedKeys.end()) {
@@ -71,9 +72,11 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
             req.progress->Deal(rsp.successKeys.size());
         }
         LOG_IF(WARNING, !rspPb.failed_object_keys().empty())
-            << FormatString("[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed",
+            << FormatString("[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed, remain_bytes: %lu",
                             req.datas->size(), req.batchSize, req.api->Address(), rspPb.failed_object_keys_size(),
-                            VectorToString(rspPb.failed_object_keys()));
+                            VectorToString(rspPb.failed_object_keys()), rsp.remainBytes);
+    } else {
+        rsp.remainBytes = 0;
     }
     return rc;
 }

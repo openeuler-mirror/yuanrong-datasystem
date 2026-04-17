@@ -176,6 +176,7 @@ message NotifyRemoteGetReqPb {
 
 message NotifyRemoteGetRspPb {
   repeated string failed_object_keys = 1;
+  uint64 remain_bytes = 2;
 }
 
 service WorkerWorkerTransportService {

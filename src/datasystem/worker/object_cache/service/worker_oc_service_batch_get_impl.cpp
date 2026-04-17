@@ -189,6 +189,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         if (index + 1 == groupedQueryMetas.size()) {
             LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
         } else {
+            // Fixme: reqTimeoutDuration is not initialized when this function is called, so the timeout set in
+            // RpcOptions inside BatchGetObjectFromRemoteOnLock may not work as expected.
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
