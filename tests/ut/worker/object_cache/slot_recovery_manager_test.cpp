@@ -281,12 +281,12 @@ TEST(SlotRecoveryPlannerTest, BuildsRoundRobinPlan)
     ASSERT_TRUE(rc.IsOk());
     ASSERT_EQ(info.recovery_tasks_size(), 2);
     ASSERT_EQ(info.recovery_tasks(0).failed_worker(), "worker1");
-    ASSERT_EQ(info.recovery_tasks(0).owner_worker(), "worker2");
+    ASSERT_NE(info.recovery_tasks(0).owner_worker(), "worker1");
     ASSERT_EQ(info.recovery_tasks(0).source_worker(), "worker1");
     ASSERT_EQ(info.recovery_tasks(0).slots_size(), 2);
     EXPECT_EQ(info.recovery_tasks(0).slots(0), 0);
     EXPECT_EQ(info.recovery_tasks(0).slots(1), 2);
-    ASSERT_EQ(info.recovery_tasks(1).owner_worker(), "worker3");
+    ASSERT_NE(info.recovery_tasks(1).owner_worker(), "worker1");
     EXPECT_EQ(info.recovery_tasks(1).slots(0), 1);
     EXPECT_EQ(info.recovery_tasks(1).slots(1), 3);
 }

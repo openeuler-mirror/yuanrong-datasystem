@@ -24,7 +24,7 @@
 #include <cstdint>
 
 namespace datasystem {
-constexpr uint32_t DISTRIBUTED_DISK_SLOT_NUM = 128;
+constexpr uint32_t DISTRIBUTED_DISK_SLOT_NUM = 16;
 constexpr uint64_t DISTRIBUTED_DISK_COMPACT_CUTOVER_BYTES = 1024UL * 1024UL;
 constexpr uint32_t DISTRIBUTED_DISK_COMPACT_CUTOVER_RECORDS = 1024;
 }  // namespace datasystem
