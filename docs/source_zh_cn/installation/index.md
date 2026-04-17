@@ -15,4 +15,4 @@
 - [安装指南](installation_linux.md)
 - [基于Cmake自定义编译](./build_guide/cmake_build.md)
 - [基于Bazel自定义编译](./build_guide/bazel_build.md)
-- [Bazel编译源码集成SDK](./build_guide/build_for_bazel.md)
+- [Bazel编译二进制集成SDK](./build_guide/build_for_bazel.md)

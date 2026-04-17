@@ -1,4 +1,4 @@
-# 基于 Bazel 编译
+# 基于 Bazel 自定义编译
 
 DataSystem 支持通过 `bash build.sh` 一键 Bazel 编译，也支持直接使用 `bazel build` 命令进行精细控制。
 
@@ -260,7 +260,7 @@ bazel build //... --config=debug --config=asan --config=coverage -j 8
 bazel build //bazel:datasystem_wheel --config=release --config=py311 --define glibc_version=2.34
 ```
 
-## 四、做为第三方组件源码集成
+## 四、源码编译安装
 
 ### 1. bazelrc 默认选项
 

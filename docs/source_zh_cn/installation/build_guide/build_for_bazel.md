@@ -1,4 +1,4 @@
-# Bazel编译源码集成SDK
+# Bazel二进制集成SDK
 
 ## 适用范围
 
@@ -12,8 +12,7 @@
 output/cpp
 ├── BUILD.bazel   # datasystem Bazel 模块定义文件（*.bzl）
 ├── include       # 头文件（datasystem.h）
-├── lib           # 动态链接库（libdatasystem.so 及其依赖）
-└── WORKSPACE     # Bazel WORKSPACE 文件
+└── lib           # 动态链接库（libdatasystem.so 及其依赖）
 ```
 
 ## 集成示例
@@ -30,8 +29,7 @@ demo
 │   └── datasystem
 │       ├── BUILD.bazel
 │       ├── include
-│       ├── lib
-|       └── WORKSPACE
+│       └── lib
 └── WORKSPACE
 ```
 
