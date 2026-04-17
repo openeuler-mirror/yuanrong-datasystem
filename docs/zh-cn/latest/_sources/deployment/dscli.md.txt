@@ -602,6 +602,10 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 通过使用配置文件（JSON格式）停止worker |
 |--worker_address <ADDR>    |-w &lt;...&gt; | 通过指定worker地址（IP:PORT格式，如127.0.0.1:31501）来停止worker |
 
+`dscli stop` 会先向 worker 发送 `SIGTERM`，等待超时后再发送 `SIGKILL`。等待超时时间按以下公式动态计算（单位：秒）：
+
+`180 + shared_memory_size_mb / data_migrate_rate_limit_mb`
+
 ### dscli up
 
 |选项                         |等效短参数  |说明     |

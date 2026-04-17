@@ -3,11 +3,11 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="部署" href="../../deployment/index.html"><link rel="prev" title="基于Bazel自定义编译" href="bazel_build.html">
+<link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="部署" href="../../deployment/index.html"><link rel="prev" title="基于 Bazel 自定义编译" href="bazel_build.html">
         <link rel="prefetch" href="../../_static/logo-small.png" as="image">
 
     <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
-        <title>Bazel编译源码集成SDK - openYuanrong datasystem documentation</title>
+        <title>Bazel二进制集成SDK - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
@@ -299,8 +299,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../index.html">安装</a><input aria-label="Toggle navigation of 安装" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="../installation_linux.html">安装指南</a></li>
 <li class="toctree-l2"><a class="reference internal" href="cmake_build.html">基于Cmake自定义编译</a></li>
-<li class="toctree-l2"><a class="reference internal" href="bazel_build.html">基于Bazel自定义编译</a></li>
-<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Bazel编译源码集成SDK</a></li>
+<li class="toctree-l2"><a class="reference internal" href="bazel_build.html">基于 Bazel 自定义编译</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Bazel二进制集成SDK</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../deployment/index.html">部署</a><input aria-label="Toggle navigation of 部署" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -570,7 +570,7 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="bazelsdk">
-<h1>Bazel编译源码集成SDK<a class="headerlink" href="#bazelsdk" title="Link to this heading">¶</a></h1>
+<h1>Bazel二进制集成SDK<a class="headerlink" href="#bazelsdk" title="Link to this heading">¶</a></h1>
 <section id="id1">
 <h2>适用范围<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <p>本文档面向需要在 Bazel 构建体系中集成 openYuanrong DataSystem C++ SDK 的开发人员、CI 维护人员及第三方系统厂商。</p>
@@ -581,8 +581,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/cpp
 ├── BUILD.bazel   # datasystem Bazel 模块定义文件（*.bzl）
 ├── include       # 头文件（datasystem.h）
-├── lib           # 动态链接库（libdatasystem.so 及其依赖）
-└── WORKSPACE     # Bazel WORKSPACE 文件
+└── lib           # 动态链接库（libdatasystem.so 及其依赖）
 </pre></div>
 </div>
 </section>
@@ -598,8 +597,7 @@ document.addEventListener('DOMContentLoaded', function() {
 │   └── datasystem
 │       ├── BUILD.bazel
 │       ├── include
-│       ├── lib
-|       └── WORKSPACE
+│       └── lib
 └── WORKSPACE
 </pre></div>
 </div>
@@ -685,7 +683,7 @@ bazel<span class="w"> </span>run<span class="w">   </span>//:demo
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">基于Bazel自定义编译</div>
+                <div class="title">基于 Bazel 自定义编译</div>
                 
               </div>
             </a>
@@ -719,7 +717,7 @@ bazel<span class="w"> </span>run<span class="w">   </span>//:demo
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Bazel编译源码集成SDK</a><ul>
+<li><a class="reference internal" href="#">Bazel二进制集成SDK</a><ul>
 <li><a class="reference internal" href="#id1">适用范围</a></li>
 <li><a class="reference internal" href="#id2">发布包目录结构说明</a></li>
 <li><a class="reference internal" href="#id3">集成示例</a><ul>
