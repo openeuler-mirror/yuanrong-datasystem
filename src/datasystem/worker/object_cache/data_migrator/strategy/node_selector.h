@@ -139,6 +139,13 @@ private:
     std::condition_variable taskCv_;
     std::atomic<bool> subSuccess_{ false };
     WaitPost subReadyPost_;
+    struct Token {
+        std::mutex mutex_;
+        bool working = false;
+
+        std::atomic<bool> alive{true};
+    };
+    Token* token_;
 };
 }  // namespace object_cache
 }  // namespace datasystem
