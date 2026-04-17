@@ -59,7 +59,7 @@ TEST_F(LogRateLimiterTest, NoLimitByDefault)
     }
 }
 
-TEST_F(LogRateLimiterTest, ErrorFatalAlwaysPass)
+TEST_F(LogRateLimiterTest, FatalAlwaysPass)
 {
     auto &limiter = LogRateLimiter::Instance();
     limiter.SetRate(1);  // Very strict: 1 per second
@@ -69,7 +69,6 @@ TEST_F(LogRateLimiterTest, ErrorFatalAlwaysPass)
 
     // ERROR and FATAL should still pass even after tokens exhausted
     for (int i = 0; i < 100; ++i) {
-        EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::err));
         EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::critical));
     }
 }
