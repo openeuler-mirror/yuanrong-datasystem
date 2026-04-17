@@ -844,8 +844,10 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, ui
     (void)timeoutMs;
     (void)workerVersion;
     // Initialize UrmaManager regardless of shmEnabled_ to avoid switch overhead standby worker.
+    // This only warms up local URMA hardware resources and memory pools.
+    // The actual remote connection is established later during the handshake.
     SetClientFastTransportMode(rsp.fast_transport_mode(), fastTransportMemSize_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_), "Fast transport init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(), "Fast transport init failed");
 
     // Enable UB fast transport if client cannot use share memory while worker supports UB.
     if (IsShmEnable()) {

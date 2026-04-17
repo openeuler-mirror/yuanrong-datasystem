@@ -183,7 +183,8 @@ Status UrmaManager::Init(const HostPort &hostport)
     PerfPoint perfPoint(PerfKey::URMA_MANAGER_INIT);
     InitState expected = InitState::UNINITIALIZED;
     if (initState_.compare_exchange_strong(expected, INITIALIZED)) {
-        LOG(INFO) << FormatString("UrmaManager::Init(hostport = %s)", hostport.ToString());
+        LOG(INFO) << "UrmaManager initializing local URMA resources"
+                  << (hostport.Empty() ? "" : FormatString(", hostport = %s", hostport.ToString()));
     } else {
         // Initialization is already in progress or done by other thread, just wait for it to be done.
         waitInit_.Wait();
