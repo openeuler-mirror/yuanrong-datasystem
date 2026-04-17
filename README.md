@@ -122,7 +122,7 @@ dscli --version
 
 #### 源码编译方式安装
 
-使用源码编译方式安装 openYuanrong datasystem 可以参考文档：[源码编译安装 openYuanrong datasystem](./docs/source_zh_cn/installation/installation_linux.md#源码编译安装)
+使用源码编译方式安装 openYuanrong datasystem 可以参考文档：[源码编译安装 openYuanrong datasystem](./docs/source_zh_cn/installation/build_guide/bazel_build.md#源码编译安装)
 
 ### 部署 openYuanrong datasystem
 
