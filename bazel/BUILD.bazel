@@ -10,9 +10,9 @@ load(
 load("@local_python_info//:version.bzl", "PYTHON_MINOR")
 load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
-load("@datasystem_version//:version.bzl", "DATASYSTEM_VERSION")
 load("//bazel:datasystem_sdk.bzl", "datasystem_sdk_tree")
 load("//bazel:datasystem_sdk_cmake_config.bzl", "datasystem_cmake_config")
+load("//:version.bzl", "DATASYSTEM_VERSION")
 
 licenses(["notice"])
 

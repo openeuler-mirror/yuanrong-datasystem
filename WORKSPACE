@@ -1,12 +1,7 @@
 workspace(name = "yuanrong-datasystem")
 
+load("//:version.bzl", "DATASYSTEM_VERSION")
 load("//bazel:ds_deps.bzl", "ds_deps", "setup_grpc")
-load("//bazel:version_repo.bzl", "version_repo")
-
-version_repo(
-    name = "datasystem_version",
-    version_file = "//:VERSION",
-)
 
 ds_deps()
 
