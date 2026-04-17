@@ -51,6 +51,7 @@ constexpr int WAIT_PATH_TIMEOUT_MS = 15000;
 constexpr int WAIT_PATH_INTERVAL_MS = 50;
 constexpr int WAIT_GET_TIMEOUT_MS = 15000;
 constexpr int WAIT_GET_INTERVAL_MS = 200;
+constexpr int WAIT_SLOT_RECOVERY_TIMEOUT_MS = 20000;
 constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t PASSIVE_NODE_DEAD_TIMEOUT_S = 3;
 constexpr uint64_t RESTART_NODE_DEAD_TIMEOUT_S = 30;
@@ -329,7 +330,8 @@ protected:
     {
         std::vector<std::pair<std::string, std::string>> keyValues;
         Status status;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_GET_TIMEOUT_MS);
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_SLOT_RECOVERY_TIMEOUT_MS);
         while (std::chrono::steady_clock::now() < deadline) {
             keyValues.clear();
             status = db_->GetAll(ETCD_SLOT_RECOVERY_TABLE, keyValues);
@@ -954,13 +956,21 @@ TEST_F(SlotEndToEndScaleTest, SameSlotDualFailure)
 
 class SlotEndToEndPassiveScaleDownTest : public SlotEndToEndTest {
 public:
+    bool UseSmallClusterConfig() const
+    {
+        return CurrentTestName() == "RecoveryPreloadOomKeepsReceiverData";
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.numWorkers = 3;
+        opts.numWorkers = UseSmallClusterConfig() ? 2 : 3;
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = true;
         opts.addNodeTime = 1;
+        if (UseSmallClusterConfig()) {
+            opts.injectActions = "SlotClient.Init.SetSlotNum:return(2)";
+        }
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         std::stringstream ss;
@@ -970,13 +980,13 @@ public:
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
            << "-enable_metadata_recovery=true "
-           << "-auto_del_dead_node=true "
            << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "
            << "-enable_l2_cache_fallback=false "
-           << "-enable_reconciliation=false";
+           << "-enable_reconciliation=false "
+           << "-shared_memory_size_mb=16 ";
         opts.workerGflagParams = ss.str();
     }
 };
@@ -1139,6 +1149,55 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, VoluntaryToPassiveScaleDown)
         std::string getValue;
         DS_ASSERT_OK(client1->Get(key, getValue));
         ASSERT_EQ(getValue, value);
+    }
+}
+
+TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryPreloadOomKeepsReceiverData)
+{
+    LOG(INFO) << "Scenario: worker1 is near high water, worker0 fails, and slot recovery preload should stop "
+                 "without evicting worker1's own WRITE_BACK_L2_CACHE_EVICT data.";
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+
+    constexpr int objectCountPerWorker = 10;
+    constexpr size_t objectBytes = 900UL * 1024UL;
+    SetParam param{ .writeMode = WriteMode::WRITE_BACK_L2_CACHE_EVICT };
+    const std::string objectValue(objectBytes, 'x');
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    for (int idx = 0; idx < objectCountPerWorker; ++idx) {
+        auto worker0Key = FindKeyForSlot(0, "slot_recovery_oom_worker0_" + std::to_string(idx));
+        auto worker1Key = FindKeyForSlot(0, "slot_recovery_oom_worker1_" + std::to_string(idx));
+        ASSERT_FALSE(worker0Key.empty());
+        ASSERT_FALSE(worker1Key.empty());
+        worker0Keys.emplace_back(worker0Key);
+        worker1Keys.emplace_back(worker1Key);
+    }
+
+    for (const auto &key : worker0Keys) {
+        DS_ASSERT_OK(client0->Set(key, objectValue, param));
+    }
+    for (const auto &key : worker1Keys) {
+        DS_ASSERT_OK(client1->Set(key, objectValue, param));
+    }
+    for (const auto &key : worker0Keys) {
+        ASSERT_TRUE(WaitUntilSlotContainsPut(SlotPathForWorkerAndKey(0, key), key)) << key;
+    }
+    for (const auto &key : worker1Keys) {
+        ASSERT_TRUE(WaitUntilSlotContainsPut(SlotPathForWorkerAndKey(1, key), key)) << key;
+    }
+
+    client0.reset();
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    WaitAllNodesJoinIntoHashRingFast(1, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+
+    for (const auto &key : worker1Keys) {
+        std::string value;
+        DS_ASSERT_OK(client1->Get(key, value));
     }
 }
 

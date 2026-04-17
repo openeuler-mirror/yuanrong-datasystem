@@ -103,6 +103,10 @@ Status SlotClient::Init()
                              "distributed_disk_path must not be empty when l2_cache_type=distributed_disk");
     rootPath_ = BuildSlotStoreRoot(sfsPath_, FLAGS_cluster_name);
     slotNum_ = DISTRIBUTED_DISK_SLOT_NUM;
+    INJECT_POINT("SlotClient.Init.SetSlotNum", [this](uint32_t slotNum) {
+        slotNum_ = slotNum;
+        return Status::OK();
+    });
     maxDataFileBytes_ = static_cast<uint64_t>(FLAGS_distributed_disk_max_data_file_size_mb) * 1024ul * 1024ul;
     VLOG(1) << "Initializing slot client, sfsPath=" << sfsPath_ << ", rootPath=" << rootPath_
             << ", slotNum=" << slotNum_ << ", maxDataFileBytes=" << maxDataFileBytes_;

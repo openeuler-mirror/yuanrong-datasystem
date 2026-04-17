@@ -264,11 +264,12 @@ Status LoadSpilledObjectToMemory(ReadObjectKV &objectKV, std::shared_ptr<WorkerO
  * @param[in] evictionManager Eviction manager.
  * @param[in] threadPool the thread pool that might be used for larger memcopies.
  * @param[in] cacheType The type of cache.
+ * @param[in] retryOnOOM Indicate need retry on OOM or not.
  * @return Status of the call.
  */
 Status SaveBinaryObjectToMemory(ObjectKV &objectKV, const std::vector<RpcMessage> &payloads,
                                 std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                                const std::shared_ptr<ThreadPool> &threadPool);
+                                const std::shared_ptr<ThreadPool> &threadPool, bool retryOnOOM = true);
 
 }  // namespace object_cache
 }  // namespace datasystem

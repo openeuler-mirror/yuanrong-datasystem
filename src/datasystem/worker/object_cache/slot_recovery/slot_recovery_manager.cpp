@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <random>
 #include <unordered_map>
 
@@ -30,6 +32,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
+#include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/timer.h"
@@ -175,6 +178,29 @@ ObjectMetaPb BuildRecoveredMetadata(const SlotPreloadMeta &meta, const std::stri
     config->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
     config->set_consistency_type(static_cast<uint32_t>(ConsistencyType::CAUSAL));
     return objectMeta;
+}
+
+uint64_t EstimatePreloadMemory(uint64_t dataSize)
+{
+    static constexpr double factor = 1.2;
+    auto estimated = std::ceil(static_cast<long double>(dataSize) * factor);
+    const auto maxSize = static_cast<long double>(std::numeric_limits<uint64_t>::max());
+    if (estimated >= maxSize) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return static_cast<uint64_t>(estimated);
+}
+
+Status CheckPreloadMemoryAvailable(const SlotPreloadMeta &meta)
+{
+    const auto estimatedSize = EstimatePreloadMemory(meta.size);
+    const auto availableSize = memory::Allocator::Instance()->GetMemoryAvailToHighWater();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        estimatedSize <= availableSize, K_OUT_OF_MEMORY,
+        FormatString("[ObjectKey %s] Slot recovery preload memory exceeds high water. data_size=%lu, "
+                     "estimated_size=%lu, available_to_high_water=%lu",
+                     meta.objectKey, meta.size, estimatedSize, availableSize));
+    return Status::OK();
 }
 }  // namespace
 
@@ -1054,16 +1080,18 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
     const auto sourceWorker = task.source_worker().empty() ? task.failed_worker() : task.source_worker();
     SlotPreloadCallback callback = [this, &recoveredMetas](const SlotPreloadMeta &meta,
                                                            const std::shared_ptr<std::stringstream> &content) {
+        RETURN_IF_NOT_OK(CheckPreloadMemoryAvailable(meta));
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(content != nullptr, K_NOT_FOUND,
+                                             FormatString("[ObjectKey %s] Preload content is empty.", meta.objectKey));
         auto recoveredMeta = BuildRecoveredMetadata(meta, localAddress_.ToString());
-        recoveredMetas.emplace_back(recoveredMeta);
 
         std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents;
-        if (content != nullptr) {
-            recoveredContents.emplace(meta.objectKey, content);
-        }
+        recoveredContents.emplace(meta.objectKey, content);
         std::vector<std::string> recoveredObjectKeys;
-        return metadataRecoveryManager_->RecoverLocalEntries({ std::move(recoveredMeta) }, recoveredContents,
-                                                             recoveredObjectKeys);
+        RETURN_IF_NOT_OK(
+            metadataRecoveryManager_->RecoverLocalEntries({ recoveredMeta }, recoveredContents, recoveredObjectKeys));
+        recoveredMetas.emplace_back(std::move(recoveredMeta));
+        return Status::OK();
     };
     std::vector<uint32_t> shuffledSlots(task.slots().begin(), task.slots().end());
     static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
