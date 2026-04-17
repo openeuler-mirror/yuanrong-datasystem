@@ -89,8 +89,8 @@ bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, bool *wasSamp
         return true;
     }
 
-    // ERROR(level=4) and above (FATAL=5) always pass
-    if (level >= ds_spdlog::level::err) {
+    // (FATAL=5) always pass
+    if (level >= ds_spdlog::level::critical) {
         return true;
     }
 
