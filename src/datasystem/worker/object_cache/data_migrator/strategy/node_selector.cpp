@@ -16,6 +16,7 @@
 
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -35,7 +36,7 @@ NodeSelector &NodeSelector::Instance()
     return instance;
 }
 
-NodeSelector::NodeSelector() : running_(false)
+NodeSelector::NodeSelector() : running_(false), token_(new Token())
 {
 }
 
@@ -77,9 +78,15 @@ void NodeSelector::Shutdown()
     }
     taskCv_.notify_all();
     subReadyPost_.Set();
+    token_->alive.store(false);
 
     if (workerThread_.joinable()) {
-        workerThread_.join();
+        std::lock_guard<std::mutex> lck(token_->mutex_);
+        if (!token_->working) {
+            workerThread_.join();
+        } else {
+            workerThread_.detach();
+        }
     }
     etcdCM_  = nullptr;
     apiManager_.reset();
@@ -198,6 +205,9 @@ void NodeSelector::WorkerThread()
     INJECT_POINT_NO_RETURN("NodeSelector.setInterval", [&intervalMs](int interval) { intervalMs = interval; });
     while (running_) {
         auto rc = CollectClusterInfo();
+        if (!token_->alive) {
+            break;
+        }
         if (rc.IsError()) {
             LOG(WARNING) << "Collect cluster info failed, errMsg is " << rc.GetMsg();
         } else {
@@ -236,6 +246,13 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     stat->set_address(localAddress_);
     stat->set_available_memory(datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater());
     stat->set_is_ready(!(etcdCM_->CheckLocalNodeIsExiting()));
+    {
+        std::lock_guard<std::mutex> lck(token_->mutex_);
+        if (!token_->alive) {
+            return Status::OK();
+        }
+        token_->working = true;
+    }
     return workerMasterApi->ReportResource(req, rsp);
 }
 
@@ -247,6 +264,13 @@ Status NodeSelector::CollectClusterInfo()
     master::ResourceReportReqPb req;
     master::ResourceReportRspPb rsp;
     RETURN_IF_NOT_OK(ReportResource(workerMasterApi, req, rsp));
+    {
+        std::lock_guard<std::mutex> lck(token_->mutex_);
+        if (!token_->alive) {
+            return Status::OK();
+        }
+        token_->working = false;
+    }
     // update the rankList_
     std::unique_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     rankList_.clear();
