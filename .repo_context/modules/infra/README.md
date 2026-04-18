@@ -7,6 +7,11 @@ Use this directory when the task depends on shared plumbing such as transport, s
 Current docs:
 
 - `common-infra.md`: broad inventory of common building blocks.
+- `l2cache/README.md`: secondary-storage overview and routing page.
+- `l2cache/design.md`: architecture-level backend model, worker integration, and design guardrails.
+- `l2cache/l2-cache-type.md`: backend selection, flags, and dispatch between OBS, SFS, and distributed-disk.
+- `slot/README.md`: standalone slot storage and recovery module overview.
+- `slot/design.md`: distributed-disk slot architecture, persistence format, recovery, reliability, availability, and DFX.
 - `logging/README.md`: logging-area overview and routing page.
 - `logging/design.md`: logging architecture, feature-extension points, and compatibility guardrails.
 - `logging/trace-and-context.md`: thread-local trace state and propagation.

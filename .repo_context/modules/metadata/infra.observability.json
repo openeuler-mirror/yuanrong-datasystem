@@ -1,0 +1,56 @@
+{
+  "id": "infra.observability",
+  "title": "Observability And Operations",
+  "status": "active",
+  "domain": "infra",
+  "module_type": "composite",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/infra/observability/README.md",
+    "design": null,
+    "details": [
+      ".repo_context/modules/infra/observability/diagnosis-and-operations.md",
+      ".repo_context/modules/infra/observability/signal-map.md",
+      ".repo_context/modules/infra/observability/performance-troubleshooting.md",
+      ".repo_context/modules/infra/observability/runtime-health-and-runbook.md"
+    ]
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [
+      ".repo_context/playbooks/operations/incident-triage.md",
+      ".repo_context/playbooks/operations/performance-investigation.md"
+    ],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/worker",
+    "src/datasystem/common/log",
+    "src/datasystem/common/metrics",
+    "tests"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "infra.logging",
+      "infra.metrics",
+      "runtime.worker-runtime"
+    ],
+    "split_signals": [
+      "cross_module_signals",
+      "dfx_workflow"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "observability",
+      "operations",
+      "signal map",
+      "runtime health"
+    ],
+    "intent_examples": [
+      "diagnose a runtime, operations, or observability issue across modules"
+    ]
+  }
+}

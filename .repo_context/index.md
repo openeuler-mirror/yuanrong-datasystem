@@ -22,6 +22,11 @@ Use it to jump from a question type to the smallest useful document instead of r
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
 | understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `docs/source_zh_cn/design_document/cluster_management.md`, `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/*.py` |
 | understand shared infra used across modules | `modules/infra/common-infra.md` | `src/datasystem/common/*` |
+| understand l2 cache architecture, backend boundaries, or when a change needs design-first handling | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
+| understand `l2_cache_type` backend selection, flags, or `PersistenceApi` dispatch | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/util/gflag/*`, `src/datasystem/worker/worker_oc_server.cpp` |
+| understand distributed-disk slot storage, replay, compaction, takeover, or restart recovery | `modules/infra/slot/design.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*`, `tests/ut/common/l2cache/slot_store_test.cpp`, `tests/st/worker/object_cache/slot_end2end_test.cpp` |
+| design and implement a low-risk l2 cache or secondary-storage feature | `playbooks/features/infra/l2cache/implementation.md` | `modules/infra/l2cache/design.md`, `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
+| design and implement a low-risk slot storage or recovery feature | `playbooks/features/infra/slot/implementation.md` | `modules/infra/slot/design.md`, `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 | understand logging architecture before adding a feature | `modules/infra/logging/design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
 | understand trace ID generation or propagation | `modules/infra/logging/trace-and-context.md` | `src/datasystem/common/log/trace.*`, `src/datasystem/context/*` |
 | understand access log, performance recording, or operation key mapping | `modules/infra/logging/access-recorder.md` | `src/datasystem/common/log/access_recorder.*`, `src/datasystem/common/log/access_point.def` |
@@ -38,6 +43,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | design and implement a low-risk logging feature | `playbooks/features/infra/logging/implementation.md` | `modules/infra/logging/design.md`, `src/datasystem/common/log/*` |
 | triage a production-style incident or collect first-pass evidence | `playbooks/operations/incident-triage.md` | `modules/infra/observability/diagnosis-and-operations.md`, `modules/quality/tests-and-reproduction.md` |
 | run a structured performance investigation | `playbooks/operations/performance-investigation.md` | `modules/infra/observability/performance-troubleshooting.md`, `tests/perf/*` |
+| generate or backfill repo context for a module | `playbooks/upkeep/module-context-generation.md` | `README.md`, `maintenance.md`, real source paths for the requested area |
+| find canonical module ids or machine-readable routing metadata | `modules/metadata/README.md` | `modules/metadata/*.json`, canonical module docs |
 | decide what kind of context file to update | `playbooks/README.md` | `maintenance.md` |
 
 ## Quick Routing By Area
@@ -45,10 +52,16 @@ Use it to jump from a question type to the smallest useful document instead of r
 | Area | Primary doc | Typical code paths |
 | --- | --- | --- |
 | global repo map | `modules/overview/repository-overview.md` | `src/datasystem`, `include/datasystem`, `cli`, `tests`, `docs` |
+| module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |
 | cluster coordination | `modules/runtime/cluster-management.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/start.py`, `cli/up.py` |
 | common infrastructure | `modules/infra/common-infra.md` | `src/datasystem/common` |
+| l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache`, `src/datasystem/worker/object_cache/slot_recovery*` |
+| l2 cache architecture | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
+| l2 cache backend selection | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/util/gflag/*` |
+| slot storage and recovery | `modules/infra/slot/README.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
+| slot design | `modules/infra/slot/design.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*`, `tests/ut/common/l2cache/slot_store_test.cpp` |
 | logging area overview | `modules/infra/logging/README.md` | `src/datasystem/common/log` |
 | logging design | `modules/infra/logging/design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
 | trace and context propagation | `modules/infra/logging/trace-and-context.md` | `src/datasystem/common/log/trace.*`, `src/datasystem/context/*` |
@@ -66,6 +79,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | runtime health and runbook | `modules/infra/observability/runtime-health-and-runbook.md` | `src/datasystem/worker/worker_liveness_check.*`, `src/datasystem/worker/worker_main.cpp`, `src/datasystem/worker/worker_oc_server.cpp` |
 | build/test/debug | `modules/quality/build-test-debug.md` | `build.sh`, `tests`, top-level CMake |
 | test selection and repro | `modules/quality/tests-and-reproduction.md` | `tests/ut`, `tests/st` |
+| l2 cache feature workflow | `playbooks/features/infra/l2cache/implementation.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
+| slot feature workflow | `playbooks/features/infra/slot/implementation.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 
 ## When To Use `generated/repo_index.md`
 

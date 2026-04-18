@@ -1,0 +1,57 @@
+{
+  "id": "infra.slot",
+  "title": "Slot Storage And Recovery",
+  "status": "active",
+  "domain": "infra",
+  "module_type": "composite",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/infra/slot/README.md",
+    "design": ".repo_context/modules/infra/slot/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/infra/slot/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/common/l2cache/slot_client",
+    "src/datasystem/worker/object_cache/slot_recovery",
+    "src/datasystem/worker/object_cache/slot_recovery_orchestrator.cpp",
+    "src/datasystem/protos/slot_recovery.proto"
+  ],
+  "key_tests": [
+    "tests/ut/common/l2cache/slot_store_test.cpp",
+    "tests/ut/worker/object_cache/slot_worker_integration_test.cpp",
+    "tests/st/worker/object_cache/slot_end2end_test.cpp",
+    "tests/st/worker/object_cache/slot_recovery_manager_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "infra.l2cache",
+      "runtime.worker-runtime"
+    ],
+    "split_signals": [
+      "persisted_format",
+      "recovery_lifecycle",
+      "dfx_workflow",
+      "focused_test_family"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "slot",
+      "distributed_disk",
+      "replay",
+      "takeover",
+      "recovery"
+    ],
+    "intent_examples": [
+      "understand distributed-disk slot storage, replay, compaction, takeover, or restart recovery"
+    ]
+  }
+}

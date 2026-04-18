@@ -1,0 +1,29 @@
+{
+  "id": "domain.module-id",
+  "title": "<Module Title>",
+  "status": "active",
+  "domain": "<domain>",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/<domain>/<module>.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [],
+    "split_signals": []
+  },
+  "retrieval": {
+    "keywords": [],
+    "intent_examples": []
+  }
+}

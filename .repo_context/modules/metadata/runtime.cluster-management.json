@@ -1,0 +1,46 @@
+{
+  "id": "runtime.cluster-management",
+  "title": "Cluster Management",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/cluster-management.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/worker/cluster_manager",
+    "src/datasystem/worker/hash_ring",
+    "cli",
+    "docs/source_zh_cn/design_document"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.worker-runtime",
+      "infra.common-infra"
+    ],
+    "split_signals": [
+      "distributed_lifecycle",
+      "operator_config_surface"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "cluster management",
+      "etcd",
+      "hash ring"
+    ],
+    "intent_examples": [
+      "understand cluster metadata, ETCD, Metastore, and hash-ring coordination"
+    ]
+  }
+}

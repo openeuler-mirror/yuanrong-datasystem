@@ -13,6 +13,15 @@ Use this file when you know the problem type but not the owning module.
 - If the change mostly affects plumbing used by many modules:
   - read `modules/infra/common-infra.md`
 
+## Repo Context Generation
+
+- If the task is to generate or backfill repo context for a named area:
+  - read `playbooks/upkeep/module-context-generation.md`
+- If the named area might actually contain multiple meaningful submodules:
+  - use the split rules in `playbooks/upkeep/module-context-generation.md` before writing any module doc
+- If the area is shared infra and includes its own persisted format, recovery lifecycle, or DFX workflow:
+  - expect sibling modules instead of one coarse parent note
+
 ## Bugfix
 
 - If you need to know what tests to run first:

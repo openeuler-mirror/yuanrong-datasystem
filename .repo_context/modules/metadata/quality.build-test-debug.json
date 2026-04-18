@@ -1,0 +1,41 @@
+{
+  "id": "quality.build-test-debug",
+  "title": "Build, Test, And Debug",
+  "status": "active",
+  "domain": "quality",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/quality/build-test-debug.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "build.sh",
+    "CMakeLists.txt",
+    "tests"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "quality.tests-and-reproduction"
+    ],
+    "split_signals": []
+  },
+  "retrieval": {
+    "keywords": [
+      "build",
+      "test",
+      "debug"
+    ],
+    "intent_examples": [
+      "find build, sanitizer, or coverage entrypoints"
+    ]
+  }
+}

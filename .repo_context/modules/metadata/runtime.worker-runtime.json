@@ -1,0 +1,43 @@
+{
+  "id": "runtime.worker-runtime",
+  "title": "Worker Runtime",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/worker-runtime.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/worker"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.cluster-management",
+      "infra.slot",
+      "infra.observability"
+    ],
+    "split_signals": [
+      "startup_lifecycle"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "worker runtime",
+      "worker startup",
+      "runtime services"
+    ],
+    "intent_examples": [
+      "understand worker startup and runtime services"
+    ]
+  }
+}

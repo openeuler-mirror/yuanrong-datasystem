@@ -1,0 +1,49 @@
+{
+  "id": "infra.metrics",
+  "title": "Metrics",
+  "status": "active",
+  "domain": "infra",
+  "module_type": "composite",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/infra/metrics/README.md",
+    "design": ".repo_context/modules/infra/metrics/design.md",
+    "details": [
+      ".repo_context/modules/infra/metrics/resource-collector.md",
+      ".repo_context/modules/infra/metrics/exporters-and-buffering.md",
+      ".repo_context/modules/infra/metrics/metric-families-and-registration.md"
+    ]
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/common/metrics",
+    "src/datasystem/worker/worker_oc_server.cpp"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "infra.logging",
+      "infra.observability"
+    ],
+    "split_signals": [
+      "dfx_workflow",
+      "config_surface",
+      "focused_test_family"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "metrics",
+      "exporter",
+      "resource collector"
+    ],
+    "intent_examples": [
+      "understand metrics architecture before adding a feature"
+    ]
+  }
+}

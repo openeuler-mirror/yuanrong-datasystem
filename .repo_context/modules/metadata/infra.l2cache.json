@@ -1,0 +1,51 @@
+{
+  "id": "infra.l2cache",
+  "title": "L2 Cache And Secondary Storage",
+  "status": "active",
+  "domain": "infra",
+  "module_type": "composite",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/infra/l2cache/README.md",
+    "design": ".repo_context/modules/infra/l2cache/design.md",
+    "details": [
+      ".repo_context/modules/infra/l2cache/l2-cache-type.md"
+    ]
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/infra/l2cache/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/common/l2cache",
+    "src/datasystem/worker/worker_oc_server.cpp"
+  ],
+  "key_tests": [
+    "tests/st/common/sfs_client/sfs_persistence_api_test.cpp",
+    "tests/st/common/obs_client/obs_persistence_api_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "infra.slot",
+      "infra.common-infra"
+    ],
+    "split_signals": [
+      "shared_api_surface",
+      "backend_selection_surface"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "l2 cache",
+      "secondary storage",
+      "l2_cache_type"
+    ],
+    "intent_examples": [
+      "understand l2 cache architecture, backend boundaries, or PersistenceApi dispatch"
+    ]
+  }
+}

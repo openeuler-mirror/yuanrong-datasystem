@@ -1,0 +1,45 @@
+{
+  "id": "overview.repository-overview",
+  "title": "Repository Overview",
+  "status": "active",
+  "domain": "overview",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/overview/repository-overview.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem",
+    "include/datasystem",
+    "cli",
+    "tests",
+    "docs/source_zh_cn"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "client.client-sdk",
+      "runtime.worker-runtime",
+      "infra.common-infra"
+    ],
+    "split_signals": []
+  },
+  "retrieval": {
+    "keywords": [
+      "repository overview",
+      "repo shape",
+      "global repo map"
+    ],
+    "intent_examples": [
+      "understand overall repo shape"
+    ]
+  }
+}
