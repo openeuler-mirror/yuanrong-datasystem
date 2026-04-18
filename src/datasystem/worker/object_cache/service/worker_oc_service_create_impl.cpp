@@ -59,19 +59,20 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
                            [&remainingTimeMs]() { remainingTimeMs = -1; });
+    RequestParam reqParam;
+    reqParam.objectKey = req.object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     if (remainingTimeMs <= 0) {
-        return Status(
-            StatusCode::K_RPC_DEADLINE_EXCEEDED,
+        Status rc =  Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
             FormatString("The create request process time has exceeded the request timeout time (remaining: %lld ms)",
-                         remainingTimeMs));
+            remainingTimeMs));
+        posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
+        return rc;
     }
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(),
                            req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
-    RequestParam reqParam;
-    reqParam.objectKey = req.object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
     point.Record();
     workerOperationTimeCost.Append("Total Create", timer.ElapsedMilliSecond());
